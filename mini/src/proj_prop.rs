@@ -122,7 +122,7 @@ pub(crate) fn typing(
     // Two tables, mutually exclusive by `zoneb::ensure`'s own branch, and a
     // declaration in neither is class (T) and owes a *term* rather than a
     // certificate — `SCOPING.md` §9's rows 2 and 4.
-    let key = (ind.clone(), inst.clone());
+    let key = (*ind, inst.clone());
     let (cs, tt, dt) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -628,7 +628,7 @@ fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
         pm.push(t.ev.thm()?.clone());
     }
     let former = c.stored_term(name, &inst)?;
-    let key = (name.clone(), inst);
+    let key = (*name, inst);
     let (cs, tt) = {
         let app = c.interp()?.ind_apparatus()?;
         (app.props.get(&key).cloned(), app.truncs.get(&key).cloned())
@@ -670,12 +670,12 @@ mod tests {
     /// rung zero would pass at one field and fail here.
     fn env() -> Environment {
         let p2 = nm("P2");
-        let spine = |x: u32, y: u32| app(app(konst(p2.clone(), no()), bvar(x)), bvar(y));
+        let spine = |x: u32, y: u32| app(app(konst(p2, no()), bvar(x)), bvar(y));
         let mut env = Environment::empty();
         add(
             &mut env,
             &Declaration::Inductive {
-                name: p2.clone(),
+                name: p2,
                 lparams: vec![],
                 num_params: 2,
                 ty: forall(prop(), forall(prop(), prop())),
@@ -699,7 +699,7 @@ mod tests {
     /// proof and `Type 0` makes it data, and nothing else about the term moves.
     fn projector_at(idx: u32, field_sort: E) -> (E, E) {
         let p2 = nm("P2");
-        let structure = app(app(konst(p2.clone(), no()), bvar(1)), bvar(0));
+        let structure = app(app(konst(p2, no()), bvar(1)), bvar(0));
         // The codomain is `a` at index 0 and `b` at index 1 — three binders in,
         // so `#2` and `#1`.
         let cod = bvar(2 - idx);
@@ -768,12 +768,12 @@ mod tests {
     fn class_t_env(field_sort: E) -> Environment {
         let p2 = nm("P2");
         let ty0 = sort(Level::Zero.succ());
-        let spine = |x: u32, y: u32| app(app(konst(p2.clone(), no()), bvar(x)), bvar(y));
+        let spine = |x: u32, y: u32| app(app(konst(p2, no()), bvar(x)), bvar(y));
         let mut env = Environment::empty();
         add(
             &mut env,
             &Declaration::Inductive {
-                name: p2.clone(),
+                name: p2,
                 lparams: vec![],
                 num_params: 2,
                 ty: forall(field_sort.clone(), forall(field_sort.clone(), ty0)),
@@ -912,13 +912,13 @@ mod tests {
         add(
             &mut env,
             &Declaration::Inductive {
-                name: pu.clone(),
-                lparams: vec![u.clone()],
+                name: pu,
+                lparams: vec![u],
                 num_params: 0,
-                ty: sort(Level::Param(u.clone())),
+                ty: sort(Level::Param(u)),
                 ctors: vec![(
                     Name::str(&pu, "unit"),
-                    konst(pu.clone(), vec![Level::Param(u)].into()),
+                    konst(pu, vec![Level::Param(u)].into()),
                 )],
             },
         )
@@ -926,13 +926,13 @@ mod tests {
         add(
             &mut env,
             &Declaration::Inductive {
-                name: w.clone(),
+                name: w,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty0,
                 ctors: vec![(
                     Name::str(&w, "mk"),
-                    forall(konst(pu, at1), konst(w.clone(), no())),
+                    forall(konst(pu, at1), konst(w, no())),
                 )],
             },
         )

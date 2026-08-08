@@ -853,7 +853,7 @@ fn a_members_recursor_binds_the_whole_blocks_motives_and_minors() {
         for d in &loaded.decls {
             mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{file}: {e}"));
         }
-        let n = rec.split('.').fold(Name::Anon, |p, s| Name::str(&p, s));
+        let n = rec.split('.').fold(Name::anon(), |p, s| Name::str(&p, s));
         let Some(ConstantInfo::Recursor {
             lparams, num_params, num_motives, num_minors, num_indices, ..
         }) = env.get(&n)

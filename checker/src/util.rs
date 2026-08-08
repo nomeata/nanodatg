@@ -476,7 +476,15 @@ impl<'t, 'p: 't> TcCtx<'t, 'p> {
     /// Store a string (a `CowStr`), getting back a pointer to the allocated item. If the item was
     /// already stored, forego the allocation and return a pointer to the previously inserted
     /// element. Checks the longer-lived storage first.
-    pub(crate) fn alloc_string(&mut self, s: CowStr<'t>) -> StringPtr<'t> {
+    ///
+    /// **`pub` rather than `pub(crate)`, for `mini/src/arena.rs`** — PIVOT.md
+    /// §6's boundary, where upstream files take minimal cited edits. `str` and
+    /// `num` are already `pub`, so a `Name` can be *extended* from outside the
+    /// crate but its leading component could not be created; the only route
+    /// was `str1_owned` followed by reading the `StringPtr` back out of the
+    /// resulting name, which allocates a junk name per component. This makes
+    /// the name constructors usable as a set. No behaviour change.
+    pub fn alloc_string(&mut self, s: CowStr<'t>) -> StringPtr<'t> {
         if let Some(idx) = self.export_file.dag.strings.get_index_of(&s) {
             Ptr::from(DagMarker::ExportFile, idx)
         } else {

@@ -92,7 +92,7 @@ use derived::{gen_all, inst_all};
 
 use crate::env::ConstantInfo;
 use crate::ev::{Ev, Gap};
-use crate::expr::{Expr, Level, Name, E};
+use crate::expr::{Expr, Level, Name, E, NameView};
 use crate::ground;
 use crate::interp::Interp;
 use crate::kernel::{Checker, Typing, R};
@@ -202,11 +202,11 @@ impl Clause {
 /// The table. One comparison on the name [`crate::zoneb::ensure`] was asked
 /// about — never a scan, and never a shape match.
 pub fn clause_for(n: &Name) -> Option<Clause> {
-    let Name::Str(pre, s) = n else { return None };
-    if **pre != Name::Anon {
+    let NameView::Str(pre, s) = n.view() else { return None };
+    if !pre.is_anon() {
         return None
     }
-    match &**s {
+    match &*s {
         "Eq" => Some(Clause::Eq),
         "Acc" => Some(Clause::Acc),
         _ => None,
@@ -219,19 +219,19 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
 /// data, the type former as a `np + ni`-deep λ-nest, then one nest per
 /// constructor. What differs is only the bottom of each nest.
 pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(name.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*name, w);
     let env = c.environment();
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
         env.get(name)
     else {
-        return Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
     };
     let (np, ni, nc) = cl.arity();
     if (*num_params, *num_indices, ctors.len()) != (np, ni, nc) {
         return Err(bad("direct clause: declaration shape"))
     }
     if inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
     }
     let depth = (np + ni) as usize;
     let lean_ty = ground::subst_ground(ty, lparams, inst);
@@ -244,13 +244,13 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
         .iter()
         .map(|n| {
             env.get(n)
-                .map(|ci| (n.clone(), ground::subst_ground(ci.ty(), lparams, inst)))
+                .map(|ci| (*n, ground::subst_ground(ci.ty(), lparams, inst)))
                 .ok_or_else(|| bad("ctor type"))
         })
         .collect::<Result<_, _>>()?;
 
     // ── the type former ───────────────────────────────────────────────────
-    let nm = name.clone();
+    let nm = *name;
     let mut bottom =
         move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(former_bottom(c, cl, &nm, depth, level)) };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
@@ -261,7 +261,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
         let cdepth = arity_of(cty);
         let codomain = crate::zoneb::peel(cty, cdepth).ok_or_else(|| bad("ctor arity"))?;
         let site = CtorSite {
-            ind: name.clone(),
+            ind: *name,
             inst: inst.to_vec(),
             clause: cl,
             codomain,
@@ -313,7 +313,7 @@ fn former_bottom(
             let t = ip.mk(d.eq, vec![a.clone(), b.clone()]);
             let phi = Formula::eq(a.clone(), b.clone());
             let Some(chi) = inst_all(&d.eq_ax, &[a, b]) else {
-                return gap(Gap::IndSpec(name.clone(), "eq instance"))
+                return gap(Gap::IndSpec(*name, "eq instance"))
             };
             (t, phi, chi)
         }
@@ -327,7 +327,7 @@ fn former_bottom(
             let t = ip.mk(ac.acc_set, vec![a.clone(), r.clone(), x.clone()]);
             let phi = ac.phi(&a, &r, &x);
             let Some(chi) = inst_all(&ac.acc_set_ax, &[a, r, x]) else {
-                return gap(Gap::IndSpec(name.clone(), "acc instance"))
+                return gap(Gap::IndSpec(*name, "acc instance"))
             };
             (t, phi, chi)
         }
@@ -338,7 +338,7 @@ fn former_bottom(
     // is what would make a `Sort u`-valued clause land in `⟦Sort u⟧` rather
     // than only in `⟦Prop⟧`.
     let in_u0 = tower.cond_in_u0(&mut ip.env, &phi, &term, &chi);
-    let Some(in_u0) = in_u0 else { return gap(Gap::IndSpec(name.clone(), "denotation typing")) };
+    let Some(in_u0) = in_u0 else { return gap(Gap::IndSpec(*name, "denotation typing")) };
     let raised = if level == 0 {
         Some(in_u0)
     } else {
@@ -348,7 +348,7 @@ fn former_bottom(
         Some(t) if *t.concl() == Formula::mem(term.clone(), ip.sort(level)) => {
             Typing { ty, tm: Some(term), ev: Ev::Proved(t) }
         }
-        _ => gap(Gap::IndUniverseHeight(name.clone(), level)),
+        _ => gap(Gap::IndUniverseHeight(*name, level)),
     }
 }
 
@@ -423,7 +423,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let (head, args) = crate::expr::get_app(codomain);
     match &*head {
         Expr::Const(n, _) if n == ind => {}
-        _ => return gap(Gap::IndSpec(ind.clone(), "ctor codomain")),
+        _ => return gap(Gap::IndSpec(*ind, "ctor codomain")),
     }
     // …and each argument's interpretation and typing, by inference on the
     // argument itself. This is the step that refuses a constructor whose result
@@ -433,7 +433,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     for a in &args {
         let Ok(t) = c.infer_type(a) else { return gap(Gap::Classifier) };
         let (Some(tm), Ev::Proved(m)) = (t.tm, t.ev) else {
-            return gap(Gap::IndSpec(ind.clone(), "ctor codomain argument"))
+            return gap(Gap::IndSpec(*ind, "ctor codomain argument"))
         };
         arg_tms.push(tm);
         arg_mems.push(m);
@@ -455,7 +455,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // clause denotes. The premise each level consumes is the argument's typing,
     // which the loop above inferred.
     let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, &arg_tms, &arg_mems) else {
-        return gap(Gap::IndSpec(ind.clone(), "type former spine"))
+        return gap(Gap::IndSpec(*ind, "type former spine"))
     };
 
     // **A decline that still hands back `•`.** A direct declaration's
@@ -481,7 +481,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         // rather than believed.
         Clause::Eq => {
             let (Some(l), Some(r)) = (arg_tms.get(1), arg_tms.get(2)) else {
-                return gap(Gap::IndSpec(ind.clone(), "refl instance"))
+                return gap(Gap::IndSpec(*ind, "refl instance"))
             };
             let got = match eq {
                 None => inst_all(&d.eq_refl, std::slice::from_ref(l)),
@@ -493,7 +493,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             };
             match got {
                 Some(t) => t,
-                None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
+                None => return gap(Gap::IndSpec(*ind, "refl instance")),
             }
         }
         // `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x` — A1 over
@@ -505,7 +505,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         Clause::Acc => {
             let Some(ac) = ip.acc() else { return undecided(Gap::IndApparatus) };
             let (Some(h_mem), 3) = (&step_hyp, arg_tms.len()) else {
-                return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO))
+                return undecided(Gap::IndSpec(*ind, ACC_INTRO))
             };
             let got = crate::acc::intro_mem(
                 ip,
@@ -521,12 +521,12 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             );
             match got {
                 Some(t) => t,
-                None => return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO)),
+                None => return undecided(Gap::IndSpec(*ind, ACC_INTRO)),
             }
         }
     };
     if *mem.concl() != Formula::mem(point.clone(), carrier) {
-        return gap(Gap::IndSpec(ind.clone(), "ctor is not about its own codomain"))
+        return gap(Gap::IndSpec(*ind, "ctor is not about its own codomain"))
     }
     // …and back onto the applied spine, which is what the Lean codomain
     // interprets to.
@@ -599,7 +599,7 @@ pub(crate) mod tests {
                 bvar(0),
                 crate::expr::app(
                     crate::expr::app(
-                        crate::expr::app(konst(e.clone(), us), bvar(1)),
+                        crate::expr::app(konst(e, us), bvar(1)),
                         bvar(0),
                     ),
                     bvar(0),
@@ -610,11 +610,11 @@ pub(crate) mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: e.clone(),
+                name: e,
                 lparams: vec![nm("u")],
                 num_params: 2,
                 ty,
-                ctors: vec![(r.clone(), cty)],
+                ctors: vec![(r, cty)],
             },
         )
         .expect("the declaration is accepted");
@@ -628,12 +628,12 @@ pub(crate) mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
 
-        let t = c.infer_type(&konst(e.clone(), us.clone())).expect("infer ⟦Eq⟧");
+        let t = c.infer_type(&konst(e, us.clone())).expect("infer ⟦Eq⟧");
         let m = t.ev.thm().unwrap_or_else(|| panic!("⟦Eq⟧ has no typing: {:?}", t.ev)).clone();
         assert!(m.hyps().is_empty(), "a closed declaration's typing is unconditional");
         assert!(t.tm.is_some(), "⟦Eq⟧ must interpret");
 
-        let ct = c.infer_type(&konst(r.clone(), us)).expect("infer ⟦Eq.refl⟧");
+        let ct = c.infer_type(&konst(r, us)).expect("infer ⟦Eq.refl⟧");
         let cm = ct.ev.thm().unwrap_or_else(|| panic!("⟦Eq.refl⟧ has no typing: {:?}", ct.ev)).clone();
         assert!(cm.hyps().is_empty());
         let (subj, _) = cm.concl().as_mem().expect("a membership");
@@ -663,7 +663,7 @@ pub(crate) mod tests {
                     bvar(1),
                     crate::expr::app(
                         crate::expr::app(
-                            crate::expr::app(konst(e.clone(), us), bvar(2)),
+                            crate::expr::app(konst(e, us), bvar(2)),
                             bvar(1),
                         ),
                         bvar(0),
@@ -675,11 +675,11 @@ pub(crate) mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: e.clone(),
+                name: e,
                 lparams: vec![nm("u")],
                 num_params: 2,
                 ty,
-                ctors: vec![(r.clone(), cty)],
+                ctors: vec![(r, cty)],
             },
         )
         .expect("accepted");
@@ -716,7 +716,7 @@ pub(crate) mod tests {
         let acc_at = |d_a: u32, d_r: u32, d_x: u32| {
             crate::expr::app(
                 crate::expr::app(
-                    crate::expr::app(konst(a.clone(), us.clone()), bvar(d_a)),
+                    crate::expr::app(konst(a, us.clone()), bvar(d_a)),
                     bvar(d_r),
                 ),
                 bvar(d_x),
@@ -735,11 +735,11 @@ pub(crate) mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: a.clone(),
+                name: a,
                 lparams: vec![nm("u")],
                 num_params: 2,
                 ty,
-                ctors: vec![(i.clone(), cty)],
+                ctors: vec![(i, cty)],
             },
         )
         .expect("the declaration is accepted");
@@ -786,7 +786,7 @@ pub(crate) mod tests {
         let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
         // The type former still lands — the clause is about `Acc α r x` and the
         // step hypothesis is nowhere in it.
-        let t = c.infer_type(&konst(a.clone(), us.clone())).expect("infer ⟦Acc⟧");
+        let t = c.infer_type(&konst(a, us.clone())).expect("infer ⟦Acc⟧");
         assert!(t.ev.thm().is_some(), "the formation clause is untouched by the constructor");
 
         let ct = c.infer_type(&konst(i, us)).expect("infer ⟦Acc.intro⟧");

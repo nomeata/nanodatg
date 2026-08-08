@@ -127,7 +127,7 @@
 use std::rc::Rc;
 
 use crate::env::{ConstantInfo, DefKind, Declaration, Environment};
-use crate::expr::{app_n, bvar, bvars, forall, konst, lam, shift, sort, Expr, Level, Name, E};
+use crate::expr::{app_n, bvar, bvars, forall, konst, lam, shift, sort, Expr, Level, Name, E, NameView};
 
 /// Why a block could not be encoded. Each is a shape, not a failure.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -193,7 +193,7 @@ impl Encoding {
             out.insert(d.name());
             if let Declaration::Inductive { name, ctors, .. } = d {
                 for (c, _) in ctors {
-                    out.insert(c.clone());
+                    out.insert(*c);
                 }
                 out.insert(Name::str(name, "rec"));
             }
@@ -259,7 +259,7 @@ fn shift_all(tys: &[E], d: u32) -> Vec<E> {
 }
 
 fn params_of(lparams: &[Name]) -> Rc<[Level]> {
-    lparams.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into()
+    lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into()
 }
 
 /// `T_k p⃗ ix⃗` becomes `Aux p⃗ (Tag.t_k p⃗ ix⃗)`, everywhere.
@@ -295,10 +295,10 @@ fn to_aux(
                 .collect::<Result<_, _>>()?;
             // `Tag.t_k` is a constructor of a *parameterised* inductive, so it
             // takes `p⃗` before the member's own indices.
-            let tag_app = app_n(konst(tag_ctors[k].clone(), us.clone()), &rewritten);
+            let tag_app = app_n(konst(tag_ctors[k], us.clone()), &rewritten);
             let mut a: Vec<E> = rewritten[..np].to_vec();
             a.push(tag_app);
-            return Ok(app_n(konst(aux.clone(), us.clone()), &a))
+            return Ok(app_n(konst(*aux, us.clone()), &a))
         }
     }
     let go = |x: &E| to_aux(x, names, tag_ctors, aux, np, nis, us);
@@ -310,7 +310,7 @@ fn to_aux(
             Rc::new(Expr::Let { ty: go(ty)?, val: go(val)?, body: go(body)? })
         }
         Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: go(s)? })
+            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: go(s)? })
         }
         _ => e.clone(),
     })
@@ -325,7 +325,7 @@ fn fresh(env: &Environment, base: Name) -> Name {
         return base
     }
     for i in 1u32.. {
-        let n = Name::Num(Rc::new(base.clone()), u64::from(i));
+        let n = Name::num(&base, u64::from(i));
         if env.get(&n).is_none() {
             return n
         }
@@ -392,19 +392,19 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     if tag == aux || aux == mot {
         return Err(Reason::NameTaken)
     }
-    let names: Vec<Name> = types.iter().map(|t| t.name.clone()).collect();
+    let names: Vec<Name> = types.iter().map(|t| t.name).collect();
     let tag_ctors: Vec<Name> =
-        (0..n).map(|i| Name::Num(Rc::new(Name::str(&tag, "t")), i as u64)).collect();
+        (0..n).map(|i| Name::num(&Name::str(&tag, "t"), i as u64)).collect();
 
     let mut decls: Vec<Declaration> = Vec::new();
 
     // `Tag p⃗`, with the parameters `d` binders in.
-    let tag_at = |d: u32| app_n(konst(tag.clone(), us.clone()), &bvars(np as u32, d));
+    let tag_at = |d: u32| app_n(konst(tag, us.clone()), &bvars(np as u32, d));
     // `Tag.tᵢ p⃗ ix⃗ᵢ`, with the parameters `dp` binders in and the indices `di`.
     let tag_ctor_at = |i: usize, dp: u32, di: u32| {
         let mut a = bvars(np as u32, dp);
         a.extend(bvars(nis[i] as u32, di));
-        app_n(konst(tag_ctors[i].clone(), us.clone()), &a)
+        app_n(konst(tag_ctors[i], us.clone()), &a)
     };
 
     // **The level `Tag` lives at, and it is the one number in the encoding
@@ -443,14 +443,14 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     //    the enumeration this used to be, with every constructor nullary; that
     //    is the degeneracy and not a branch.
     add(&mut tmp, &mut decls, Declaration::Inductive {
-            name: tag.clone(),
+            name: tag,
             lparams: lparams.clone(),
             num_params: *num_params,
             ty: foralls(&param_tys, sort(big_w.clone())),
             ctors: (0..n)
                 .map(|i| {
                     // `∀p⃗ ix⃗ᵢ, Tag p⃗`.
-                    (tag_ctors[i].clone(), foralls(&param_tys, foralls(&ix_tys[i], tag_at(nis[i] as u32))))
+                    (tag_ctors[i], foralls(&param_tys, foralls(&ix_tys[i], tag_at(nis[i] as u32))))
                 })
                 .collect(),
         },
@@ -469,7 +469,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     }
     let nc = aux_ctors.len();
     add(&mut tmp, &mut decls, Declaration::Inductive {
-            name: aux.clone(),
+            name: aux,
             lparams: lparams.clone(),
             num_params: *num_params,
             // `∀p⃗, Tag p⃗ → Sort u`.
@@ -483,13 +483,13 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         let body = {
             let mut a = bvars(np as u32, nis[i] as u32);
             a.push(tag_ctor_at(i, nis[i] as u32, 0));
-            app_n(konst(aux.clone(), us.clone()), &a)
+            app_n(konst(aux, us.clone()), &a)
         };
         let mut tys = param_tys.clone();
         tys.extend(ix_tys[i].iter().cloned());
         add(&mut tmp, &mut decls,
             Declaration::Def {
-                name: t.name.clone(),
+                name: t.name,
                 lparams: lparams.clone(),
                 ty: t.ty.clone(),
                 value: lams(&tys, body),
@@ -509,10 +509,10 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             if k < np {
                 return Err(Reason::Malformed)
             }
-            let body = app_n(konst(aux_ctors[m].0.clone(), us.clone()), &bvars(k as u32, 0));
+            let body = app_n(konst(aux_ctors[m].0, us.clone()), &bvars(k as u32, 0));
             add(&mut tmp, &mut decls,
                 Declaration::Def {
-                    name: cn.clone(),
+                    name: *cn,
                     lparams: lparams.clone(),
                     ty: ct.clone(),
                     value: lams(&binders, body),
@@ -538,7 +538,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     // `elimToSort` gave the recursor one level parameter more than the block
     // when it eliminates large, and that extra one is the motive's.
     let big = lp2.len() == lparams.len() + 1;
-    let v = if big { Level::Param(lp2[0].clone()) } else { Level::Zero };
+    let v = if big { Level::Param(lp2[0]) } else { Level::Zero };
     let us2 = params_of(&lp2);
 
     // 5. The packed motive, `fun p⃗ m⃗ (t : Tag p⃗) => Aux p⃗ t → Sort v`.
@@ -558,7 +558,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             a.extend(bvars(nis[k] as u32, 0));
             foralls(
                 &shift_all(&ix_tys[k], k as u32),
-                forall(app_n(konst(names[k].clone(), us.clone()), &a), sort(v.clone())),
+                forall(app_n(konst(names[k], us.clone()), &a), sort(v.clone())),
             )
         })
         .collect();
@@ -566,7 +566,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     let packed_body = {
         let mut a = bvars(np as u32, (n + 1) as u32);
         a.push(bvar(0));
-        forall(app_n(konst(aux.clone(), us.clone()), &a), sort(v.clone()))
+        forall(app_n(konst(aux, us.clone()), &a), sort(v.clone()))
     };
     let packed = lam(tag_at(n as u32), packed_body.clone());
     let mot_ty = {
@@ -601,7 +601,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         lams(&tys, app_n(tag_rec, &a))
     };
     add(&mut tmp, &mut decls, Declaration::Def {
-            name: mot.clone(),
+            name: mot,
             lparams: lp2.clone(),
             ty: mot_ty,
             value: mot_val,
@@ -641,13 +641,13 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             let mut a = bvars(np as u32, off);
             let mut mot_args = bvars(np as u32, off);
             mot_args.extend(bvars(n as u32, (nc + ni + 1) as u32));
-            a.push(app_n(konst(mot.clone(), us2.clone()), &mot_args));
+            a.push(app_n(konst(mot, us2.clone()), &mot_args));
             a.extend(bvars(nc as u32, (ni + 1) as u32));
             // `Aux` has exactly one index, the tag, and this member's own
             // indices are the arguments of the tag constructor. Then the major.
             a.push(tag_ctor_at(i, off, 1));
             a.push(bvar(0));
-            app_n(konst(aux_rec.clone(), aux_rec_levels.clone()), &a)
+            app_n(konst(aux_rec, aux_rec_levels.clone()), &a)
         };
         add(&mut tmp, &mut decls, Declaration::Def {
                 name: rec_name,
@@ -694,7 +694,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 let ctor_app = {
                     let mut a = bvars(np as u32, (n + nc + nf) as u32);
                     a.extend(bvars(nf as u32, 0));
-                    app_n(konst(cn.clone(), us.clone()), &a)
+                    app_n(konst(*cn, us.clone()), &a)
                 };
                 let alpha = {
                     let mut a = ridx.clone();
@@ -711,8 +711,8 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 };
                 let vs: Rc<[Level]> = vec![v.clone()].into();
                 let stmt =
-                    app_n(konst(eq.clone(), vs.clone()), &[alpha.clone(), lhs.clone(), rhs.clone()]);
-                let proof = app_n(konst(eq_refl.clone(), vs), &[alpha, lhs]);
+                    app_n(konst(eq, vs.clone()), &[alpha.clone(), lhs.clone(), rhs.clone()]);
+                let proof = app_n(konst(eq_refl, vs), &[alpha, lhs]);
                 let name =
                     fresh(&tmp, Name::str(&Name::str(&t.name, "rec"), &format!("_auxRule{j}")));
                 add(&mut tmp, &mut decls,
@@ -799,8 +799,8 @@ pub fn demand_over(
                     out: &mut HashMap<Name, Vec<Vec<u32>>>,
                     n: Name,
                     s: Vec<u32>| {
-        if seen.insert((n.clone(), s.clone())) {
-            out.entry(n.clone()).or_default().push(s.clone());
+        if seen.insert((n, s.clone())) {
+            out.entry(n).or_default().push(s.clone());
             work.push((n, s));
         }
     };
@@ -809,7 +809,7 @@ pub fn demand_over(
             continue
         }
         for s in ss {
-            push(&mut work, &mut seen, &mut out, n.clone(), s.clone());
+            push(&mut work, &mut seen, &mut out, *n, s.clone());
         }
     }
     while let Some((n, sigma)) = work.pop() {
@@ -852,7 +852,7 @@ fn consts(
             if mine.contains(n) {
                 let s: Option<Vec<u32>> = ls.iter().map(|l| crate::ground::eval(l, map)).collect();
                 if let Some(s) = s {
-                    out.push((n.clone(), s));
+                    out.push((*n, s));
                 }
             }
         }
@@ -968,7 +968,7 @@ pub fn expand(
             for g in &enc.decls {
                 let n = g.name();
                 if is_rule_of(&n, &t.name) {
-                    seeds.entry(n.clone()).or_insert_with(|| ss.clone());
+                    seeds.entry(n).or_insert_with(|| ss.clone());
                     out.schedule.entry(n).or_default().extend(ss.iter().cloned());
                 }
             }
@@ -979,11 +979,11 @@ pub fn expand(
         // **Only what this encoding declares.** See `Encoding::declares`.
         for k in enc.declares() {
             if let Some(v) = enc.env.consts.get(&k) {
-                out.env.consts.insert(k.clone(), v.clone());
+                out.env.consts.insert(k, v.clone());
             }
             match enc.env.owners.get(&k) {
                 Some(o) => {
-                    out.env.owners.insert(k, o.clone());
+                    out.env.owners.insert(k, *o);
                 }
                 None => {
                     out.env.owners.remove(&k);
@@ -1011,12 +1011,12 @@ pub fn expand(
 /// recognised here rather than by a string search at the call site.
 fn is_rule_of(n: &Name, t: &Name) -> bool {
     let rec = Name::str(t, "rec");
-    let mut cur = n;
+    let mut cur = *n;
     // `T.rec._auxRuleJ`, possibly with `fresh`'s numeric suffix on top.
-    while let Name::Num(p, _) = cur {
+    while let NameView::Num(p, _) = cur.view() {
         cur = p;
     }
-    matches!(cur, Name::Str(p, sfx) if **p == rec && sfx.starts_with("_auxRule"))
+    matches!(cur.view(), NameView::Str(p, sfx) if p == rec && sfx.starts_with("_auxRule"))
 }
 
 /// Check `d` into `tmp` and record it. **The declaration goes through

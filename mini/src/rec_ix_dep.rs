@@ -131,15 +131,15 @@ pub(crate) fn ensure(
     ni: usize,
     rec_ty: &E,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let ctors = match c.environment().get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
     let depth = np + 1 + n + ni + 1;
     let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(ARITY))?;
 
-    let key = (ind_name.clone(), ind_inst.to_vec());
+    let key = (*ind_name, ind_inst.to_vec());
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -158,9 +158,9 @@ pub(crate) fn ensure(
     }
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
-        rec: rec_name.clone(),
+        rec: *rec_name,
         rec_inst: rec_inst.to_vec(),
         ctors,
         np,
@@ -180,7 +180,7 @@ pub(crate) fn ensure(
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (np, n, ni, depth) = (site.np, site.n, site.ni, site.depth);
 
     // §6.2's split, taken twice and required to agree: `rec_dep` read it off
@@ -275,7 +275,7 @@ pub(crate) fn premise_at(
     m_ty_mem: &Thm,
     lvl: u32,
 ) -> Result<IxPre, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (n, ni) = (site.n, site.ni);
     let tr = site.fam.class_t().ok_or_else(|| bad(DISAGREE))?.clone();
     if let Some(ss) = sources {
@@ -288,11 +288,11 @@ pub(crate) fn premise_at(
     // minors' own, and a `GenRecursor` per build.
     let dr = {
         let (base, fam) = (tr.base.clone(), &tr.ii);
-        let key = (site.ind.clone(), site.inst.clone());
+        let key = (site.ind, site.inst.clone());
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         app.indexed_dep_recursor(kenv, &key, &base, fam)
-            .ok_or_else(|| Gap::Recursor(site.ind.clone(), RULE, Cause::Library))?
+            .ok_or(Gap::Recursor(site.ind, RULE, Cause::Library))?
     };
     if dr.minors.len() != n || dr.xvs.len() != ni || dr.guards.dep_parts.len() != n {
         return Err(bad(DISAGREE))
@@ -425,7 +425,7 @@ pub(crate) struct IxPre {
 /// The rule at `(⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, T)` discharged at the major, and the bottom's
 /// term.
 fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let IxPre { dr, pre, sub, target } = ix;
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
@@ -485,7 +485,7 @@ fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm)
     // `MINI-HANDOFF.md` §8 for why that row's remaining obstacle is
     // `minor_ix::transport` and *not* this.
     if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec.clone(), site.rec_inst.clone());
+        let key = (site.rec, site.rec_inst.clone());
         app.dep_elims
             .insert(key, Rc::new(crate::interp::DepElim { sym, ax, target: target.clone() }));
     }
@@ -595,7 +595,7 @@ mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         c.infer_type(&konst(t, Vec::new().into())).expect("infer ⟦T⟧");
         let at: Rc<[Level]> = vec![Level::Zero.succ()].into();
-        let got = c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦T.rec.{1}⟧");
+        let got = c.infer_type(&konst(rec, at)).expect("infer ⟦T.rec.{1}⟧");
         let m = got
             .ev
             .thm()

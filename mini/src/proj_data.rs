@@ -516,7 +516,7 @@ pub(crate) fn typing(
     }
 
     // ── the class, read off the store — `decls`, like row 2's branch ────────
-    let key = (ind.clone(), inst.clone());
+    let key = (*ind, inst.clone());
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -664,7 +664,7 @@ pub(crate) fn iota(
     }
 
     // ── the declaration, and the theorems its translation kept ──────────────
-    let key = (ind.clone(), inst.to_vec());
+    let key = (*ind, inst.to_vec());
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -805,7 +805,7 @@ pub(crate) fn structure_eta(
     }
     let k = args.len() - np;
 
-    let key = (ind.clone(), inst.clone());
+    let key = (*ind, inst.clone());
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -852,7 +852,7 @@ pub(crate) fn structure_eta(
     let mut convs = Vec::with_capacity(k);
     for (i, pi) in pis.iter().enumerate() {
         let p = std::rc::Rc::new(Expr::Proj {
-            ind: ind.clone(),
+            ind: *ind,
             idx: u32::try_from(i).map_err(|_| miss!())?,
             s: e2.clone(),
         });

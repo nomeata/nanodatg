@@ -133,8 +133,8 @@ pub(crate) fn fire(
         .environment()
         .owner(rec)
         .cloned()
-        .ok_or_else(|| Gap::NoInterpretation(rec.clone(), rec_inst.to_vec()))?;
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+        .ok_or_else(|| Gap::NoInterpretation(*rec, rec_inst.to_vec()))?;
+    let bad = |w: &'static str| Gap::Recursor(ind_name, w, Cause::Threading);
     if crate::direct::clause_for(&ind_name) != Some(crate::direct::Clause::Acc) {
         return Err(bad(CLAUSE))
     }
@@ -179,7 +179,7 @@ pub(crate) fn fire(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let elim: Rc<RecAccElim> = ip
         .rec_acc_elims
-        .get(&(rec.clone(), rec_inst.to_vec()))
+        .get(&(*rec, rec_inst.to_vec()))
         .cloned()
         .ok_or_else(|| bad(ABBREV))?;
     let ac = ip.acc().ok_or(Gap::IndApparatus)?;
@@ -335,7 +335,7 @@ fn rows_agree(
     ih_tm: &Term,
     lam: &Term,
 ) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind, w, Cause::Threading);
     let sums = ip.prelude.tower.sums.clone();
     let base = cx.ra.ra.base.clone();
     let (lsite, ldom) = ip.as_lam(lam).ok_or_else(|| bad(LAM))?;
@@ -440,7 +440,7 @@ fn row_agrees(
     inner: &Term,
     sc: &mut Scopes,
 ) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind, w, Cause::Threading);
     let sums = ip.prelude.tower.sums.clone();
     let base = cx.ra.ra.base.clone();
     let up = sums.ap.sets.up;
@@ -560,7 +560,7 @@ fn recursive_call(
     rel_u0: &Thm,
     w_in_rel: &Thm,
 ) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind, w, Cause::Threading);
     let point = ip.point();
 
     // `w` is a proof, so it is `•` — which is what puts the pair in the graph.

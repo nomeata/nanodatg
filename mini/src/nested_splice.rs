@@ -323,7 +323,7 @@ pub fn recognise(
     for (i, d) in decls.iter().enumerate() {
         let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else { continue };
         let types =
-            vec![IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }];
+            vec![IndType { name: *name, ty: ty.clone(), ctors: ctors.clone() }];
         // **`nested::plan` answers "is this nested", and nothing else does.**
         // Not the export's `is_nested` flag, which `convert::load` has already
         // consumed at the parser gate, and not a name: the question here is
@@ -385,9 +385,9 @@ impl Recognised {
         // The type former and the constructors have no universe parameters of
         // their own, so `σ = []` is the whole population.
         for (export, model) in &m.mono {
-            self.model_of.insert((export.clone(), Vec::new()), model.clone());
+            self.model_of.insert((*export, Vec::new()), *model);
             self.demand(model, &[Vec::new()]);
-            constants.push(export.clone());
+            constants.push(*export);
         }
         // **A recursor is keyed at every σ the run will ask for it at**, and
         // the same σ are propagated onto the model — the header's "any
@@ -405,11 +405,11 @@ impl Recognised {
                 }
             }
             for s in &sigmas {
-                self.model_of.insert((export.clone(), s.clone()), model.clone());
+                self.model_of.insert((*export, s.clone()), *model);
             }
             self.demand(model, &sigmas);
-            sigmas_of.insert(export.clone(), sigmas);
-            constants.push(export.clone());
+            sigmas_of.insert(*export, sigmas);
+            constants.push(*export);
         }
         // A rule is keyed at the σ its recursor was keyed at, and at no other:
         // a rule at a σ the recursor has no interpretation at is a rule about a
@@ -417,12 +417,12 @@ impl Recognised {
         for (export, ctor, thm) in &m.iotas {
             let Some(sigmas) = sigmas_of.get(export) else { continue };
             for s in sigmas {
-                self.model_iota.insert(((export.clone(), s.clone()), ctor.clone()), thm.clone());
+                self.model_iota.insert(((*export, s.clone()), *ctor), *thm);
             }
             self.demand(thm, sigmas);
         }
         let _ = env;
-        self.nested.insert(name.clone(), NestedRecord { why: None, constants });
+        self.nested.insert(*name, NestedRecord { why: None, constants });
     }
 
     /// Add σ to a model constant's schedule entry. **Never a default**: a
@@ -433,7 +433,7 @@ impl Recognised {
         if sigmas.is_empty() {
             return
         }
-        let e = self.schedule.entry(n.clone()).or_default();
+        let e = self.schedule.entry(*n).or_default();
         for s in sigmas {
             if !e.contains(s) {
                 e.push(s.clone());
@@ -444,11 +444,11 @@ impl Recognised {
     /// Record a nested declaration with no model: the shape that stopped it,
     /// filed under every constant the model would have keyed.
     fn decline(&mut self, env: &Environment, name: &Name, ctors: &[(Name, E)], why: Missing) {
-        let mut constants = vec![name.clone()];
-        constants.extend(ctors.iter().map(|(c, _)| c.clone()));
+        let mut constants = vec![*name];
+        constants.extend(ctors.iter().map(|(c, _)| *c));
         constants.extend(export_recs(env, name).into_iter().map(|(n, _)| n));
         self.nested
-            .insert(name.clone(), NestedRecord { why: Some(why.label()), constants });
+            .insert(*name, NestedRecord { why: Some(why.label()), constants });
     }
 }
 
@@ -501,12 +501,12 @@ fn shape(
     // part of the tower is missing, rather than in one sweep that would report
     // every absence as the same thing.
     let mut rho: HashMap<Name, Name> = HashMap::new();
-    rho.insert(t.clone(), self_n.clone());
+    rho.insert(*t, self_n);
     for (j, (c, _)) in ctors.iter().enumerate() {
-        rho.insert(c.clone(), ctor_name(t, j));
+        rho.insert(*c, ctor_name(t, j));
     }
     for (k, (r, _)) in recs.iter().enumerate() {
-        rho.insert(r.clone(), rec_name(t, k));
+        rho.insert(*r, rec_name(t, k));
     }
 
     // ── the carrier ─────────────────────────────────────────────────────────
@@ -528,7 +528,7 @@ fn shape(
         return Err(Missing::Carrier)
     }
 
-    let mut mono: Vec<(Name, Name)> = vec![(t.clone(), self_n)];
+    let mut mono: Vec<(Name, Name)> = vec![(*t, self_n)];
     for (j, (c, c_ty)) in ctors.iter().enumerate() {
         let m = ctor_name(t, j);
         let Some(ci) = env.get(&m) else { return Err(Missing::Ctor) };
@@ -539,14 +539,14 @@ fn shape(
         let at = crate::env::instantiate_lparams(
             ci.ty(),
             ci.lparams(),
-            &t_ci.lparams().iter().map(|n| crate::expr::Level::Param(n.clone())).collect::<Vec<_>>(),
+            &t_ci.lparams().iter().map(|n| crate::expr::Level::Param(*n)).collect::<Vec<_>>(),
         );
         if ci.lparams().len() != t_ci.lparams().len()
             || at.ok().as_ref() != Some(&rename(&rho, c_ty))
         {
             return Err(Missing::Ctor)
         }
-        mono.push((c.clone(), m));
+        mono.push((*c, m));
     }
 
     // ρ read backwards, for [`iota_key`]: an ι theorem's major is written in
@@ -557,7 +557,7 @@ fn shape(
     // through ρ when it is a model constant and taken as it stands when it is
     // not.
     let back: HashMap<Name, Name> =
-        rho.iter().map(|(e, m)| (m.clone(), e.clone())).collect();
+        rho.iter().map(|(e, m)| (*m, *e)).collect();
 
     let mut out_recs: Vec<(Name, Name)> = Vec::new();
     let mut iotas: Vec<(Name, Name, Name)> = Vec::new();
@@ -584,9 +584,9 @@ fn shape(
             if about != *rule_ctor {
                 return Err(Missing::IotaRule)
             }
-            iotas.push((r.clone(), rule_ctor.clone(), thm));
+            iotas.push((*r, *rule_ctor, thm));
         }
-        out_recs.push((r.clone(), m));
+        out_recs.push((*r, m));
     }
     Ok(Model { mono, recs: out_recs, iotas })
 }
@@ -624,7 +624,7 @@ fn at_export_levels(model: &ConstantInfo, export: &ConstantInfo) -> Option<E> {
         return None
     }
     let us: Vec<crate::expr::Level> =
-        export.lparams().iter().map(|n| crate::expr::Level::Param(n.clone())).collect();
+        export.lparams().iter().map(|n| crate::expr::Level::Param(*n)).collect();
     crate::env::instantiate_lparams(model.ty(), model.lparams(), &us).ok()
 }
 
@@ -659,7 +659,7 @@ fn iota_key(ty: &E, rec: &Name, back: &HashMap<Name, Name>) -> Option<Name> {
     }
     let major = lhs_args.last()?;
     match &*get_app(major).0 {
-        Expr::Const(c, _) => Some(back.get(c).unwrap_or(c).clone()),
+        Expr::Const(c, _) => Some(*back.get(c).unwrap_or(c)),
         _ => None,
     }
 }
@@ -668,7 +668,7 @@ fn iota_key(ty: &E, rec: &Name, back: &HashMap<Name, Name>) -> Option<Name> {
 fn rename(rho: &HashMap<Name, Name>, e: &E) -> E {
     match &**e {
         Expr::Const(n, ls) => match rho.get(n) {
-            Some(m) => crate::expr::konst(m.clone(), ls.clone()),
+            Some(m) => crate::expr::konst(*m, ls.clone()),
             None => e.clone(),
         },
         Expr::App(f, x) => crate::expr::app(rename(rho, f), rename(rho, x)),
@@ -680,7 +680,7 @@ fn rename(rho: &HashMap<Name, Name>, e: &E) -> E {
             body: rename(rho, body),
         }),
         Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: ind.clone(),
+            ind: *ind,
             idx: *idx,
             s: rename(rho, s),
         }),
@@ -748,7 +748,7 @@ fn consts_at(e: &E, map: &HashMap<Name, u32>, out: &mut Vec<(Name, Vec<u32>)>) {
     match &**e {
         Expr::Const(n, ls) => {
             if let Some(s) = ls.iter().map(|l| crate::ground::eval(l, map)).collect() {
-                out.push((n.clone(), s));
+                out.push((*n, s));
             }
         }
         Expr::App(f, x) => {
@@ -778,14 +778,14 @@ fn positions(env: &Environment, decls: &[Declaration]) -> HashMap<Name, usize> {
         owner_pos.insert(d.name(), i);
         if let Declaration::Mutual { types, .. } = d {
             for t in types {
-                owner_pos.insert(t.name.clone(), i);
+                owner_pos.insert(t.name, i);
             }
         }
     }
     let mut out = owner_pos.clone();
     for (n, o) in &env.owners {
         if let Some(i) = owner_pos.get(o) {
-            out.insert(n.clone(), *i);
+            out.insert(*n, *i);
         }
     }
     out

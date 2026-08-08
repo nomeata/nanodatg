@@ -154,7 +154,7 @@ impl ClassPIx {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassPIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.truncs_ix.get(&(ind_name.clone(), inst.to_vec())).cloned()
+    app.truncs_ix.get(&(*ind_name, inst.to_vec())).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(P) declaration with indices.
@@ -169,7 +169,7 @@ pub(crate) fn build(
     level: u32,
     walk: Rc<IndexedWalk>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndexedFamily(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndexedFamily(*ind_name, w);
     if walk.spec.params() != np || walk.spec.num_indices() != ni {
         return Err(bad("class (P) at an index: the walk and the declaration disagree"))
     }
@@ -238,7 +238,7 @@ pub(crate) fn build(
     // eliminator read as a `derived/` gap for a month because `build_trunc`
     // ended at `former_at` and dropped exactly this.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.truncs_ix.insert((ind_name.clone(), inst.to_vec()), built.clone());
+        app.truncs_ix.insert((*ind_name, inst.to_vec()), built.clone());
     }
     // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule:
     // the type former is a complete obligation on its own, so a constructor
@@ -246,7 +246,7 @@ pub(crate) fn build(
     for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
         if let Err(g) = constructor(c, ind_name, inst, cname, cty, i, &built) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((cname.clone(), inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
             }
         }
     }
@@ -280,7 +280,7 @@ fn constructor(
     i: usize,
     cp: &Rc<ClassPIx>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(cname.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(*cname, w, Cause::Threading);
     let order = cp
         .walk
         .spec
@@ -298,8 +298,8 @@ fn constructor(
     let depth = np + nf;
     let codomain = crate::zoneb::peel(cty, depth).ok_or_else(|| bad("constructor arity"))?;
     let site = CtorSite {
-        ind: ind_name.clone(),
-        ctor: cname.clone(),
+        ind: *ind_name,
+        ctor: *cname,
         inst: inst.to_vec(),
         i,
         np,
@@ -348,7 +348,7 @@ const RULE: &str = "TruncCtor's rule does not discharge here";
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
 
     // ── the index expressions, off the checker's own telescope ──────────────
@@ -492,7 +492,7 @@ fn build_ctor(
     site: &CtorSite,
     at: &At,
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
     let cp = site.cp.clone();
     let tcc = cp.tc.ctors.get(site.i).ok_or_else(|| bad(SHAPE))?;
@@ -881,7 +881,7 @@ pub(crate) mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: n.clone(),
+                name: n,
                 lparams: vec![],
                 num_params: np,
                 ty,
@@ -912,7 +912,7 @@ pub(crate) mod tests {
         let ctor_ok = t.tm.is_some()
             && names
                 .iter()
-                .all(|m| c.infer_type(&konst(m.clone(), no.clone())).map(|x| x.tm.is_some()).unwrap_or(false));
+                .all(|m| c.infer_type(&konst(*m, no.clone())).map(|x| x.tm.is_some()).unwrap_or(false));
         (t.tm.is_some(), t.ev.gap().cloned(), ctor_ok)
     }
 
@@ -991,7 +991,7 @@ pub(crate) mod tests {
 
         // `f0` has no recursive field and owes the three things every stored
         // typing owes.
-        let f0 = c.infer_type(&konst(names[0].clone(), no.clone())).expect("infer f0");
+        let f0 = c.infer_type(&konst(names[0], no.clone())).expect("infer f0");
         let m = f0.ev.thm().unwrap_or_else(|| panic!("f0 has no typing: {:?}", f0.ev)).clone();
         let (subj, set) = m.concl().as_mem().expect("a membership");
         assert!(m.hyps().is_empty(), "a stored typing is unconditional");
@@ -1001,11 +1001,11 @@ pub(crate) mod tests {
 
         // `f1` declines, and the reason is the missing **bridge** rather than a
         // frame that could not be read.
-        let f1 = c.infer_type(&konst(names[1].clone(), no)).expect("infer f1");
+        let f1 = c.infer_type(&konst(names[1], no)).expect("infer f1");
         assert!(f1.ev.thm().is_none(), "a function-typed slot must not certify here");
         assert_eq!(
             f1.ev.gap(),
-            Some(&Gap::IndexedCtor(names[1].clone(), REC_FUN, Cause::Threading)),
+            Some(&Gap::IndexedCtor(names[1], REC_FUN, Cause::Threading)),
             "the frame is read and the bridge is what is missing"
         );
     }

@@ -69,7 +69,7 @@ pub fn subst_ground(e: &E, uparams: &[Name], sigma: &[u32]) -> E {
     crate::expr::subst_level(e, &|n: &Name| match env.get(n) {
         Some(k) => numeral(*k),
         // As in `instantiate_lparams`: should not happen.
-        None => Level::Param(n.clone()),
+        None => Level::Param(*n),
     })
 }
 

@@ -1396,5 +1396,5 @@ fn retype(env: &mut Environment, n: &Name, ty: E) {
     let ConstantInfo::Def { lparams, value, .. } = env.get(n).expect("declared").clone() else {
         panic!("{n} is not a def")
     };
-    env.consts.insert(n.clone(), ConstantInfo::Def { lparams, ty, value });
+    env.consts.insert(*n, ConstantInfo::Def { lparams, ty, value });
 }

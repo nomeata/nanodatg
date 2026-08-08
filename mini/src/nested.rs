@@ -100,7 +100,7 @@
 //! names a certificate.
 
 use crate::env::{instantiate_lparams, ConstantInfo, Declaration, Environment, IndType};
-use crate::expr::{app_n, bvars, get_app, has_bvar, konst, substs, Expr, Level, Name, E};
+use crate::expr::{app_n, bvars, get_app, has_bvar, konst, substs, Expr, Level, Name, E, NameView};
 use std::collections::HashMap;
 
 type R<T> = Result<T, String>;
@@ -158,18 +158,18 @@ pub fn plan(
     types: &[IndType],
 ) -> R<Option<Plan>> {
     let root = match types.first() {
-        Some(t) => t.name.clone(),
+        Some(t) => t.name,
         None => return Ok(None),
     };
     let us: std::rc::Rc<[Level]> =
-        lparams.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into();
+        lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
     let mut sp = Sp {
         env,
         num_params,
         us,
-        members: types.iter().map(|t| t.name.clone()).collect(),
+        members: types.iter().map(|t| t.name).collect(),
         mimics: Vec::new(),
-        root: root.clone(),
+        root,
         // The parameter binder types of the block, peeled from the first
         // member's own type. Every mimic is declared over the same telescope.
         params: peel_params(&types[0].ty, num_params)?,
@@ -184,9 +184,9 @@ pub fn plan(
     for t in types {
         let mut cs = Vec::with_capacity(t.ctors.len());
         for (cn, cty) in &t.ctors {
-            cs.push((cn.clone(), sp.spec(cty, 0)?));
+            cs.push((*cn, sp.spec(cty, 0)?));
         }
-        out.push(IndType { name: t.name.clone(), ty: t.ty.clone(), ctors: cs });
+        out.push(IndType { name: t.name, ty: t.ty.clone(), ctors: cs });
     }
     if sp.mimics.is_empty() {
         return Ok(None)
@@ -203,7 +203,7 @@ pub fn plan(
     while k < sp.mimics.len() {
         let m = sp.mimics[k].clone();
         let (ty, ctors) = sp.mimic_decl(&m)?;
-        out.push(IndType { name: m.name.clone(), ty, ctors });
+        out.push(IndType { name: m.name, ty, ctors });
         k += 1;
     }
     Ok(Some(Plan { types: out, mimics: sp.mimics }))
@@ -222,7 +222,7 @@ pub fn add(
     types: &[IndType],
     plan: &Plan,
 ) -> R<()> {
-    let root = types[0].name.clone();
+    let root = types[0].name;
     // A scratch environment, because the mimics are **not** declarations the
     // export makes and must not survive into the real one: `Tree._nested.1` is
     // this module's name for `List Tree`, and a consumer that found it in the
@@ -242,9 +242,9 @@ pub fn add(
     // how many leading arguments it consumes and what it becomes.
     let mut heads: HashMap<Name, (u32, E)> = HashMap::new();
     for (k, m) in plan.mimics.iter().enumerate() {
-        heads.insert(m.name.clone(), (num_params, m.occ.clone()));
+        heads.insert(m.name, (num_params, m.occ.clone()));
         for (mc, real) in &m.ctors {
-            heads.insert(mc.clone(), (num_params, real.clone()));
+            heads.insert(*mc, (num_params, real.clone()));
         }
         heads.insert(
             Name::str(&m.name, "rec"),
@@ -273,7 +273,7 @@ pub fn add(
         return Err(format!("{root} did not come back as an inductive"))
     };
     env.insert_new(
-        root.clone(),
+        root,
         ConstantInfo::Inductive {
             lparams: lparams.to_vec(),
             ty,
@@ -285,10 +285,10 @@ pub fn add(
     )?;
     for (cn, cty) in &types[0].ctors {
         env.insert_new(
-            cn.clone(),
+            *cn,
             ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: cty.clone() },
         )?;
-        env.owners.insert(cn.clone(), root.clone());
+        env.owners.insert(*cn, root);
     }
     for k in 0..plan.types.len() {
         let member = &plan.types[k].name;
@@ -307,7 +307,7 @@ pub fn add(
             return Err(format!("{src} did not come back as a recursor"))
         };
         let name = Plan::rec_name(&root, k);
-        env.owners.insert(name.clone(), root.clone());
+        env.owners.insert(name, root);
         env.insert_new(
             name,
             ConstantInfo::Recursor {
@@ -332,7 +332,7 @@ pub fn add(
 fn rec_levels(env: &Environment, member: &Name) -> R<std::rc::Rc<[Level]>> {
     let n = Name::str(member, "rec");
     let ci = env.get(&n).ok_or_else(|| format!("{n} was not generated"))?;
-    Ok(ci.lparams().iter().map(|p| Level::Param(p.clone())).collect::<Vec<_>>().into())
+    Ok(ci.lparams().iter().map(|p| Level::Param(*p)).collect::<Vec<_>>().into())
 }
 
 fn get_ty<'a>(env: &'a Environment, n: &Name) -> R<&'a E> {
@@ -345,10 +345,10 @@ fn get_ty<'a>(env: &'a Environment, n: &Name) -> R<&'a E> {
 fn restore_ctor_name(heads: &HashMap<Name, (u32, E)>, c: &Name) -> Name {
     match heads.get(c) {
         Some((_, repl)) => match &*get_app(repl).0 {
-            Expr::Const(n, _) => n.clone(),
-            _ => c.clone(),
+            Expr::Const(n, _) => *n,
+            _ => *c,
         },
-        None => c.clone(),
+        None => *c,
     }
 }
 
@@ -393,7 +393,7 @@ pub fn restore(heads: &HashMap<Name, (u32, E)>, e: &E) -> E {
             body: restore(heads, body),
         }),
         Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: ind.clone(),
+            ind: *ind,
             idx: *idx,
             s: restore(heads, s),
         }),
@@ -484,7 +484,7 @@ impl Sp<'_> {
                 body: self.spec(body, d + 1)?,
             })),
             Expr::Proj { ind, idx, s } => Ok(std::rc::Rc::new(Expr::Proj {
-                ind: ind.clone(),
+                ind: *ind,
                 idx: *idx,
                 s: self.spec(s, d)?,
             })),
@@ -527,10 +527,10 @@ impl Sp<'_> {
         }
         let occ = lower(occ, k);
         if let Some(m) = self.mimics.iter().find(|m| m.occ == occ) {
-            return Ok(m.name.clone())
+            return Ok(m.name)
         }
         let idx = self.mimics.len() + 1;
-        let name = Name::Num(std::rc::Rc::new(Name::str(&self.root, "_nested")), idx as u64);
+        let name = Name::num(&Name::str(&self.root, "_nested"), idx as u64);
         if self.env.get(&name).is_some() {
             return Err(format!("{name} is already declared"))
         }
@@ -542,17 +542,17 @@ impl Sp<'_> {
         let mut cs = Vec::with_capacity(ctors.len());
         let (_, occ_args) = get_app(&occ);
         for cn in ctors {
-            let last = match cn {
-                Name::Str(_, s) => s.to_string(),
-                other => other.to_string(),
+            let last = match cn.view() {
+                NameView::Str(_, s) => s.to_string(),
+                _ => cn.to_string(),
             };
             cs.push((
                 Name::str(&name, &last),
-                app_n(konst(cn.clone(), ls.clone()), &occ_args),
+                app_n(konst(*cn, ls.clone()), &occ_args),
             ));
         }
-        self.members.push(name.clone());
-        self.mimics.push(Mimic { name: name.clone(), occ, ctors: cs });
+        self.members.push(name);
+        self.mimics.push(Mimic { name, occ, ctors: cs });
         Ok(name)
     }
 
@@ -583,7 +583,7 @@ impl Sp<'_> {
             let rls = rci.lparams().to_vec();
             let cty = self.at_params(&instantiate_lparams(rci.ty(), &rls, ls)?, &occ_args)?;
             let cty = self.spec(&cty, self.num_params)?;
-            out.push((mc.clone(), wrap_params(&self.params, cty)));
+            out.push((*mc, wrap_params(&self.params, cty)));
         }
         Ok((ty, out))
     }
@@ -646,7 +646,7 @@ fn lower_general(e: &E, k: u32, cut: u32) -> E {
             body: lower_general(body, k, cut + 1),
         }),
         Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: ind.clone(),
+            ind: *ind,
             idx: *idx,
             s: lower_general(s, k, cut),
         }),

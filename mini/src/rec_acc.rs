@@ -126,26 +126,26 @@ pub(crate) fn ensure(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     if (*num_params, *num_minors, *num_indices) != (2, 1, 1) {
         return Err(bad(SHAPE))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let u1 = crate::rec_dep::motive_level(&rec_ty, 2, 1).ok_or_else(|| bad(MOTIVE))?;
     let codomain = crate::zoneb::peel(&rec_ty, DEPTH).ok_or_else(|| bad(ARITY))?;
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
-        rec: rec_name.clone(),
+        rec: *rec_name,
         rec_inst: rec_inst.to_vec(),
         codomain,
         u1,
@@ -183,7 +183,7 @@ pub(crate) struct Site {
 fn prop_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort (in `ensure`), once from the codomain the nest reached.
@@ -225,7 +225,7 @@ pub(crate) struct At {
 
 /// `Γ ⊢ • ∈ ⟦C a t⟧`.
 fn build(ip: &mut Interp, ac: &AccClause, site: &Site, at: &At) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let sums = ip.prelude.tower.sums.clone();
     let tower = ip.prelude.tower.clone();
     let point = ip.point();

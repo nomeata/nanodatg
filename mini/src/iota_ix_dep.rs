@@ -129,7 +129,7 @@ pub(crate) fn fire(
     rhs: &E,
 ) -> Result<(Thm, Term), Gap> {
     let depth = np + 1 + n + ni + 1;
-    let bad = |w: &'static str| Gap::Recursor(rec.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*rec, w, Cause::Threading);
     if args.len() != depth || arg_tms.len() != depth || ni == 0 {
         return Err(bad(if ni == 0 { NOT_INDEXED } else { SHAPE }))
     }
@@ -159,7 +159,7 @@ pub(crate) fn fire(
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.indexed
-            .get(&(ind_name.clone(), ind_inst.clone()))
+            .get(&(ind_name, ind_inst.clone()))
             .cloned()
             .ok_or_else(|| bad(CARRIER))?
     };
@@ -178,9 +178,9 @@ pub(crate) fn fire(
     }
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: ind_name,
         inst: ind_inst.clone(),
-        rec: rec.clone(),
+        rec: *rec,
         rec_inst: rec_inst.to_vec(),
         ctors: ctors.clone(),
         np,
@@ -252,7 +252,7 @@ pub(crate) fn fire(
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.dep_elims
-            .get(&(rec.clone(), rec_inst.to_vec()))
+            .get(&(*rec, rec_inst.to_vec()))
             .cloned()
             .ok_or_else(|| bad(ABBREV))?
     };
@@ -542,8 +542,8 @@ mod tests {
     /// gets wrong.
     fn elim(x: E, y: E, major: E) -> E {
         let (b, t) = (nm("B"), nm("T"));
-        let bt = konst(b.clone(), no());
-        let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no()), a), i), j);
+        let bt = konst(b, no());
+        let tap = |a: E, i: E, j: E| app(app(app(konst(t, no()), a), i), j);
         let b0 = konst(Name::str(&b, "b0"), no());
         // `C := λ (x y : B) (t : T B x y). B`
         let motive =
@@ -578,7 +578,7 @@ mod tests {
     /// The three majors, with the index vector each is eliminated at.
     fn majors() -> Vec<(&'static str, E, E, E)> {
         let (b, t) = (nm("B"), nm("T"));
-        let bt = konst(b.clone(), no());
+        let bt = konst(b, no());
         let b0 = konst(Name::str(&b, "b0"), no());
         let b1 = konst(Name::str(&b, "b1"), no());
         let c = |s: &str| konst(Name::str(&t, s), no());
@@ -618,7 +618,7 @@ mod tests {
         for (what, x, y, major) in majors() {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(t.clone(), no())).expect("infer ⟦T⟧");
+            c.infer_type(&konst(t, no())).expect("infer ⟦T⟧");
             let e = elim(x, y, major);
             let ty = c.infer_type(&e).unwrap_or_else(|x| panic!("{what}: infer ⟦e⟧: {x}"));
             let tm = ty.tm.clone().unwrap_or_else(|| panic!("{what}: ⟦e⟧ is absent: {:?}", ty.ev));

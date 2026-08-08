@@ -117,12 +117,12 @@ pub(crate) fn ensure(
     rec_inst: &[u32],
     tt: Rc<TruncTranslation>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     // An indexed class-(P) family is a different construction and not a
     // relaxed guard on this one — `TruncRecursor`'s header says why: its `φ` is
@@ -130,10 +130,10 @@ pub(crate) fn ensure(
     // no corpus witness, and the carrier route would not have produced a
     // non-indexed `tc` for one anyway.
     if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone(), "a class-(P) indexed eliminator"))
+        return Err(Gap::IndexedFamily(*ind_name, "a class-(P) indexed eliminator"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
@@ -146,7 +146,7 @@ pub(crate) fn ensure(
         return Err(bad(DISAGREE))
     }
 
-    let site = Site { ind: ind_name.clone(), inst: ind_inst.to_vec(), np, n, depth, codomain, tt };
+    let site = Site { ind: *ind_name, inst: ind_inst.to_vec(), np, n, depth, codomain, tt };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(rec_bottom(c, &site)) };
     let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, rec_name, rec_inst, t)
@@ -168,7 +168,7 @@ struct Site {
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort (in `ensure`), once from the codomain the nest reached.
@@ -219,7 +219,7 @@ struct Cx {
 }
 
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (np, n, depth) = (site.np, site.n, site.depth);
     let tt = site.tt.clone();
     let point = ip.point();
@@ -296,12 +296,12 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     };
 
     // ── the rule, one per declaration ───────────────────────────────────────
-    let key = (site.ind.clone(), site.inst.clone());
+    let key = (site.ind, site.inst.clone());
     let tr = {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        app.trunc_recursor(kenv, &key, &tt).ok_or_else(|| {
+        app.trunc_recursor(kenv, &key, &tt).ok_or({
             Gap::Recursor(
-                site.ind.clone(),
+                site.ind,
                 "class (P) eliminator: TruncRecursor::over_declaration declined",
                 Cause::Library,
             )
@@ -542,12 +542,12 @@ mod tests {
         let leaf = Name::str(&r, "leaf");
         let node = Name::str(&r, "node");
         let no: Rc<[Level]> = Vec::new().into();
-        let k = || konst(r.clone(), no.clone());
+        let k = || konst(r, no.clone());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: r.clone(),
+                name: r,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(sort(Level::Zero.succ()), sort(Level::Zero)),
@@ -583,8 +583,8 @@ mod tests {
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        c.infer_type(&konst(r.clone(), no.clone())).expect("infer ⟦R⟧");
-        let got = c.infer_type(&konst(rec.clone(), no)).expect("infer ⟦R.rec⟧");
+        c.infer_type(&konst(r, no.clone())).expect("infer ⟦R⟧");
+        let got = c.infer_type(&konst(rec, no)).expect("infer ⟦R.rec⟧");
         let m = got
             .ev
             .thm()

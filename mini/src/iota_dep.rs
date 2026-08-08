@@ -131,7 +131,7 @@ pub(crate) fn fire(
     rhs: &E,
 ) -> Result<(Thm, Term), Gap> {
     let depth = np + 1 + n + 1;
-    let bad = |w: &'static str| Gap::Recursor(rec.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*rec, w, Cause::Threading);
     if args.len() != depth || arg_tms.len() != depth {
         return Err(bad(SHAPE))
     }
@@ -163,7 +163,7 @@ pub(crate) fn fire(
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&(ind_name.clone(), ind_inst.clone())).cloned().ok_or_else(|| bad(CARRIER))?
+        app.decls.get(&(ind_name, ind_inst.clone())).cloned().ok_or_else(|| bad(CARRIER))?
     };
     if tr.ind.spec.ctors.len() != n || tr.ind.params.len() != np {
         return Err(bad(SHAPE))
@@ -175,9 +175,9 @@ pub(crate) fn fire(
     }
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: ind_name,
         inst: ind_inst.clone(),
-        rec: rec.clone(),
+        rec: *rec,
         rec_inst: rec_inst.to_vec(),
         ctors: ctors.clone(),
         np,
@@ -240,7 +240,7 @@ pub(crate) fn fire(
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.dep_elims
-            .get(&(rec.clone(), rec_inst.to_vec()))
+            .get(&(*rec, rec_inst.to_vec()))
             .cloned()
             .ok_or_else(|| bad(ABBREV))?
     };
@@ -704,20 +704,20 @@ mod tests {
         add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty0(),
-                ctors: vec![(Name::str(&b, "b"), konst(b.clone(), no()))],
+                ctors: vec![(Name::str(&b, "b"), konst(b, no()))],
             },
         )
         .expect("B is accepted");
         let l = nm("L");
-        let spine = |d: u32| app(konst(l.clone(), no()), bvar(d));
+        let spine = |d: u32| app(konst(l, no()), bvar(d));
         add(
             &mut env,
             &Declaration::Inductive {
-                name: l.clone(),
+                name: l,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty0(), ty0()),
@@ -738,8 +738,8 @@ mod tests {
     /// minors at the shapes the two constructors need.
     fn elim(major: E) -> E {
         let (b, l) = (nm("B"), nm("L"));
-        let bty = konst(b.clone(), no());
-        let lb = app(konst(l.clone(), no()), bty.clone());
+        let bty = konst(b, no());
+        let lb = app(konst(l, no()), bty.clone());
         app_n(konst(Name::str(&l, "rec"), vec![Level::Zero.succ()].into()), &[
             bty.clone(),
             // the motive, constant: `fun _ : L B => B`

@@ -370,7 +370,7 @@ fn const_groups(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
             if !f.keeps(&d.shown, s) {
                 continue
             }
-            let key: ConstKey = (d.name.clone(), s.clone());
+            let key: ConstKey = (d.name, s.clone());
             let title = format!("{}   σ = {}", d.shown, sigma_str(&d.lparams, s));
             let lines = match ip.get_const(&key) {
                 None => vec![Line::absent(
@@ -1012,7 +1012,7 @@ fn schedule_of(decls: &[Declaration], sched: &HashMap<Name, Vec<Vec<u32>>>) -> S
             lparams: lparams.clone(),
             sigmas,
             has_value,
-            name: name.clone(),
+            name: *name,
         });
     }
     order.sort_by(|a, b| a.shown.cmp(&b.shown));
@@ -1032,7 +1032,7 @@ fn extra_consts(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
     let mut covered: Vec<ConstKey> = Vec::new();
     for d in &sched.order {
         for s in &d.sigmas {
-            covered.push((d.name.clone(), s.clone()));
+            covered.push((d.name, s.clone()));
         }
     }
     let mut keys = ip.const_keys();

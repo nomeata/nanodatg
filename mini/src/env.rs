@@ -70,15 +70,15 @@ pub enum Declaration {
 impl Declaration {
     pub fn name(&self) -> Name {
         match self {
-            Declaration::Axiom { name, .. } => name.clone(),
-            Declaration::Def { name, .. } => name.clone(),
+            Declaration::Axiom { name, .. } => *name,
+            Declaration::Def { name, .. } => *name,
             Declaration::Quot => Name::simple("Quot"),
-            Declaration::Inductive { name, .. } => name.clone(),
+            Declaration::Inductive { name, .. } => *name,
             // The block's first member. A `mutual` block is one declaration
             // with no name of its own, and the first member is the name the
             // export file's own reporting uses.
             Declaration::Mutual { types, .. } => {
-                types.first().map(|t| t.name.clone()).unwrap_or(Name::Anon)
+                types.first().map(|t| t.name).unwrap_or_else(Name::anon)
             }
         }
     }
@@ -191,6 +191,6 @@ pub fn instantiate_lparams(e: &E, lparams: &[Name], levels: &[Level]) -> Result<
     Ok(crate::expr::subst_level(e, &|n: &Name| match lparams.iter().position(|p| p == n) {
         Some(i) => levels[i].clone(),
         // "should not happen", as the original says.
-        None => Level::Param(n.clone()),
+        None => Level::Param(*n),
     }))
 }

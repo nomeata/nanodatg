@@ -193,7 +193,7 @@ pub(crate) fn fire(
     ctor_args: &[E],
     rhs: &E,
 ) -> Result<(Thm, Term), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(rec.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*rec, w, Cause::Threading);
     if args.is_empty() || args.len() != arg_tms.len() {
         return Err(bad(SHAPE))
     }
@@ -206,7 +206,7 @@ pub(crate) fn fire(
     let thm = {
         let app =
             c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.model_iota.get(&((rec.clone(), rec_inst.to_vec()), ctor.clone())).cloned()
+        app.model_iota.get(&((*rec, rec_inst.to_vec()), *ctor)).cloned()
     };
     let Some(thm) = thm else { return Err(bad(NORULE)) };
 
@@ -255,7 +255,7 @@ pub(crate) fn fire(
     // replaced by the **stronger** demand that the two interpretations be equal
     // on the nose — which is the keying, stated as a check. A σ or a
     // declaration where it does not hold declines at `DOMAIN`.
-    let head = konst(thm.clone(), ls.to_vec().into());
+    let head = konst(thm, ls.to_vec().into());
     let t = c.infer_type(&head).map_err(|_| bad(NORULE))?;
     let mut mem = t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
     let mut ty = t.ty.clone();
@@ -300,7 +300,7 @@ pub(crate) fn fire(
     if *ty_nm != eq_name() || ty_args.len() != 3 {
         return Err(bad(SHAPE))
     }
-    let lhs_e = app_n(konst(rec.clone(), ls.to_vec().into()), args);
+    let lhs_e = app_n(konst(*rec, ls.to_vec().into()), args);
     let alpha = c.infer_type(&lhs_e).map_err(|_| Gap::Classifier)?.ty;
     let stmt = app_n(konst(eq_name(), ty_ls.clone()), &[alpha, lhs_e, rhs.clone()]);
     let cashed = crate::eq_cash::cash_stmt(c, &stmt, mem)?;

@@ -180,10 +180,10 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     let env = c.environment();
     // Which declaration does this constant belong to? By index, not by scan.
     let ind_name = match env.get(name) {
-        Some(ConstantInfo::Inductive { .. }) => name.clone(),
+        Some(ConstantInfo::Inductive { .. }) => *name,
         _ => match env.owner(name) {
-            Some(n) => n.clone(),
-            None => return Err(Gap::NoInterpretation(name.clone(), inst.to_vec())),
+            Some(n) => *n,
+            None => return Err(Gap::NoInterpretation(*name, inst.to_vec())),
         },
     };
     // **The declaration's own σ, which is not the constant's.** A constructor
@@ -194,10 +194,10 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     // lookup would miss with a reason naming the wrong thing.
     let nl = match env.get(&ind_name) {
         Some(ci) => ci.lparams().len(),
-        None => return Err(Gap::NoInterpretation(ind_name.clone(), inst.to_vec())),
+        None => return Err(Gap::NoInterpretation(ind_name, inst.to_vec())),
     };
     if inst.len() < nl {
-        return Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
     }
     // The constant's **own** σ, kept apart from the declaration's: a recursor's
     // store key is this one, and using the declaration's would put
@@ -205,7 +205,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     let own_inst = inst.to_vec();
     let ind_inst: Vec<u32> = inst[inst.len() - nl..].to_vec();
     let inst = &ind_inst[..];
-    let key = (ind_name.clone(), inst.to_vec());
+    let key = (ind_name, inst.to_vec());
     {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -287,7 +287,7 @@ fn model_alias(
     ind_name: &Name,
     why: Option<&'static str>,
 ) -> Result<(), Gap> {
-    let key = (name.clone(), own.to_vec());
+    let key = (*name, own.to_vec());
     let model = {
         let app = c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.model_of.get(&key).cloned()
@@ -296,11 +296,11 @@ fn model_alias(
     // that was never built: the σ is part of the key, and a recursor's motive
     // level is what it distinguishes.
     let Some(model) = model else {
-        return Err(Gap::IndSpec(ind_name.clone(), why.unwrap_or("nested model not keyed here")))
+        return Err(Gap::IndSpec(*ind_name, why.unwrap_or("nested model not keyed here")))
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let Some(ci) = ip.get_const(&(model, own.to_vec())).cloned() else {
-        return Err(Gap::IndSpec(ind_name.clone(), "nested model not interpreted"))
+        return Err(Gap::IndSpec(*ind_name, "nested model not interpreted"))
     };
     ip.put_const(key, ConstInterp { term: ci.term, typing: ci.typing, defeq: None });
     Ok(())
@@ -326,11 +326,11 @@ fn record_reason(
     let is_decl = name == ind_name;
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return };
     if is_rec {
-        app.rec_untranslated.insert((name.clone(), own.to_vec()), g);
+        app.rec_untranslated.insert((*name, own.to_vec()), g);
     } else if is_decl {
-        app.untranslated.insert((name.clone(), inst.to_vec()), g);
+        app.untranslated.insert((*name, inst.to_vec()), g);
     } else {
-        app.ctor_untranslated.insert((name.clone(), inst.to_vec()), g);
+        app.ctor_untranslated.insert((*name, inst.to_vec()), g);
     }
 }
 
@@ -366,7 +366,7 @@ pub(crate) fn stored_or_reason_after(
         let r = crate::recursor::ensure(c, ind_name, inst, name, own);
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.rec_untranslated.insert((name.clone(), own.to_vec()), g.clone());
+                app.rec_untranslated.insert((*name, own.to_vec()), g.clone());
             }
         }
         return r
@@ -380,11 +380,11 @@ pub(crate) fn stored_or_reason_after(
     // standing in for a decline that knows exactly what it could not bridge.
     // `crate::ev::Gap::IndexedCtor` says why the distinction is worth a variant.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        if let Some(g) = app.ctor_untranslated.get(&(name.clone(), inst.to_vec())) {
+        if let Some(g) = app.ctor_untranslated.get(&(*name, inst.to_vec())) {
             return Err(g.clone())
         }
     }
-    Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
+    Err(Gap::NoInterpretation(*name, inst.to_vec()))
 }
 
 /// **Why `⟦name.{inst}⟧` is not in the store.** Reads three tables and builds
@@ -409,14 +409,14 @@ pub(crate) fn stored_or_reason_after(
 /// or a constant the environment does not own — and is not a fallback standing
 /// in for a reason that exists.
 pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Gap {
-    let bare = Gap::NoInterpretation(name.clone(), inst.to_vec());
+    let bare = Gap::NoInterpretation(*name, inst.to_vec());
     let (ind_name, ind_inst, is_rec) = {
         let env = c.environment();
         let is_rec = matches!(env.get(name), Some(ConstantInfo::Recursor { .. }));
         let ind_name = match env.get(name) {
-            Some(ConstantInfo::Inductive { .. }) => name.clone(),
+            Some(ConstantInfo::Inductive { .. }) => *name,
             _ => match env.owner(name) {
-                Some(n) => n.clone(),
+                Some(n) => *n,
                 None => return bare,
             },
         };
@@ -428,14 +428,14 @@ pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]
     };
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return bare };
     if is_rec {
-        if let Some(g) = app.rec_untranslated.get(&(name.clone(), inst.to_vec())) {
+        if let Some(g) = app.rec_untranslated.get(&(*name, inst.to_vec())) {
             return g.clone()
         }
     }
     if let Some(g) = app.untranslated.get(&(ind_name, ind_inst.clone())) {
         return g.clone()
     }
-    if let Some(g) = app.ctor_untranslated.get(&(name.clone(), ind_inst)) {
+    if let Some(g) = app.ctor_untranslated.get(&(*name, ind_inst)) {
         return g.clone()
     }
     bare
@@ -831,25 +831,25 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
         env.get(ind_name)
     else {
-        return Err(Gap::NoInterpretation(ind_name.clone(), inst.to_vec()))
+        return Err(Gap::NoInterpretation(*ind_name, inst.to_vec()))
     };
     let (np, ni) = (*num_params as usize, *num_indices as usize);
     if inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(ind_name.clone(), inst.to_vec()))
+        return Err(Gap::NoInterpretation(*ind_name, inst.to_vec()))
     }
     // The branch decider, on the declaration's **own** level expression.
-    let own = peel(ty, np + ni).ok_or_else(|| Gap::IndSpec(ind_name.clone(), "type shape"))?;
+    let own = peel(ty, np + ni).ok_or(Gap::IndSpec(*ind_name, "type shape"))?;
     let Expr::Sort(l) = &*own else {
-        return Err(Gap::IndSpec(ind_name.clone(), "resultant sort"))
+        return Err(Gap::IndSpec(*ind_name, "resultant sort"))
     };
     let ind_ty = ground::subst_ground(ty, lparams, inst);
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
         .map(|n| {
             let t = env.get(n).map(|ci| ground::subst_ground(ci.ty(), lparams, inst));
-            (n.clone(), t)
+            (*n, t)
         })
-        .map(|(n, t)| t.map(|t| (n, t)).ok_or_else(|| Gap::IndSpec(ind_name.clone(), "ctor type")))
+        .map(|(n, t)| t.map(|t| (n, t)).ok_or(Gap::IndSpec(*ind_name, "ctor type")))
         .collect::<Result<_, _>>()?;
     // **The second and third branches of the trichotomy**
     // (`INDEXED-DESIGN.md` §2.1). A resultant level that is not provably
@@ -886,7 +886,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
             let (shape, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
             let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
             if !spec.well_formed() {
-                return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+                return Err(Gap::IndSpec(*ind_name, "indexed spec not well formed"))
             }
             // **Which carrier**, because the two are different constructions
             // owed at different places: class (S) at `ni ≥ 1` is
@@ -910,7 +910,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
                 class_s,
             });
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.indexed_walks.insert((ind_name.clone(), inst.to_vec()), walk.clone());
+                app.indexed_walks.insert((*ind_name, inst.to_vec()), walk.clone());
             }
             if class_s {
                 return crate::class_s_ix::build(
@@ -936,7 +936,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // ── the `FnSym` boundary (WIRING-DESIGN.md §3.2) ──────────────────────
     let (shape, spec, _) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Derive)?;
     if !spec.well_formed() {
-        return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
+        return Err(Gap::IndSpec(*ind_name, "spec not well formed"))
     }
 
     // ── the carrier ───────────────────────────────────────────────────────
@@ -945,7 +945,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         Rc::new(
             Inductive::build(kenv, &mut app.mach, &spec)
-                .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "carrier"))?,
+                .ok_or(Gap::IndSpec(*ind_name, "carrier"))?,
         )
     };
 
@@ -953,9 +953,9 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let du = decl_universe(c, ind_name, &shape, &ind)?;
 
     // ── the Lean-facing layer ─────────────────────────────────────────────
-    let key = (ind_name.clone(), inst.to_vec());
+    let key = (*ind_name, inst.to_vec());
     former(c, ind_name, inst, &shape, &ind, &du)?;
-    let at = Decl { name: ind_name.clone(), inst: inst.to_vec(), np, ind: ind.clone() };
+    let at = Decl { name: *ind_name, inst: inst.to_vec(), np, ind: ind.clone() };
     let mut ctor_abbrev = Vec::with_capacity(shape.ctors.len());
     for (i, (cname, cty, _, ev)) in shape.ctors.iter().enumerate() {
         ctor_abbrev.push(constructor(c, &at, cname, cty, i, ev)?);
@@ -1198,7 +1198,7 @@ fn build_trunc(
 ) -> Result<(), Gap> {
     let (shape, base, _) = spec_of(c, ind_name, np, 0, ind_ty, ctor_tys, Legs::Skip)?;
     if !base.well_formed() {
-        return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
+        return Err(Gap::IndSpec(*ind_name, "spec not well formed"))
     }
     // **`TruncCarrier::in_u0` places `‖a‖` in `U₀`, and this clause asks for
     // nothing else — so a σ at which the declaration's sort is a nonzero
@@ -1237,13 +1237,13 @@ fn build_trunc(
     // `good/` `Squash.{u} (α : Sort u) : Sort u | mk : α → Squash α` is what
     // would open it.
     if shape.result_level != 0 {
-        return Err(Gap::IndSpec(ind_name.clone(), "class (P) above Prop"))
+        return Err(Gap::IndSpec(*ind_name, "class (P) above Prop"))
     }
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let tower = ip.prelude.tower.clone();
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let ind = Inductive::build(kenv, &mut app.mach, &base)
-        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "carrier"))?;
+        .ok_or(Gap::IndSpec(*ind_name, "carrier"))?;
     let tr = app.trunc(kenv).ok_or(Gap::IndApparatus)?;
     let tc = derived::inductive::family::TruncCarrier::over_declaration(
         kenv,
@@ -1252,7 +1252,7 @@ fn build_trunc(
         &tr,
         &ind,
     )
-    .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "truncation carrier"))?;
+    .ok_or(Gap::IndSpec(*ind_name, "truncation carrier"))?;
 
     // **A name of mini's own for `‖ind(p⃗)‖`.** The carrier is
     // `trunc(ind(p⃗))`, a term `derived` assembled — so it was never recorded
@@ -1263,7 +1263,7 @@ fn build_trunc(
     // typing across. Same move, and the same reason, as the constructor term's.
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let (sym, ax) = derived::define_abbrev(kenv, &ind.params, &tc.carrier)
-        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "truncation abbreviation"))?;
+        .ok_or(Gap::IndSpec(*ind_name, "truncation abbreviation"))?;
     let at = derived::inst_all(&tc.in_u0, &ps).ok_or(Gap::ConvCompose("trunc-in-u0"))?;
     let ax_at = derived::inst_all(&ax, &ps).ok_or(Gap::ConvCompose("trunc-abbrev"))?;
     let onto = ip.retarget_subject(&at, &ax_at).ok_or(Gap::ConvCompose("trunc-subject"))?;
@@ -1285,7 +1285,7 @@ fn build_trunc(
         field_abbrev: shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect(),
     });
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.truncs.insert((ind_name.clone(), inst.to_vec()), tt);
+        app.truncs.insert((*ind_name, inst.to_vec()), tt);
     }
     former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)?;
     // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule,
@@ -1371,7 +1371,7 @@ fn trunc_constructors(
             shape.ctors.get(i).map(|(.., ev)| ev.abbrev.clone()).unwrap_or_default();
         if let Err(g) = trunc_one(c, ind_name, inst, np, i, cname, cty, tc, ind, ax, &abbrev) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((cname.clone(), inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
             }
         }
     }
@@ -1392,7 +1392,7 @@ fn trunc_one(
     ax: &Thm,
     abbrev: &[Thm],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*ind_name, w);
     let tcc = tc.ctors.get(i).ok_or_else(|| bad("class (P): no truncation constructor"))?;
     let (k, m) = (tcc.yvs.len(), tcc.tvs.len());
     let order = ind.spec.ctors.get(i).ok_or_else(|| bad("class (P): ctor shape"))?.order.clone();
@@ -1402,8 +1402,8 @@ fn trunc_one(
     let depth = np + k + m;
     let codomain = peel(cty, depth).ok_or_else(|| bad("class (P): ctor arity"))?;
     let site = TruncCtorSite {
-        ind: ind_name.clone(),
-        ctor: cname.clone(),
+        ind: *ind_name,
+        ctor: *cname,
         i,
         np,
         k,
@@ -1442,7 +1442,7 @@ struct TruncCtorSite {
 fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::TruncCtor(site.ctor.clone(), w);
+    let bad = |w: &'static str| Gap::TruncCtor(site.ctor, w);
     let depth = site.np + site.k + site.m;
 
     // `⟦T p⃗⟧`, by inference on the declared codomain — the set the membership
@@ -1620,7 +1620,7 @@ fn build_indexed(
     let IndexData { indices, ctors, axioms } = ixd;
     let spec = IndexedDeclSpec::new(base, indices, ctors);
     if !spec.well_formed() {
-        return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+        return Err(Gap::IndSpec(*ind_name, "indexed spec not well formed"))
     }
     // The erased skeleton, exactly as the non-indexed path builds it: the
     // indexed carrier is carved *out of* it, so it must be the same object.
@@ -1629,7 +1629,7 @@ fn build_indexed(
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         Rc::new(
             Inductive::build(kenv, &mut app.mach, &spec.base)
-                .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "carrier"))?,
+                .ok_or(Gap::IndSpec(*ind_name, "carrier"))?,
         )
     };
     let du = decl_universe(c, ind_name, &shape, &ind)?;
@@ -1639,7 +1639,7 @@ fn build_indexed(
     let lvl = tower.at(du.level as usize).ok_or(Gap::SortTowerHeight)?;
     // Before the translation exists, because the translation carries it.
     let ctor_abbrev = crate::ctor_ix::ctor_abbrevs(ip, &ind, &spec.base)
-        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "naming a constructor's term"))?;
+        .ok_or(Gap::IndSpec(*ind_name, "naming a constructor's term"))?;
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let wrec = app.wrec(kenv).ok_or(Gap::IndApparatus)?;
     let ii = derived::inductive::family::IndexedInductive::build(
@@ -1651,7 +1651,7 @@ fn build_indexed(
         &wrec.iota,
         &wrec.funspace,
     )
-    .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "indexed carrier"))?;
+    .ok_or(Gap::IndSpec(*ind_name, "indexed carrier"))?;
     let iu = derived::inductive::family::IndexedUniverse::over_at(
         kenv,
         &app.chain,
@@ -1662,7 +1662,7 @@ fn build_indexed(
         du.hyp.as_ref(),
         &lvl,
     )
-    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), du.level))?;
+    .ok_or(Gap::IndUniverseHeight(*ind_name, du.level))?;
     let (ty_sym, univ) = (ii.carrier.ty, iu.ty_in_u1.clone());
     // **Kept, not dropped.** `IndexedCtor::mem_lean` is stated at this build's
     // working variables and about this build's `ind(p⃗,x⃗)`; the constructor
@@ -1680,7 +1680,7 @@ fn build_indexed(
         ctor_abbrev,
         rec_dom_abbrev,
     });
-    app.indexed.insert((ind_name.clone(), inst.to_vec()), tr.clone());
+    app.indexed.insert((*ind_name, inst.to_vec()), tr.clone());
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
     // **After the former, and unable to unseat it.** The type former is a
     // complete obligation on its own and `042_rbTreeDef` asks for it and
@@ -1707,7 +1707,7 @@ pub(crate) fn spec_of(
     ctor_tys: &[(Name, E)],
     legs: Legs,
 ) -> Result<(Shape, DeclSpec, IndexData), Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*ind_name, w);
     c.in_scope(|c| {
         // 1. the parameters, opened once.
         let mut param_tys = Vec::with_capacity(np);
@@ -1776,7 +1776,7 @@ pub(crate) fn spec_of(
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
             let (spec, ev, idx, iax) =
                 c.in_scope(|c| ctor_spec(c, ind_name, np, ni, result_level, &body, legs))?;
-            ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
+            ctors.push((*cname, cty.clone(), spec.clone(), ev));
             specs.push(spec);
             ctors_idx.push(idx);
             ctor_index_axs.push(iax);
@@ -1859,7 +1859,7 @@ fn ctor_spec(
     body: &E,
     legs: Legs,
 ) -> Result<(CtorSpec, CtorEvidence, CtorIndices, CtorIndexAx), Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*ind_name, w);
     // `d⃗ᵢⱼ`, one row per `Slot::Rec`, accumulated as the walk meets them, and
     // the defining axioms beside them — kept for the same reason
     // `CtorEvidence::abbrev` keeps the field ones: a consumer has to move a
@@ -1935,7 +1935,7 @@ fn ctor_spec(
                 // no bridge and is declined rather than mis-built. `Acc.intro`
                 // is the only depth-2 witness in the corpus and it takes
                 // `crate::direct`'s clause, never this walk.
-                return Err(Gap::IndSpec(ind_name.clone(), "recursive argument telescope depth"))
+                return Err(Gap::IndSpec(*ind_name, "recursive argument telescope depth"))
             }
             let mut syms = Vec::with_capacity(gammas.len());
             let mut axs = Vec::with_capacity(gammas.len());
@@ -1956,7 +1956,7 @@ fn ctor_spec(
                     // a different shape from a nested one in a plain field —
                     // and `blocker::variant_sites` requires a detail literal to
                     // pin exactly one line.
-                    return Err(Gap::IndSpec(ind_name.clone(), "occurrence in a recursive argument's domain"))
+                    return Err(Gap::IndSpec(*ind_name, "occurrence in a recursive argument's domain"))
                 }
                 // **Which declaration `γ` is**, read off the syntax while the
                 // syntax is here — see [`CtorEvidence::rec_dom_decl`]. The
@@ -1969,7 +1969,7 @@ fn ctor_spec(
                             .iter()
                             .map(|l| crate::ground::eval(l, &empty))
                             .collect::<Option<Vec<u32>>>()
-                            .map(|ls| (name.clone(), ls))
+                            .map(|ls| (*name, ls))
                     }
                     _ => None,
                 });
@@ -2079,7 +2079,7 @@ fn ctor_spec(
             // reducing occurrence `constType β (T p⃗)` of the paragraph above,
             // which [`crate::nested::plan`] answers `Ok(None)` for — it is not
             // nested — and which therefore never had a model to be keyed onto.
-            return Err(Gap::IndSpec(ind_name.clone(), "nested occurrence"))
+            return Err(Gap::IndSpec(*ind_name, "nested occurrence"))
         } else {
             // The field type's own typing, before the binder is opened — the
             // leg's body, and the only place it is available.
@@ -2113,7 +2113,7 @@ fn ctor_spec(
                     // still stops here, by name.
                     let raised = ip
                         .raise_in_gamma(l as usize, rung as usize, &mem)
-                        .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
+                        .ok_or(Gap::IndSummand(*ind_name))?;
                     let leg = ip
                         .retarget_subject(&raised, &at)
                         .ok_or(Gap::ConvCompose("summand-leg-subject"))?;
@@ -2194,7 +2194,7 @@ fn index_syms(
     abstraction: &[kernel::FreeVar],
     what: &'static str,
 ) -> Result<(Vec<kernel::FnSym>, Vec<Thm>), Gap> {
-    let bad = move |_: ()| Gap::IndSpec(ind_name.clone(), what);
+    let bad = move |_: ()| Gap::IndSpec(*ind_name, what);
     let (mut out, mut axs) = (Vec::with_capacity(ixs.len()), Vec::with_capacity(ixs.len()));
     for e in ixs {
         let t = c.infer_type(e).map_err(|_| bad(()))?;
@@ -2458,7 +2458,7 @@ fn decl_universe(
     ind: &Inductive,
 ) -> Result<DeclUniv, Gap> {
     let level = shape.result_level;
-    let short = |_: ()| Gap::IndSummand(ind_name.clone());
+    let short = |_: ()| Gap::IndSummand(*ind_name);
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let np = ps.len();
 
@@ -2555,10 +2555,10 @@ fn decl_universe(
         &tags,
         fibres.as_ref(),
     )
-    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
+    .ok_or(Gap::IndUniverseHeight(*ind_name, level))?;
     // The level asked for is the level got: `⟦Sort ℓ⟧` and nothing else.
     if !du.rests_on_nothing() || du.universe != want {
-        return Err(Gap::IndUniverseHeight(ind_name.clone(), level))
+        return Err(Gap::IndUniverseHeight(*ind_name, level))
     }
     Ok(DeclUniv { ty_in_un: du.ty_in_u1.clone(), du, hyp, level })
 }
@@ -2586,7 +2586,7 @@ fn collapse_over_params(
     np: usize,
     hyp: &mut Option<Formula>,
 ) -> Result<Thm, Gap> {
-    let short = || Gap::IndSummand(ind_name.clone());
+    let short = || Gap::IndSummand(*ind_name);
     let collapsed =
         derived::cumul::summand_obligation(env, th, None, np).ok_or_else(short)?;
     let at = derived::inst_all(&collapsed, ps).ok_or_else(short)?;
@@ -2743,7 +2743,7 @@ fn fibre_facts(
     if plain {
         return Ok(None)
     }
-    let short = || Gap::IndFibreValue(ind_name.clone());
+    let short = || Gap::IndFibreValue(*ind_name);
     let np = ind.spec.params;
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     // The declaration's own context. Every row below is stated at
@@ -2921,13 +2921,13 @@ pub(crate) fn former_at(
         .map(|ci| ci.lparams().to_vec())
         .unwrap_or_default();
     let lean_ty = ground::subst_ground(
-        &lean_ty.ok_or_else(|| Gap::NoInterpretation(ind_name.clone(), inst.to_vec()))?,
+        &lean_ty.ok_or_else(|| Gap::NoInterpretation(*ind_name, inst.to_vec()))?,
         &lparams,
         inst,
     );
     let u1 = univ.clone();
     let n = level;
-    let name = ind_name.clone();
+    let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let level = crate::expr::sort(level_numeral(n));
         let gap = |g: Gap| Ok(Typing { ty: level.clone(), tm: None, ev: Ev::missing(g) });
@@ -2953,7 +2953,7 @@ pub(crate) fn former_at(
             Thm::mp(&t, &conj)
         }) {
             Some(t) if *t.concl() == Formula::mem(carrier.clone(), ip.sort(n)) => Ev::Proved(t),
-            _ => return gap(Gap::IndUniverseHeight(name.clone(), n)),
+            _ => return gap(Gap::IndUniverseHeight(name, n)),
         };
         Ok(Typing { ty: level, tm: Some(carrier), ev })
     };
@@ -3076,7 +3076,7 @@ fn constructor(
     // The codomain is read off the declaration, not synthesised: it is the one
     // expression whose interpretation the bottom's membership must be about.
     let codomain =
-        peel(cty, depth).ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor arity"))?;
+        peel(cty, depth).ok_or(Gap::IndSpec(at.name, "ctor arity"))?;
     // **The carrier term's name is minted here, not at the bottom**, over
     // variables of this call's own — so that the defining axiom survives the
     // nest. `Inductive::ctor_term` is a function of its arguments alone, so
@@ -3102,12 +3102,12 @@ fn constructor(
         // list has to hold them.
         let params: Vec<Term> = at.ind.params.iter().map(|v| Term::var(*v)).collect();
         let rs = rec_slot_terms(ip, &spec, at.np, &params, &rs)
-            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "recursive field transport"))?;
+            .ok_or(Gap::IndSpec(at.name, "recursive field transport"))?;
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let raw = at
             .ind
             .ctor_term(&app.mach, i, &ys, &rs)
-            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor term"))?;
+            .ok_or(Gap::IndSpec(at.name, "ctor term"))?;
         // **`p⃗ ++ f⃗`, not `f⃗`.** A plain constructor's term mentions no
         // parameter and this degenerates to the old abstraction at `np = 0`;
         // under `RecArg::general` the summands `Σ(z::γⱼ(p⃗))` are the
@@ -3119,7 +3119,7 @@ fn constructor(
         let abstraction: Vec<kernel::FreeVar> =
             at.ind.params.iter().copied().chain(fvs.iter().copied()).collect();
         derived::define_abbrev(kenv, &abstraction, &raw)
-            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor abbreviation"))?
+            .ok_or(Gap::IndSpec(at.name, "ctor abbreviation"))?
     };
     let site = CtorSite {
         at: at.clone(),
@@ -3222,7 +3222,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let Ok(pty) = c.local_type(u32::try_from(nf + np - 1 - k).unwrap_or(u32::MAX)) else {
             return gap(Gap::NoEndpoint)
         };
-        let why = Gap::IndSpec(ind_name.clone(), "parameter reduction");
+        let why = Gap::IndSpec(*ind_name, "parameter reduction");
         // **Asked acceptance-only first.** The threaded `whnf_conv` reports
         // every conversion it composes to the §0.3 census, so running it at a
         // parameter already in weak head normal form — which is every parameter
@@ -3315,7 +3315,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             let Ok(lty) = c.local_type(slot_ty) else { return gap(Gap::NoEndpoint) };
             let Some(cod_e) = rec_field_codomain(&lty) else { continue };
             let why =
-                Gap::IndexedCtor(ind_name.clone(), "recursive field codomain", Cause::Threading);
+                Gap::IndexedCtor(*ind_name, "recursive field codomain", Cause::Threading);
             let Ok((_, conv)) = c.whnf_conv(&cod_e, Some(cod.clone()), &why) else {
                 return gap(why)
             };
@@ -3342,7 +3342,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             continue
         }
         let Ok(lty) = c.local_type(slot_ty) else { return gap(Gap::NoEndpoint) };
-        let why = Gap::IndSpec(ind_name.clone(), "recursive field reduction");
+        let why = Gap::IndSpec(*ind_name, "recursive field reduction");
         let Ok((_, conv)) = c.whnf_conv(&lty, Some(set), &why) else { return gap(why) };
         let Some(eq) = conv.ev.thm().cloned() else { return gap(why) };
         if eq.concl().as_eq().map(|(_, r)| r) != Some(spine_tm.clone()) {
@@ -3365,7 +3365,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let mut args: Vec<Term> = ps.to_vec();
         args.extend(ys[..j].iter().cloned());
         let Some(at) = abbrev.get(j).and_then(|ax| derived::inst_all(ax, &args)) else {
-            return gap(Gap::IndSpec(ind_name.clone(), "field abbreviation instance"))
+            return gap(Gap::IndSpec(*ind_name, "field abbreviation instance"))
         };
         let Some(back) = derived::eq_symm(&mut ip.env, &at) else {
             return gap(Gap::ConvCompose("ctor-field-symm"))
@@ -3381,7 +3381,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // changing, not a proof step, and everything below states the membership at
     // these and not at the Lean fields.
     let Some(rs_c) = rec_slot_terms(ip, spec, np, ps, &rs) else {
-        return gap(Gap::IndSpec(ind_name.clone(), "recursive field transport"))
+        return gap(Gap::IndSpec(*ind_name, "recursive field transport"))
     };
     // **At the nest's parameters, and that is not a spelling choice.**
     // `Inductive::ctor_term` states its dispatcher's summands `Σ(z::γⱼ(p⃗))` at
@@ -3393,7 +3393,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         match ind.ctor_term_at(&app.mach, i, &ys, &rs_c, ps) {
             Some(t) => t,
-            None => return gap(Gap::IndSpec(ind_name.clone(), "ctor term")),
+            None => return gap(Gap::IndSpec(*ind_name, "ctor term")),
         }
     };
     // **The carrier term has to be given a name of mini's own**, and this is
@@ -3425,21 +3425,21 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         args.extend(fields.iter().cloned());
         let at = match derived::inst_all(ctor_ax, &args) {
             Some(t) => t,
-            None => return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance")),
+            None => return gap(Gap::IndSpec(*ind_name, "ctor abbreviation instance")),
         };
         // The symbol names *this* nest's carrier term, and nothing else: the
         // axiom's right-hand side at these parameters and fields must be the
         // term just built.
         if at.concl().as_eq().map(|(_, r)| r) != Some(raw.clone()) {
-            return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance"))
+            return gap(Gap::IndSpec(*ind_name, "ctor abbreviation instance"))
         }
         (ip.mk(*ctor_sym, args), at)
     };
     let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, ps, &param_mems) else {
-        return gap(Gap::IndSpec(ind_name.clone(), "type former spine"))
+        return gap(Gap::IndSpec(*ind_name, "type former spine"))
     };
     if carrier != ip.mk(ind.ty, ps.to_vec()) {
-        return gap(Gap::IndSpec(ind_name.clone(), "spine bottom"))
+        return gap(Gap::IndSpec(*ind_name, "spine bottom"))
     }
     // `Ctor::mem` at `(p⃗, y⃗, r⃗)`, with its antecedent discharged from the
     // scopes' own assumptions. The recursive fields' typings are at the applied
@@ -3448,7 +3448,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     inst_args.extend(ys.iter().cloned());
     inst_args.extend(rs_c.iter().cloned());
     let Some(at) = derived::inst_all(&ind.ctors[i].mem, &inst_args) else {
-        return gap(Gap::IndSpec(ind_name.clone(), "ctor mem instantiation"))
+        return gap(Gap::IndSpec(*ind_name, "ctor mem instantiation"))
     };
     // **The recursive slots' atoms.** A plain declaration's is one Leibniz: the
     // scope holds `rⱼ ∈ ⟦T p⃗⟧` and `Ctor::mem` wants `rⱼ ∈ ind(p⃗)`, and a
@@ -3480,7 +3480,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             }
             continue
         }
-        let bad = |w: &'static str| Gap::IndexedCtor(ind_name.clone(), w, Cause::Threading);
+        let bad = |w: &'static str| Gap::IndexedCtor(*ind_name, w, Cause::Threading);
         if spec.rec_dom(j).is_empty() {
             // The one-point function `{⟨•,rⱼ⟩}`, whose typing rule is
             // `derived::point_fun`'s `point_in_funspace` at `a := •` — `1` is
@@ -3625,7 +3625,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         }
         match Thm::mp(&at, &conj) {
             Some(t) => t,
-            None => return gap(Gap::IndSpec(ind_name.clone(), "ctor antecedent")),
+            None => return gap(Gap::IndSpec(*ind_name, "ctor antecedent")),
         }
     };
     // The subject moves onto mini's own symbol, along that symbol's own
@@ -3678,12 +3678,12 @@ pub(crate) fn store(
     let typing = match ev {
         Ev::Proved(th) => match Sealed::new(th) {
             Ok(s) => Ok(s),
-            Err(_) => Err(Gap::IndSpec(name.clone(), "hypothesis escaped the nest")),
+            Err(_) => Err(Gap::IndSpec(*name, "hypothesis escaped the nest")),
         },
         Ev::Gap(g) => Err(g),
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    ip.put_const((name.clone(), inst.to_vec()), ConstInterp { term, typing, defeq: None });
+    ip.put_const((*name, inst.to_vec()), ConstInterp { term, typing, defeq: None });
     Ok(())
 }
 
@@ -3752,7 +3752,7 @@ mod tests {
     fn the_spine_predicate_pins_the_parameters_wherever_they_come_from() {
         let t = Name::simple("T");
         let ls: std::rc::Rc<[Level]> = std::rc::Rc::from(Vec::new());
-        let sp = |args: &[E]| crate::expr::app_n(konst(t.clone(), ls.clone()), args);
+        let sp = |args: &[E]| crate::expr::app_n(konst(t, ls.clone()), args);
         let (np, ni, d) = (3usize, 1usize, 4usize);
         let pinned = crate::expr::bvars(3, 4); // #6 #5 #4
 
@@ -3804,18 +3804,18 @@ mod tests {
     /// arity check below would not catch it.
     fn three_ctor_env() -> (Environment, Name, Vec<Name>) {
         let t = Name::simple("T");
-        let ty = konst(t.clone(), Vec::new().into());
+        let ty = konst(t, Vec::new().into());
         let ctors = vec![
             (Name::str(&t, "c0"), ty.clone()),
             (Name::str(&t, "c1"), forall(ty.clone(), ty.clone())),
             (Name::str(&t, "c2"), forall(ty.clone(), forall(ty.clone(), ty.clone()))),
         ];
-        let names: Vec<Name> = ctors.iter().map(|(n, _)| n.clone()).collect();
+        let names: Vec<Name> = ctors.iter().map(|(n, _)| *n).collect();
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -3835,7 +3835,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
 
-        let ty = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer ⟦T⟧");
+        let ty = c.infer_type(&konst(t, Vec::new().into())).expect("infer ⟦T⟧");
         assert!(ty.tm.is_some(), "the carrier must interpret");
         let mem = ty.ev.thm().expect("⊢ ⟦T⟧ ∈ ⟦Type 0⟧").clone();
         assert!(mem.hyps().is_empty(), "a closed declaration's typing is unconditional");
@@ -3845,7 +3845,7 @@ mod tests {
         // Each constructor, at its own arity. `c1` and `c2` are λ-nests over
         // the recursive fields; `c0` is the bare carrier element.
         for (i, n) in ctors.iter().enumerate() {
-            let ct = c.infer_type(&konst(n.clone(), Vec::new().into())).expect("infer ctor");
+            let ct = c.infer_type(&konst(*n, Vec::new().into())).expect("infer ctor");
             let m = ct.ev.thm().unwrap_or_else(|| panic!("{n} has no typing: {:?}", ct.ev)).clone();
             assert!(m.hyps().is_empty(), "{n}'s typing must be unconditional");
             let (subj, _) = m.concl().as_mem().expect("a membership");
@@ -3882,13 +3882,13 @@ mod tests {
     #[test]
     fn a_function_typed_recursive_argument_records_its_telescope_at_its_own_slot() {
         let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         let mut env = Environment::empty();
         for n in [&a, &b] {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: n.clone(),
+                    name: *n,
                     lparams: vec![],
                     num_params: 0,
                     ty: sort(Level::Zero.succ()),
@@ -3906,7 +3906,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -3982,18 +3982,18 @@ mod tests {
     /// by what it **reduces to**, and any reducible application would do.
     fn alias_env() -> (Environment, Vec<Declaration>, Name, Name) {
         let (a, alias) = (Name::simple("A"), Name::simple("alias"));
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         let u = sort(Level::Zero.succ());
         let decls = vec![
             Declaration::Inductive {
-                name: a.clone(),
+                name: a,
                 lparams: vec![],
                 num_params: 0,
                 ty: u.clone(),
                 ctors: vec![(Name::str(&a, "pt"), ty(&a))],
             },
             Declaration::Def {
-                name: alias.clone(),
+                name: alias,
                 lparams: vec![],
                 ty: forall(u.clone(), forall(u.clone(), u.clone())),
                 value: crate::expr::lam(u.clone(), crate::expr::lam(u.clone(), bvar(1))),
@@ -4027,12 +4027,12 @@ mod tests {
     fn a_field_that_reduces_to_the_recursive_spine_is_a_recursive_argument() {
         let (mut env, mut decls, _, alias) = alias_env();
         let t = Name::simple("T");
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         // `T.mk : alias T T → T`
         let field = app(app(ty(&alias), ty(&t)), ty(&t));
         let ctors = vec![(Name::str(&t, "mk"), forall(field, ty(&t)))];
         let d = Declaration::Inductive {
-            name: t.clone(),
+            name: t,
             lparams: vec![],
             num_params: 0,
             ty: sort(Level::Zero.succ()),
@@ -4077,14 +4077,14 @@ mod tests {
     fn the_spine_is_reduced_under_the_binders_of_a_function_typed_field() {
         let (mut env, _, a, alias) = alias_env();
         let s = Name::simple("S");
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         // `S.mk : (A → alias S S) → S`
         let field = forall(ty(&a), app(app(ty(&alias), ty(&s)), ty(&s)));
         let ctors = vec![(Name::str(&s, "mk"), forall(field, ty(&s)))];
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: s.clone(),
+                name: s,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -4127,14 +4127,14 @@ mod tests {
     fn a_field_whose_occurrence_reduces_away_is_declined_and_does_not_re_enter() {
         let (mut env, _, a, alias) = alias_env();
         let u = Name::simple("U");
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         // `U.mk : alias A U → U`
         let field = app(app(ty(&alias), ty(&a)), ty(&u));
         let ctors = vec![(Name::str(&u, "mk"), forall(field, ty(&u)))];
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: u.clone(),
+                name: u,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -4150,7 +4150,7 @@ mod tests {
             .expect("the walk declines");
         assert_eq!(
             g,
-            Gap::IndSpec(u.clone(), "nested occurrence"),
+            Gap::IndSpec(u, "nested occurrence"),
             "and it declines by the name the arm carries"
         );
     }
@@ -4172,13 +4172,13 @@ mod tests {
     #[test]
     fn the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing() {
         let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
-        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let ty = |n: &Name| konst(*n, Vec::new().into());
         let mut env = Environment::empty();
         for n in [&a, &b] {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: n.clone(),
+                    name: *n,
                     lparams: vec![],
                     num_params: 0,
                     ty: sort(Level::Zero.succ()),
@@ -4194,7 +4194,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -4269,9 +4269,9 @@ mod tests {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (d, b) = (Name::simple("D"), Name::simple("B"));
-        let bty = konst(b.clone(), no.clone());
+        let bty = konst(b, no.clone());
         let bff = konst(Name::str(&b, "ff"), no.clone());
-        let spine = |a: E, i: E| app(app(konst(d.clone(), no.clone()), a), i);
+        let spine = |a: E, i: E| app(app(konst(d, no.clone()), a), i);
         // Inside `∀z`, counting from the innermost: `z = 0`, `n = 1`, `α = 2`.
         let cell = |ix: E| {
             forall(
@@ -4292,7 +4292,7 @@ mod tests {
             (
                 "the bound `z`",
                 bvar(0),
-                Some(Gap::IndSpec(d.clone(), "recursive argument index")),
+                Some(Gap::IndSpec(d, "recursive argument index")),
             ),
             ("a closed constant", bff.clone(), None),
         ];
@@ -4302,7 +4302,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: b.clone(),
+                    name: b,
                     lparams: vec![],
                     num_params: 0,
                     ty: ty0.clone(),
@@ -4317,7 +4317,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: d.clone(),
+                    name: d,
                     lparams: vec![],
                     num_params: 1,
                     ty: forall(ty0.clone(), forall(bty.clone(), ty0.clone())),
@@ -4462,7 +4462,7 @@ mod tests {
         let t = Name::simple("T");
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
-        let spine = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+        let spine = |d: u32| app(konst(t, no.clone()), bvar(d));
         // `c : ∀α. (α → T α) → T α` — the recursive argument's domain *is* the
         // parameter.
         let cty = forall(ty0.clone(), forall(forall(bvar(0), spine(1)), spine(1)));
@@ -4471,7 +4471,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty0.clone(), ty0.clone()),
@@ -4582,10 +4582,10 @@ mod tests {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a) = (Name::simple("T"), Name::simple("A"));
-        let ty = |n: &Name| konst(n.clone(), no.clone());
+        let ty = |n: &Name| konst(*n, no.clone());
         // `T`'s recursive spine at `np = 0` and at `np = 1`.
-        let spine0 = konst(t.clone(), no.clone());
-        let spine1 = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+        let spine0 = konst(t, no.clone());
+        let spine1 = |d: u32| app(konst(t, no.clone()), bvar(d));
 
         /// What the walk must leave on the one recursive slot's row.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4646,7 +4646,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: a.clone(),
+                    name: a,
                     lparams: vec![],
                     num_params: 0,
                     ty: ty0.clone(),
@@ -4658,7 +4658,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: t.clone(),
+                    name: t,
                     lparams: vec![],
                     num_params: np,
                     ty: ind_ty.clone(),
@@ -4746,16 +4746,16 @@ mod tests {
         let no: Rc<[Level]> = Vec::new().into();
         let t = Name::simple("T");
         let doms = [Name::simple("A"), Name::simple("B"), Name::simple("C")];
-        let ty = |n: &Name| konst(n.clone(), no.clone());
+        let ty = |n: &Name| konst(*n, no.clone());
         // `T α`, under `d` binders of the constructor's own.
-        let spine = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+        let spine = |d: u32| app(konst(t, no.clone()), bvar(d));
 
         let mut env = Environment::empty();
         for e in &doms {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: e.clone(),
+                    name: *e,
                     lparams: vec![],
                     num_params: 0,
                     ty: ty0.clone(),
@@ -4778,7 +4778,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty0.clone(), ty0.clone()),
@@ -4841,15 +4841,15 @@ mod tests {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
-        let ty = |n: &Name| konst(n.clone(), no.clone());
-        let spine = konst(t.clone(), no.clone());
+        let ty = |n: &Name| konst(*n, no.clone());
+        let spine = konst(t, no.clone());
 
         let mut env = Environment::empty();
         for e in [&a, &b] {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: e.clone(),
+                    name: *e,
                     lparams: vec![],
                     num_params: 0,
                     ty: ty0.clone(),
@@ -4869,7 +4869,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty0.clone(),
@@ -4992,12 +4992,12 @@ mod tests {
     /// those arities against what the construction will apply the symbol at.
     fn indexed_env() -> (Environment, Name) {
         let b = Name::simple("B");
-        let bt = konst(b.clone(), Vec::new().into());
+        let bt = konst(b, Vec::new().into());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
@@ -5013,7 +5013,7 @@ mod tests {
         let t = Name::simple("T");
         // `T α i j`, with `α` at de Bruijn `d` and the indices given.
         let tap = |a: E, i: E, j: E| {
-            crate::expr::app(crate::expr::app(crate::expr::app(konst(t.clone(), Vec::new().into()), a), i), j)
+            crate::expr::app(crate::expr::app(crate::expr::app(konst(t, Vec::new().into()), a), i), j)
         };
         let ty = forall(sort(Level::Zero.succ()), forall(bt.clone(), forall(bt.clone(), sort(Level::Zero.succ()))));
         let ctors = vec![
@@ -5054,7 +5054,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty,
@@ -5146,7 +5146,7 @@ mod tests {
         {
             let mut c = Checker::threaded(&env, &mut ip);
             ensure(&mut c, &t, &[]).expect("the indexed family translates");
-            let ty = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer ⟦T⟧");
+            let ty = c.infer_type(&konst(t, Vec::new().into())).expect("infer ⟦T⟧");
             let tm = ty.tm.clone().expect("the type former must interpret");
             let mem = ty.ev.thm().expect("the former must have a typing").clone();
             assert!(mem.hyps().is_empty(), "a closed declaration's typing is unconditional");
@@ -5224,7 +5224,7 @@ mod tests {
             .ind_apparatus()
             .expect("apparatus")
             .indexed
-            .get(&(t.clone(), Vec::new()))
+            .get(&(t, Vec::new()))
             .expect("build_indexed kept the translation")
             .clone();
         let ctor = &it.ii.carrier.ctors[0];
@@ -5299,12 +5299,12 @@ mod tests {
         let mut ip = Interp::new();
         {
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(t.clone(), Vec::new().into())).expect("build");
+            c.infer_type(&konst(t, Vec::new().into())).expect("build");
             for n in &ctors {
-                c.infer_type(&konst(n.clone(), Vec::new().into())).expect("build");
+                c.infer_type(&konst(*n, Vec::new().into())).expect("build");
             }
         }
-        let key = (t.clone(), Vec::new());
+        let key = (t, Vec::new());
         let (kenv, app, _) = ip.ind_parts().expect("apparatus");
         let ind = app.decls.get(&key).expect("translated").ind.clone();
         for (i, j) in [(0usize, 1usize), (0, 2), (1, 2)] {
@@ -5343,7 +5343,7 @@ mod tests {
         let ty = forall(u1(), forall(u1(), forall(u1(), u1())));
         let spine = crate::expr::app(
             crate::expr::app(
-                crate::expr::app(konst(t.clone(), Vec::new().into()), crate::expr::bvar(5)),
+                crate::expr::app(konst(t, Vec::new().into()), crate::expr::bvar(5)),
                 crate::expr::bvar(4),
             ),
             crate::expr::bvar(3),
@@ -5357,11 +5357,11 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 3,
                 ty,
-                ctors: vec![(mk.clone(), forall(u1(), forall(u1(), forall(u1(), fields))))],
+                ctors: vec![(mk, forall(u1(), forall(u1(), forall(u1(), fields))))],
             },
         )
         .expect("the declaration is accepted");
@@ -5369,13 +5369,13 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         for n in [&t, &mk] {
-            let r = c.infer_type(&konst(n.clone(), Vec::new().into())).expect("infer");
+            let r = c.infer_type(&konst(*n, Vec::new().into())).expect("infer");
             let m = r.ev.thm().unwrap_or_else(|| panic!("{n} has no typing: {:?}", r.ev)).clone();
             assert!(m.hyps().is_empty(), "{n}'s typing must be unconditional");
             let (subj, _) = m.concl().as_mem().expect("a membership");
             assert_eq!(subj, r.tm.clone().unwrap(), "{n}'s typing must be about {n}");
         }
-        let key = (t.clone(), Vec::new());
+        let key = (t, Vec::new());
         let (_, app, _) = ip.ind_parts().expect("apparatus");
         let ind = &app.decls.get(&key).expect("translated").ind;
         assert_eq!(ind.spec.ctors.len(), 1);
@@ -5394,7 +5394,7 @@ mod tests {
     #[test]
     fn a_declaration_above_type_zero_lands_in_its_own_universe() {
         let t = Name::simple("Big");
-        let self_ty = konst(t.clone(), Vec::new().into());
+        let self_ty = konst(t, Vec::new().into());
         let ctors = vec![
             (Name::str(&t, "z"), self_ty.clone()),
             (Name::str(&t, "s"), forall(self_ty.clone(), self_ty.clone())),
@@ -5404,7 +5404,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ().succ()),
@@ -5414,7 +5414,7 @@ mod tests {
         .expect("accepted");
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let r = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer");
+        let r = c.infer_type(&konst(t, Vec::new().into())).expect("infer");
         let m = r.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", r.ev)).clone();
         assert!(m.hyps().is_empty());
         let want_2 = c.interp().unwrap().sort(2);
@@ -5444,12 +5444,12 @@ mod tests {
     fn a_possibly_prop_declaration_never_acquires_a_w_type() {
         let t = Name::simple("P");
         let u = Name::simple("u");
-        let ty = konst(t.clone(), vec![Level::Param(u.clone())].into());
+        let ty = konst(t, vec![Level::Param(u)].into());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![u],
                 num_params: 0,
                 ty: sort(Level::Param(Name::simple("u"))),
@@ -5469,16 +5469,16 @@ mod tests {
         // `σ = [1]`: `Sort 1` is `Type 0`, so a *per-instantiation* branch
         // would build a W-type right here.
         let at: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
-        let r = c.infer_type(&konst(t.clone(), at.clone())).expect("infer");
+        let r = c.infer_type(&konst(t, at.clone())).expect("infer");
         assert!(r.tm.is_none(), "a possibly-Prop declaration must not acquire a W-type");
         assert_eq!(
             r.ev.gap(),
-            Some(&Gap::IndSpec(t.clone(), "class (P) above Prop")),
+            Some(&Gap::IndSpec(t, "class (P) above Prop")),
             "and the gap must name the cause, not the site"
         );
         // The decline is recorded, so a second lookup reports the same reason
         // rather than a bare store miss.
-        let r2 = c.infer_type(&konst(t.clone(), at)).expect("infer");
+        let r2 = c.infer_type(&konst(t, at)).expect("infer");
         assert_eq!(r2.ev.gap(), Some(&Gap::IndSpec(t, "class (P) above Prop")));
     }
 
@@ -5531,13 +5531,13 @@ mod tests {
         let p3 = Name::simple("P3");
         let mk = Name::str(&p3, "mk");
         let no: Rc<[Level]> = Vec::new().into();
-        let k = || konst(p3.clone(), no.clone());
+        let k = || konst(p3, no.clone());
         let ty0 = || sort(Level::Zero.succ());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: p3.clone(),
+                name: p3,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty0(), forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::Zero))))),
@@ -5569,7 +5569,7 @@ mod tests {
         // `got.tm.is_none()`; `crate::class_s_ix` and `derived`'s `8d9c94c`
         // between them made `P3` build, and the retention is the same retention
         // either way — `zoneb::ensure` stores before it branches.
-        let got = c.infer_type(&konst(p3.clone(), no)).expect("infer ⟦P3⟧");
+        let got = c.infer_type(&konst(p3, no)).expect("infer ⟦P3⟧");
         assert!(got.tm.is_some(), "P3 is class (S) at an index and now builds");
 
         // Four distinct terms, so a wrong slot cannot coincide with a right one.
@@ -5640,15 +5640,15 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: q.clone(),
+                name: q,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(sort(Level::Zero.succ()), sort(Level::Zero)),
                 ctors: vec![(
-                    mk.clone(),
+                    mk,
                     forall(
                         sort(Level::Zero.succ()),
-                        forall(bvar(0), app(konst(q.clone(), no.clone()), bvar(1))),
+                        forall(bvar(0), app(konst(q, no.clone()), bvar(1))),
                     ),
                 )],
             },
@@ -5658,7 +5658,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         c.infer_type(&konst(q, no.clone())).expect("infer ⟦Q⟧");
-        let got = c.infer_type(&konst(mk.clone(), no)).expect("infer ⟦Q.mk⟧");
+        let got = c.infer_type(&konst(mk, no)).expect("infer ⟦Q.mk⟧");
         let m = got
             .ev
             .thm()

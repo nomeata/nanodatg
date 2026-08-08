@@ -264,7 +264,7 @@ pub(crate) fn constructors(
     for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
         if let Err(g) = one(c, ind_name, inst, np, ni, i, cname, cty, tr) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((cname.clone(), inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
             }
         }
     }
@@ -283,7 +283,7 @@ fn one(
     cty: &E,
     tr: &Rc<IndexedTranslation>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(cname.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(*cname, w, Cause::Threading);
     let spec = tr
         .ii
         .spec
@@ -302,8 +302,8 @@ fn one(
     let (ctor_sym, ctor_ax) = tr.ctor_abbrev.get(i).cloned().ok_or_else(|| bad(TERM))?;
 
     let site = Site {
-        ind: ind_name.clone(),
-        ctor: cname.clone(),
+        ind: *ind_name,
+        ctor: *cname,
         inst: inst.to_vec(),
         i,
         np,
@@ -339,7 +339,7 @@ struct Site {
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
 
     let Some((all, mems)) = c.binders(np + nf) else { return gap(Gap::NoEndpoint) };
@@ -515,7 +515,7 @@ struct At {
 
 /// The bottom's term and typing, or the bridge that did not fit.
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
     let carrier = &site.tr.ii.carrier;
     let ctor = carrier.ctors.get(site.i).ok_or_else(|| bad(SHAPE))?;
@@ -871,12 +871,12 @@ fn spine_eq(
     xs: &[(Term, Thm)],
     held: Option<&Term>,
 ) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     // **Scope, not threading.** An index expression at a type the declaration's
     // own binder was not opened at is `ιₖ` mentioning `x⃗<ₖ` — a shape nothing
     // in the repository builds at either end, so what is missing is a witness
     // and a design decision, not a wire.
-    let scope = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Scope);
+    let scope = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Scope);
     let mut a: Vec<Term> = ps.to_vec();
     let mut m: Vec<Thm> = param_mems.to_vec();
     for (t, mem) in xs {
@@ -952,12 +952,12 @@ mod tests {
     /// other index and is refused rather than believed.
     fn indexed_env() -> (Environment, Name, Vec<Name>) {
         let b = nm("B");
-        let bt = konst(b.clone(), no_levels());
+        let bt = konst(b, no_levels());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty1(),
@@ -971,7 +971,7 @@ mod tests {
         let b0 = konst(Name::str(&b, "b0"), no_levels());
         let b1 = konst(Name::str(&b, "b1"), no_levels());
         let t = nm("T");
-        let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
+        let tap = |a: E, i: E, j: E| app(app(app(konst(t, no_levels()), a), i), j);
         let ty = forall(ty1(), forall(bt.clone(), forall(bt.clone(), ty1())));
         let ctors = vec![
             (Name::str(&t, "c0"), forall(ty1(), tap(bvar(0), b0.clone(), b0.clone()))),
@@ -1002,11 +1002,11 @@ mod tests {
                 ),
             ),
         ];
-        let names: Vec<Name> = ctors.iter().map(|(n, _)| n.clone()).collect();
+        let names: Vec<Name> = ctors.iter().map(|(n, _)| *n).collect();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty,
@@ -1038,9 +1038,9 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         // The former first; the constructors are built with it, not on demand.
-        c.infer_type(&konst(t.clone(), no_levels())).expect("infer ⟦T⟧");
+        c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
         for n in &ctors {
-            let got = c.infer_type(&konst(n.clone(), no_levels())).expect("infer");
+            let got = c.infer_type(&konst(*n, no_levels())).expect("infer");
             let tm = got
                 .tm
                 .clone()
@@ -1072,12 +1072,12 @@ mod tests {
         let mut ip = Interp::new();
         {
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(t.clone(), no_levels())).expect("infer ⟦T⟧");
+            c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
             for n in &ctors {
-                c.infer_type(&konst(n.clone(), no_levels())).expect("infer");
+                c.infer_type(&konst(*n, no_levels())).expect("infer");
             }
         }
-        let key = (t.clone(), Vec::new());
+        let key = (t, Vec::new());
         let base = ip
             .ind_apparatus()
             .expect("apparatus")
@@ -1109,12 +1109,12 @@ mod tests {
     /// `ni ≥ 1`.
     fn general_indexed_env() -> (Environment, Name) {
         let b = nm("B");
-        let bt = konst(b.clone(), no_levels());
+        let bt = konst(b, no_levels());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty1(),
@@ -1127,11 +1127,11 @@ mod tests {
         .expect("B is accepted");
         let b0 = konst(Name::str(&b, "b0"), no_levels());
         let g = nm("G");
-        let gap = |a: E, i: E| app(app(konst(g.clone(), no_levels()), a), i);
+        let gap = |a: E, i: E| app(app(konst(g, no_levels()), a), i);
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: g.clone(),
+                name: g,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty1(), forall(bt.clone(), ty1())),
@@ -1178,13 +1178,13 @@ mod tests {
         let mut ip = Interp::new();
         {
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(g.clone(), no_levels())).expect("infer ⟦G⟧");
+            c.infer_type(&konst(g, no_levels())).expect("infer ⟦G⟧");
         }
         let tr = ip
             .ind_apparatus()
             .expect("apparatus")
             .indexed
-            .get(&(g.clone(), Vec::new()))
+            .get(&(g, Vec::new()))
             .expect("G is translated")
             .clone();
         assert_eq!(tr.ctor_abbrev.len(), 1, "one constructor");
@@ -1262,12 +1262,12 @@ mod tests {
     /// scope, not a hole in this test.
     fn two_index_general_env() -> (Environment, Name, Name) {
         let b = nm("B");
-        let bt = konst(b.clone(), no_levels());
+        let bt = konst(b, no_levels());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty1(),
@@ -1282,11 +1282,11 @@ mod tests {
         // constructors rather than two so that `⟦D⟧` cannot coincide with
         // `⟦B⟧` by cardinality either.
         let d = nm("D");
-        let dt = konst(d.clone(), no_levels());
+        let dt = konst(d, no_levels());
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: d.clone(),
+                name: d,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty1(),
@@ -1300,17 +1300,17 @@ mod tests {
         .expect("D is accepted");
         let b0 = konst(Name::str(&b, "b0"), no_levels());
         let t = nm("T");
-        let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
+        let tap = |a: E, i: E, j: E| app(app(app(konst(t, no_levels()), a), i), j);
         let cname = Name::str(&t, "c");
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty1(), forall(bt.clone(), forall(bt.clone(), ty1()))),
                 ctors: vec![(
-                    cname.clone(),
+                    cname,
                     forall(
                         ty1(),
                         forall(
@@ -1357,8 +1357,8 @@ mod tests {
         let (env, t, cname) = two_index_general_env();
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        c.infer_type(&konst(t.clone(), no_levels())).expect("infer ⟦T⟧");
-        let got = c.infer_type(&konst(cname.clone(), no_levels())).expect("infer");
+        c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
+        let got = c.infer_type(&konst(cname, no_levels())).expect("infer");
         let tm = got
             .tm
             .clone()
@@ -1401,7 +1401,7 @@ mod tests {
         let (env, t, ctors) = indexed_env();
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        c.infer_type(&konst(t.clone(), no_levels())).expect("infer ⟦T⟧");
+        c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
         // The former is in the store and stays there, whatever a constructor
         // does — and every constructor is there beside it.
         assert!(c.stored_term(&t, &[]).is_some(), "the type former must survive");
@@ -1412,16 +1412,16 @@ mod tests {
         // A key the store misses. `T` has no level parameters, so nothing is
         // ever built at `[9]` and both calls below take the miss branch.
         let miss: &[u32] = &[9];
-        let c2 = ctors[2].clone();
+        let c2 = ctors[2];
         assert_eq!(
             crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),
-            Gap::NoInterpretation(c2.clone(), miss.to_vec()),
+            Gap::NoInterpretation(c2, miss.to_vec()),
             "with nothing recorded, a store miss is an absence and says so"
         );
-        let want = Gap::IndexedCtor(c2.clone(), INDEX_TYPE, Cause::Scope);
+        let want = Gap::IndexedCtor(c2, INDEX_TYPE, Cause::Scope);
         {
             let app = c.interp().expect("threaded").ind_apparatus().expect("apparatus");
-            app.ctor_untranslated.insert((c2.clone(), miss.to_vec()), want.clone());
+            app.ctor_untranslated.insert((c2, miss.to_vec()), want.clone());
         }
         assert_eq!(
             crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),

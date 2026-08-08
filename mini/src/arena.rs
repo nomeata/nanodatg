@@ -65,7 +65,12 @@
 //! makes the installation per-file on the path `mini` itself uses.
 
 use nanoda_lib::expr::{BinderStyle, Expr};
-use nanoda_lib::util::{Config, ExportFile, ExprPtr, LeanDag, NamePtr, TcCtx};
+use nanoda_lib::level::Level as CLevel;
+use nanoda_lib::name::Name as CName;
+use nanoda_lib::util::{
+    BigUintPtr, Config, ExportFile, ExprPtr, LeanDag, LevelPtr, LevelsPtr, NamePtr, StringPtr,
+    TcCtx,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -116,12 +121,57 @@ pub fn is_installed() -> bool { CTX.with(|c| c.borrow().is_some()) }
 /// out ends the borrow — and every public constructor takes its arguments
 /// already built.
 fn read<R>(f: impl FnOnce(&TcCtx<'static, 'static>) -> R) -> R {
+    ensure_installed();
     CTX.with(|c| f(c.borrow().as_ref().expect("mini::arena: no export file installed")))
 }
 
 /// Allocate through the arena. Private, for the reason [`read`] gives.
 fn write<R>(f: impl FnOnce(&mut TcCtx<'static, 'static>) -> R) -> R {
+    ensure_installed();
     CTX.with(|c| f(c.borrow_mut().as_mut().expect("mini::arena: no export file installed")))
+}
+
+/// **Under `cargo test` only, an absent arena becomes an empty one.**
+///
+/// Mini's unit tests build declarations by hand — `Name::simple("Nat")`,
+/// `konst(…)`, a whole inductive — and none of them has an export file. Before
+/// the migration those constructors were `Rc::new`; now they need a context,
+/// and requiring 168 tests to install one would be boilerplate proportional to
+/// the suite rather than to the change.
+///
+/// It is safe precisely because it is empty: an auto-installed arena has no
+/// declarations, so nothing can *silently find* a name or expression it should
+/// have had to parse for — a test that depended on export content would fail,
+/// not pass. In a non-test build `cfg!(test)` is `false` and this is dead
+/// code, so production still panics on a missing [`install`]. Integration
+/// tests go through `run::check_file`, which installs the real thing.
+fn ensure_installed() {
+    if cfg!(test) && !CTX.with(|c| c.borrow().is_some()) {
+        install_empty_arena();
+    }
+}
+
+/// An arena over a zero-byte export file. `parse_export_file` reads lines
+/// until EOF, so an empty input is a valid empty environment.
+///
+/// `pub` because `mini`'s *integration* tests need it too, for the same reason
+/// [`ensure_installed`] gives — and there `cfg!(test)` is false, since they
+/// link `mini` as a library.
+pub fn install_empty_arena() {
+    let cfg: Config = serde_json::from_str(
+        r#"{"export_file_path": null,
+            "unpermitted_axiom_hard_error": false,
+            "unsafe_permit_all_axioms": true,
+            "nat_extension": true,
+            "string_extension": true,
+            "print_axioms": false,
+            "print_success_message": false}"#,
+    )
+    .expect("mini::arena: the empty-arena config does not deserialise");
+    let (ef, _) = cfg
+        .to_export_file_from(std::io::Cursor::new(Vec::new()))
+        .expect("mini::arena: the empty export file does not parse");
+    install_export_file(ef);
 }
 
 // ────────────────────────────────────────────────────────── accessors ──
@@ -129,6 +179,54 @@ fn write<R>(f: impl FnOnce(&mut TcCtx<'static, 'static>) -> R) -> R {
 /// The node `e` points at. `Expr<'static>` is `Copy`, so this ends the borrow
 /// before the caller looks at it — see [`read`].
 pub fn read_expr(e: ExprPtr<'static>) -> Expr<'static> { read(|c| c.read_expr(e)) }
+
+/// The node `n` points at. `Name<'static>` is `Copy`; same argument.
+pub fn read_name(n: NamePtr<'static>) -> CName<'static> { read(|c| c.read_name(n)) }
+
+/// A component string, copied out. The arena hands back a `&CowStr` borrowed
+/// from the context, which must not escape the borrow — see [`read`].
+pub fn read_string(s: StringPtr<'static>) -> String {
+    read(|c| c.read_string(s).as_ref().to_string())
+}
+
+/// The level `l` points at.
+pub fn read_level(l: LevelPtr<'static>) -> CLevel<'static> { read(|c| c.read_level(l)) }
+
+/// A universe-parameter list, as an owned vector. The arena stores it as an
+/// `Arc<[LevelPtr]>`; cloning the `Arc` would still be a value that outlives
+/// the borrow, so this copies the (always short) slice.
+pub fn read_levels(ls: LevelsPtr<'static>) -> Vec<LevelPtr<'static>> {
+    read(|c| c.read_levels(ls).to_vec())
+}
+
+/// A nat literal's value **in decimal**, copied out.
+///
+/// A string rather than the `BigUint` the arena holds, because mini has no
+/// `num-bigint` dependency and wants none: its own literals are `u64` and the
+/// parser declines anything above ten, so a value that does not fit is
+/// declined regardless of how it is spelled. `None` when the export file was
+/// parsed without the nat extension, which mini never does.
+pub fn read_nat_lit_decimal(n: BigUintPtr<'static>) -> Option<String> {
+    read(|c| c.read_bignum(n).map(|b| b.to_string()))
+}
+
+// ─────────────────────────────────────────────────── name constructors ──
+
+/// `Name.anonymous`.
+pub fn name_anon() -> NamePtr<'static> { read(|c| c.anonymous()) }
+
+/// `Name.str`. Needs `TcCtx::alloc_string`, which this migration made `pub` —
+/// see the citation at its definition.
+pub fn name_str(pre: NamePtr<'static>, s: &str) -> NamePtr<'static> {
+    let owned = s.to_string();
+    write(|c| {
+        let sfx = c.alloc_string(std::borrow::Cow::Owned(owned));
+        c.str(pre, sfx)
+    })
+}
+
+/// `Name.num`.
+pub fn name_num(pre: NamePtr<'static>, i: u64) -> NamePtr<'static> { write(|c| c.num(pre, i)) }
 
 // ──────────────────────────────────────────────── pinned constructors ──
 
@@ -255,23 +353,9 @@ fn erase_go(
 mod tests {
     use super::*;
 
-    /// An arena over an empty export file. `parse_export_file` reads lines
-    /// until EOF, so a zero-byte input is a valid empty environment — which
-    /// is all these tests need, since they build every expression by hand.
-    fn install_empty() {
-        let cfg: Config = serde_json::from_str(
-            r#"{"export_file_path": null,
-                "unpermitted_axiom_hard_error": false,
-                "unsafe_permit_all_axioms": true,
-                "nat_extension": true,
-                "string_extension": true,
-                "print_axioms": false,
-                "print_success_message": false}"#,
-        )
-        .expect("config");
-        let (ef, _) = cfg.to_export_file_from(std::io::Cursor::new(Vec::new())).expect("parse");
-        install_export_file(ef);
-    }
+    /// A fresh empty arena for each test. `ensure_installed` would supply one
+    /// lazily, but these tests are *about* the arena, so they say so.
+    fn install_empty() { install_empty_arena(); }
 
     /// **Pointer identity is structural identity.** The property everything
     /// else here rests on: `alloc_expr` checks the export dag and then a

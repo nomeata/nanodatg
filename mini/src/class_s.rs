@@ -190,7 +190,7 @@ impl ClassS {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassS>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.props.get(&(ind_name.clone(), inst.to_vec())).cloned()
+    app.props.get(&(*ind_name, inst.to_vec())).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(S) declaration.
@@ -206,7 +206,7 @@ pub(crate) fn build(
     ind_ty: &E,
     ctor_tys: &[(Name, E)],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*ind_name, w);
 
     // ── the `FnSym` boundary, shared with the class-(T) walk ──────────────
     // `ni = 0`: `zoneb::build` routes an indexed declaration to its own decline
@@ -270,7 +270,7 @@ pub(crate) fn build(
     }
     if let Some(ip) = c.interp() {
         if let Some(app) = ip.ind_apparatus() {
-            app.props.insert((ind_name.clone(), inst.to_vec()), built);
+            app.props.insert((*ind_name, inst.to_vec()), built);
         }
     }
     Ok(())
@@ -293,7 +293,7 @@ fn former(
     cs: &Rc<ClassS>,
 ) -> Result<(), Gap> {
     let cs = cs.clone();
-    let name = ind_name.clone();
+    let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let ty = crate::expr::sort(crate::zoneb::level_numeral(level));
         let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) });
@@ -301,14 +301,14 @@ fn former(
         let ip = c.interp().expect("threaded");
         let carrier = ip.mk(cs.lc.phi, ps.clone());
         let Some(at) = inst_all(&cs.in_u0, &ps) else {
-            return gap(Gap::IndSpec(name.clone(), "denotation typing instance"))
+            return gap(Gap::IndSpec(name, "denotation typing instance"))
         };
         let raised = if level == 0 { Some(at) } else { ip.raise_in_gamma(0, level as usize, &at) };
         match raised {
             Some(t) if *t.concl() == Formula::mem(carrier.clone(), ip.sort(level)) => {
                 Ok(Typing { ty, tm: Some(carrier), ev: Ev::Proved(t) })
             }
-            _ => gap(Gap::IndUniverseHeight(name.clone(), level)),
+            _ => gap(Gap::IndUniverseHeight(name, level)),
         }
     };
     let t = c.lam_nest(ind_ty, np, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
@@ -341,9 +341,9 @@ fn constructor(
     let nf = cs.spec.base.ctors[i].order.len();
     let depth = cs.np() + nf;
     let codomain =
-        crate::zoneb::peel(cty, depth).ok_or_else(|| Gap::IndSpec(ind_name.clone(), "ctor arity"))?;
+        crate::zoneb::peel(cty, depth).ok_or(Gap::IndSpec(*ind_name, "ctor arity"))?;
     let site = CtorSite {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: inst.to_vec(),
         i,
         codomain,
@@ -374,7 +374,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let (i, np) = (*i, *np);
     let ty = codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::IndSpec(ind.clone(), w);
+    let bad = |w: &'static str| Gap::IndSpec(*ind, w);
     let spec = &cs.spec.base.ctors[i];
     let nf = spec.order.len();
     if spec.order.iter().any(|s| *s != Slot::Plain) {
@@ -475,7 +475,7 @@ mod tests {
                 p,
                 forall(
                     bvar(1),
-                    forall(bvar(1), at(konst(a.clone(), Vec::new().into()), bvar(3), bvar(2))),
+                    forall(bvar(1), at(konst(a, Vec::new().into()), bvar(3), bvar(2))),
                 ),
             ),
         );
@@ -483,11 +483,11 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: a.clone(),
+                name: a,
                 lparams: vec![],
                 num_params: 2,
                 ty,
-                ctors: vec![(i.clone(), cty)],
+                ctors: vec![(i, cty)],
             },
         )
         .expect("the declaration is accepted");
@@ -503,7 +503,7 @@ mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         let none: std::rc::Rc<[Level]> = Vec::new().into();
 
-        let t = c.infer_type(&konst(a.clone(), none.clone())).expect("infer ⟦And⟧");
+        let t = c.infer_type(&konst(a, none.clone())).expect("infer ⟦And⟧");
         let m = t.ev.thm().unwrap_or_else(|| panic!("⟦And⟧ has no typing: {:?}", t.ev)).clone();
         assert!(m.hyps().is_empty(), "a closed declaration's typing is unconditional");
         assert!(t.tm.is_some(), "⟦And⟧ must interpret");
@@ -531,11 +531,11 @@ mod tests {
         let mut env = Environment::empty();
         for (n, k) in [("S", 1usize), ("P", 2)] {
             let t = nm(n);
-            let ty = konst(t.clone(), Vec::new().into());
+            let ty = konst(t, Vec::new().into());
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: t.clone(),
+                    name: t,
                     lparams: vec![],
                     num_params: 0,
                     ty: sort(Level::Zero),
@@ -590,7 +590,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: f.clone(),
+                name: f,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero),

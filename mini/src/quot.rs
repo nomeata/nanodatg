@@ -69,7 +69,7 @@
 
 use crate::env::ConstantInfo;
 use crate::ev::{Ev, Gap};
-use crate::expr::{Name, E};
+use crate::expr::{Name, E, NameView};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
 use kernel::Thm;
@@ -125,10 +125,10 @@ impl Prim {
 
 /// The table. One comparison on the name, never a scan and never a shape match.
 pub fn prim_for(n: &Name) -> Option<Prim> {
-    let Name::Str(pre, s) = n else { return None };
-    match &**pre {
-        Name::Anon if &**s == "Quot" => Some(Prim::Quot),
-        Name::Str(root, q) if **root == Name::Anon && &**q == "Quot" => match &**s {
+    let NameView::Str(pre, s) = n.view() else { return None };
+    match pre.view() {
+        NameView::Anon if &*s == "Quot" => Some(Prim::Quot),
+        NameView::Str(root, q) if root.is_anon() && &*q == "Quot" => match &*s {
             "mk" => Some(Prim::Mk),
             "lift" => Some(Prim::Lift),
             "ind" => Some(Prim::Ind),
@@ -165,7 +165,7 @@ const LIFT_DOM: &str =
 /// case — `add_quot`'s order — and the length is checked against the constant's
 /// declared parameter list rather than against the table.
 pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), Gap> {
-    let miss = || Gap::NoInterpretation(name.clone(), inst.to_vec());
+    let miss = || Gap::NoInterpretation(*name, inst.to_vec());
     let bad = |w: &'static str| Gap::IndSpec(Name::simple("Quot"), w);
     let prim = prim_for(name).ok_or_else(miss)?;
 

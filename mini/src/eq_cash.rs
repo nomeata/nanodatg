@@ -578,7 +578,7 @@ mod tests {
                 cur = body.clone();
             }
             let args = bvars(u32::try_from(n).expect("small telescope"), 0);
-            Ok(cash(c, &app_n(konst(nm.clone(), [].into()), &args)))
+            Ok(cash(c, &app_n(konst(nm, [].into()), &args)))
         });
         (out.unwrap_or_else(Err), n)
     }

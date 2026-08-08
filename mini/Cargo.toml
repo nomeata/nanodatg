@@ -8,14 +8,21 @@ description = "A Rust port of lean-mini-kernel, to be made evidence-passing"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UNTRUSTED, like `checker`. `mini` is a second, much smaller consumer of the
-# trusted `kernel`: a port of https://github.com/nomeata/lean-mini-kernel with
-# no caches, no hash-consing and no arena, so that the evidence-threading
-# design can be built where nothing confounds it. See MINI-DESIGN.md.
+# trusted `kernel`: a port of https://github.com/nomeata/lean-mini-kernel,
+# built with no caches so that the evidence-threading design had nothing
+# confounding it. See MINI-DESIGN.md.
 #
-# It depends on `checker` only for the export-file parser and the
-# level-instantiation pre-pass; it never enters `tc.rs` or `tg.rs`, and it
-# requires no change to `checker/` (whose diff against upstream nanoda is an
-# advertised audit artefact).
+# **The representation is converging with `checker`'s** (PIVOT.md §1.1): terms
+# live in a hash-consed `checker` arena reached through `mini/src/arena.rs`,
+# which is the only module here that names `TcCtx`. Mini still never enters
+# `tc.rs` or `tg.rs`.
+#
+# It no longer requires `checker/` to be unchanged — PIVOT.md §6 inverts that
+# rule deliberately, since the old one existed to protect `checker/` from
+# mini's fidelity experiment. Upstream files take minimal, cited edits (today:
+# one `pub(crate)` -> `pub` on `TcCtx::alloc_string`), new capability lands in
+# new files, and `git diff nanoda-upstream/master -- checker/` remains the
+# advertised audit artefact.
 # ─────────────────────────────────────────────────────────────────────────────
 
 [dependencies]

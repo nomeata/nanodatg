@@ -20,40 +20,102 @@
 //! Nat literals are `u64`; the parser declines anything above 10 (mini-lean's
 //! own guard), so the width is never load-bearing.
 
+use nanoda_lib::name::Name as CName;
+use nanoda_lib::util::NamePtr;
 use std::fmt;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────── names ──
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Name {
+/// A Lean name, as a pointer into [`crate::arena`].
+///
+/// **A handle, not a tree.** It was `enum Name { Anon, Str(Rc<Name>,
+/// Rc<str>), Num(Rc<Name>, u64) }`; it is now `checker`'s hash-consed
+/// `NamePtr`, so it is `Copy`, equality is a `u32` comparison, and two
+/// spellings of one name are one pointer. The migration kept both smart
+/// constructors' signatures — [`Name::simple`] and [`Name::str`] are 382 of
+/// the 419 call sites — so only the 37 sites that matched the variants
+/// directly had to change, and they use [`Name::view`].
+///
+/// `Ord` is deliberately absent, as it was before: `crate::dump` sorts by
+/// *rendered* name, and a pointer order would be allocation order, which is
+/// not stable across runs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Name(pub NamePtr<'static>);
+
+/// [`Name`] destructured one level. The `Rc<str>` is a copy out of the
+/// arena — the component cannot be handed out by reference, because the
+/// borrow of the context must not escape (`crate::arena`'s `read`).
+///
+/// Every site that uses this is name *classification* — "is this
+/// `Quot.sound`", "is this `T.rec._auxRule_3`" — on declaration names, not on
+/// expression nodes, so the copy is off every hot path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum NameView {
     Anon,
-    Str(Rc<Name>, Rc<str>),
-    Num(Rc<Name>, u64),
+    Str(Name, Rc<str>),
+    Num(Name, u64),
 }
 
 impl Name {
+    /// `Name.anonymous`.
+    pub fn anon() -> Name { Name(crate::arena::name_anon()) }
+
     /// `Name.simple`: a one-component name.
-    pub fn simple(s: &str) -> Name { Name::Str(Rc::new(Name::Anon), Rc::from(s)) }
+    pub fn simple(s: &str) -> Name { Name(crate::arena::name_str(crate::arena::name_anon(), s)) }
 
     /// `Name.str`.
-    pub fn str(pre: &Name, s: &str) -> Name { Name::Str(Rc::new(pre.clone()), Rc::from(s)) }
+    pub fn str(pre: &Name, s: &str) -> Name { Name(crate::arena::name_str(pre.0, s)) }
+
+    /// `Name.num`.
+    pub fn num(pre: &Name, i: u64) -> Name { Name(crate::arena::name_num(pre.0, i)) }
+
+    /// One level of structure. See [`NameView`].
+    pub fn view(&self) -> NameView {
+        match crate::arena::read_name(self.0) {
+            CName::Anon => NameView::Anon,
+            CName::Str(pre, s, _) => NameView::Str(Name(pre), Rc::from(crate::arena::read_string(s))),
+            CName::Num(pre, i, _) => NameView::Num(Name(pre), i),
+        }
+    }
+
+    /// Whether this is the anonymous name — the root test, written out
+    /// because it is the commonest thing the old `**pre == Name::Anon`
+    /// spelling said and it should not need a component copy.
+    pub fn is_anon(&self) -> bool { self.0 == crate::arena::name_anon() }
 }
 
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Name::Anon => write!(f, "[anonymous]"),
-            Name::Str(pre, s) => match **pre {
-                Name::Anon => write!(f, "{s}"),
-                _ => write!(f, "{pre}.{s}"),
-            },
-            Name::Num(pre, i) => match **pre {
-                Name::Anon => write!(f, "{i}"),
-                _ => write!(f, "{pre}.{i}"),
-            },
+        match self.view() {
+            NameView::Anon => write!(f, "[anonymous]"),
+            NameView::Str(pre, s) => {
+                if pre.is_anon() {
+                    write!(f, "{s}")
+                } else {
+                    write!(f, "{pre}.{s}")
+                }
+            }
+            NameView::Num(pre, i) => {
+                if pre.is_anon() {
+                    write!(f, "{i}")
+                } else {
+                    write!(f, "{pre}.{i}")
+                }
+            }
         }
     }
+}
+
+/// Renders the name, not the pointer.
+///
+/// Not the derive: assertion messages across the suite say `{n:?}` — for
+/// instance `convert`'s "a user-declared axiom passed as one of Lean's own" —
+/// and a bare `Name(Ptr { raw: 41 })` would turn a diagnostic into a puzzle.
+/// Quoted, so that a name with a dot *in a component* is still visibly one
+/// component, which is exactly the distinction that test is about.
+impl fmt::Debug for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "`{self}`") }
 }
 
 // ────────────────────────────────────────────────────────────── levels ──
@@ -106,7 +168,7 @@ impl Level {
 
     /// `Level.substOneLevel`.
     pub fn subst_one(&self, n: &Name, l: &Level) -> Level {
-        self.subst(&|m| if m == n { l.clone() } else { Level::Param(m.clone()) })
+        self.subst(&|m| if m == n { l.clone() } else { Level::Param(*m) })
     }
 
     /// `Level.mkIMax` — the smart constructor keeping `imax`'s rhs a parameter.
@@ -127,13 +189,13 @@ impl Level {
             Level::Succ(l) => Level::Succ(Rc::new(l.simplify())),
             Level::Max(a, b) => Level::max(a.simplify(), b.simplify()),
             Level::IMax(a, b) => Level::mk_imax(&a.simplify(), &b.simplify()),
-            Level::Param(n) => Level::Param(n.clone()),
+            Level::Param(n) => Level::Param(*n),
         }
     }
 
     /// `Level.byCases`.
     fn by_cases(p: &Name, l1: &Level, l2: &Level, balance: i64) -> bool {
-        let succ_p = Level::Param(p.clone()).succ();
+        let succ_p = Level::Param(*p).succ();
         Level::le(&l1.subst_one(p, &Level::Zero).simplify(), &l2.subst_one(p, &Level::Zero).simplify(), balance)
             && Level::le(&l1.subst_one(p, &succ_p).simplify(), &l2.subst_one(p, &succ_p).simplify(), balance)
     }
@@ -270,7 +332,7 @@ pub fn shift(e: &E, n: u32, d: u32) -> E {
             body: shift(body, n + 1, d),
         }),
         Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: shift(s, n, d) })
+            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: shift(s, n, d) })
         }
         Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
     }
@@ -303,7 +365,7 @@ pub fn substs(e: &E, s: &[E], n: u32) -> E {
             body: substs(body, s, n + 1),
         }),
         Expr::Proj { ind, idx, s: x } => {
-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: substs(x, s, n) })
+            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: substs(x, s, n) })
         }
         Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
     }
@@ -316,7 +378,7 @@ pub fn subst(e: &E, a: &E) -> E { substs(e, std::slice::from_ref(a), 0) }
 pub fn subst_level(e: &E, f: &dyn Fn(&Name) -> Level) -> E {
     match &**e {
         Expr::Const(n, ls) => {
-            konst(n.clone(), ls.iter().map(|l| l.subst(f)).collect::<Vec<_>>().into())
+            konst(*n, ls.iter().map(|l| l.subst(f)).collect::<Vec<_>>().into())
         }
         Expr::App(g, a) => app(subst_level(g, f), subst_level(a, f)),
         Expr::Lam { ty, body } => lam(subst_level(ty, f), subst_level(body, f)),
@@ -327,7 +389,7 @@ pub fn subst_level(e: &E, f: &dyn Fn(&Name) -> Level) -> E {
             body: subst_level(body, f),
         }),
         Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: subst_level(s, f) })
+            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: subst_level(s, f) })
         }
         Expr::Sort(l) => sort(l.subst(f)),
         Expr::BVar(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),

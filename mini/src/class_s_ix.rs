@@ -131,7 +131,7 @@ impl ClassSIx {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassSIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.props_ix.get(&(ind_name.clone(), inst.to_vec())).cloned()
+    app.props_ix.get(&(*ind_name, inst.to_vec())).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(S) declaration with indices.
@@ -147,7 +147,7 @@ pub(crate) fn build(
     level: u32,
     walk: Rc<IndexedWalk>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndexedFamily(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::IndexedFamily(*ind_name, w);
     if walk.spec.base.ctors.iter().any(|cs| cs.recs != 0) {
         return Err(bad(RECURSIVE))
     }
@@ -187,7 +187,7 @@ pub(crate) fn build(
         constructor(c, ind_name, inst, cname, cty, i, &built)?;
     }
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.props_ix.insert((ind_name.clone(), inst.to_vec()), built);
+        app.props_ix.insert((*ind_name, inst.to_vec()), built);
     }
     Ok(())
 }
@@ -211,7 +211,7 @@ fn former(
     cs: &Rc<ClassSIx>,
 ) -> Result<(), Gap> {
     let cs = cs.clone();
-    let name = ind_name.clone();
+    let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let ty = crate::expr::sort(crate::zoneb::level_numeral(level));
         let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) });
@@ -223,23 +223,23 @@ fn former(
         // term is *decomposable* later; the two are compared rather than one
         // being assumed to be the other.
         let Some(want) = cs.lic.at(&ps, &xs) else {
-            return gap(Gap::IndexedFamily(name.clone(), "class (S) at an index: arity"))
+            return gap(Gap::IndexedFamily(name, "class (S) at an index: arity"))
         };
         let mut args = ps.clone();
         args.extend(xs.iter().cloned());
         let carrier = ip.mk(cs.lic.sym, args.clone());
         if carrier != want {
-            return gap(Gap::IndexedFamily(name.clone(), "class (S) at an index: the carrier term"))
+            return gap(Gap::IndexedFamily(name, "class (S) at an index: the carrier term"))
         }
         let Some(at) = inst_all(&cs.lic.in_u0, &args) else {
-            return gap(Gap::IndexedFamily(name.clone(), "class (S) at an index: the typing"))
+            return gap(Gap::IndexedFamily(name, "class (S) at an index: the typing"))
         };
         let raised = if level == 0 { Some(at) } else { ip.raise_in_gamma(0, level as usize, &at) };
         match raised {
             Some(t) if *t.concl() == Formula::mem(carrier.clone(), ip.sort(level)) => {
                 Ok(Typing { ty, tm: Some(carrier), ev: Ev::Proved(t) })
             }
-            _ => gap(Gap::IndUniverseHeight(name.clone(), level)),
+            _ => gap(Gap::IndUniverseHeight(name, level)),
         }
     };
     let t = c.lam_nest(ind_ty, np + ni, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
@@ -269,14 +269,14 @@ fn constructor(
     i: usize,
     cs: &Rc<ClassSIx>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(cname.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(*cname, w, Cause::Threading);
     let nf = cs.walk.spec.base.ctors.get(i).ok_or_else(|| bad("constructor shape"))?.order.len();
     let (np, ni) = (cs.np(), cs.ni());
     let depth = np + nf;
     let codomain = crate::zoneb::peel(cty, depth).ok_or_else(|| bad("constructor arity"))?;
     let site = CtorSite {
-        ind: ind_name.clone(),
-        ctor: cname.clone(),
+        ind: *ind_name,
+        ctor: *cname,
         inst: inst.to_vec(),
         i,
         np,
@@ -295,12 +295,12 @@ fn constructor(
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
     let cs = site.cs.clone();
 
     if cs.walk.spec.base.ctors[site.i].order.iter().any(|s| *s != Slot::Plain) {
-        return gap(Gap::IndexedFamily(site.ind.clone(), RECURSIVE))
+        return gap(Gap::IndexedFamily(site.ind, RECURSIVE))
     }
     let Some((all, mems)) = c.binders(np + nf) else { return gap(Gap::NoEndpoint) };
     let Some(store_ty) = c.stored_term(&site.ind, &site.inst) else {
@@ -330,7 +330,7 @@ fn build_ctor(
     store_ty: &Term,
     result: &[(Term, Thm)],
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, i) = (site.np, site.ni, site.i);
     let cs = site.cs.clone();
     let point = ip.point();
@@ -389,7 +389,7 @@ fn build_ctor(
     // `LeCarrier::intro_is_conditional` at every constructor — so unlike
     // `crate::class_s` there is no second shape to carry, and the `mp` is
     // unconditional.
-    let ctors = cs.lic.ctor_intro.as_ref().ok_or(Gap::IndexedFamily(site.ind.clone(), RECURSIVE))?;
+    let ctors = cs.lic.ctor_intro.as_ref().ok_or(Gap::IndexedFamily(site.ind, RECURSIVE))?;
     let rule = ctors.get(i).ok_or_else(|| bad("the introduction rule"))?;
     let at = inst_all(&rule.mem, &e_args).ok_or_else(|| bad("the introduction rule"))?;
     let conj = atoms
@@ -440,11 +440,11 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: n.clone(),
+                name: n,
                 lparams: vec![],
                 num_params: np,
                 ty,
-                ctors: vec![(mk.clone(), ctor)],
+                ctors: vec![(mk, ctor)],
             },
         )
         .unwrap_or_else(|e| panic!("{name} is accepted: {e}"));

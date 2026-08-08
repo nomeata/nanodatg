@@ -86,14 +86,14 @@ pub(crate) fn certify(
     // Which declaration, at which ground levels, with which parameters.
     let (head, args) = crate::expr::get_app(&tw);
     let crate::expr::Expr::Const(name, ls) = &*head else { return Err(Gap::NoEndpoint) };
-    let name = name.clone();
+    let name = *name;
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> = ls
         .iter()
         .map(|l| ground::eval(l, &empty))
         .collect::<Option<_>>()
         .ok_or(Gap::SymbolicLevel)?;
-    let bad = || Gap::UnitLike(name.clone());
+    let bad = || Gap::UnitLike(name);
     let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(&name) else {
         return Err(bad())
     };

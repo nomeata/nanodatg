@@ -112,20 +112,20 @@ pub(crate) fn ensure(
     rec_inst: &[u32],
     cp: Rc<ClassPIx>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let ctors = match c.environment().get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     let (np, n, ni) = (*num_params as usize, *num_minors as usize, *num_indices as usize);
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     // **No §6.2 split.** A class-(P) recursor's motive is `Sort 0` — the
     // absence of the extra level parameter is what put the declaration on this
@@ -139,9 +139,9 @@ pub(crate) fn ensure(
     let codomain = crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad(ARITY))?;
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
-        rec: rec_name.clone(),
+        rec: *rec_name,
         rec_inst: rec_inst.to_vec(),
         ctors,
         np,
@@ -161,7 +161,7 @@ pub(crate) fn ensure(
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let Some(cp) = site.fam.class_p().cloned() else { return gap(bad(DISAGREE)) };
 
     let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
@@ -197,14 +197,14 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 
     // The rule, once per declaration — one `w_rect` Separation per build.
     let tr = {
-        let key = (site.ind.clone(), site.inst.clone());
+        let key = (site.ind, site.inst.clone());
         let (base, fam, tc) = (cp.base.clone(), cp.ii.clone(), cp.tc.clone());
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         let Some(trunc) = app.trunc(kenv) else { return gap(Gap::IndApparatus) };
         match app.indexed_trunc_recursor(kenv, &key, &trunc, &base, &fam, &tc) {
             Some(r) => r,
-            None => return gap(Gap::Recursor(site.ind.clone(), RULE, Cause::Library)),
+            None => return gap(Gap::Recursor(site.ind, RULE, Cause::Library)),
         }
     };
     if tr.minors.len() != n || tr.xvs.len() != ni {
@@ -250,7 +250,7 @@ fn fire(
     at: &At,
     minors: &[Thm],
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
@@ -346,10 +346,10 @@ mod tests {
             let (env, _) = cell_env(name, np, ty, &ctors);
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(n.clone(), no.clone())).expect("infer ⟦T⟧");
+            c.infer_type(&konst(n, no.clone())).expect("infer ⟦T⟧");
             let rec = Name::str(&n, "rec");
             let got = c
-                .infer_type(&konst(rec.clone(), no.clone()))
+                .infer_type(&konst(rec, no.clone()))
                 .unwrap_or_else(|e| panic!("{name}: infer ⟦{rec}⟧: {e}"));
             let m = got
                 .ev

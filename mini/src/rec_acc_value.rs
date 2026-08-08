@@ -107,7 +107,7 @@ const CODOMAIN: &str = "Acc.rec: the value clause did not land in the codomain";
 pub(crate) fn value_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort (in `ensure`), once from the codomain the nest reached.
@@ -173,7 +173,7 @@ fn build(
     site: &Site,
     at: &At,
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let point = ip.point();
     let (a, r, cm) = (at.xs[0].clone(), at.xs[1].clone(), at.xs[2].clone());
     let (em, aa, tt) = (at.xs[3].clone(), at.xs[4].clone(), at.xs[5].clone());
@@ -266,7 +266,7 @@ fn build(
     // Dropping it is `MINI-HANDOFF.md` §2's sixth instance; storing it before
     // that reader existed would have been §26 item 1's from the other side.
     ip.rec_acc_elims.insert(
-        (site.rec.clone(), site.rec_inst.clone()),
+        (site.rec, site.rec_inst.clone()),
         std::rc::Rc::new(crate::interp::RecAccElim { sym, ax: ax.clone() }),
     );
     let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;

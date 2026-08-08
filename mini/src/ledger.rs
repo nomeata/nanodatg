@@ -761,7 +761,7 @@ impl Ledger {
                 // also delta reduction's certificate; everything else gets an
                 // opaque symbol, which is a signature extension and asserts
                 // nothing about inhabitation — hence the `Gap` on its typing.
-                let key = (name.clone(), sigma.clone());
+                let key = (*name, sigma.clone());
                 if ip.get_const(&key).is_some() {
                     if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
                         led.first_blocker = Some(pv.blocker(ip, o));
@@ -819,7 +819,7 @@ impl Ledger {
                     Declaration::Axiom { .. } => ty_blocked
                         .clone()
                         .or_else(|| axiom_ev.as_ref().and_then(|r| r.as_ref().err().cloned()))
-                        .unwrap_or_else(|| Gap::Axiom(name.clone())),
+                        .unwrap_or(Gap::Axiom(*name)),
                     _ => val_blocked
                         .clone()
                         .or_else(|| ty_blocked.clone())
@@ -1104,8 +1104,8 @@ pub(crate) fn fill_declaration(
                 r.constants.clone()
             } else {
                 let mut v = Vec::with_capacity(ctors.len() + 2);
-                v.push(name.clone());
-                v.extend(ctors.iter().map(|(n, _)| n.clone()));
+                v.push(*name);
+                v.extend(ctors.iter().map(|(n, _)| *n));
                 v.push(Name::str(name, "rec"));
                 v
             }
@@ -1120,7 +1120,7 @@ pub(crate) fn fill_declaration(
         // the corpus's six `Quot` exports.
         Declaration::Quot => {
             let q = Name::simple("Quot");
-            vec![q.clone(), Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
+            vec![q, Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
         }
         Declaration::Axiom { .. } | Declaration::Def { .. } => return,
         // **A mutual block does not go to zone B, and the absence is recorded
@@ -1150,16 +1150,16 @@ pub(crate) fn fill_declaration(
                 .unwrap_or(crate::mutual_aux::Reason::NotABlock)
                 .label();
             for t in types {
-                let g = crate::ev::Gap::IndSpec(t.name.clone(), why);
-                let mut keys: Vec<(Name, bool)> = vec![(t.name.clone(), false)];
-                keys.extend(t.ctors.iter().map(|(n, _)| (n.clone(), false)));
+                let g = crate::ev::Gap::IndSpec(t.name, why);
+                let mut keys: Vec<(Name, bool)> = vec![(t.name, false)];
+                keys.extend(t.ctors.iter().map(|(n, _)| (*n, false)));
                 keys.push((Name::str(&t.name, "rec"), true));
                 for (n, is_rec) in keys {
                     let Some(sigmas) = schedule.get(&n) else { continue };
                     for sigma in sigmas {
                         let mut c = Checker::threaded(env, ip);
                         let Some(app) = c.interp().and_then(|i| i.ind_apparatus()) else { continue };
-                        let key = (n.clone(), sigma.clone());
+                        let key = (n, sigma.clone());
                         if is_rec {
                             app.rec_untranslated.insert(key, g.clone());
                         } else if n == t.name {
@@ -1209,15 +1209,15 @@ mod tests {
     fn a_reason_key_is_wire_safe() {
         let n = Name::simple("T");
         let gaps = [
-            Gap::NoInterpretation(n.clone(), vec![0, 1]),
+            Gap::NoInterpretation(n, vec![0, 1]),
             Gap::Quotient(0, crate::quot::Prim::Quot),
             Gap::Quotient(1, crate::quot::Prim::Mk),
-            Gap::Axiom(n.clone()),
-            Gap::StructProj(n.clone()),
-            Gap::StructEta(n.clone()),
-            Gap::UnitLike(n.clone()),
-            Gap::IndSpec(n.clone(), "a reason with spaces"),
-            Gap::Recursor(n.clone(), "a reason with spaces", crate::ev::Cause::Threading),
+            Gap::Axiom(n),
+            Gap::StructProj(n),
+            Gap::StructEta(n),
+            Gap::UnitLike(n),
+            Gap::IndSpec(n, "a reason with spaces"),
+            Gap::Recursor(n, "a reason with spaces", crate::ev::Cause::Threading),
         ];
         for g in &gaps {
             let k = Ledger::key(Some(g));
@@ -1571,7 +1571,7 @@ mod tests {
         let prop = sort(Level::Zero);
         let a = Name::simple("A");
         let a_def = Declaration::Def {
-            name: a.clone(),
+            name: a,
             lparams: vec![],
             ty: prop.clone(),
             // `∀ p : Prop, p` — a closed proposition, no axiom needed.
@@ -1579,12 +1579,12 @@ mod tests {
             kind: DefKind::Def,
         };
         crate::kernel::add(&mut env, &a_def).unwrap();
-        let id_ty = forall(konst(a.clone(), Vec::new().into()), konst(a.clone(), Vec::new().into()));
+        let id_ty = forall(konst(a, Vec::new().into()), konst(a, Vec::new().into()));
         let id = Declaration::Def {
             name: Name::simple("id"),
             lparams: vec![],
             ty: id_ty,
-            value: crate::expr::lam(konst(a.clone(), Vec::new().into()), crate::expr::bvar(0)),
+            value: crate::expr::lam(konst(a, Vec::new().into()), crate::expr::bvar(0)),
             kind: DefKind::Def,
         };
         crate::kernel::add(&mut env, &id).unwrap();
@@ -1700,7 +1700,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: e.clone(),
+                name: e,
                 lparams: vec![Name::simple("u")],
                 num_params: 2,
                 // `Eq : ∀ (α : Sort u) (a : α), α → Prop`

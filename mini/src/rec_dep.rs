@@ -197,15 +197,15 @@ pub(crate) fn ensure(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
     // **The indexed eliminator, and it is two constructions, not one.**
@@ -247,7 +247,7 @@ pub(crate) fn ensure(
     }
     let ctors = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let depth = np + 1 + n + 1;
@@ -256,7 +256,7 @@ pub(crate) fn ensure(
     let u1 = motive_level(&rec_ty, np, 0)
         .ok_or_else(|| bad("dependent recursor: the motive's binder is not a Lean motive"))?;
 
-    let key = (ind_name.clone(), ind_inst.to_vec());
+    let key = (*ind_name, ind_inst.to_vec());
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -270,9 +270,9 @@ pub(crate) fn ensure(
     }
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
-        rec: rec_name.clone(),
+        rec: *rec_name,
         rec_inst: rec_inst.to_vec(),
         ctors,
         np,
@@ -355,7 +355,7 @@ pub(crate) struct Site {
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort, once from the codomain the nest actually reached.
@@ -444,7 +444,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
 /// term or a membership, so `whnf` can supply them from its own stack and this
 /// function does not know the difference.
 pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (np, n, depth) = (site.np, site.n, site.depth);
     let ind = site.tr.ind.clone();
     let s = ip.prelude.tower.sums.clone();
@@ -656,7 +656,7 @@ pub(crate) fn ctor_bridges(
     param_es: &[E],
     param_tms: &[Term],
 ) -> Result<Vec<CtorBridge>, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     if param_es.len() != site.np || param_tms.len() != site.np {
         return Err(bad(BRIDGE))
     }
@@ -982,7 +982,7 @@ pub(crate) fn crossings(
 /// the induction hypotheses supplying the `•`s the conditional-singleton
 /// application rule consumes.
 fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
@@ -1004,7 +1004,7 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
     let mut steps = Vec::with_capacity(site.n);
     for (i, part) in parts.iter().enumerate().take(site.n) {
         if let Some(why) = general_slot_declines(&cx.ind, i) {
-            return Err(Gap::Recursor(site.ind.clone(), why, Cause::Library))
+            return Err(Gap::Recursor(site.ind, why, Cause::Library))
         }
         let got = minor_at(ip, site, cx, at, i, true).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(part, &cx.psub);
@@ -1047,13 +1047,13 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 /// `Γ` is the caller's: what is shared is the *derivation*, and every input it
 /// takes ([`Cx`]) is a term or a membership.
 pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<Pre, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
-    let key = (site.ind.clone(), site.inst.clone());
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
+    let key = (site.ind, site.inst.clone());
     let dep = {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        app.dep_recursor(kenv, &key, &cx.ind).ok_or_else(|| {
+        app.dep_recursor(kenv, &key, &cx.ind).ok_or({
             Gap::Recursor(
-                site.ind.clone(),
+                site.ind,
                 "dependent recursor: DepRecursor::build declined",
                 Cause::Library,
             )
@@ -1075,7 +1075,7 @@ pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<P
     let mut deps = Vec::with_capacity(site.n);
     for i in 0..site.n {
         if let Some(why) = general_slot_declines(&cx.ind, i) {
-            return Err(Gap::Recursor(site.ind.clone(), why, Cause::Library))
+            return Err(Gap::Recursor(site.ind, why, Cause::Library))
         }
         let got = minor_at(ip, site, cx, at, i, false).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(&dr.guards.dep_parts[i], &sub);
@@ -1135,7 +1135,7 @@ pub(crate) fn quant_at(cx: &Cx, dr: &derived::inductive::DepRecursor) -> (Vec<Fr
 
 /// `⟦T.rec.{u₁,σ}⟧ = λp⃗ C S⃗ t. app(drec, t)`, with `DepRecursor::typing`.
 fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
 
@@ -1176,7 +1176,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // `MINI-HANDOFF.md` §2's sixth instance; [`crate::iota_dep`] is the
     // consumer.
     if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec.clone(), site.rec_inst.clone());
+        let key = (site.rec, site.rec_inst.clone());
         let target = cx.v_set.clone();
         app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
     }
@@ -2164,12 +2164,12 @@ mod tests {
         let (nil, cons) = (Name::str(&l, "nil"), Name::str(&l, "cons"));
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
-        let spine = |d: u32| app(konst(l.clone(), no.clone()), bvar(d));
+        let spine = |d: u32| app(konst(l, no.clone()), bvar(d));
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: l.clone(),
+                name: l,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(ty0.clone(), ty0),
@@ -2211,7 +2211,7 @@ mod tests {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
             let at: Rc<[Level]> = vec![level(u1)].into();
-            let t = c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦L.rec⟧");
+            let t = c.infer_type(&konst(rec, at)).expect("infer ⟦L.rec⟧");
             let m = t
                 .ev
                 .thm()
@@ -2335,7 +2335,7 @@ mod tests {
         let mut ip = Interp::new();
         {
             let mut c = Checker::threaded(&env, &mut ip);
-            c.infer_type(&konst(l.clone(), Vec::new().into())).expect("carrier");
+            c.infer_type(&konst(l, Vec::new().into())).expect("carrier");
         }
         let s = ip.prelude.tower.sums.clone();
         let key = (l, Vec::new());
@@ -2365,7 +2365,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         let at: Rc<[Level]> = vec![level(1)].into();
-        c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦L.rec.{1}⟧");
+        c.infer_type(&konst(rec, at)).expect("infer ⟦L.rec.{1}⟧");
         let u1 = ip.prelude.tower.at(1).expect("the first rung").set.clone();
         let stored = ip
             .ind_apparatus()
@@ -2455,11 +2455,11 @@ mod tests {
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a, b, cc, p) = (nm("T"), nm("A"), nm("B"), nm("C"), nm("P"));
         let (q, r) = (nm("Q"), nm("R"));
-        let spine = konst(t.clone(), no.clone());
-        let pspine = konst(p.clone(), no.clone());
-        let qspine = konst(q.clone(), no.clone());
-        let rspine = konst(r.clone(), no.clone());
-        let enum_of = |n: &Name| konst(n.clone(), no.clone());
+        let spine = konst(t, no.clone());
+        let pspine = konst(p, no.clone());
+        let qspine = konst(q, no.clone());
+        let rspine = konst(r, no.clone());
+        let enum_of = |n: &Name| konst(*n, no.clone());
 
         // `T.c : (A → T) → T` and `T.d : T → (A → T) → (B → T) → T`, the second
         // **mixed**, and with **three** recursive slots at two distinct
@@ -2489,7 +2489,7 @@ mod tests {
                 crate::kernel::add(
                     &mut env,
                     &Declaration::Inductive {
-                        name: e.clone(),
+                        name: *e,
                         lparams: vec![],
                         num_params: 0,
                         ty: ty0.clone(),
@@ -2504,7 +2504,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: t.clone(),
+                    name: t,
                     lparams: vec![],
                     num_params: 0,
                     ty: ty0.clone(),
@@ -2512,7 +2512,7 @@ mod tests {
                 },
             )
             .expect("the checker accepts a function-typed recursive argument");
-            (env, t.clone(), Name::str(&t, "rec"))
+            (env, t, Name::str(&t, "rec"))
         };
 
         // `T.f : (A → T) → A → (B → T) → (C → T) → T` — the **`Rec, Plain, Rec,
@@ -2576,7 +2576,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: p.clone(),
+                    name: p,
                     lparams: vec![],
                     num_params: 1,
                     ty: forall(ty0.clone(), ty0.clone()),
@@ -2584,7 +2584,7 @@ mod tests {
                 },
             )
             .expect("a function-typed slot at the parameter is accepted");
-            (env, p.clone(), Name::str(&p, "rec"))
+            (env, p, Name::str(&p, "rec"))
         };
 
         // `T.e : (A → B → T) → T` — the slot's `γ` is **two** binders deep, a
@@ -2633,7 +2633,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: q.clone(),
+                    name: q,
                     lparams: vec![],
                     num_params: 1,
                     ty: forall(ty0.clone(), ty0.clone()),
@@ -2641,7 +2641,7 @@ mod tests {
                 },
             )
             .expect("a constructor's parameter binder may reduce to the type former's");
-            (env, q.clone(), Name::str(&q, "rec"))
+            (env, q, Name::str(&q, "rec"))
         };
 
         // **`R (α : Type 0) : Type 0 | c : ((λX.X) (R α)) → R α`** — the
@@ -2664,7 +2664,7 @@ mod tests {
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
-                    name: r.clone(),
+                    name: r,
                     lparams: vec![],
                     num_params: 1,
                     ty: forall(ty0.clone(), ty0.clone()),
@@ -2672,7 +2672,7 @@ mod tests {
                 },
             )
             .expect("a plain recursive field may only reduce to the spine");
-            (env, r.clone(), Name::str(&r, "rec"))
+            (env, r, Name::str(&r, "rec"))
         };
 
         /// What a cell expects: an interpretation, a decline this module owns
@@ -2714,7 +2714,7 @@ mod tests {
                 let mut c = Checker::threaded(&env, &mut ip);
                 let at: Rc<[Level]> = vec![level(u1)].into();
                 let got = c
-                    .infer_type(&konst(rec.clone(), at))
+                    .infer_type(&konst(rec, at))
                     .unwrap_or_else(|e| panic!("{label} u₁={u1}: infer_type: {e:?}"));
                 match want {
                     Want::Interp => assert!(
@@ -2725,14 +2725,14 @@ mod tests {
                     ),
                     Want::Named(why) => assert_eq!(
                         got.ev.gap(),
-                        Some(&Gap::Recursor(ind.clone(), why, Cause::Library)),
+                        Some(&Gap::Recursor(ind, why, Cause::Library)),
                         "{label} u₁={u1}: the crossing must decline by *this* name, on \
                          the library axis"
                     ),
                     Want::Spec => assert_eq!(
                         got.ev.gap(),
                         Some(&Gap::IndSpec(
-                            ind.clone(),
+                            ind,
                             "recursive argument telescope depth"
                         )),
                         "{label} u₁={u1}: a currying is refused at the spec, two \

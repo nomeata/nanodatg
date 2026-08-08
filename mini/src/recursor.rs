@@ -183,7 +183,7 @@ pub(crate) fn ensure(
     // now wires.
     if let Some(cs) = crate::class_s::of(c, ind_name, ind_inst) {
         if cs.spec.len() != 1 {
-            return Err(Gap::Recursor(ind_name.clone(), CLASS_S_EMPTY, Cause::Threading))
+            return Err(Gap::Recursor(*ind_name, CLASS_S_EMPTY, Cause::Threading))
         }
         return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
     }
@@ -200,7 +200,7 @@ pub(crate) fn ensure(
     // sets it was translated into. The store read is
     // `crate::zoneb::build_trunc`'s own answer, not a second classification.
     let tt = {
-        let key = (ind_name.clone(), ind_inst.to_vec());
+        let key = (*ind_name, ind_inst.to_vec());
         c.interp().and_then(|ip| ip.ind_apparatus()).and_then(|a| a.truncs.get(&key).cloned())
     };
     if let Some(tt) = tt {
@@ -263,21 +263,21 @@ fn empty_rec(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     if *num_minors != 0 {
         return Err(bad("no constructors: the recursor has minors"))
     }
     if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone(), "an indexed recursor at a non-indexed route"))
+        return Err(Gap::IndexedFamily(*ind_name, "an indexed recursor at a non-indexed route"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let np = *num_params as usize;
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
@@ -285,7 +285,7 @@ fn empty_rec(
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("no constructors: arity"))?;
 
-    let key = (ind_name.clone(), ind_inst.to_vec());
+    let key = (*ind_name, ind_inst.to_vec());
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -298,7 +298,7 @@ fn empty_rec(
         return Err(bad("no constructors: the recursor and the carrier disagree"))
     }
     let site = EmptySite {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
         np,
         codomain,
@@ -323,7 +323,7 @@ struct EmptySite {
 fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let depth = site.np + 2;
 
     // `⟦C t⟧`, by inference on the declared codomain — the term the membership
@@ -393,23 +393,23 @@ fn eq_rec(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     if (*num_params, *num_minors, *num_indices) != (2, 1, 1) {
         return Err(bad("Eq.rec: recursor shape"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let codomain =
         crate::zoneb::peel(&rec_ty, EQ_DEPTH).ok_or_else(|| bad("Eq.rec: recursor arity"))?;
-    let site = EqSite { ind: ind_name.clone(), inst: ind_inst.to_vec(), codomain };
+    let site = EqSite { ind: *ind_name, inst: ind_inst.to_vec(), codomain };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(eq_bottom(c, &site)) };
     let t = c.lam_nest(&rec_ty, EQ_DEPTH, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, rec_name, rec_inst, t)
@@ -445,7 +445,7 @@ struct EqSite {
 fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // `⟦C b t⟧`, by inference on the declared codomain.
     let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
@@ -566,12 +566,12 @@ mod tests {
         let ty = forall(sort(u.clone()), forall(bvar(0), forall(bvar(1), sort(Level::Zero))));
         let at = |f: E, x: E, y: E, z: E| app(app(app(f, x), y), z);
         let cty =
-            forall(sort(u), forall(bvar(0), at(konst(e.clone(), us), bvar(1), bvar(0), bvar(0))));
+            forall(sort(u), forall(bvar(0), at(konst(e, us), bvar(1), bvar(0), bvar(0))));
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: e.clone(),
+                name: e,
                 lparams: vec![nm("u")],
                 num_params: 2,
                 ty,
@@ -579,7 +579,7 @@ mod tests {
             },
         )
         .expect("the declaration is accepted");
-        (env, e.clone(), Name::str(&e, "rec"))
+        (env, e, Name::str(&e, "rec"))
     }
 
     /// Replace the body under `depth` `Π` binders.
@@ -605,7 +605,7 @@ mod tests {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
             let at: Rc<[Level]> = sigma.iter().map(|n| level(*n)).collect::<Vec<_>>().into();
-            let t = c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦Eq.rec⟧");
+            let t = c.infer_type(&konst(rec, at)).expect("infer ⟦Eq.rec⟧");
             let m = t
                 .ev
                 .thm()
@@ -701,7 +701,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: empty.clone(),
+                name: empty,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),

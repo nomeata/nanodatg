@@ -87,7 +87,7 @@ use kernel::{Formula, Thm};
 
 use crate::env::ConstantInfo;
 use crate::ev::{Ev, Gap};
-use crate::expr::{Name, E};
+use crate::expr::{Name, E, NameView};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
 
@@ -111,9 +111,9 @@ impl Clause {
 
 /// The table. One comparison on the name the declaration walk already holds.
 pub fn clause_for(n: &Name) -> Option<Clause> {
-    let Name::Str(pre, s) = n else { return None };
-    match &**pre {
-        Name::Str(root, q) if **root == Name::Anon && &**q == "Quot" && &**s == "sound" => {
+    let NameView::Str(pre, s) = n.view() else { return None };
+    match pre.view() {
+        NameView::Str(root, q) if root.is_anon() && &*q == "Quot" && &*s == "sound" => {
             Some(Clause::QuotSound)
         }
         _ => None,
@@ -135,8 +135,8 @@ pub fn inhabit(
     inst: &[u32],
     ty_tm: &kernel::Term,
 ) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::IndSpec(name.clone(), w);
-    let miss = || Gap::NoInterpretation(name.clone(), inst.to_vec());
+    let bad = |w: &'static str| Gap::IndSpec(*name, w);
+    let miss = || Gap::NoInterpretation(*name, inst.to_vec());
     // The declared type, from the environment rather than from the ledger's
     // substituted copy: this module states its depth against what the *export*
     // says, which is the half of "the name is not the evidence" that is cheap.
@@ -257,7 +257,7 @@ mod tests {
         // `Eq.refl : ∀ (α : Sort u) (a : α), Eq α a a`
         let refl_ty = forall(
             sort(u.clone()),
-            forall(bvar(0), app(app(app(konst(e.clone(), us), bvar(1)), bvar(0)), bvar(0))),
+            forall(bvar(0), app(app(app(konst(e, us), bvar(1)), bvar(0)), bvar(0))),
         );
         let mut env = Environment::empty();
         crate::kernel::add(
@@ -285,7 +285,7 @@ mod tests {
         );
         crate::kernel::add(
             &mut env,
-            &Declaration::Axiom { name: name.clone(), lparams: vec![nm("u")], ty },
+            &Declaration::Axiom { name, lparams: vec![nm("u")], ty },
         )
         .expect("the axiom is accepted");
         (env, name)

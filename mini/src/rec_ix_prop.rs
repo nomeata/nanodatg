@@ -102,15 +102,15 @@ pub(crate) fn ensure(
     ni: usize,
     rec_ty: &E,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let ctors = match c.environment().get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
     let depth = np + 1 + n + ni + 1;
     let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(ARITY))?;
 
-    let key = (ind_name.clone(), ind_inst.to_vec());
+    let key = (*ind_name, ind_inst.to_vec());
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -129,9 +129,9 @@ pub(crate) fn ensure(
     }
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
-        rec: rec_name.clone(),
+        rec: *rec_name,
         rec_inst: rec_inst.to_vec(),
         ctors,
         np,
@@ -151,7 +151,7 @@ pub(crate) fn ensure(
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: `rec_dep` read it off
     // the motive's declared sort to get here, and this is the codomain the nest
@@ -198,13 +198,13 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // The rule, once per declaration — one `w_rect` Separation per build, so a
     // second one would carve a second carrier no equation relates to the first.
     let pr = {
-        let key = (site.ind.clone(), site.inst.clone());
+        let key = (site.ind, site.inst.clone());
         let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         match app.indexed_prop_recursor(kenv, &key, &base, fam) {
             Some(r) => r,
-            None => return gap(Gap::Recursor(site.ind.clone(), RULE, Cause::Library)),
+            None => return gap(Gap::Recursor(site.ind, RULE, Cause::Library)),
         }
     };
     if pr.minors.len() != n || pr.xvs.len() != ni {
@@ -255,7 +255,7 @@ fn fire(
     at: &At,
     minors: &[Thm],
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
@@ -353,12 +353,12 @@ pub(crate) mod tests {
     /// it certifies nothing on its own and is asserted alongside the other two.
     pub(crate) fn indexed_env() -> (Environment, Name, Name) {
         let b = nm("B");
-        let bt = konst(b.clone(), no_levels());
+        let bt = konst(b, no_levels());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: b.clone(),
+                name: b,
                 lparams: vec![],
                 num_params: 0,
                 ty: ty1(),
@@ -372,7 +372,7 @@ pub(crate) mod tests {
         let b0 = konst(Name::str(&b, "b0"), no_levels());
         let b1 = konst(Name::str(&b, "b1"), no_levels());
         let t = nm("T");
-        let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
+        let tap = |a: E, i: E, j: E| app(app(app(konst(t, no_levels()), a), i), j);
         let ty = forall(ty1(), forall(bt.clone(), forall(bt.clone(), ty1())));
         let ctors = vec![
             (Name::str(&t, "c0"), forall(ty1(), tap(bvar(0), b0.clone(), b0.clone()))),
@@ -406,7 +406,7 @@ pub(crate) mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: t.clone(),
+                name: t,
                 lparams: vec![],
                 num_params: 1,
                 ty,
@@ -438,7 +438,7 @@ pub(crate) mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
         let at: Rc<[Level]> = vec![Level::Zero].into();
-        let got = c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦T.rec.{0}⟧");
+        let got = c.infer_type(&konst(rec, at)).expect("infer ⟦T.rec.{0}⟧");
         let m = got
             .ev
             .thm()
@@ -474,7 +474,7 @@ pub(crate) mod tests {
         let point = c.interp().expect("threaded").point();
 
         let at0: Rc<[Level]> = vec![Level::Zero].into();
-        let p = c.infer_type(&konst(rec.clone(), at0)).expect("infer ⟦T.rec.{0}⟧");
+        let p = c.infer_type(&konst(rec, at0)).expect("infer ⟦T.rec.{0}⟧");
         assert_eq!(p.tm, Some(point.clone()), "a Prop-valued motive gives a proof");
 
         let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();

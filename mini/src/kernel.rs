@@ -1077,7 +1077,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                         let g = if cur_tm.is_none() {
                                             Gap::NoEndpoint
                                         } else {
-                                            Gap::Iota(name.clone())
+                                            Gap::Iota(*name)
                                         };
                                         step!(Ev::missing(g));
                                         cur_tm = None;
@@ -1146,7 +1146,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 let mut args = stack[..np + nmot + nm].to_vec();
                                 args.extend(fields);
                                 let rhs = instantiate_lparams(rhs, lparams, ls)?;
-                                fired = Some((f.clone(), substs(&rhs, &args, 0)));
+                                fired = Some((*f, substs(&rhs, &args, 0)));
                             }
                         }
                         if let Some((cname, rhs)) = fired {
@@ -1357,7 +1357,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     let g = if cur_tm.is_none() {
                                         Gap::NoEndpoint
                                     } else {
-                                        sub.unwrap_or_else(|| Gap::Iota(name.clone()))
+                                        sub.unwrap_or(Gap::Iota(*name))
                                     };
                                     step!(Ev::missing(g));
                                     cur_tm = None;
@@ -1554,7 +1554,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // expression and `a_tm ≠ b_tm`.)*
                     let (s2, s_conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
                     let stuck =
-                        Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
+                        Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: s2.clone() });
                     // A subject that did not move owes nothing: the two
                     // endpoints are the same term and the leg would be a `refl`
                     // this chain does not need. That is also the only case the
@@ -1600,9 +1600,9 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // what decided the projection's route: reading `proj i s`
                     // as `T.rec (λ_. βᵢ) (λ y⃗. yᵢ) s` would put an expression
                     // here that this `Expr` never contained.
-                    let (ind2, idx2) = (ind.clone(), *idx);
+                    let (ind2, idx2) = (*ind, *idx);
                     let np2 = *num_params as usize;
-                    let ctor_n = f.clone();
+                    let ctor_n = *f;
                     // The constructor's own ground levels: a structure's
                     // constructor has the declaration's level parameters, so
                     // this is the key `IndApparatus::decls` holds it under.
@@ -1809,8 +1809,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (Ev::missing(g), None)
         }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
-        let Some(c) = th.ip.get_const(&(name.clone(), inst.clone())) else {
-            return (Ev::missing(Gap::NoInterpretation(name.clone(), inst)), None)
+        let Some(c) = th.ip.get_const(&(*name, inst.clone())) else {
+            return (Ev::missing(Gap::NoInterpretation(*name, inst)), None)
         };
         match &c.defeq {
             Some(s) => {
@@ -1818,7 +1818,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let rhs = thm.concl().as_eq().map(|(_, b)| b);
                 (Ev::Proved(thm), rhs)
             }
-            None => (Ev::missing(Gap::NoDefiningEquation(name.clone())), None),
+            None => (Ev::missing(Gap::NoDefiningEquation(*name)), None),
         }
     }
 
@@ -2455,9 +2455,9 @@ impl<'e, 'i> Checker<'e, 'i> {
                         }
                         Err(g) => g,
                     };
-                    sub = Some(first_reason(&Gap::StructProj(ind.clone()), g1, g2));
+                    sub = Some(first_reason(&Gap::StructProj(*ind), g1, g2));
                 }
-                Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
+                Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(*ind))) })
             }
             // **`⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧`, and there is no clause
             // beyond that.** The literal is *expanded* and the expansion is
@@ -2993,7 +2993,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// levels it is building for. Only the term: the typing is what it is in the
     /// middle of establishing.
     pub(crate) fn stored_term(&mut self, name: &Name, inst: &[u32]) -> Option<Term> {
-        let ip = self.th.as_ref()?.ip.get_const(&(name.clone(), inst.to_vec()))?;
+        let ip = self.th.as_ref()?.ip.get_const(&(*name, inst.to_vec()))?;
         Some(ip.term.clone())
     }
 
@@ -3099,7 +3099,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// nowhere. Every clause with a bare-constant value has the same blind
     /// spot, which is why the fix is symmetry rather than a special case.
     fn miss_reason(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
-        let key = (name.clone(), inst.to_vec());
+        let key = (*name, inst.to_vec());
         let missing = |c: &Self| c.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none());
         if self.th.is_none() || !missing(self) {
             return None
@@ -3126,7 +3126,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         else {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
-        let key = (name.clone(), inst.clone());
+        let key = (*name, inst.clone());
         if let Some(g) = self.miss_reason(name, &inst) {
             return (None, Ev::missing(g))
         }
@@ -3139,7 +3139,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 };
                 (Some(c.term.clone()), ev)
             }
-            None => (None, Ev::missing(Gap::NoInterpretation(name.clone(), inst))),
+            None => (None, Ev::missing(Gap::NoInterpretation(*name, inst))),
         }
     }
 
@@ -3266,7 +3266,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     i + 1
                 ))
             }
-            ctor_ty = subst(b, &Rc::new(Expr::Proj { ind: n.clone(), idx: i, s: e.clone() }));
+            ctor_ty = subst(b, &Rc::new(Expr::Proj { ind: *n, idx: i, s: e.clone() }));
         }
         let cur = ctor_ty.clone();
         let Expr::Forall { ty: d, .. } = &*cur else {
@@ -3391,7 +3391,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // Uncertified there is no witness to be missing: the caller handed in
         // no endpoints, and `no-endpoint` is the reason it gets back — the
         // same one it got before this branch had a name.
-        let name = name.clone();
+        let name = *name;
         Ok(Some(if cert { Ev::missing(Gap::UnitLike(name)) } else { Ev::missing(Gap::NoEndpoint) }))
     }
 
@@ -3435,11 +3435,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         if ctors.len() != 1 || &ctors[0] != con_name {
             return Ok(None)
         }
-        let ind_name = ind_name.clone();
+        let ind_name = *ind_name;
         let np = *num_params as usize;
         for (i, arg) in args.iter().enumerate().skip(np) {
             let p = Rc::new(Expr::Proj {
-                ind: ind_name.clone(),
+                ind: ind_name,
                 idx: u32::try_from(i - np).expect("field index"),
                 s: e2.clone(),
             });
@@ -3946,7 +3946,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let (Some(x), Some(y)) = (a_tm.clone(), b_tm.clone()) else {
                     return Ok(Ev::missing(Gap::NoEndpoint))
                 };
-                let (n, i) = (n1.clone(), *i1);
+                let (n, i) = (*n1, *i1);
                 Ok(match crate::proj_data::proj_congr(self, &n, i, &s1, &s2, &x, &y) {
                     Ok(t) => Ev::Proved(t),
                     Err(g) => Ev::missing(g),
@@ -4066,7 +4066,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Err(format!("Expected an application headed by the current inductive, got {ty}"))
         };
         if us.len() != ic.lparams.len()
-            || us.iter().zip(ic.lparams.iter()).any(|(l, p)| *l != Level::Param(p.clone()))
+            || us.iter().zip(ic.lparams.iter()).any(|(l, p)| *l != Level::Param(*p))
         {
             return Err(format!("Level parameters do not match those of {f} in {ty}"))
         }
@@ -4208,7 +4208,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     c.open_forall_push(ni, &opened[j])?;
                     let mut a = bvars(np, ni);
                     a.extend(bvars(ni, 0));
-                    let major_type = app_n(konst(ic.names[j].clone(), us.clone()), &a);
+                    let major_type = app_n(konst(ic.names[j], us.clone()), &a);
                     c.push(major_type, None);
                     c.mk_forall(ni + 1, sort(motive_level.clone()))
                 })?;
@@ -4256,7 +4256,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let mut a: Vec<E> =
                             params.iter().map(|p| shift(p, 0, num_fields + nh)).collect();
                         a.extend(bvars(num_fields, nh));
-                        let ctor_app = app_n(konst(ctor_name.clone(), us.clone()), &a);
+                        let ctor_app = app_n(konst(*ctor_name, us.clone()), &a);
                         let (_, rargs) = get_app(&ctor_res_type);
                         let mut a2 =
                             slice(&rargs, np as usize, (np + ic.num_indices[j]) as usize);
@@ -4273,7 +4273,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             // 5. Major argument, at member `k`.
             let mut a = bvars(np, n + nc + nik);
             a.extend(bvars(nik, 0));
-            let major_type = app_n(konst(ic.names[k].clone(), us.clone()), &a);
+            let major_type = app_n(konst(ic.names[k], us.clone()), &a);
             c.push(major_type, None);
             // 6. Result type: member `k`'s motive applied to indices and major.
             let mut a = bvars(nik, 1);
@@ -4416,13 +4416,13 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
     let u = Name::simple("u");
     let v = Name::simple("v");
     let prop = sort(Level::Zero);
-    let sort_u = sort(Level::Param(u.clone()));
-    let sort_v = sort(Level::Param(v.clone()));
+    let sort_u = sort(Level::Param(u));
+    let sort_v = sort(Level::Param(v));
     let eq_name = Name::simple("Eq");
 
     let aar_prop = |i: u32| arrow(bvar(i), arrow(bvar(i + 1), prop.clone()));
     let mk_quot = |a: u32, r: u32| {
-        app(app(konst(quot_name.clone(), levels(&[Level::Param(u.clone())])), bvar(a)), bvar(r))
+        app(app(konst(quot_name, levels(&[Level::Param(u)])), bvar(a)), bvar(r))
     };
 
     // Quot : ∀ (α : Sort u) (_ : α → α → Prop), Sort u
@@ -4440,7 +4440,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
                 app(app(bvar(4), bvar(1)), bvar(0)),
                 app(
                     app(
-                        app(konst(eq_name, levels(&[Level::Param(v.clone())])), bvar(4)),
+                        app(konst(eq_name, levels(&[Level::Param(v)])), bvar(4)),
                         app(bvar(3), bvar(2)),
                     ),
                     app(bvar(3), bvar(1)),
@@ -4463,7 +4463,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
             bvar(1),
             app(
                 app(
-                    app(konst(quot_mk_name.clone(), levels(&[Level::Param(u.clone())])), bvar(3)),
+                    app(konst(quot_mk_name, levels(&[Level::Param(u)])), bvar(3)),
                     bvar(2),
                 ),
                 bvar(0),
@@ -4479,7 +4479,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
     );
 
     let lift_info = ConstantInfo::Recursor {
-        lparams: vec![u.clone(), v],
+        lparams: vec![u, v],
         ty: quot_lift_type,
         num_params: 2,
         // `Quot` is not an inductive block; its two eliminators take one
@@ -4487,20 +4487,20 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
         num_motives: 1,
         num_minors: 2,
         num_indices: 0,
-        rules: vec![(quot_mk_name.clone(), app(bvar(2), bvar(0)))],
+        rules: vec![(quot_mk_name, app(bvar(2), bvar(0)))],
         k_type: None,
     };
     let ind_info = ConstantInfo::Recursor {
-        lparams: vec![u.clone()],
+        lparams: vec![u],
         ty: quot_ind_type,
         num_params: 2,
         num_motives: 1,
         num_minors: 1,
         num_indices: 0,
-        rules: vec![(quot_mk_name.clone(), app(bvar(1), bvar(0)))],
+        rules: vec![(quot_mk_name, app(bvar(1), bvar(0)))],
         k_type: None,
     };
-    env.insert_new(quot_name, ConstantInfo::Opaque { lparams: vec![u.clone()], ty: quot_type })?;
+    env.insert_new(quot_name, ConstantInfo::Opaque { lparams: vec![u], ty: quot_type })?;
     env.insert_new(
         quot_mk_name,
         ConstantInfo::Opaque { lparams: vec![u], ty: quot_mk_type },
@@ -4525,7 +4525,7 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
                     .map_err(|e| format!("{e}\n… while checking declaration {name}"))?;
             }
             env.insert_new(
-                name.clone(),
+                *name,
                 ConstantInfo::Opaque { lparams: lparams.clone(), ty: ty.clone() },
             )
         }
@@ -4556,14 +4556,14 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
                     ConstantInfo::Opaque { lparams: lparams.clone(), ty: ty.clone() }
                 }
             };
-            env.insert_new(name.clone(), cinfo)
+            env.insert_new(*name, cinfo)
         }
         Declaration::Quot => add_quot(env),
         // A single inductive is a block of one, and [`add_block`] is written so
         // that nothing inside it knows the difference.
         Declaration::Inductive { name, lparams, num_params, ty, ctors } => {
             let types =
-                [IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }];
+                [IndType { name: *name, ty: ty.clone(), ctors: ctors.clone() }];
             add_maybe_nested(env, lparams, *num_params, &types)
         }
         Declaration::Mutual { lparams, num_params, types } => {
@@ -4658,7 +4658,7 @@ fn add_block(
         return Err("Inductive declaration with no types".to_string())
     };
     nodup(lparams, &first.name)?;
-    let names: Vec<Name> = types.iter().map(|t| t.name.clone()).collect();
+    let names: Vec<Name> = types.iter().map(|t| t.name).collect();
     let tys: Vec<E> = types.iter().map(|t| t.ty.clone()).collect();
     let ctors: Vec<Vec<(Name, E)>> = types.iter().map(|t| t.ctors.clone()).collect();
     let n = u32::try_from(types.len()).expect("block size");
@@ -4731,13 +4731,13 @@ fn add_block(
     // checked: a constructor of one member mentions the others.
     for (j, t) in types.iter().enumerate() {
         env.insert_new(
-            t.name.clone(),
+            t.name,
             ConstantInfo::Inductive {
                 lparams: lparams.to_vec(),
                 ty: t.ty.clone(),
                 num_params,
                 num_indices: num_indices[j],
-                ctors: t.ctors.iter().map(|(n, _)| n.clone()).collect(),
+                ctors: t.ctors.iter().map(|(n, _)| *n).collect(),
                 is_unit: is_unit[j],
             },
         )?;
@@ -4776,12 +4776,12 @@ fn add_block(
     for t in types {
         for (ctor_name, ctor_type) in &t.ctors {
             env.insert_new(
-                ctor_name.clone(),
+                *ctor_name,
                 ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: ctor_type.clone() },
             )?;
             // The index §9 zone B reaches the declaration by. Built here, where
             // the relation is known, so that no later pass has to look for it.
-            env.owners.insert(ctor_name.clone(), t.name.clone());
+            env.owners.insert(*ctor_name, t.name);
         }
     }
 
@@ -4826,16 +4826,16 @@ fn add_block(
 
     let (motive_level, lparams2) = if elim_to_sort {
         let v = fresh_level_name(lparams);
-        let mut l = vec![v.clone()];
+        let mut l = vec![v];
         l.extend(lparams.iter().cloned());
         (Level::Param(v), l)
     } else {
         (Level::Zero, lparams.to_vec())
     };
     let us: Rc<[Level]> =
-        lparams.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into();
+        lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
     let us2: Rc<[Level]> =
-        lparams2.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into();
+        lparams2.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
 
     let ic = IndCtx {
         names: &names,
@@ -4863,11 +4863,11 @@ fn add_block(
             let pos = minor_base + u32::try_from(i).expect("constructor index");
             let rhs =
                 c.build_rec_rule(&ic, &rec_type, ctor_type, pos, num_minors, &us2)?;
-            rules.push((ctor_name.clone(), rhs));
+            rules.push((*ctor_name, rhs));
         }
         minor_base += u32::try_from(t.ctors.len()).expect("constructor count");
         let rec_name = Name::str(&t.name, "rec");
-        env.owners.insert(rec_name.clone(), t.name.clone());
+        env.owners.insert(rec_name, t.name);
         env.insert_new(
             rec_name,
             ConstantInfo::Recursor {
@@ -4895,9 +4895,9 @@ mod tests {
         let mut env = Environment::empty();
         let prop = sort(Level::Zero);
         let p_ty = Name::simple("P");
-        add(&mut env, &Declaration::Axiom { name: p_ty.clone(), lparams: vec![], ty: prop.clone() })
+        add(&mut env, &Declaration::Axiom { name: p_ty, lparams: vec![], ty: prop.clone() })
             .unwrap();
-        let pk = konst(p_ty.clone(), no_levels());
+        let pk = konst(p_ty, no_levels());
         add(&mut env, &Declaration::Axiom { name: Name::simple("p"), lparams: vec![], ty: pk })
             .unwrap();
         add(
@@ -5473,13 +5473,13 @@ mod tests {
                 kind: DefKind::Opaque,
             },
             Declaration::Inductive {
-                name: e2.clone(),
+                name: e2,
                 lparams: vec![],
                 num_params: 0,
                 ty: sort(Level::Zero.succ()),
                 ctors: vec![
-                    (Name::str(&e2, "a"), konst(e2.clone(), no_levels())),
-                    (Name::str(&e2, "b"), konst(e2.clone(), no_levels())),
+                    (Name::str(&e2, "a"), konst(e2, no_levels())),
+                    (Name::str(&e2, "b"), konst(e2, no_levels())),
                 ],
             },
         ];

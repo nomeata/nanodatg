@@ -40,13 +40,12 @@
 //! never reaches mini at all — it becomes a decline at the parser panic.
 
 use crate::env::{Declaration, DefKind, IndType};
-use crate::expr::{self, Expr, Level, Name, E};
+use crate::expr::{self, Expr, Level, Name, E, NameView};
 use nanoda_lib::env::Declar;
 use nanoda_lib::expr::Expr as CExpr;
 use nanoda_lib::instantiations::{Inst, Instantiations};
 use nanoda_lib::level::Level as CLevel;
-use nanoda_lib::name::Name as CName;
-use nanoda_lib::util::{Config, ExprPtr, LevelPtr, NamePtr, TcCtx};
+use nanoda_lib::util::{Config, ExprPtr, LevelPtr, NamePtr};
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -245,11 +244,11 @@ fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 /// comparison would wave it through as Lean's own. The pin is this module's
 /// `a_dotted_component_is_not_a_standard_axiom`.
 fn is_standard_axiom(n: &Name) -> bool {
-    let Name::Str(pre, s) = n else { return false };
-    match &**pre {
-        Name::Anon => &**s == "propext",
-        Name::Str(root, q) if **root == Name::Anon => {
-            matches!((&**q, &**s), ("Quot", "sound") | ("Classical", "choice"))
+    let NameView::Str(pre, s) = n.view() else { return false };
+    match pre.view() {
+        NameView::Anon => &*s == "propext",
+        NameView::Str(root, q) if root.is_anon() => {
+            matches!((&*q, &*s), ("Quot", "sound") | ("Classical", "choice"))
         }
         _ => false,
     }
@@ -324,10 +323,18 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
         }
     };
 
-    let insts = Instantiations::compute(&ef);
+    // **One context, and it is `crate::arena`'s.** This used to be
+    // `ef.with_ctx(|ctx| …)`, which mints a *second* `LeanDag` and `TcCtx`
+    // scoped to the closure. That was harmless while mini converted every
+    // pointer into an owned tree on the way out, and is not harmless now: a
+    // `NamePtr` read from one context and a `NamePtr` built in another are
+    // incomparable integers, so the two must be the same context. Installing
+    // the export file *is* opening it — see `crate::arena`.
+    let ef = crate::arena::install_export_file(ef);
+    let insts = Instantiations::compute(ef);
 
-    ef.with_ctx(|ctx| {
-        let mut cv = Cv::new(ctx);
+    {
+        let mut cv = Cv::new();
         let mut facts = Facts { declars: ef.declars.len(), ..Facts::default() };
 
         // Pass 1: index constructors by their inductive (mini bundles them into
@@ -362,7 +369,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
                         rec_of
                             .entry(*ind)
                             .or_default()
-                            .push((r.info.name, ctx.read_levels(r.info.uparams).to_vec()));
+                            .push((r.info.name, crate::arena::read_levels(r.info.uparams).to_vec()));
                     }
                 }
                 Declar::Inductive(_) => {
@@ -381,7 +388,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
             let mut scratch = Facts::default();
             for (_, d) in ef.declars.iter() {
                 let Declar::Recursor(r) = d else { continue };
-                let go = |cv: &mut Cv<'_, '_, '_>, scratch: &mut Facts| -> LR<ExportRec> {
+                let go = |cv: &mut Cv, scratch: &mut Facts| -> LR<ExportRec> {
                     let mut rules = Vec::with_capacity(r.rec_rules.len());
                     for rule in r.rec_rules.iter() {
                         rules.push((cv.name(rule.ctor_name), cv.expr(rule.val, scratch)?));
@@ -415,7 +422,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
             if let Some(set) = insts.for_name(*name_ptr) {
                 let v: Vec<Inst> = set.iter().cloned().collect();
                 facts.scheduled_pairs += v.len();
-                schedule.insert(name.clone(), v);
+                schedule.insert(name, v);
             }
             let lparams = cv.uparams(info.uparams)?;
             match d {
@@ -542,20 +549,21 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
             }
         }
         Ok(Loaded { decls, schedule, facts, export_recs })
-    })
-}
-
-struct Cv<'a, 't, 'p> {
-    ctx: &'a TcCtx<'t, 'p>,
-    names: HashMap<NamePtr<'t>, Name>,
-    levels: HashMap<LevelPtr<'t>, Level>,
-    exprs: HashMap<ExprPtr<'t>, E>,
-}
-
-impl<'a, 't, 'p> Cv<'a, 't, 'p> {
-    fn new(ctx: &'a TcCtx<'t, 'p>) -> Self {
-        Cv { ctx, names: HashMap::new(), levels: HashMap::new(), exprs: HashMap::new() }
     }
+}
+
+/// The export file's items, brought into mini's vocabulary.
+///
+/// **Shrinking as the representations converge.** `names` is already gone:
+/// mini's `Name` *is* a `NamePtr`, so there is nothing to convert and nothing
+/// to memoise. `levels` and `exprs` remain until steps 3 and 4.
+struct Cv {
+    levels: HashMap<LevelPtr<'static>, Level>,
+    exprs: HashMap<ExprPtr<'static>, E>,
+}
+
+impl Cv {
+    fn new() -> Self { Cv { levels: HashMap::new(), exprs: HashMap::new() } }
 
     /// One inductive member: its type and its constructors, in `ctor_idx`
     /// order. The same code for a single declaration and for a member of a
@@ -564,9 +572,9 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
     fn ind_member(
         &mut self,
         name: Name,
-        ptr: NamePtr<'t>,
-        ty: ExprPtr<'t>,
-        ctors_of: &HashMap<NamePtr<'t>, Vec<(u16, NamePtr<'t>, ExprPtr<'t>)>>,
+        ptr: NamePtr<'static>,
+        ty: ExprPtr<'static>,
+        ctors_of: &HashMap<NamePtr<'static>, Vec<(u16, NamePtr<'static>, ExprPtr<'static>)>>,
         facts: &mut Facts,
     ) -> LR<IndType> {
         let mut cs = ctors_of.get(&ptr).cloned().unwrap_or_default();
@@ -585,8 +593,8 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
     fn audit_recursor_shape(
         &mut self,
         ind: &Name,
-        recs: &[(NamePtr<'t>, Vec<LevelPtr<'t>>)],
-        ind_uparams: nanoda_lib::util::LevelsPtr<'t>,
+        recs: &[(NamePtr<'static>, Vec<LevelPtr<'static>>)],
+        ind_uparams: nanoda_lib::util::LevelsPtr<'static>,
         facts: &mut Facts,
     ) {
         let expected = Name::str(ind, "rec");
@@ -608,7 +616,7 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
                 .push(format!("{ind}: recursor named {rec}, not {expected}"));
             return
         }
-        let ind_ptrs = self.ctx.read_levels(ind_uparams).to_vec();
+        let ind_ptrs = crate::arena::read_levels(ind_uparams).to_vec();
         let ind_us: Vec<Level> = ind_ptrs.iter().map(|l| self.level(*l)).collect();
         let rec_us: Vec<Level> = rec_uparams.iter().map(|l| self.level(*l)).collect();
         // mini generates `v :: lparams` when the recursor eliminates to a sort,
@@ -622,30 +630,16 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
         }
     }
 
-    fn name(&mut self, p: NamePtr<'t>) -> Name {
-        if let Some(n) = self.names.get(&p) {
-            return n.clone()
-        }
-        let n = match self.ctx.read_name(p) {
-            CName::Anon => Name::Anon,
-            CName::Str(pre, s, _) => {
-                let pre = self.name(pre);
-                Name::Str(Rc::new(pre), Rc::from(self.ctx.read_string(s).as_ref()))
-            }
-            CName::Num(pre, i, _) => {
-                let pre = self.name(pre);
-                Name::Num(Rc::new(pre), i)
-            }
-        };
-        self.names.insert(p, n.clone());
-        n
-    }
+    /// **The identity.** Mini's `Name` is `checker`'s `NamePtr`, so there is
+    /// no conversion left — this is a wrap, kept as a method only so that the
+    /// call sites do not all have to change in the same commit.
+    fn name(&mut self, p: NamePtr<'static>) -> Name { Name(p) }
 
-    fn level(&mut self, p: LevelPtr<'t>) -> Level {
+    fn level(&mut self, p: LevelPtr<'static>) -> Level {
         if let Some(l) = self.levels.get(&p) {
             return l.clone()
         }
-        let l = match self.ctx.read_level(p) {
+        let l = match crate::arena::read_level(p) {
             CLevel::Zero => Level::Zero,
             CLevel::Succ(x, _) => Level::Succ(Rc::new(self.level(x))),
             CLevel::Max(x, y, _) => Level::max(self.level(x), self.level(y)),
@@ -656,8 +650,8 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
         l
     }
 
-    fn uparams(&mut self, p: nanoda_lib::util::LevelsPtr<'t>) -> LR<Vec<Name>> {
-        let ls = self.ctx.read_levels(p);
+    fn uparams(&mut self, p: nanoda_lib::util::LevelsPtr<'static>) -> LR<Vec<Name>> {
+        let ls = crate::arena::read_levels(p);
         let mut out = Vec::with_capacity(ls.len());
         for l in ls.iter() {
             match self.level(*l) {
@@ -672,17 +666,17 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
         Ok(out)
     }
 
-    fn expr(&mut self, p: ExprPtr<'t>, facts: &mut Facts) -> LR<E> {
+    fn expr(&mut self, p: ExprPtr<'static>, facts: &mut Facts) -> LR<E> {
         if let Some(e) = self.exprs.get(&p) {
             return Ok(e.clone())
         }
-        let e = match self.ctx.read_expr(p) {
+        let e = match crate::arena::read_expr(p) {
             CExpr::Var { dbj_idx, .. } => expr::bvar(u32::from(dbj_idx)),
             CExpr::Sort { level, .. } => expr::sort(self.level(level)),
             CExpr::Const { name, levels, .. } => {
                 let n = self.name(name);
                 let ls: Vec<Level> =
-                    self.ctx.read_levels(levels).iter().map(|l| self.level(*l)).collect();
+                    crate::arena::read_levels(levels).iter().map(|l| self.level(*l)).collect();
                 expr::konst(n, ls.into())
             }
             CExpr::App { fun, arg, .. } => {
@@ -708,11 +702,8 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
                 // No num-bigint dependency in `mini`: the decimal form is
                 // enough, and anything that does not fit `u64` is above 10 and
                 // declined regardless.
-                let s = self
-                    .ctx
-                    .read_bignum(ptr)
-                    .ok_or_else(|| declined("nat literal not found in the arena"))?
-                    .to_string();
+                let s = crate::arena::read_nat_lit_decimal(ptr)
+                    .ok_or_else(|| declined("nat literal not found in the arena"))?;
                 let n: u64 = s.parse().unwrap_or(u64::MAX);
                 facts.nat_lits += 1;
                 facts.max_nat_lit = facts.max_nat_lit.max(n);
@@ -725,7 +716,7 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
             }
             CExpr::StringLit { ptr, .. } => {
                 facts.str_lits += 1;
-                Rc::new(Expr::StrLit(Rc::from(self.ctx.read_string(ptr).as_ref())))
+                Rc::new(Expr::StrLit(Rc::from(crate::arena::read_string(ptr).as_ref())))
             }
             CExpr::Local { .. } => {
                 return Err(declined("export file contains a free variable"))
@@ -763,8 +754,8 @@ mod tests {
             Name::simple("Classical.choice"),
             Name::str(&Name::simple("My"), "propext"),
             Name::str(&Name::str(&Name::simple("A"), "Quot"), "sound"),
-            Name::Num(Rc::new(Name::simple("propext")), 0),
-            Name::Anon,
+            Name::num(&Name::simple("propext"), 0),
+            Name::anon(),
         ] {
             assert!(
                 !is_standard_axiom(&n),

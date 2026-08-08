@@ -152,28 +152,28 @@ pub(crate) fn ensure(
     rec_inst: &[u32],
     cs: Rc<ClassS>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     // An indexed family never reaches the class-(S) carrier — `LeProp` is
     // stated at `ni = 0` — so this is the statement that the *recursor* agrees.
     if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone(), "an indexed recursor at the class-(S) route"))
+        return Err(Gap::IndexedFamily(*ind_name, "an indexed recursor at the class-(S) route"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let np = *num_params as usize;
     if *num_minors != 1 || cs.spec.len() != 1 || cs.np() != np {
         return Err(bad("class (S) eliminator: the recursor and the carrier disagree"))
     }
     let ctor = match env.get(ind_name) {
-        Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0].clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0],
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
 
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
@@ -184,7 +184,7 @@ pub(crate) fn ensure(
         .ok_or_else(|| bad("class (S) eliminator: the motive's binder is not a Lean motive"))?;
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
         ctor,
         np,
@@ -241,7 +241,7 @@ const CTOR: &str = "class (S) eliminator: the constructor's own interpretation";
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort, once from the codomain the nest actually reached.
@@ -260,7 +260,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         return gap(Gap::NoEndpoint)
     };
     let at = At { xs, mems, former, ctor_former, goal, prop };
-    let key = (site.ind.clone(), site.inst.clone());
+    let key = (site.ind, site.inst.clone());
     let fields = {
         let Some((kenv, app, _)) = c.interp().and_then(|ip| ip.ind_parts()) else {
             return gap(Gap::IndApparatus)
@@ -284,7 +284,7 @@ fn build(
     at: &At,
     fields: &derived::inductive::family::LePropFields,
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (np, depth) = (site.np, site.depth);
     let cs = &site.cs;
     let point = ip.point();
@@ -611,7 +611,7 @@ mod tests {
         let mut ip = crate::interp::Interp::new();
         let mut c = Checker::threaded(env, &mut ip);
         let at: Rc<[Level]> = sigma.iter().map(|n| level(*n)).collect::<Vec<_>>().into();
-        let t = c.infer_type(&konst(rec.clone(), at)).expect("infer the eliminator");
+        let t = c.infer_type(&konst(*rec, at)).expect("infer the eliminator");
         let tm = t
             .tm
             .clone()
@@ -641,14 +641,14 @@ mod tests {
             p.clone(),
             forall(
                 p,
-                forall(bvar(1), forall(bvar(1), at(konst(a.clone(), no_levels()), bvar(3), bvar(2)))),
+                forall(bvar(1), forall(bvar(1), at(konst(a, no_levels()), bvar(3), bvar(2)))),
             ),
         );
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: a.clone(),
+                name: a,
                 lparams: vec![],
                 num_params: 2,
                 ty,
@@ -724,16 +724,16 @@ mod tests {
     fn punit_rec_at_no_fields() {
         let u = nm("u");
         let (p, unit) = (nm("PUnit"), Name::str(&nm("PUnit"), "unit"));
-        let us: Rc<[Level]> = vec![Level::Param(u.clone())].into();
+        let us: Rc<[Level]> = vec![Level::Param(u)].into();
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: p.clone(),
-                lparams: vec![u.clone()],
+                name: p,
+                lparams: vec![u],
                 num_params: 0,
                 ty: sort(Level::Param(u)),
-                ctors: vec![(unit, konst(p.clone(), us))],
+                ctors: vec![(unit, konst(p, us))],
             },
         )
         .expect("accepted");
@@ -780,7 +780,7 @@ mod tests {
                     bvar(1),
                     forall(
                         app(bvar(1), bvar(0)),
-                        app(app(konst(d.clone(), no_levels()), bvar(3)), bvar(2)),
+                        app(app(konst(d, no_levels()), bvar(3)), bvar(2)),
                     ),
                 ),
             ),
@@ -789,7 +789,7 @@ mod tests {
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: d.clone(),
+                name: d,
                 lparams: vec![],
                 num_params: 2,
                 ty,
@@ -808,7 +808,7 @@ mod tests {
                 crate::class_s::of(&mut c, &d, &[]).is_none(),
                 "the carrier is built on demand, not before the first use"
             );
-            let _ = c.infer_type(&konst(d.clone(), no_levels())).expect("infer ⟦D⟧");
+            let _ = c.infer_type(&konst(d, no_levels())).expect("infer ⟦D⟧");
             assert!(
                 crate::class_s::of(&mut c, &d, &[]).is_some(),
                 "D must take the class-(S) route, or this test pins nothing"
@@ -845,13 +845,13 @@ mod tests {
         let ty = forall(sort(level(1)), sort(Level::Zero));
         let cty = forall(
             sort(level(1)),
-            forall(bvar(0), app(konst(e.clone(), no_levels()), bvar(1))),
+            forall(bvar(0), app(konst(e, no_levels()), bvar(1))),
         );
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: e.clone(),
+                name: e,
                 lparams: vec![],
                 num_params: 1,
                 ty,
@@ -865,7 +865,7 @@ mod tests {
             !crate::zoneb::large_eliminating(&mut c, &e),
             "a Type-resident field that is not a result index is small-eliminating"
         );
-        c.infer_type(&konst(e.clone(), no_levels())).expect("infer ⟦E⟧");
+        c.infer_type(&konst(e, no_levels())).expect("infer ⟦E⟧");
         assert!(
             crate::class_s::of(&mut c, &e, &[]).is_none(),
             "E must not have a class-(S) carrier — the ℓⱼ = 0 guard is what would \

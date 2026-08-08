@@ -417,7 +417,7 @@ pub(crate) fn transport(
     mvars: &[FreeVar],
     clause: Clause,
 ) -> Result<Transported, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let from = Source::from_telescope(c, site, i).ok_or_else(|| bad(site.minor_gap))?;
     transport_at(c, site, at, i, &from, src, mvars, clause)
 }
@@ -435,7 +435,7 @@ pub(crate) fn transport_at(
     mvars: &[FreeVar],
     clause: Clause,
 ) -> Result<Transported, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let cs = site.fam.spec().base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
     let (k, m) = (cs.args.len(), cs.recs);
     let nlev = k + 2 * m;
@@ -537,7 +537,7 @@ fn walk(
     clause: Clause,
     opened: &mut usize,
 ) -> Result<Walked, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let fail = || bad(site.minor_gap);
     let ni = site.ni;
     let (k, m) = (cs.args.len(), cs.recs);

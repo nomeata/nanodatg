@@ -118,26 +118,26 @@ pub(crate) fn ensure(
     rec_inst: &[u32],
     cs: Rc<ClassSIx>,
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     };
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
     }
     let (np, n, ni) = (*num_params as usize, *num_minors as usize, *num_indices as usize);
     if n != 1 || cs.walk.spec.len() != 1 || cs.np() != np || cs.ni() != ni || ni == 0 {
         return Err(bad(DISAGREE))
     }
     let ctor = match env.get(ind_name) {
-        Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0].clone(),
-        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+        Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0],
+        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
     };
     let Some(ctor_info) = env.get(&ctor) else {
-        return Err(Gap::NoInterpretation(ctor.clone(), ind_inst.to_vec()))
+        return Err(Gap::NoInterpretation(ctor, ind_inst.to_vec()))
     };
     let cty = ground::subst_ground(ctor_info.ty(), lparams, rec_inst);
     let nf = cs.walk.spec.base.ctors[0].order.len();
@@ -180,7 +180,7 @@ pub(crate) fn ensure(
     let u1 = crate::rec_dep::motive_level(&rec_ty, np, ni).ok_or_else(|| bad(MOTIVE))?;
 
     let site = Site {
-        ind: ind_name.clone(),
+        ind: *ind_name,
         inst: ind_inst.to_vec(),
         np,
         ni,
@@ -215,7 +215,7 @@ struct Site {
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree.
     let prop = match c.is_prop(&site.codomain) {
@@ -246,7 +246,7 @@ fn build(
     goal: &Term,
     prop: bool,
 ) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let (np, ni, depth) = (site.np, site.ni, site.depth);
     let point = ip.point();
 
@@ -430,12 +430,12 @@ mod tests {
         let mk = Name::str(&sw, "mk");
         let rec = Name::str(&sw, "rec");
         let ty0 = || sort(Level::Zero.succ());
-        let k = || konst(sw.clone(), Vec::<Level>::new().into());
+        let k = || konst(sw, Vec::<Level>::new().into());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
-                name: sw.clone(),
+                name: sw,
                 lparams: vec![],
                 num_params: 1,
                 ty: forall(
@@ -474,7 +474,7 @@ mod tests {
         let mut c = crate::kernel::Checker::threaded(&env, &mut ip);
         let at = |c: &mut Checker<'_, '_>, l: Level| {
             let t = c
-                .infer_type(&konst(rec.clone(), vec![l].into()))
+                .infer_type(&konst(rec, vec![l].into()))
                 .expect("infer the eliminator");
             (t.tm.clone(), t.ev.gap().cloned())
         };
