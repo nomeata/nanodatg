@@ -56,6 +56,39 @@ def expected : List Row :=
   , ("nested_keying", [("Tree", 15)], [("UTree", "nested model name taken (UTree._model.self)")])
   ]
 
+/-- **The refusal paths, each with a fixture that reaches it.** The generator
+seat reported that `nested_ev::Reason`'s guards "keep their arguments and gain
+no occupant" — no fixture in the tree reaches any refusal except `NameTaken`,
+so five guards were known only by inspection. These are written for exactly
+that hole, under `modelgen/tests/` rather than in `mini/tests/fixtures`, and
+`export.sh` builds them with the repository's own exporter.
+
+Two of them are not refusals of *this* tool's making and are the more
+interesting half:
+
+* `nest_through_mutual` — a mutual block one of whose members nests. **Lean
+  supports it and exports it**: `A`/`B` come back with `numNested = 1` and
+  three recursors, `A.rec`, `B.rec` and `A.rec_1`. Nothing in the 205-file
+  corpus has the shape, so it was neither covered nor known to decline.
+* `nest_through_nested` — nesting through a container that is *itself* a
+  nested inductive. This refutes a load-bearing sentence in
+  `mini/src/nested_ev.rs`: "nesting strictly decreases, so this is a
+  topological order and a cycle cannot arise". `T` nests into `Tree T`;
+  `Tree`'s own `node` field is `List (Tree T)`; *that* copy's `cons` head is
+  `Tree T` again. `pack₀` and `pack₁` call each other and no emission order
+  exists. `Tree` in the same file still gets its model, so the fixture
+  distinguishes the cycle check from a refusal to do anything. -/
+def expectedOwn : List Row :=
+  [ ("decline_polymorphic", [], [("PTree", "nested model with universe parameters")])
+  , ("decline_indexed", [], [("ITree", "nested model with indices")])
+  , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
+  , ("decline_under_binder", [],
+      [("Tree", "nested model shape: Tree._model.1.mk has a recursive field under a binder")])
+  , ("nest_through_mutual", [], [("A", "nested model in a mutual block")])
+  , ("nest_through_nested", [("Tree", 15)],
+      [("T", "nested model with mutually recursive occurrences")])
+  ]
+
 structure TAcc where
   failures : Array String := #[]
   checks : Nat := 0
@@ -63,9 +96,9 @@ structure TAcc where
 def check (a : TAcc) (ok : Bool) (msg : String) : TAcc :=
   { a with checks := a.checks + 1, failures := if ok then a.failures else a.failures.push msg }
 
-def runOne (root : String) (a : TAcc) (r : Row) : IO TAcc := do
+def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures") : IO TAcc := do
   let (name, want, wantDeclined) := r
-  let path := s!"{root}/mini/tests/fixtures/{name}.ndjson"
+  let path := s!"{root}/{dir}/{name}.ndjson"
   let text ← IO.FS.readFile path
   let .ok x := Modelgen.parse text | do
     return check a false s!"{name}: does not parse"
@@ -82,7 +115,10 @@ def runOne (root : String) (a : TAcc) (r : Row) : IO TAcc := do
   a := check a (gotD == wantDeclined) s!"{name}: declines are {gotD}, expected {wantDeclined}"
   -- axis 3: the statements, against the installed recursors' own rules
   a := check a rep.stmtErrors.isEmpty s!"{name}: {rep.stmtErrors}"
-  a := check a (rep.stmtChecked > 0) s!"{name}: no statement was compared"
+  -- A fixture whose only declarations are refusals has nothing to compare;
+  -- one that generated a model must have compared something.
+  a := check a (rep.generated.isEmpty || rep.stmtChecked > 0)
+    s!"{name}: a model was generated and no statement was compared"
   a := check a rep.recMismatch.isEmpty
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
   -- axis 4: the round trip
@@ -132,6 +168,8 @@ def main (args : List String) : IO UInt32 := do
   let mut a : TAcc := {}
   for r in expected do
     a ← runOne root a r
+  for r in expectedOwn do
+    a ← runOne root a r (dir := "modelgen/tests")
   a ← runSyntax root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"

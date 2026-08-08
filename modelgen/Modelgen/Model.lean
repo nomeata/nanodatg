@@ -56,6 +56,9 @@ inductive Decline where
   | dependentFields
   | noEq
   | nameTaken (n : Name)
+  /-- Two mimics whose containers mention each other, so `pack` would have to
+  be mutually recursive. -/
+  | cyclicMimics
   | malformed (msg : String)
   deriving Inhabited
 
@@ -66,6 +69,7 @@ def Decline.label : Decline → String
   | .dependentFields => "nested model with dependent fields"
   | .noEq => "nested model without Eq"
   | .nameTaken n => s!"nested model name taken ({n})"
+  | .cyclicMimics => "nested model with mutually recursive occurrences"
   | .malformed m => s!"nested model shape: {m}"
 
 /-- `Eq`, `Eq.refl` and `Eq.rec` at the arities the round trips need. The
@@ -1052,6 +1056,19 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   let occs := pl.mimics.map fun m => restore toSelf m.occ
   let g : Gen := { model, selfName, np, u, members := (Array.range pl.types.size).map b
                    blockCtors, occs, eqi }
+
+  -- **The emission order is topological, and that has to be checked.**
+  -- `nested_ev.rs` asserts it instead — "nesting strictly decreases, so this is
+  -- a topological order and a cycle cannot arise" — and that is false for a
+  -- container which is *itself* a nested inductive.
+  -- `modelgen/tests/nest_through_nested.lean` is the witness: `T` nests into
+  -- `Tree T`, `Tree`'s own `node` field is `List (Tree T)`, and *that* copy's
+  -- `cons` head is `Tree T` again, so `pack₀` and `pack₁` call each other.
+  -- A cycle here is a genuine limitation, not a bad ordering.
+  for i in [0:pl.mimics.size] do
+    for (_, cty) in pl.types[i + 1]!.ctors do
+      for j in [0:i] do
+        if mentions pl.mimics[j]!.name cty then declineWith .cyclicMimics
 
   -- ── 3. pack, unpack, and the two round trips, per mimic ────────────────
   --

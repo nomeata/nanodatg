@@ -223,6 +223,56 @@ from the others here.
 
 ---
 
+# 4.2 Coverage, and where the edges are
+
+Every axis the Rust path covers, `modelgen` covers, at the same fixture:
+depth-1 recursive container (`Tree`), depth-1 non-recursive container
+(`PTree`), depth 2 through the same container twice (`DTree`), depth 2 through
+two different containers (`BTree`), two nested positions in one constructor
+(`nested_shapes`' `BTree`), a declaration with parameters (`PT α`), and a
+container that is a structure (`Box`).
+
+**The `List N` decoy is discriminated.** `nested_shapes` carries `listOfN :
+List N` beside `BTree`'s nested `List BTree` — `Lean.Syntax.ident`'s shape — and
+a treatment that specialised *every* container application would produce a
+block with a member Lean does not have. Two things catch it, and both are
+measured rather than argued: the declaration counts (`nested_shapes`' `BTree`
+is 14 with **one** mimic, not 24 with two) and the statement oracle, which
+compares one generated `rec_k` per block member against the export's own and
+would have a spare.
+
+Beyond the Rust path, and new:
+
+* **Universe-polymorphic containers** (§5), which is what `Lean.Syntax` needs.
+* **`Lean.Syntax` itself** — three block members, four constructors, three
+  recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
+
+Two shapes Lean supports and this does **not**, each now with a fixture under
+`modelgen/tests/` that says so out loud rather than passing over in silence:
+
+* **Nesting inside a mutual block.** Lean accepts and exports it: `mutual
+  inductive A | mk : List B → A; inductive B | mk : A → B end` comes back with
+  `numNested = 1` on both members and three recursors, `A.rec`, `B.rec` and
+  `A.rec_1`. Nothing in the 205-file corpus has the shape.
+  `mini/src/nested.rs` refuses it outright and so does this; extending to it
+  means a carrier and a recursor family per member, which is a naming-convention
+  change and a second project. `nest_through_mutual.lean`.
+* **Nesting through a container that is itself a nested inductive**, and this
+  one **refutes a load-bearing sentence in `mini/src/nested_ev.rs`**: "nesting
+  strictly decreases, so this is a topological order and a cycle cannot arise".
+  It does arise. `T` nests into `Tree T`; `Tree`'s own `node` field is `List
+  (Tree T)`; *that* copy's `cons` head is `Tree T` again. So `pack₀` calls
+  `pack₁` and `pack₁` calls `pack₀`, and **no emission order exists**. The Rust
+  would run into it as an unbound constant; `modelgen` checks the order is
+  topological and declines with `nested model with mutually recursive
+  occurrences`. The fix, if it is ever wanted, is that the mutually recursive
+  `pack`s are exactly what `Tree`'s *own* nested recursors `Tree.rec` /
+  `Tree.rec_1` compute simultaneously. `nest_through_nested.lean` — and `Tree`
+  in the same file still gets its model, so the fixture distinguishes the check
+  from a refusal to do anything.
+
+---
+
 # 5. What it declines, each a shape
 
 * `nested model with universe parameters` — the declaration has level
@@ -246,8 +296,20 @@ from the others here.
 * `nested model without Eq` — the export declares no `Eq`, or one whose
   recursor is not Lean's shape.
 * `nested model name taken (N)` — `N` is declared somewhere in the input.
+* `nested model with mutually recursive occurrences` — see §4.2.
+* `nested model in a mutual block` — see §4.2.
 * `nested model shape: …` — a shape the generator cannot write, or a proof the
-  kernel did not accept.
+  kernel did not accept. Its named occupant is **a constructor field recursive
+  under a binder**: a container whose constructor has a functional field gives
+  the mimic a field `N → B₀`, `Bₖ.rec`'s rule gives that an induction
+  hypothesis, and the ι statement writes none — a decline rather than a wrong
+  theorem.
+
+**Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
+built by `modelgen/tests/export.sh` with the repository's own exporter,
+toolchain and `--#export` convention. That was a hole worth closing: the
+generator seat reported that `nested_ev::Reason`'s guards "keep their arguments
+and gain no occupant", so five of the six were known only by inspection.
 
 ## 5.1 One Lean-side wrinkle
 
@@ -264,5 +326,5 @@ output is accepted by `nanoda` at 2470 declarations. The kernel-level API
 *imported* half of the constant map and then the async map, so a constant added
 that way is invisible and the generator cannot name `List.rec`.
 
-Mutual-and-nested together is declined by the planner: the specialisation of a
+Nested-inside-mutual is declined by the driver: the specialisation of a
 mutual block is not written.

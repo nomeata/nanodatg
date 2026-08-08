@@ -264,6 +264,15 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
     -- declaration is added, which is where `mini/src/nested.rs` also stands:
     -- nothing in the model mentions `T`.
     if let .induct ts cs _ := d then
+      -- A **mutual** block one of whose members nests. Lean supports it and
+      -- exports it (`A`/`B` with `numNested = 1` and three recursors `A.rec`,
+      -- `B.rec`, `A.rec_1`); `mini/src/nested.rs` refuses it outright and so
+      -- does this. Said rather than passed over in silence, because a consumer
+      -- that saw no model would otherwise not know whether there was nothing
+      -- to do or something not done.
+      if ts.length > 1 && ts.any (·.numNested > 0) then
+        let msg := "nested model in a mutual block"
+        rep := { rep with declined := rep.declined.push (ts.head!.name, msg) }
       if let [t] := ts then
         if t.numNested > 0 then
           let ptypes : Array PType :=
