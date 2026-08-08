@@ -351,11 +351,11 @@ pub fn cash(c: &mut Checker<'_, '_>, proof: &E) -> Result<Cashed, Gap> {
 /// not prove. That refusal is the same one the module note describes at step 4
 /// and it is why no comparison is added here.
 pub fn cash_stmt(c: &mut Checker<'_, '_>, stmt: &E, mem: Thm) -> Result<Cashed, Gap> {
-    let stmt = stmt.clone();
+    let stmt = *stmt;
 
     // ── 2. the statement, as `Eq.{v} α lhs rhs` ─────────────────────────────
     let (head, sides) = get_app(&stmt);
-    let Expr::Const(nm, ls) = &*head else { return Err(gap!(Gap::NotDecomposable)) };
+    let Expr::Const(nm, ls) = &head.view() else { return Err(gap!(Gap::NotDecomposable)) };
     if *nm != eq_name() || sides.len() != 3 {
         return Err(gap!(Gap::NotDecomposable))
     }
@@ -567,15 +567,15 @@ mod tests {
         name: &str,
     ) -> (Result<Cashed, Gap>, usize) {
         let nm = Name::simple(name);
-        let ty = env.get(&nm).unwrap_or_else(|| panic!("{name} is not declared")).ty().clone();
+        let ty = *env.get(&nm).unwrap_or_else(|| panic!("{name} is not declared")).ty();
         let mut c = Checker::threaded(env, ip);
         let mut n = 0usize;
         let out = c.in_scope(|c| {
-            let mut cur = ty.clone();
-            while let Expr::Forall { ty: dom, body } = &*cur.clone() {
+            let mut cur = ty;
+            while let Expr::Forall { ty: dom, body } = &cur.clone().view() {
                 c.interpret_and_open(dom).map_err(|_| Gap::Classifier)?;
                 n += 1;
-                cur = body.clone();
+                cur = *body;
             }
             let args = bvars(u32::try_from(n).expect("small telescope"), 0);
             Ok(cash(c, &app_n(konst(nm, [].into()), &args)))

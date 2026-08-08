@@ -186,7 +186,7 @@ pub fn plan(
         for (cn, cty) in &t.ctors {
             cs.push((*cn, sp.spec(cty, 0)?));
         }
-        out.push(IndType { name: t.name, ty: t.ty.clone(), ctors: cs });
+        out.push(IndType { name: t.name, ty: t.ty, ctors: cs });
     }
     if sp.mimics.is_empty() {
         return Ok(None)
@@ -242,9 +242,9 @@ pub fn add(
     // how many leading arguments it consumes and what it becomes.
     let mut heads: HashMap<Name, (u32, E)> = HashMap::new();
     for (k, m) in plan.mimics.iter().enumerate() {
-        heads.insert(m.name, (num_params, m.occ.clone()));
+        heads.insert(m.name, (num_params, m.occ));
         for (mc, real) in &m.ctors {
-            heads.insert(*mc, (num_params, real.clone()));
+            heads.insert(*mc, (num_params, *real));
         }
         heads.insert(
             Name::str(&m.name, "rec"),
@@ -286,7 +286,7 @@ pub fn add(
     for (cn, cty) in &types[0].ctors {
         env.insert_new(
             *cn,
-            ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: cty.clone() },
+            ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: *cty },
         )?;
         env.owners.insert(*cn, root);
     }
@@ -344,8 +344,8 @@ fn get_ty<'a>(env: &'a Environment, n: &Name) -> R<&'a E> {
 /// is the name the export's `Tree.rec_1` rules carry.
 fn restore_ctor_name(heads: &HashMap<Name, (u32, E)>, c: &Name) -> Name {
     match heads.get(c) {
-        Some((_, repl)) => match &*get_app(repl).0 {
-            Expr::Const(n, _) => *n,
+        Some((_, repl)) => match get_app(repl).0.view() {
+            Expr::Const(n, _) => n,
             _ => *c,
         },
         None => *c,
@@ -358,21 +358,21 @@ fn restore_ctor_name(heads: &HashMap<Name, (u32, E)>, c: &Name) -> Name {
 /// a parameter — and a head that consumes none is a plain rename.
 pub fn restore(heads: &HashMap<Name, (u32, E)>, e: &E) -> E {
     if heads.is_empty() {
-        return e.clone()
+        return *e
     }
-    match &**e {
+    match &e.view() {
         // A bare head with parameters still to consume is left **unrestored**
         // on purpose: it cannot occur in a well-formed type, and an internal
         // name surviving into the environment is caught by the export oracle,
         // where a silently substituted body with loose variables would not be.
         Expr::Const(n, _) => match heads.get(n) {
-            Some((0, repl)) => repl.clone(),
-            _ => e.clone(),
+            Some((0, repl)) => *repl,
+            _ => *e,
         },
         Expr::App(..) => {
             let (h, args) = get_app(e);
             let args: Vec<E> = args.iter().map(|a| restore(heads, a)).collect();
-            if let Expr::Const(n, _) = &*h {
+            if let Expr::Const(n, _) = &h.view() {
                 if let Some((take, repl)) = heads.get(n) {
                     let take = *take as usize;
                     if args.len() >= take {
@@ -387,30 +387,22 @@ pub fn restore(heads: &HashMap<Name, (u32, E)>, e: &E) -> E {
         Expr::Forall { ty, body } => {
             crate::expr::forall(restore(heads, ty), restore(heads, body))
         }
-        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
-            ty: restore(heads, ty),
-            val: restore(heads, val),
-            body: restore(heads, body),
-        }),
-        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: *ind,
-            idx: *idx,
-            s: restore(heads, s),
-        }),
-        Expr::BVar(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+        Expr::Let { ty, val, body } => crate::expr::let_(restore(heads, ty), restore(heads, val), restore(heads, body)),
+        Expr::Proj { ind, idx, s } => crate::expr::proj(*ind, *idx, restore(heads, s)),
+        Expr::BVar(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => *e,
     }
 }
 
 /// The block's parameter binder types, outermost first.
 fn peel_params(ty: &E, num_params: u32) -> R<Vec<E>> {
     let mut out = Vec::new();
-    let mut cur = ty.clone();
+    let mut cur = *ty;
     for _ in 0..num_params {
-        let Expr::Forall { ty, body } = &*cur.clone() else {
+        let Expr::Forall { ty, body } = &cur.clone().view() else {
             return Err("inductive type has fewer binders than parameters".to_string())
         };
-        out.push(ty.clone());
-        cur = body.clone();
+        out.push(*ty);
+        cur = *body;
     }
     Ok(out)
 }
@@ -439,12 +431,12 @@ impl Sp<'_> {
     /// binders opened so far, of which the outermost `num_params` are the
     /// block's parameters.
     fn spec(&mut self, e: &E, d: u32) -> R<E> {
-        match &**e {
+        match &e.view() {
             Expr::App(..) | Expr::Const(..) => {
                 let (h, args) = get_app(e);
-                if let Expr::Const(c, ls) = &*h {
+                if let Expr::Const(c, ls) = &h.view() {
                     if let Some(np) = self.container_arity(c, &args) {
-                        let occ = app_n(h.clone(), &args[..np]);
+                        let occ = app_n(h, &args[..np]);
                         if self.mentions_member(&occ) {
                             // Unreachable, and a subtraction below would wrap
                             // rather than say so: an occurrence mentions a
@@ -478,17 +470,9 @@ impl Sp<'_> {
             Expr::Forall { ty, body } => {
                 Ok(crate::expr::forall(self.spec(ty, d)?, self.spec(body, d + 1)?))
             }
-            Expr::Let { ty, val, body } => Ok(std::rc::Rc::new(Expr::Let {
-                ty: self.spec(ty, d)?,
-                val: self.spec(val, d)?,
-                body: self.spec(body, d + 1)?,
-            })),
-            Expr::Proj { ind, idx, s } => Ok(std::rc::Rc::new(Expr::Proj {
-                ind: *ind,
-                idx: *idx,
-                s: self.spec(s, d)?,
-            })),
-            _ => Ok(e.clone()),
+            Expr::Let { ty, val, body } => Ok(crate::expr::let_(self.spec(ty, d)?, self.spec(val, d)?, self.spec(body, d + 1)?)),
+            Expr::Proj { ind, idx, s } => Ok(crate::expr::proj(*ind, *idx, self.spec(s, d)?)),
+            _ => Ok(*e),
         }
     }
 
@@ -560,7 +544,7 @@ impl Sp<'_> {
     /// the occurrence's parameters, specialised in turn.
     fn mimic_decl(&mut self, m: &Mimic) -> R<(E, Vec<(Name, E)>)> {
         let (h, occ_args) = get_app(&m.occ);
-        let Expr::Const(c, ls) = &*h else {
+        let Expr::Const(c, ls) = &h.view() else {
             return Err(format!("the occurrence {} is not headed by a constant", m.occ))
         };
         let ci = self.env.get(c).ok_or_else(|| format!("unknown container {c}"))?;
@@ -576,7 +560,7 @@ impl Sp<'_> {
         let mut out = Vec::with_capacity(m.ctors.len());
         for (mc, real) in &m.ctors {
             let (rh, _) = get_app(real);
-            let Expr::Const(rc, _) = &*rh else {
+            let Expr::Const(rc, _) = &rh.view() else {
                 return Err(format!("{mc} has no real constructor"))
             };
             let rci = self.env.get(rc).ok_or_else(|| format!("unknown constructor {rc}"))?;
@@ -592,12 +576,12 @@ impl Sp<'_> {
     /// occurrence's arguments, leaving an expression at the block's parameter
     /// telescope.
     fn at_params(&self, ty: &E, args: &[E]) -> R<E> {
-        let mut cur = ty.clone();
+        let mut cur = *ty;
         for _ in 0..args.len() {
-            let Expr::Forall { body, .. } = &*cur.clone() else {
+            let Expr::Forall { body, .. } = &cur.clone().view() else {
                 return Err(format!("container type {ty} has too few parameters"))
             };
-            cur = body.clone();
+            cur = *body;
         }
         Ok(substs(&cur, args, 0))
     }
@@ -607,7 +591,7 @@ impl Sp<'_> {
 fn wrap_params(params: &[E], body: E) -> E {
     let mut out = body;
     for p in params.iter().rev() {
-        out = crate::expr::forall(p.clone(), out);
+        out = crate::expr::forall(*p, out);
     }
     out
 }
@@ -618,17 +602,17 @@ fn wrap_params(params: &[E], body: E) -> E {
 /// variable below the cut occurs.
 fn lower(e: &E, k: u32) -> E {
     if k == 0 {
-        return e.clone()
+        return *e
     }
     lower_general(e, k, 0)
 }
 
 /// `lower`, with the cut at an arbitrary depth.
 fn lower_general(e: &E, k: u32, cut: u32) -> E {
-    match &**e {
+    match &e.view() {
         Expr::BVar(i) => {
             if *i < cut {
-                e.clone()
+                *e
             } else {
                 crate::expr::bvar(i - k)
             }
@@ -640,16 +624,8 @@ fn lower_general(e: &E, k: u32, cut: u32) -> E {
         Expr::Forall { ty, body } => {
             crate::expr::forall(lower_general(ty, k, cut), lower_general(body, k, cut + 1))
         }
-        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
-            ty: lower_general(ty, k, cut),
-            val: lower_general(val, k, cut),
-            body: lower_general(body, k, cut + 1),
-        }),
-        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: *ind,
-            idx: *idx,
-            s: lower_general(s, k, cut),
-        }),
-        Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+        Expr::Let { ty, val, body } => crate::expr::let_(lower_general(ty, k, cut), lower_general(val, k, cut), lower_general(body, k, cut + 1)),
+        Expr::Proj { ind, idx, s } => crate::expr::proj(*ind, *idx, lower_general(s, k, cut)),
+        Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => *e,
     }
 }

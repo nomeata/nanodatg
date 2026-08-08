@@ -323,7 +323,7 @@ pub fn recognise(
     for (i, d) in decls.iter().enumerate() {
         let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else { continue };
         let types =
-            vec![IndType { name: *name, ty: ty.clone(), ctors: ctors.clone() }];
+            vec![IndType { name: *name, ty: *ty, ctors: ctors.clone() }];
         // **`nested::plan` answers "is this nested", and nothing else does.**
         // Not the export's `is_nested` flag, which `convert::load` has already
         // consumed at the parser gate, and not a name: the question here is
@@ -643,48 +643,40 @@ fn at_export_levels(model: &ConstantInfo, export: &ConstantInfo) -> Option<E> {
 /// left is exactly as unusable here, and splitting the two would be a reason
 /// string with no input behind it.
 fn iota_key(ty: &E, rec: &Name, back: &HashMap<Name, Name>) -> Option<Name> {
-    let mut body = ty;
-    while let Expr::Forall { body: b, .. } = &**body {
+    let mut body = *ty;
+    while let Expr::Forall { body: b, .. } = body.view() {
         body = b;
     }
-    let (head, args) = get_app(body);
-    let Expr::Const(eq, _) = &*head else { return None };
+    let (head, args) = get_app(&body);
+    let Expr::Const(eq, _) = &head.view() else { return None };
     if *eq != Name::simple("Eq") || args.len() != 3 {
         return None
     }
     let (lhs_head, lhs_args) = get_app(&args[1]);
-    let Expr::Const(r, _) = &*lhs_head else { return None };
+    let Expr::Const(r, _) = &lhs_head.view() else { return None };
     if r != rec {
         return None
     }
     let major = lhs_args.last()?;
-    match &*get_app(major).0 {
-        Expr::Const(c, _) => Some(*back.get(c).unwrap_or(c)),
+    match get_app(major).0.view() {
+        Expr::Const(c, _) => Some(*back.get(&c).unwrap_or(&c)),
         _ => None,
     }
 }
 
 /// Rewrite every `Const` head named in `rho`, keeping its level list.
 fn rename(rho: &HashMap<Name, Name>, e: &E) -> E {
-    match &**e {
+    match &e.view() {
         Expr::Const(n, ls) => match rho.get(n) {
             Some(m) => crate::expr::konst(*m, ls.clone()),
-            None => e.clone(),
+            None => *e,
         },
         Expr::App(f, x) => crate::expr::app(rename(rho, f), rename(rho, x)),
         Expr::Forall { ty, body } => crate::expr::forall(rename(rho, ty), rename(rho, body)),
         Expr::Lam { ty, body } => crate::expr::lam(rename(rho, ty), rename(rho, body)),
-        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
-            ty: rename(rho, ty),
-            val: rename(rho, val),
-            body: rename(rho, body),
-        }),
-        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
-            ind: *ind,
-            idx: *idx,
-            s: rename(rho, s),
-        }),
-        _ => e.clone(),
+        Expr::Let { ty, val, body } => crate::expr::let_(rename(rho, ty), rename(rho, val), rename(rho, body)),
+        Expr::Proj { ind, idx, s } => crate::expr::proj(*ind, *idx, rename(rho, s)),
+        _ => *e,
     }
 }
 
@@ -745,7 +737,7 @@ fn interpretable(d: &Declaration) -> Option<(&[Name], Vec<&E>)> {
 
 /// Every `Const` occurrence in `e` whose levels evaluate under `map`.
 fn consts_at(e: &E, map: &HashMap<Name, u32>, out: &mut Vec<(Name, Vec<u32>)>) {
-    match &**e {
+    match &e.view() {
         Expr::Const(n, ls) => {
             if let Some(s) = ls.iter().map(|l| crate::ground::eval(l, map)).collect() {
                 out.push((*n, s));

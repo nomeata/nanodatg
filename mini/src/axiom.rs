@@ -144,7 +144,7 @@ pub fn inhabit(
     if !matches!(ci, ConstantInfo::Opaque { .. }) {
         return Err(miss())
     }
-    let (lparams, ty) = (ci.lparams().to_vec(), ci.ty().clone());
+    let (lparams, ty) = (ci.lparams().to_vec(), *ci.ty());
     if lparams.len() != inst.len() {
         return Err(miss())
     }
@@ -195,7 +195,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, inst: &[u32], cod: &E) -> Ty
                 None => crate::direct::eq_bottom(c, cod, vec![0], None),
                 Some(Some(t)) => crate::direct::eq_bottom(c, cod, vec![u], Some(t)),
                 Some(None) => Typing {
-                    ty: cod.clone(),
+                    ty: *cod,
                     tm: None,
                     ev: Ev::missing(Gap::Quotient(u, crate::quot::Prim::Mk)),
                 },

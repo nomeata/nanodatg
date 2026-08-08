@@ -465,18 +465,18 @@ fn k(n: &str) -> E { konst(Name::simple(n), Vec::new().into()) }
 fn a_cross_member_occurrence_in_a_domain_is_not_strictly_positive() {
     let ty = sort((Level::zero()).succ());
     let good = block(vec![
-        ("A", ty.clone(), vec![("A.mk", arrow(k("B"), k("A")))]),
-        ("B", ty.clone(), vec![("B.mk", k("B"))]),
-        ("C", ty.clone(), vec![("C.mk", arrow(k("B"), k("C")))]),
+        ("A", ty, vec![("A.mk", arrow(k("B"), k("A")))]),
+        ("B", ty, vec![("B.mk", k("B"))]),
+        ("C", ty, vec![("C.mk", arrow(k("B"), k("C")))]),
     ]);
     let mut env = Environment::empty();
     mini::kernel::add(&mut env, &good).expect("a positive cross-member field is fine");
 
     let bad = block(vec![
-        ("A", ty.clone(), vec![("A.mk", arrow(k("B"), k("A")))]),
-        ("B", ty.clone(), vec![("B.mk", k("B"))]),
+        ("A", ty, vec![("A.mk", arrow(k("B"), k("A")))]),
+        ("B", ty, vec![("B.mk", k("B"))]),
         // `(B → C) → C`: `B` in the domain of a recursive argument.
-        ("C", ty.clone(), vec![("C.mk", arrow(arrow(k("B"), k("C")), k("C")))]),
+        ("C", ty, vec![("C.mk", arrow(arrow(k("B"), k("C")), k("C")))]),
     ]);
     let mut env = Environment::empty();
     let err = mini::kernel::add(&mut env, &bad).expect_err("a non-positive block was accepted");
@@ -503,8 +503,8 @@ fn a_block_whose_members_live_at_different_universes_is_rejected() {
     mini::kernel::add(
         &mut env,
         &block(vec![
-            ("A", ty0.clone(), vec![("A.mk", arrow(k("B"), k("A")))]),
-            ("B", ty0.clone(), vec![("B.mk", k("B"))]),
+            ("A", ty0, vec![("A.mk", arrow(k("B"), k("A")))]),
+            ("B", ty0, vec![("B.mk", k("B"))]),
         ]),
     )
     .expect("one universe is fine");
@@ -535,9 +535,9 @@ fn canon(n: usize) -> Vec<Level> {
 /// Peel every `∀`, returning the body.
 fn peel_all(ty: &E) -> (usize, E) {
     let mut n = 0usize;
-    let mut cur = ty.clone();
-    while let Expr::Forall { body, .. } = &*cur {
-        let b = body.clone();
+    let mut cur = *ty;
+    while let Expr::Forall { body, .. } = &cur.view() {
+        let b = *body;
         cur = b;
         n += 1;
     }
@@ -546,10 +546,10 @@ fn peel_all(ty: &E) -> (usize, E) {
 
 /// Peel `n` `fun` binders, or say there were not that many.
 fn strip_lams(e: &E, n: usize) -> Option<E> {
-    let mut cur = e.clone();
+    let mut cur = *e;
     for _ in 0..n {
-        let Expr::Lam { body, .. } = &*cur else { return None };
-        let b = body.clone();
+        let Expr::Lam { body, .. } = &cur.view() else { return None };
+        let b = *body;
         cur = b;
     }
     Some(cur)
@@ -567,9 +567,9 @@ fn strip_lams(e: &E, n: usize) -> Option<E> {
 fn num_fields(env: &Environment, ctor: &Name, np: usize) -> Option<usize> {
     let ConstantInfo::Opaque { ty, .. } = env.get(ctor)? else { return None };
     let mut n = 0usize;
-    let mut cur = ty.clone();
-    while let Expr::Forall { body, .. } = &*cur {
-        let b = body.clone();
+    let mut cur = *ty;
+    while let Expr::Forall { body, .. } = &cur.view() {
+        let b = *body;
         cur = b;
         n += 1;
     }
@@ -664,7 +664,7 @@ fn compare_recursors(
             let owner_param_sort = env
                 .owner(n)
                 .and_then(|o| env.get(o))
-                .map(|ci| matches!(&*peel_all(ci.ty()).1, Expr::Sort(l) if matches!(l.view(), LevelView::Param(_))))
+                .map(|ci| matches!(peel_all(ci.ty()).1.view(), Expr::Sort(l) if matches!(l.view(), LevelView::Param(_))))
                 .unwrap_or(false);
             let known = k_type.is_some() && !er.is_k && owner_param_sort;
             if known {

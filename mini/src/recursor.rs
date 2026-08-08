@@ -321,8 +321,8 @@ struct EmptySite {
 
 /// `⊢ • ∈ ⟦C t⟧`, from `t ∈ ⟦T p⃗⟧` and nothing else.
 fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let depth = site.np + 2;
 
@@ -443,8 +443,8 @@ struct EqSite {
 /// audit of `Eq.rec`, because a rule that is not `Eq.rec` cannot make these
 /// three agree.
 fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // `⟦C b t⟧`, by inference on the declared codomain.
@@ -587,8 +587,8 @@ mod tests {
         if depth == 0 {
             return cod
         }
-        let Expr::Forall { ty: d, body } = &**ty else { panic!("fewer than {depth} binders") };
-        forall(d.clone(), with_codomain(body, depth - 1, cod))
+        let Expr::Forall { ty: d, body } = &ty.view() else { panic!("fewer than {depth} binders") };
+        forall(*d, with_codomain(body, depth - 1, cod))
     }
 
     /// **`⟦Eq.rec⟧` is interpreted with its typing**, at a `Type`-valued motive

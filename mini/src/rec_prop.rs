@@ -239,8 +239,8 @@ const CTOR: &str = "class (S) eliminator: the constructor's own interpretation";
 
 /// The bottom of `⟦T.rec⟧`'s nest.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
@@ -635,10 +635,10 @@ mod tests {
     fn and_env() -> (Environment, Name) {
         let (a, i) = (nm("And"), Name::str(&nm("And"), "intro"));
         let p = sort(Level::zero());
-        let ty = forall(p.clone(), forall(p.clone(), sort(Level::zero())));
+        let ty = forall(p, forall(p, sort(Level::zero())));
         let at = |f: E, x: E, y: E| app(app(f, x), y);
         let cty = forall(
-            p.clone(),
+            p,
             forall(
                 p,
                 forall(bvar(1), forall(bvar(1), at(konst(a, no_levels()), bvar(3), bvar(2)))),
@@ -770,10 +770,10 @@ mod tests {
         let mk = Name::str(&d, "mk");
         let prop = sort(Level::zero());
         // `D : ∀ (a : Prop) (g : a → Prop), Prop`
-        let ty = forall(prop.clone(), forall(forall(bvar(0), prop.clone()), prop.clone()));
+        let ty = forall(prop, forall(forall(bvar(0), prop), prop));
         // `D.mk : ∀ (a : Prop) (g : a → Prop) (y : a) (z : g y), D a g`
         let cty = forall(
-            prop.clone(),
+            prop,
             forall(
                 forall(bvar(0), prop),
                 forall(

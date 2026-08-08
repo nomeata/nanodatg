@@ -1428,7 +1428,7 @@ mod tests {
             Declaration::Axiom {
                 name: Name::simple("uninterpretable"),
                 lparams: vec![],
-                ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
+                ty: crate::expr::str_lit("s"),
             },
             // `Gap::Axiom` — a statement that interprets and an inhabitation
             // nothing here can produce. **An assumed inhabitant, not a sort.**
@@ -1573,7 +1573,7 @@ mod tests {
         let a_def = Declaration::Def {
             name: a,
             lparams: vec![],
-            ty: prop.clone(),
+            ty: prop,
             // `∀ p : Prop, p` — a closed proposition, no axiom needed.
             value: forall(prop, crate::expr::bvar(0)),
             kind: DefKind::Def,
@@ -1624,7 +1624,7 @@ mod tests {
         let d = Declaration::Axiom {
             name: Name::simple("p"),
             lparams: vec![],
-            ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
+            ty: crate::expr::str_lit("s"),
         };
         let mut ip = Interp::new();
         let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
@@ -1650,7 +1650,7 @@ mod tests {
         let blocked = Declaration::Axiom {
             name: Name::simple("blocked"),
             lparams: vec![],
-            ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
+            ty: crate::expr::str_lit("s"),
         };
         // `Prop → Prop`, not `Prop`: a **sort-valued** axiom's `⟦c⟧ ∈ Uₙ` is
         // derivable and mini declines the file instead, so it is an example of
@@ -1778,7 +1778,7 @@ mod tests {
                     forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
                     forall(
                         sort(Level::zero().succ()),
-                        forall(forall(bvar(2), bvar(1)), forall(h_ty.clone(), forall(bvar(4), cod))),
+                        forall(forall(bvar(2), bvar(1)), forall(h_ty, forall(bvar(4), cod))),
                     ),
                 ),
             )
@@ -1790,7 +1790,7 @@ mod tests {
                     forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
                     lam(
                         sort(Level::zero().succ()),
-                        lam(forall(bvar(2), bvar(1)), lam(h_ty.clone(), lam(bvar(4), body))),
+                        lam(forall(bvar(2), bvar(1)), lam(h_ty, lam(bvar(4), body))),
                     ),
                 ),
             )
@@ -1837,7 +1837,7 @@ mod tests {
     #[test]
     fn armed_the_run_stops_at_the_first_pair_it_cannot_discharge() {
         let env = Environment::empty();
-        let nat = || std::rc::Rc::new(crate::expr::Expr::StrLit("s".into()));
+        let nat = || crate::expr::str_lit("s");
         let decls = vec![
             Declaration::Def {
                 name: Name::simple("fine"),

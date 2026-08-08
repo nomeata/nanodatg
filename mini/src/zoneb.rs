@@ -155,10 +155,10 @@ pub const CLASS_P_INDEXED: &str = "class (P) truncation over an indexed base";
 
 /// Peel `n` `Π` binders, returning the body. `None` if there are fewer.
 pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
-    let mut cur = ty.clone();
+    let mut cur = *ty;
     for _ in 0..n {
-        let Expr::Forall { body, .. } = &*cur.clone() else { return None };
-        cur = body.clone();
+        let Expr::Forall { body, .. } = &cur.clone().view() else { return None };
+        cur = *body;
     }
     Some(cur)
 }
@@ -839,7 +839,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     }
     // The branch decider, on the declaration's **own** level expression.
     let own = peel(ty, np + ni).ok_or(Gap::IndSpec(*ind_name, "type shape"))?;
-    let Expr::Sort(l) = &*own else {
+    let Expr::Sort(l) = &own.view() else {
         return Err(Gap::IndSpec(*ind_name, "resultant sort"))
     };
     let ind_ty = ground::subst_ground(ty, lparams, inst);
@@ -1083,10 +1083,10 @@ pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> boo
         return false
     };
     let (np, ni) = (*num_params as usize, *num_indices as usize);
-    let (ty, ctors) = (ty.clone(), ctors.clone());
+    let (ty, ctors) = (*ty, ctors.clone());
     // Reason 1, on the declaration's own level expression.
     if let Some(own) = peel(&ty, np + ni) {
-        if let Expr::Sort(l) = &*own {
+        if let Expr::Sort(l) = &own.view() {
             if provably_nonzero(l) {
                 return true
             }
@@ -1098,7 +1098,7 @@ pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> boo
         1 => {}
         _ => return false,
     }
-    let Some(cty) = c.environment().get(&ctors[0]).map(|ci| ci.ty().clone()) else { return false };
+    let Some(cty) = c.environment().get(&ctors[0]).map(|ci| *ci.ty()) else { return false };
     c.in_scope(|c| Ok::<bool, Gap>(ctor_le(c, ind_name, np, ni, &ty, &cty))).unwrap_or(false)
 }
 
@@ -1115,18 +1115,18 @@ fn ctor_le(
     // — `And.intro`'s `a` and `b` — has nothing to infer against and is filed
     // as non-propositional. `And` classified as class (P) for exactly one
     // compile because of it.
-    let mut pt = ind_ty.clone();
+    let mut pt = *ind_ty;
     for _ in 0..np {
-        let Expr::Forall { ty, body } = &*pt.clone() else { return false };
-        c.open_uninterpreted(ty.clone());
-        pt = body.clone();
+        let Expr::Forall { ty, body } = &pt.clone().view() else { return false };
+        c.open_uninterpreted(*ty);
+        pt = *body;
     }
     let Some(body) = peel(cty, np) else { return false };
     // De Bruijn depths of the fields that still have to be found among `e⃗`.
     let mut owed: Vec<usize> = Vec::new();
-    let mut cur = body.clone();
+    let mut cur = body;
     let mut d = 0usize;
-    while let Expr::Forall { ty, body } = &*cur.clone() {
+    while let Expr::Forall { ty, body } = &cur.clone().view() {
         if crate::expr::has_const(ind_name, ty) {
             // A recursive argument — `(∀z :: γ. t e) → β LE ctor`, with no
             // condition on it at all.
@@ -1144,15 +1144,15 @@ fn ctor_le(
                 owed.push(d);
             }
         }
-        c.open_uninterpreted(ty.clone());
+        c.open_uninterpreted(*ty);
         d += 1;
-        cur = body.clone();
+        cur = *body;
     }
     // The codomain, and the `y ∈ e` side condition.
     let Some(ixs) = ind_spine(ind_name, &cur, np, ni, d) else { return false };
     owed.iter().all(|j| {
         let want = d - 1 - j;
-        ixs.iter().any(|e| matches!(&**e, Expr::BVar(k) if *k as usize == want))
+        ixs.iter().any(|e| matches!(&e.view(), Expr::BVar(k) if *k as usize == want))
     })
 }
 
@@ -1440,8 +1440,8 @@ struct TruncCtorSite {
 
 /// `⊢ • ∈ ⟦T p⃗⟧` under the constructor's own field binders.
 fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::TruncCtor(site.ctor, w);
     let depth = site.np + site.k + site.m;
 
@@ -1711,13 +1711,13 @@ pub(crate) fn spec_of(
     c.in_scope(|c| {
         // 1. the parameters, opened once.
         let mut param_tys = Vec::with_capacity(np);
-        let mut cur = ind_ty.clone();
+        let mut cur = *ind_ty;
         for _ in 0..np {
-            let Expr::Forall { ty, body } = &*cur.clone() else { return Err(bad("parameters")) };
+            let Expr::Forall { ty, body } = &cur.clone().view() else { return Err(bad("parameters")) };
             let dom = c.interpret_and_open(ty).map_err(|_| bad("parameter type"))?;
             dom.ok_or_else(|| bad("parameter type uninterpretable"))?;
-            param_tys.push(ty.clone());
-            cur = body.clone();
+            param_tys.push(*ty);
+            cur = *body;
         }
         // 1b. the **indices**, in their own nested scope: `ιₖ` is abstracted
         //     over the parameters and the *earlier* indices, so index `k`'s
@@ -1731,9 +1731,9 @@ pub(crate) fn spec_of(
         let mut indices = Vec::with_capacity(ni);
         let mut index_axs = Vec::with_capacity(ni);
         cur = c.in_scope(|c| {
-            let mut cur = cur.clone();
+            let mut cur = cur;
             for _ in 0..ni {
-                let Expr::Forall { ty, body } = &*cur.clone() else { return Err(bad("indices")) };
+                let Expr::Forall { ty, body } = &cur.clone().view() else { return Err(bad("indices")) };
                 // **Read the abstraction before opening the binder.**
                 // `scope_vars(n)` is the `n` *innermost* scopes, so taking it
                 // after the push would drop the outermost parameter and pick up
@@ -1753,11 +1753,11 @@ pub(crate) fn spec_of(
                     .ok_or_else(|| bad("index type mentions a later binder"))?;
                 indices.push(sym);
                 index_axs.push(ax);
-                cur = body.clone();
+                cur = *body;
             }
             Ok(cur)
         })?;
-        let Expr::Sort(l) = &*cur else { return Err(bad("resultant sort")) };
+        let Expr::Sort(l) = &cur.view() else { return Err(bad("resultant sort")) };
         let result_level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
 
         // 2. each constructor, at the same parameter variables.
@@ -1776,7 +1776,7 @@ pub(crate) fn spec_of(
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
             let (spec, ev, idx, iax) =
                 c.in_scope(|c| ctor_spec(c, ind_name, np, ni, result_level, &body, legs))?;
-            ctors.push((*cname, cty.clone(), spec.clone(), ev));
+            ctors.push((*cname, *cty, spec.clone(), ev));
             specs.push(spec);
             ctors_idx.push(idx);
             ctor_index_axs.push(iax);
@@ -1874,7 +1874,7 @@ fn ctor_spec(
     let mut order = Vec::new();
     let mut args = Vec::new();
     let mut recs = 0usize;
-    let mut cur = body.clone();
+    let mut cur = *body;
     // `d` counts the field binders opened so far, so parameter `i` is
     // `bvar(d + np - 1 - i)` at every point of the walk.
     let mut d = 0usize;
@@ -1889,7 +1889,7 @@ fn ctor_spec(
     // one level out needs.
     let mut unfolds: Vec<(Term, Thm)> = Vec::new();
     let mut ev = CtorEvidence::default();
-    while let Expr::Forall { ty, body } = &*cur.clone() {
+    while let Expr::Forall { ty, body } = &cur.clone().view() {
         // **One classification for both recursive shapes**, and it reads the
         // spine through reductions — see [`rec_field`]. An empty `γ⃗` is the
         // plain recursive occurrence; a non-empty one is the function-typed
@@ -1914,7 +1914,7 @@ fn ctor_spec(
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
             // built yet, and nothing may depend on this field.
-            c.open_uninterpreted(ty.clone());
+            c.open_uninterpreted(*ty);
         } else if let Some((gammas, ixs)) = fun_rec {
             // **A function-typed recursive argument**, `(∀z :: γ. t e) → τ`
             // (`thesis.txt:1800`) — the same `Slot::Rec` as a plain one, with
@@ -1962,7 +1962,7 @@ fn ctor_spec(
                 // syntax is here — see [`CtorEvidence::rec_dom_decl`]. The
                 // levels are already ground: the walk runs on the ctor types at
                 // σ.
-                decls.push(match &**g {
+                decls.push(match &g.view() {
                     Expr::Const(name, levels) => {
                         let empty = std::collections::HashMap::new();
                         levels
@@ -2029,7 +2029,7 @@ fn ctor_spec(
             // was.)*
             let (isyms, iaxs) = c.in_scope(|c| {
                 for (g, dom) in gammas.iter().zip(gdoms.iter()) {
-                    c.push_interpreted(g.clone(), dom.clone());
+                    c.push_interpreted(*g, dom.clone());
                 }
                 index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")
             })?;
@@ -2041,7 +2041,7 @@ fn ctor_spec(
             ev.rec_dom_decl.push(decls);
             order.push(Slot::Rec);
             recs += 1;
-            c.open_uninterpreted(ty.clone());
+            c.open_uninterpreted(*ty);
         } else if crate::expr::has_const(ind_name, ty) {
             // The declaration occurring anywhere other than as the recursive
             // spine — *after* [`rec_field`] has tried the reduct too, so a
@@ -2125,11 +2125,11 @@ fn ctor_spec(
             args.push(sym);
             order.push(Slot::Plain);
             unfolds.push((Term::apply(sym, sym_args), unfold));
-            c.push_interpreted(ty.clone(), dom);
+            c.push_interpreted(*ty, dom);
             abstraction.push(c.scope_vars(1).ok_or_else(|| bad("field variable"))?[0]);
         }
         d += 1;
-        cur = body.clone();
+        cur = *body;
     }
     // The codomain must be the declaration applied to its own parameters.
     let Some(ixs) = ind_spine(ind_name, &cur, np, ni, d) else {
@@ -2272,7 +2272,7 @@ pub(crate) fn ind_spine(ind_name: &Name, e: &E, np: usize, ni: usize, d: usize) 
 /// knows how many are open.
 pub(crate) fn ind_spine_at(ind_name: &Name, e: &E, params: &[E], ni: usize) -> Option<Vec<E>> {
     let (head, args) = crate::expr::get_app(e);
-    let Expr::Const(n, _) = &*head else { return None };
+    let Expr::Const(n, _) = &head.view() else { return None };
     let np = params.len();
     if n != ind_name || args.len() != np + ni {
         return None
@@ -2343,10 +2343,10 @@ fn rec_field(
         ind_spine(ind_name, cur, np, ni, d + gammas.len()).map(|ixs| (gammas, ixs))
     };
     let mut gammas = Vec::new();
-    let mut cur = ty.clone();
-    while let Expr::Forall { ty: g, body } = &*cur.clone() {
-        gammas.push(g.clone());
-        cur = body.clone();
+    let mut cur = *ty;
+    while let Expr::Forall { ty: g, body } = &cur.clone().view() {
+        gammas.push(*g);
+        cur = *body;
     }
     if let Some(r) = spine(gammas, &cur) {
         return Some(r)
@@ -2356,17 +2356,17 @@ fn rec_field(
     }
     c.in_scope(|c| {
         let mut gammas = Vec::new();
-        let mut cur = ty.clone();
+        let mut cur = *ty;
         loop {
             // An `Err` here is a *type* error in the field, which this
             // classifier does not own: zone A rejected the file already if it
             // is one. Reported as "not a recursive argument", which sends the
             // field to the nested-occurrence arm.
             let Ok(t) = c.whnf(&cur) else { return Ok(None) };
-            let Expr::Forall { ty: g, body } = &*t else { return Ok(spine(gammas, &t)) };
-            gammas.push(g.clone());
-            c.open_uninterpreted(g.clone());
-            cur = body.clone();
+            let Expr::Forall { ty: g, body } = &t.view() else { return Ok(spine(gammas, &t)) };
+            gammas.push(*g);
+            c.open_uninterpreted(*g);
+            cur = *body;
         }
     })
     .ok()
@@ -2422,8 +2422,8 @@ fn rec_field(
 /// way — the eliminator's bridge and the constructor's have to agree about
 /// which expression `⟦B⟧` is or they compose two different sets.)*
 pub(crate) fn rec_field_codomain(ty: &E) -> Option<E> {
-    let Expr::Forall { body, .. } = &**ty else { return None };
-    let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
+    let Expr::Forall { body, .. } = &ty.view() else { return None };
+    let at = |l: Level| crate::expr::subst(body, &crate::expr::sort(l));
     let (a, b) = (at(Level::zero()), at(Level::zero().succ()));
     (a == b).then_some(a)
 }
@@ -2914,7 +2914,7 @@ pub(crate) fn former_at(
     level: u32,
 ) -> Result<(), Gap> {
     let depth = np + ni;
-    let lean_ty = c.environment().get(ind_name).map(|ci| ci.ty().clone());
+    let lean_ty = c.environment().get(ind_name).map(|ci| *ci.ty());
     let lparams: Vec<Name> = c
         .environment()
         .get(ind_name)
@@ -2930,7 +2930,7 @@ pub(crate) fn former_at(
     let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let level = crate::expr::sort(level_numeral(n));
-        let gap = |g: Gap| Ok(Typing { ty: level.clone(), tm: None, ev: Ev::missing(g) });
+        let gap = |g: Gap| Ok(Typing { ty: level, tm: None, ev: Ev::missing(g) });
         let Some((ps, mems)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
         // `H` is the *parameters*' conjunction; the index scopes are not in it.
         let mems = &mems[..np];
@@ -3175,8 +3175,8 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let (ind_name, inst, np, ind) = (&at.name, &at.inst[..], at.np, &at.ind);
     let i = *i;
     let nf = spec.order.len();
-    let ty = codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = *codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let Some((all, mems)) = c.binders(np + nf) else { return gap(Gap::NoEndpoint) };
     let Some(field_vars) = c.scope_vars(nf) else { return gap(Gap::NoEndpoint) };
     let (ps, fields) = all.split_at(np);
@@ -3775,15 +3775,15 @@ mod tests {
         // (3) Non-variable parameters — the case the depth version cannot
         // state at all, and the reason the general one exists.
         let a = konst(Name::simple("A"), ls.clone());
-        let b = app(konst(Name::simple("F"), ls.clone()), a.clone());
+        let b = app(konst(Name::simple("F"), ls.clone()), a);
         let cc = sort(Level::zero());
-        let ps = vec![a.clone(), b.clone(), cc.clone()];
+        let ps = vec![a, b, cc];
         let ix = app(konst(Name::simple("g"), ls.clone()), bvar(0));
-        let use_site = sp(&[a.clone(), b.clone(), cc.clone(), ix.clone()]);
+        let use_site = sp(&[a, b, cc, ix]);
         assert_eq!(ind_spine_at(&t, &use_site, &ps, ni).as_deref(), Some(&[ix][..]));
         // The same head at *different* parameters is a different family
         // instance, and must not be read as this one.
-        let wrong = sp(&[a.clone(), a.clone(), cc, bvar(0)]);
+        let wrong = sp(&[a, a, cc, bvar(0)]);
         assert_eq!(ind_spine_at(&t, &wrong, &ps, ni), None, "a use site's parameters are pinned too");
         // Arity is still part of the predicate.
         assert_eq!(ind_spine_at(&t, &use_site, &ps, 0), None);
@@ -3806,9 +3806,9 @@ mod tests {
         let t = Name::simple("T");
         let ty = konst(t, Vec::new().into());
         let ctors = vec![
-            (Name::str(&t, "c0"), ty.clone()),
-            (Name::str(&t, "c1"), forall(ty.clone(), ty.clone())),
-            (Name::str(&t, "c2"), forall(ty.clone(), forall(ty.clone(), ty.clone()))),
+            (Name::str(&t, "c0"), ty),
+            (Name::str(&t, "c1"), forall(ty, ty)),
+            (Name::str(&t, "c2"), forall(ty, forall(ty, ty))),
         ];
         let names: Vec<Name> = ctors.iter().map(|(n, _)| *n).collect();
         let mut env = Environment::empty();
@@ -3902,7 +3902,7 @@ mod tests {
             ty(&t),
             forall(forall(ty(&a), ty(&t)), forall(forall(ty(&b), ty(&t)), ty(&t))),
         );
-        let ctors = vec![(Name::str(&t, "c"), cty.clone())];
+        let ctors = vec![(Name::str(&t, "c"), cty)];
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
@@ -3989,14 +3989,14 @@ mod tests {
                 name: a,
                 lparams: vec![],
                 num_params: 0,
-                ty: u.clone(),
+                ty: u,
                 ctors: vec![(Name::str(&a, "pt"), ty(&a))],
             },
             Declaration::Def {
                 name: alias,
                 lparams: vec![],
-                ty: forall(u.clone(), forall(u.clone(), u.clone())),
-                value: crate::expr::lam(u.clone(), crate::expr::lam(u.clone(), bvar(1))),
+                ty: forall(u, forall(u, u)),
+                value: crate::expr::lam(u, crate::expr::lam(u, bvar(1))),
                 kind: crate::env::DefKind::Def,
             },
         ];
@@ -4275,12 +4275,12 @@ mod tests {
         // Inside `∀z`, counting from the innermost: `z = 0`, `n = 1`, `α = 2`.
         let cell = |ix: E| {
             forall(
-                ty0.clone(),
+                ty0,
                 forall(
-                    bty.clone(),
+                    bty,
                     forall(
-                        forall(bty.clone(), spine(bvar(2), ix)),
-                        spine(bvar(2), bff.clone()),
+                        forall(bty, spine(bvar(2), ix)),
+                        spine(bvar(2), bff),
                     ),
                 ),
             )
@@ -4294,7 +4294,7 @@ mod tests {
                 bvar(0),
                 Some(Gap::IndSpec(d, "recursive argument index")),
             ),
-            ("a closed constant", bff.clone(), None),
+            ("a closed constant", bff, None),
         ];
 
         for (label, ix, want) in cells {
@@ -4305,10 +4305,10 @@ mod tests {
                     name: b,
                     lparams: vec![],
                     num_params: 0,
-                    ty: ty0.clone(),
+                    ty: ty0,
                     ctors: vec![
-                        (Name::str(&b, "ff"), bty.clone()),
-                        (Name::str(&b, "tt"), bty.clone()),
+                        (Name::str(&b, "ff"), bty),
+                        (Name::str(&b, "tt"), bty),
                     ],
                 },
             )
@@ -4320,7 +4320,7 @@ mod tests {
                     name: d,
                     lparams: vec![],
                     num_params: 1,
-                    ty: forall(ty0.clone(), forall(bty.clone(), ty0.clone())),
+                    ty: forall(ty0, forall(bty, ty0)),
                     ctors: ctors.clone(),
                 },
             )
@@ -4329,7 +4329,7 @@ mod tests {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
             ensure(&mut c, &b, &[]).expect("B places");
-            let ind_ty = forall(ty0.clone(), forall(bty.clone(), ty0.clone()));
+            let ind_ty = forall(ty0, forall(bty, ty0));
             let got = spec_of(&mut c, &d, 1, 1, &ind_ty, &ctors, Legs::Skip);
             match (&want, &got) {
                 (Some(g), Err(e)) => assert_eq!(e, g, "{label}"),
@@ -4465,7 +4465,7 @@ mod tests {
         let spine = |d: u32| app(konst(t, no.clone()), bvar(d));
         // `c : ∀α. (α → T α) → T α` — the recursive argument's domain *is* the
         // parameter.
-        let cty = forall(ty0.clone(), forall(forall(bvar(0), spine(1)), spine(1)));
+        let cty = forall(ty0, forall(forall(bvar(0), spine(1)), spine(1)));
         let ctors = vec![(Name::str(&t, "c"), cty)];
         let mut env = Environment::empty();
         crate::kernel::add(
@@ -4474,7 +4474,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(ty0.clone(), ty0.clone()),
+                ty: forall(ty0, ty0),
                 ctors: ctors.clone(),
             },
         )
@@ -4483,7 +4483,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         let (shape, spec, _) =
-            spec_of(&mut c, &t, 1, 0, &forall(ty0.clone(), ty0), &ctors, Legs::Skip)
+            spec_of(&mut c, &t, 1, 0, &forall(ty0, ty0), &ctors, Legs::Skip)
                 .expect("the walk expresses a parameter-domain recursive argument");
         assert_eq!(spec.ctors[0].order, vec![Slot::Rec], "one function-typed recursive slot");
         assert_eq!(spec.ctors[0].rec_dom(0).len(), 1, "γ₀ is abbreviated over the parameters");
@@ -4606,8 +4606,8 @@ mod tests {
             (
                 "np=0, γ closed",
                 0,
-                ty0.clone(),
-                forall(forall(ty(&a), spine0.clone()), spine0.clone()),
+                ty0,
+                forall(forall(ty(&a), spine0), spine0),
                 Row::Bare,
             ),
             // The carrier builds and so does the constructor: the abbreviation
@@ -4618,8 +4618,8 @@ mod tests {
             (
                 "np=1, γ closed",
                 1,
-                forall(ty0.clone(), ty0.clone()),
-                forall(ty0.clone(), forall(forall(ty(&a), spine1(1)), spine1(1))),
+                forall(ty0, ty0),
+                forall(ty0, forall(forall(ty(&a), spine1(1)), spine1(1))),
                 Row::PrenexClosedBody,
             ),
             // The cell the whole construction was for: `γ` is the parameter, so
@@ -4628,15 +4628,15 @@ mod tests {
             (
                 "np=1, γ a parameter",
                 1,
-                forall(ty0.clone(), ty0.clone()),
-                forall(ty0.clone(), forall(forall(bvar(0), spine1(1)), spine1(1))),
+                forall(ty0, ty0),
+                forall(ty0, forall(forall(bvar(0), spine1(1)), spine1(1))),
                 Row::PrenexParamBody,
             ),
             (
                 "np=1, γ empty",
                 1,
-                forall(ty0.clone(), ty0.clone()),
-                forall(ty0.clone(), forall(spine1(0), spine1(1))),
+                forall(ty0, ty0),
+                forall(ty0, forall(spine1(0), spine1(1))),
                 Row::Absent,
             ),
         ];
@@ -4649,7 +4649,7 @@ mod tests {
                     name: a,
                     lparams: vec![],
                     num_params: 0,
-                    ty: ty0.clone(),
+                    ty: ty0,
                     ctors: vec![(Name::str(&a, "t"), ty(&a)), (Name::str(&a, "f"), ty(&a))],
                 },
             )
@@ -4661,7 +4661,7 @@ mod tests {
                     name: t,
                     lparams: vec![],
                     num_params: np,
-                    ty: ind_ty.clone(),
+                    ty: ind_ty,
                     ctors: ctors.clone(),
                 },
             )
@@ -4758,7 +4758,7 @@ mod tests {
                     name: *e,
                     lparams: vec![],
                     num_params: 0,
-                    ty: ty0.clone(),
+                    ty: ty0,
                     ctors: vec![(Name::str(e, "t"), ty(e)), (Name::str(e, "f"), ty(e))],
                 },
             )
@@ -4771,7 +4771,7 @@ mod tests {
             .map(|(i, d)| {
                 (
                     Name::str(&t, &format!("c{i}")),
-                    forall(ty0.clone(), forall(forall(ty(d), spine(1)), spine(1))),
+                    forall(ty0, forall(forall(ty(d), spine(1)), spine(1))),
                 )
             })
             .collect();
@@ -4781,7 +4781,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(ty0.clone(), ty0.clone()),
+                ty: forall(ty0, ty0),
                 ctors: ctors.clone(),
             },
         )
@@ -4797,7 +4797,7 @@ mod tests {
         // …and the three domains really are three, so an `Ok` from a walk that
         // had collapsed them would not pass.
         let (_, spec, _) =
-            spec_of(&mut c, &t, 1, 0, &forall(ty0.clone(), ty0), &ctors, Legs::Skip)
+            spec_of(&mut c, &t, 1, 0, &forall(ty0, ty0), &ctors, Legs::Skip)
                 .expect("the walk expresses three function-typed constructors");
         assert_eq!(spec.ctors.len(), 3, "three constructors");
         for cs in &spec.ctors {
@@ -4852,7 +4852,7 @@ mod tests {
                     name: *e,
                     lparams: vec![],
                     num_params: 0,
-                    ty: ty0.clone(),
+                    ty: ty0,
                     ctors: vec![(Name::str(e, "t"), ty(e)), (Name::str(e, "f"), ty(e))],
                 },
             )
@@ -4860,10 +4860,10 @@ mod tests {
         }
         // `T.c : T → (A → T) → (B → T) → T`, in that declared order.
         let ctor_ty = forall(
-            spine.clone(),
+            spine,
             forall(
-                forall(ty(&a), spine.clone()),
-                forall(forall(ty(&b), spine.clone()), spine.clone()),
+                forall(ty(&a), spine),
+                forall(forall(ty(&b), spine), spine),
             ),
         );
         crate::kernel::add(
@@ -4872,7 +4872,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 0,
-                ty: ty0.clone(),
+                ty: ty0,
                 ctors: vec![(Name::str(&t, "c"), ctor_ty)],
             },
         )
@@ -4895,10 +4895,10 @@ mod tests {
             0,
             &ty0,
             &[(Name::str(&t, "c"), forall(
-                spine.clone(),
+                spine,
                 forall(
-                    forall(ty(&a), spine.clone()),
-                    forall(forall(ty(&b), spine.clone()), spine),
+                    forall(ty(&a), spine),
+                    forall(forall(ty(&b), spine), spine),
                 ),
             ))],
             Legs::Skip,
@@ -5002,8 +5002,8 @@ mod tests {
                 num_params: 0,
                 ty: sort(Level::zero().succ()),
                 ctors: vec![
-                    (Name::str(&b, "b0"), bt.clone()),
-                    (Name::str(&b, "b1"), bt.clone()),
+                    (Name::str(&b, "b0"), bt),
+                    (Name::str(&b, "b1"), bt),
                 ],
             },
         )
@@ -5015,18 +5015,18 @@ mod tests {
         let tap = |a: E, i: E, j: E| {
             crate::expr::app(crate::expr::app(crate::expr::app(konst(t, Vec::new().into()), a), i), j)
         };
-        let ty = forall(sort(Level::zero().succ()), forall(bt.clone(), forall(bt.clone(), sort(Level::zero().succ()))));
+        let ty = forall(sort(Level::zero().succ()), forall(bt, forall(bt, sort(Level::zero().succ()))));
         let ctors = vec![
             // c0 : ∀ α. T α b0 b0
-            (Name::str(&t, "c0"), forall(sort(Level::zero().succ()), tap(bvar(0), b0.clone(), b0.clone()))),
+            (Name::str(&t, "c0"), forall(sort(Level::zero().succ()), tap(bvar(0), b0, b0))),
             // c1 : ∀ α (x : B). T α x b0 → T α b1 x
             (
                 Name::str(&t, "c1"),
                 forall(
                     sort(Level::zero().succ()),
                     forall(
-                        bt.clone(),
-                        forall(tap(bvar(1), bvar(0), b0.clone()), tap(bvar(2), b1.clone(), bvar(1))),
+                        bt,
+                        forall(tap(bvar(1), bvar(0), b0), tap(bvar(2), b1, bvar(1))),
                     ),
                 ),
             ),
@@ -5036,14 +5036,14 @@ mod tests {
                 forall(
                     sort(Level::zero().succ()),
                     forall(
-                        bt.clone(),
+                        bt,
                         forall(
-                            bt.clone(),
+                            bt,
                             forall(
                                 tap(bvar(2), bvar(1), bvar(0)),
                                 forall(
                                     tap(bvar(3), bvar(1), bvar(2)),
-                                    tap(bvar(4), b0.clone(), b1.clone()),
+                                    tap(bvar(4), b0, b1),
                                 ),
                             ),
                         ),
@@ -5079,7 +5079,7 @@ mod tests {
             .iter()
             .map(|n| {
                 let n = Name::str(&t, n);
-                let ty = c.environment().get(&n).unwrap().ty().clone();
+                let ty = *c.environment().get(&n).unwrap().ty();
                 (n, ty)
             })
             .collect();
@@ -5396,9 +5396,9 @@ mod tests {
         let t = Name::simple("Big");
         let self_ty = konst(t, Vec::new().into());
         let ctors = vec![
-            (Name::str(&t, "z"), self_ty.clone()),
-            (Name::str(&t, "s"), forall(self_ty.clone(), self_ty.clone())),
-            (Name::str(&t, "d"), forall(self_ty.clone(), forall(self_ty.clone(), self_ty))),
+            (Name::str(&t, "z"), self_ty),
+            (Name::str(&t, "s"), forall(self_ty, self_ty)),
+            (Name::str(&t, "d"), forall(self_ty, forall(self_ty, self_ty))),
         ];
         let mut env = Environment::empty();
         crate::kernel::add(
@@ -5454,7 +5454,7 @@ mod tests {
                 num_params: 0,
                 ty: sort(Level::param(Name::simple("u"))),
                 ctors: vec![
-                    (Name::str(&t, "a"), ty.clone()),
+                    (Name::str(&t, "a"), ty),
                     (Name::str(&t, "b"), ty),
                 ],
             },

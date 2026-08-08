@@ -85,7 +85,7 @@ pub(crate) fn certify(
 
     // Which declaration, at which ground levels, with which parameters.
     let (head, args) = crate::expr::get_app(&tw);
-    let crate::expr::Expr::Const(name, ls) = &*head else { return Err(Gap::NoEndpoint) };
+    let crate::expr::Expr::Const(name, ls) = &head.view() else { return Err(Gap::NoEndpoint) };
     let name = *name;
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> = ls

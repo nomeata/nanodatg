@@ -159,8 +159,8 @@ pub(crate) fn ensure(
 
 /// The bottom of `⟦T.rec⟧`'s nest: `⊢ • ∈ ⟦C x⃗ t⟧`.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let Some(cp) = site.fam.class_p().cloned() else { return gap(bad(DISAGREE)) };
 

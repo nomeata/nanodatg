@@ -1,4 +1,4 @@
-//! `Name`, `Level`, `Expr` — owned, de Bruijn, no arena.
+//! `Name`, `Level`, `Expr` — de Bruijn, hash-consed in [`crate::arena`].
 //!
 //! # Interface
 //!
@@ -7,22 +7,45 @@
 //! here has a named original, and the correspondence is one-to-one on purpose:
 //! this file is meant to be reviewed against the Lean side line by line.
 //!
+//! **The three types are pointers into `checker`'s arena** (PIVOT.md §1.1) —
+//! `NamePtr`, `LevelPtr`, `ExprPtr` — rather than the `Rc` trees they were.
+//! All three are `Copy`, `==` is a `u32` comparison, and **pointer identity is
+//! structural identity**. Reading is `view()`, which hands back an owned
+//! `NameView`/`LevelView`/`Expr` whose variant names are still mini's own.
+//! What did *not* move is the algebra: `Level`'s `le`, `mk_imax`, `simplify`
+//! and the rest are still mini-lean's clauses in mini-lean's order, because
+//! `checker`'s would be a different acceptance boundary.
+//!
 //! Two deliberate departures, both argued in MINI-DESIGN.md §2:
 //!
 //! * **No binder names.** Mini-lean carries a `Name` on `lam`/`forall`/`let`
-//!   purely for printing. `Expr`'s derived `BEq` therefore compares them, but
-//!   the only structural `Expr` comparisons the kernel performs are against
-//!   `.bvar` nodes (`isValidIndApp`, `resType.getApp.2.contains (.bvar shift)`),
-//!   so dropping the names cannot change a verdict.
+//!   purely for printing. The only structural `Expr` comparisons the kernel
+//!   performs are against `.bvar` nodes (`isValidIndApp`,
+//!   `resType.getApp.2.contains (.bvar shift)`), so dropping the names cannot
+//!   change a verdict.
+//!
+//!   **This is now enforced rather than merely true.** `checker` hash-conses
+//!   `binder_name`, `binder_style` and `nondep` into the node, so equality
+//!   *would* see them; [`lam`], [`forall`] and [`let_`] pin all three to one
+//!   value and `convert::Cv::expr` puts every parsed expression into the same
+//!   form on the way in. `crate::arena` states the normal form and pins it
+//!   with four tests. Without that discipline `==` on expressions would
+//!   quietly become "was built by the same code path".
 //! * **No `Local` variant.** Mini is pure de Bruijn: the local context is a
-//!   telescope, exactly as in the original.
+//!   telescope, exactly as in the original. `checker`'s `Expr` has one, and
+//!   [`E::view`] panics on it rather than inventing a reading; `convert`
+//!   declines any export that carries one, so it cannot arise.
 //!
 //! Nat literals are `u64`; the parser declines anything above 10 (mini-lean's
-//! own guard), so the width is never load-bearing.
+//! own guard), so the width is never load-bearing. De Bruijn indices are
+//! `u32` here and `u16` in the arena — measured, the largest mini ever builds
+//! over the whole corpus is 38, and `arena::bvar` is the one narrowing point
+//! and panics rather than wrapping.
 
+use nanoda_lib::expr::Expr as CExpr;
 use nanoda_lib::level::Level as CLevel;
 use nanoda_lib::name::Name as CName;
-use nanoda_lib::util::{LevelPtr, NamePtr};
+use nanoda_lib::util::{ExprPtr, LevelPtr, NamePtr};
 use std::fmt;
 use std::rc::Rc;
 
@@ -320,28 +343,113 @@ impl fmt::Display for Level {
 
 // ───────────────────────────────────────────────────────── expressions ──
 
+/// A Lean expression, as a pointer into [`crate::arena`].
+///
+/// **Hash-consed, so `==` is a `u32` comparison and pointer identity *is*
+/// structural identity.** That equivalence is what the whole migration is
+/// for, and it is conditional on one discipline: every binder mini builds
+/// carries the anonymous name and the default style, and every parsed
+/// expression is put into the same normal form by `arena::erase_binders` on
+/// the way in. `crate::arena`'s header argues why, and four tests there pin
+/// it. Without that, a *generated* `∀ _ : A, B` and a *parsed* `∀ x : A, B`
+/// would be different pointers for what this file has always treated as one
+/// expression.
+///
+/// Reading is [`E::view`], which hands back an owned [`Expr`]; the old
+/// `&**e` spelling becomes `&e.view()`, and the binding modes are unchanged
+/// because `Rc<Expr>` and `E` are both what a pattern used to bind by
+/// reference.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct E(pub ExprPtr<'static>);
+
+/// [`E`] destructured one level.
+///
+/// The variant names and shapes are mini's own, not `checker`'s: `BVar` for
+/// `Var`, `Forall` for `Pi`, `StrLit` for `StringLit`, and no `Local`. Mini
+/// is pure de Bruijn — the local context is `Checker::lenv`, a telescope —
+/// so a `Local` node cannot arise; `convert` declines any export carrying
+/// one, and [`E::view`] panics rather than inventing a reading for it.
+///
+/// The binder metadata `checker` keeps on `Lambda`/`Pi`/`Let` is *absent
+/// here on purpose*. It is pinned to one value at construction, so there is
+/// nothing to report and nothing a caller could act on.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Expr {
     Const(Name, Rc<[Level]>),
     BVar(u32),
-    App(Rc<Expr>, Rc<Expr>),
-    Lam { ty: Rc<Expr>, body: Rc<Expr> },
-    Forall { ty: Rc<Expr>, body: Rc<Expr> },
+    App(E, E),
+    Lam { ty: E, body: E },
+    Forall { ty: E, body: E },
     NatLit(u64),
     StrLit(Rc<str>),
     Sort(Level),
-    Proj { ind: Name, idx: u32, s: Rc<Expr> },
-    Let { ty: Rc<Expr>, val: Rc<Expr>, body: Rc<Expr> },
+    Proj { ind: Name, idx: u32, s: E },
+    Let { ty: E, val: E, body: E },
 }
 
-pub type E = Rc<Expr>;
+impl E {
+    /// One level of structure.
+    pub fn view(&self) -> Expr {
+        match crate::arena::read_expr(self.0) {
+            CExpr::Var { dbj_idx, .. } => Expr::BVar(u32::from(dbj_idx)),
+            CExpr::Sort { level, .. } => Expr::Sort(Level(level)),
+            CExpr::Const { name, levels, .. } => {
+                Expr::Const(Name(name), crate::arena::levels_of(levels))
+            }
+            CExpr::App { fun, arg, .. } => Expr::App(E(fun), E(arg)),
+            CExpr::Lambda { binder_type, body, .. } => {
+                Expr::Lam { ty: E(binder_type), body: E(body) }
+            }
+            CExpr::Pi { binder_type, body, .. } => {
+                Expr::Forall { ty: E(binder_type), body: E(body) }
+            }
+            CExpr::Let { binder_type, val, body, .. } => {
+                Expr::Let { ty: E(binder_type), val: E(val), body: E(body) }
+            }
+            CExpr::Proj { ty_name, idx, structure, .. } => Expr::Proj {
+                ind: Name(ty_name),
+                // The arena's `idx` is a `usize` and mini's is a `u32`.
+                // `convert` refuses a projection index that does not fit on
+                // the way in, so this cannot be reached with one that does
+                // not — and if it ever were, a wrap would silently project a
+                // different field.
+                idx: u32::try_from(idx).expect("projection index exceeds u32"),
+                s: E(structure),
+            },
+            CExpr::NatLit { ptr, .. } => {
+                let s = crate::arena::read_nat_lit_decimal(ptr)
+                    .expect("mini::arena: a nat literal with the nat extension off");
+                // Mini declines anything above ten at the frontend, so every
+                // literal that reaches here fits. `u64::MAX` keeps the old
+                // `parse().unwrap_or(u64::MAX)` behaviour for the impossible
+                // case rather than panicking in the middle of a walk.
+                Expr::NatLit(s.parse().unwrap_or(u64::MAX))
+            }
+            CExpr::StringLit { ptr, .. } => {
+                Expr::StrLit(Rc::from(crate::arena::read_string(ptr)))
+            }
+            CExpr::Local { .. } => {
+                panic!("mini has no Local: the local context is Checker::lenv, a telescope")
+            }
+        }
+    }
+}
 
-pub fn bvar(i: u32) -> E { Rc::new(Expr::BVar(i)) }
-pub fn sort(l: Level) -> E { Rc::new(Expr::Sort(l)) }
-pub fn konst(n: Name, ls: Rc<[Level]>) -> E { Rc::new(Expr::Const(n, ls)) }
-pub fn app(f: E, a: E) -> E { Rc::new(Expr::App(f, a)) }
-pub fn lam(ty: E, body: E) -> E { Rc::new(Expr::Lam { ty, body }) }
-pub fn forall(ty: E, body: E) -> E { Rc::new(Expr::Forall { ty, body }) }
+pub fn bvar(i: u32) -> E { E(crate::arena::bvar(i)) }
+pub fn sort(l: Level) -> E { E(crate::arena::sort(l.0)) }
+pub fn konst(n: Name, ls: Rc<[Level]>) -> E {
+    let ptrs: Vec<_> = ls.iter().map(|l| l.0).collect();
+    E(crate::arena::konst(n.0, crate::arena::alloc_levels(&ptrs)))
+}
+pub fn app(f: E, a: E) -> E { E(crate::arena::app(f.0, a.0)) }
+pub fn lam(ty: E, body: E) -> E { E(crate::arena::lam(ty.0, body.0)) }
+pub fn forall(ty: E, body: E) -> E { E(crate::arena::pi(ty.0, body.0)) }
+pub fn let_(ty: E, val: E, body: E) -> E { E(crate::arena::let_(ty.0, val.0, body.0)) }
+pub fn proj(ind: Name, idx: u32, s: E) -> E {
+    E(crate::arena::proj(ind.0, idx as usize, s.0))
+}
+pub fn nat_lit(n: u64) -> E { E(crate::arena::nat_lit(n)) }
+pub fn str_lit(s: &str) -> E { E(crate::arena::str_lit(s)) }
 
 /// `Expr.arrow` — a non-dependent `Π`. Note the original does **not** shift
 /// `b`: callers (only `addQuot`) write the de Bruijn indices out by hand.
@@ -350,10 +458,10 @@ pub fn arrow(a: E, b: E) -> E { forall(a, b) }
 /// `Expr.getApp`.
 pub fn get_app(e: &E) -> (E, Vec<E>) {
     let mut args = Vec::new();
-    let mut cur = e.clone();
-    while let Expr::App(f, a) = &*cur.clone() {
-        args.push(a.clone());
-        cur = f.clone();
+    let mut cur = *e;
+    while let Expr::App(f, a) = cur.view() {
+        args.push(a);
+        cur = f;
     }
     args.reverse();
     (cur, args)
@@ -363,7 +471,7 @@ pub fn get_app(e: &E) -> (E, Vec<E>) {
 pub fn app_n(f: E, args: &[E]) -> E {
     let mut out = f;
     for a in args {
-        out = app(out, a.clone());
+        out = app(out, *a);
     }
     out
 }
@@ -371,28 +479,24 @@ pub fn app_n(f: E, args: &[E]) -> E {
 /// `Expr.shift`.
 pub fn shift(e: &E, n: u32, d: u32) -> E {
     if d == 0 {
-        return e.clone()
+        return *e
     }
-    match &**e {
+    match e.view() {
         Expr::BVar(i) => {
-            if *i >= n {
+            if i >= n {
                 bvar(i + d)
             } else {
-                e.clone()
+                *e
             }
         }
-        Expr::App(f, a) => app(shift(f, n, d), shift(a, n, d)),
-        Expr::Lam { ty, body } => lam(shift(ty, n, d), shift(body, n + 1, d)),
-        Expr::Forall { ty, body } => forall(shift(ty, n, d), shift(body, n + 1, d)),
-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
-            ty: shift(ty, n, d),
-            val: shift(val, n, d),
-            body: shift(body, n + 1, d),
-        }),
-        Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: shift(s, n, d) })
+        Expr::App(f, a) => app(shift(&f, n, d), shift(&a, n, d)),
+        Expr::Lam { ty, body } => lam(shift(&ty, n, d), shift(&body, n + 1, d)),
+        Expr::Forall { ty, body } => forall(shift(&ty, n, d), shift(&body, n + 1, d)),
+        Expr::Let { ty, val, body } => {
+            let_(shift(&ty, n, d), shift(&val, n, d), shift(&body, n + 1, d))
         }
-        Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+        Expr::Proj { ind, idx, s } => proj(ind, idx, shift(&s, n, d)),
+        Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => *e,
     }
 }
 
@@ -400,9 +504,8 @@ pub fn shift(e: &E, n: u32, d: u32) -> E {
 /// the substituted variables, `s[len-1]` replaces `bvar n`.
 pub fn substs(e: &E, s: &[E], n: u32) -> E {
     let len = s.len() as u32;
-    match &**e {
+    match e.view() {
         Expr::BVar(i) => {
-            let i = *i;
             if i >= n {
                 if i < n + len {
                     shift(&s[(len - (i - n + 1)) as usize], 0, n)
@@ -410,22 +513,18 @@ pub fn substs(e: &E, s: &[E], n: u32) -> E {
                     bvar(i - len)
                 }
             } else {
-                e.clone()
+                *e
             }
         }
-        Expr::Const(..) => e.clone(),
-        Expr::App(f, a) => app(substs(f, s, n), substs(a, s, n)),
-        Expr::Lam { ty, body } => lam(substs(ty, s, n), substs(body, s, n + 1)),
-        Expr::Forall { ty, body } => forall(substs(ty, s, n), substs(body, s, n + 1)),
-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
-            ty: substs(ty, s, n),
-            val: substs(val, s, n),
-            body: substs(body, s, n + 1),
-        }),
-        Expr::Proj { ind, idx, s: x } => {
-            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: substs(x, s, n) })
+        Expr::Const(..) => *e,
+        Expr::App(f, a) => app(substs(&f, s, n), substs(&a, s, n)),
+        Expr::Lam { ty, body } => lam(substs(&ty, s, n), substs(&body, s, n + 1)),
+        Expr::Forall { ty, body } => forall(substs(&ty, s, n), substs(&body, s, n + 1)),
+        Expr::Let { ty, val, body } => {
+            let_(substs(&ty, s, n), substs(&val, s, n), substs(&body, s, n + 1))
         }
-        Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+        Expr::Proj { ind, idx, s: x } => proj(ind, idx, substs(&x, s, n)),
+        Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => *e,
     }
 }
 
@@ -434,36 +533,32 @@ pub fn subst(e: &E, a: &E) -> E { substs(e, std::slice::from_ref(a), 0) }
 
 /// `Expr.substLevel`.
 pub fn subst_level(e: &E, f: &dyn Fn(&Name) -> Level) -> E {
-    match &**e {
+    match e.view() {
         Expr::Const(n, ls) => {
-            konst(*n, ls.iter().map(|l| l.subst(f)).collect::<Vec<_>>().into())
+            konst(n, ls.iter().map(|l| l.subst(f)).collect::<Vec<_>>().into())
         }
-        Expr::App(g, a) => app(subst_level(g, f), subst_level(a, f)),
-        Expr::Lam { ty, body } => lam(subst_level(ty, f), subst_level(body, f)),
-        Expr::Forall { ty, body } => forall(subst_level(ty, f), subst_level(body, f)),
-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
-            ty: subst_level(ty, f),
-            val: subst_level(val, f),
-            body: subst_level(body, f),
-        }),
-        Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: subst_level(s, f) })
+        Expr::App(g, a) => app(subst_level(&g, f), subst_level(&a, f)),
+        Expr::Lam { ty, body } => lam(subst_level(&ty, f), subst_level(&body, f)),
+        Expr::Forall { ty, body } => forall(subst_level(&ty, f), subst_level(&body, f)),
+        Expr::Let { ty, val, body } => {
+            let_(subst_level(&ty, f), subst_level(&val, f), subst_level(&body, f))
         }
+        Expr::Proj { ind, idx, s } => proj(ind, idx, subst_level(&s, f)),
         Expr::Sort(l) => sort(l.subst(f)),
-        Expr::BVar(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+        Expr::BVar(..) | Expr::NatLit(..) | Expr::StrLit(..) => *e,
     }
 }
 
 /// `Expr.hasBVar`.
 pub fn has_bvar(e: &E, idx: u32) -> bool {
-    match &**e {
-        Expr::BVar(i) => *i == idx,
-        Expr::App(f, a) => has_bvar(f, idx) || has_bvar(a, idx),
+    match e.view() {
+        Expr::BVar(i) => i == idx,
+        Expr::App(f, a) => has_bvar(&f, idx) || has_bvar(&a, idx),
         Expr::Lam { ty, body } | Expr::Forall { ty, body } => {
-            has_bvar(ty, idx) || has_bvar(body, idx + 1)
+            has_bvar(&ty, idx) || has_bvar(&body, idx + 1)
         }
         Expr::Let { ty, val, body } => {
-            has_bvar(ty, idx) || has_bvar(val, idx) || has_bvar(body, idx + 1)
+            has_bvar(&ty, idx) || has_bvar(&val, idx) || has_bvar(&body, idx + 1)
         }
         _ => false,
     }
@@ -500,18 +595,18 @@ pub fn has_bvar(e: &E, idx: u32) -> bool {
 /// move an acceptance boundary to make a certificate easier, which §5 says the
 /// boundary wins.
 pub fn has_bvar_in_proj(e: &E, idx: u32) -> bool {
-    match &**e {
-        Expr::BVar(i) => *i == idx,
-        Expr::App(f, a) => has_bvar_in_proj(f, idx) || has_bvar_in_proj(a, idx),
+    match e.view() {
+        Expr::BVar(i) => i == idx,
+        Expr::App(f, a) => has_bvar_in_proj(&f, idx) || has_bvar_in_proj(&a, idx),
         Expr::Lam { ty, body } | Expr::Forall { ty, body } => {
-            has_bvar_in_proj(ty, idx) || has_bvar_in_proj(body, idx + 1)
+            has_bvar_in_proj(&ty, idx) || has_bvar_in_proj(&body, idx + 1)
         }
         Expr::Let { ty, val, body } => {
-            has_bvar_in_proj(ty, idx)
-                || has_bvar_in_proj(val, idx)
-                || has_bvar_in_proj(body, idx + 1)
+            has_bvar_in_proj(&ty, idx)
+                || has_bvar_in_proj(&val, idx)
+                || has_bvar_in_proj(&body, idx + 1)
         }
-        Expr::Proj { s, .. } => has_bvar_in_proj(s, idx),
+        Expr::Proj { s, .. } => has_bvar_in_proj(&s, idx),
         Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => false,
     }
 }
@@ -519,20 +614,33 @@ pub fn has_bvar_in_proj(e: &E, idx: u32) -> bool {
 /// `hasConst`. Note the original does *not* descend into `proj`'s name nor into
 /// a `.const`'s level arguments, and neither does this.
 pub fn has_const(n: &Name, e: &E) -> bool {
-    match &**e {
-        Expr::Const(name, _) => name == n,
-        Expr::App(f, a) => has_const(n, f) || has_const(n, a),
-        Expr::Lam { ty, body } | Expr::Forall { ty, body } => has_const(n, ty) || has_const(n, body),
-        Expr::Let { ty, val, body } => {
-            has_const(n, ty) || has_const(n, val) || has_const(n, body)
+    match e.view() {
+        Expr::Const(name, _) => name == *n,
+        Expr::App(f, a) => has_const(n, &f) || has_const(n, &a),
+        Expr::Lam { ty, body } | Expr::Forall { ty, body } => {
+            has_const(n, &ty) || has_const(n, &body)
         }
-        Expr::Proj { s, .. } => has_const(n, s),
+        Expr::Let { ty, val, body } => {
+            has_const(n, &ty) || has_const(n, &val) || has_const(n, &body)
+        }
+        Expr::Proj { s, .. } => has_const(n, &s),
         Expr::BVar(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => false,
     }
 }
 
 /// `Expr.bvars n d` = `#[bvar (n-1+d), …, bvar d]`.
 pub fn bvars(n: u32, d: u32) -> Vec<E> { (0..n).rev().map(|i| bvar(i + d)).collect() }
+
+/// Renders the expression, not the pointer — the argument [`Name`]'s `Debug`
+/// gives. Error strings across the kernel interpolate an expression with
+/// `{e}`, and `Gap`'s derived `Debug` reaches these too.
+impl fmt::Debug for E {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self}") }
+}
+
+impl fmt::Display for E {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.view()) }
+}
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

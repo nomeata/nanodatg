@@ -370,7 +370,7 @@ fn first_reason(own: &Gap, g1: Gap, g2: Gap) -> Gap { if g1 == *own { g2 } else 
 
 /// `sort` — the shape check, not the interpretation.
 pub fn as_sort(e: &E) -> R<Level> {
-    match &**e {
+    match &e.view() {
         Expr::Sort(u) => Ok(*u),
         _ => Err(format!("Expected a sort, got {e}")),
     }
@@ -510,7 +510,7 @@ struct Frame {
 fn hash_expr(e: &E) -> u64 {
     use std::hash::{Hash, Hasher};
     fn go<H: Hasher>(e: &E, h: &mut H) {
-        match &**e {
+        match &e.view() {
             Expr::BVar(i) => {
                 0u8.hash(h);
                 i.hash(h);
@@ -816,7 +816,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let n = (n as usize).min(len);
         let mut out = body;
         for i in 0..n {
-            out = forall(self.lenv[len - 1 - i].clone(), out);
+            out = forall(self.lenv[len - 1 - i], out);
         }
         Ok(out)
     }
@@ -827,7 +827,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let n = (n as usize).min(len);
         let mut out = body;
         for i in 0..n {
-            out = lam(self.lenv[len - 1 - i].clone(), out);
+            out = lam(self.lenv[len - 1 - i], out);
         }
         Ok(out)
     }
@@ -913,7 +913,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // where it was chosen. See [`crate::blocker::Quiet`].
         let _quiet =
             (!tm_asked && crate::blocker::is_armed()).then(crate::blocker::Quiet::new);
-        let mut cur = e.clone();
+        let mut cur = *e;
         // The endpoint the caller asked about, kept for `done!`'s proof clause
         // below: `cur_tm` is loop state and is gone by the time it is needed.
         let from_tm = tm.clone();
@@ -922,14 +922,14 @@ impl<'e, 'i> Checker<'e, 'i> {
         let mut stack: Vec<E> = Vec::new();
         let mut stack_tms: Vec<Option<Term>> = Vec::new();
         let mut acc = match &cur_tm {
-            Some(t) => Conv::refl(e.clone(), t),
+            Some(t) => Conv::refl(*e, t),
             // **Propagation, not minting.** `why` is the caller's own reason,
             // already chosen and — where it came from an `Ev` — already
             // recorded at the site that chose it. Routing it through
             // `Ev::missing` again would put this one line at the top of every
             // blocker trail (it was, ×20 on a single pair) and bury the step
             // that actually gave up. `blocker`'s "re-wrapping is not minting".
-            None => Conv { to: e.clone(), ev: Ev::Gap(why.clone()) },
+            None => Conv { to: *e, ev: Ev::Gap(why.clone()) },
         };
         // A closure would borrow `self`; this macro is the same thing without
         // the borrow. `$leg` is about the head, `$to` the whole reduct.
@@ -972,8 +972,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             }};
         }
         loop {
-            let node = cur.clone();
-            match &*node {
+            let node = cur;
+            match &node.view() {
                 Expr::Const(name, ls) => {
                     let cinfo =
                         self.lookup(name).ok_or_else(|| format!("Unknown constant {name}"))?;
@@ -1010,7 +1010,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let nm = *num_minors as usize;
                         let major_pos = np + nmot + nm + *num_indices as usize;
                         let Some(major) = stack.get(major_pos).cloned() else {
-                            done!(app_n(node.clone(), &stack))
+                            done!(app_n(node, &stack))
                         };
                         // The K-rule: an inductive proposition's major premise
                         // needs only to *have* the right type.
@@ -1116,7 +1116,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let (major2, mconv) = self.whnf_conv(&major, major_tm, why)?;
                         let (head, con_args) = get_app(&major2);
                         let mut fired = None;
-                        if let Expr::Const(f, _) = &*head {
+                        if let Expr::Const(f, _) = &head.view() {
                             if let Some((_, rhs)) = rules.iter().find(|(c, _)| c == f) {
                                 // **The constructor's own parameter count, not
                                 // the recursor's.** They agree for every
@@ -1164,7 +1164,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                             // because an ι theorem about a term this run cannot
                             // name is a theorem about the wrong redex.
                             let mut all = stack[..major_pos + 1].to_vec();
-                            all[major_pos] = major2.clone();
+                            all[major_pos] = major2;
                             let all_tms: Option<Vec<Term>> = stack_tms
                                 .get(..major_pos + 1)
                                 .and_then(|s| s.iter().cloned().collect::<Option<Vec<Term>>>())
@@ -1440,9 +1440,9 @@ impl<'e, 'i> Checker<'e, 'i> {
                             // prefix. Clippy called the store dead; it was, and
                             // the comment was the misleading half.
                         }
-                        done!(app_n(node.clone(), &stack2))
+                        done!(app_n(node, &stack2))
                     }
-                    done!(app_n(node.clone(), &stack))
+                    done!(app_n(node, &stack))
                 }
                 Expr::App(f, a) => {
                     // Peeling an application is not a reduction: no leg. What
@@ -1450,13 +1450,13 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // one lookup in the applicative structure the
                     // interpretation recorded on the way in.
                     let (f_tm, a_tm) = self.split_app(&cur_tm);
-                    stack.insert(0, a.clone());
+                    stack.insert(0, *a);
                     stack_tms.insert(0, a_tm);
                     cur_tm = f_tm;
-                    cur = f.clone();
+                    cur = *f;
                 }
                 Expr::Lam { ty, body } if !stack.is_empty() => {
-                    let (ty, body) = (ty.clone(), body.clone());
+                    let (ty, body) = (*ty, *body);
                     let a = stack.remove(0);
                     let a_tm = stack_tms.remove(0);
                     // **Beta.** `beta_leg` takes the argument's membership as a
@@ -1554,7 +1554,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // expression and `a_tm ≠ b_tm`.)*
                     let (s2, s_conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
                     let stuck =
-                        Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: s2.clone() });
+                        crate::expr::proj(*ind, *idx, s2);
                     // A subject that did not move owes nothing: the two
                     // endpoints are the same term and the leg would be a `refl`
                     // this chain does not need. That is also the only case the
@@ -1576,7 +1576,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         }};
                     }
                     let (head, args) = get_app(&s2);
-                    let Expr::Const(f, cls) = &*head else { stuck!() };
+                    let Expr::Const(f, cls) = &head.view() else { stuck!() };
                     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind)
                     else {
                         stuck!()
@@ -1645,7 +1645,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         Ev::missing(Gap::SymbolicLevel)
                     };
                     step!(ev);
-                    cur = args[pos].clone();
+                    cur = args[pos];
                 }
                 Expr::NatLit(n) => {
                     // Note the original drops `stack` on this branch — a nat
@@ -1666,7 +1666,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // the literal's declared type is `Nat`.)*
                     done!(Self::nat_unfold(*n)?)
                 }
-                _ => done!(app_n(node.clone(), &stack)),
+                _ => done!(app_n(node, &stack)),
             }
         }
     }
@@ -1906,9 +1906,9 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         let mut legs = Vec::with_capacity(args.len());
         let mut cur_tm = head_tm.clone();
-        let mut ty = rec_ty.clone();
+        let mut ty = *rec_ty;
         for (a, a_tm) in args.iter().zip(arg_tms.iter()) {
-            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+            let Expr::Forall { ty: dom_e, body } = &ty.clone().view() else {
                 return (legs, None)
             };
             let (leg, to) = self.beta_evidence(&cur_tm, dom_e, a, a_tm);
@@ -1970,11 +1970,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         args: &[E],
     ) -> Result<(Vec<Term>, Vec<Thm>), Gap> {
         let mut cur = head_tm.clone();
-        let mut ty = nest_ty.clone();
+        let mut ty = *nest_ty;
         let mut tms = Vec::with_capacity(args.len());
         let mut mems = Vec::with_capacity(args.len());
         for a in args {
-            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+            let Expr::Forall { ty: dom_e, body } = &ty.clone().view() else {
                 return Err(Gap::NotDecomposable)
             };
             let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&cur)) else {
@@ -2008,10 +2008,10 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Err(Gap::NotDecomposable)
         }
         let mut cur = head_tm.clone();
-        let mut ty = nest_ty.clone();
+        let mut ty = *nest_ty;
         let mut out = Vec::with_capacity(args.len());
         for (a, a_tm) in args.iter().zip(arg_tms.iter()) {
-            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+            let Expr::Forall { ty: dom_e, body } = &ty.clone().view() else {
                 return Err(Gap::NotDecomposable)
             };
             let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&cur)) else {
@@ -2072,22 +2072,22 @@ impl<'e, 'i> Checker<'e, 'i> {
             .as_ref()
             .and_then(|tm| self.wt_memo.get(tm))
             .filter(|(from, _, _)| *from == t.ty)
-            .map(|(_, ty2, eq)| (ty2.clone(), eq.clone()));
+            .map(|(_, ty2, eq)| (*ty2, eq.clone()));
         if let Some((ty2, eq)) = hit {
-            let conv = Conv { to: ty2.clone(), ev: Ev::Proved(eq.clone()) };
+            let conv = Conv { to: ty2, ev: Ev::Proved(eq.clone()) };
             let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
                 match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                     Some(t) => Ev::Proved(t),
                     None => Ev::missing(Gap::ConvCompose("whnf-typing-retarget")),
                 }
             });
-            return Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
+            return Ok((ty2, conv, Typing { ty: ty2, tm: t.tm, ev }))
         }
         let why = t.ev.reason(Gap::NoEndpoint);
         let ty_tm2 = ty_tm.clone();
         let (ty2, conv) = self.whnf_conv(&t.ty, ty_tm, &why)?;
         if let (Some(k), Ev::Proved(eq)) = (ty_tm2, &conv.ev) {
-            self.wt_memo.insert(k, (t.ty.clone(), ty2.clone(), eq.clone()));
+            self.wt_memo.insert(k, (t.ty, ty2, eq.clone()));
         }
         let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
@@ -2095,7 +2095,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 None => Ev::missing(Gap::ConvCompose("whnf-typing-retarget")),
             }
         });
-        Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
+        Ok((ty2, conv, Typing { ty: ty2, tm: t.tm, ev }))
     }
 
     /// `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧` — beta's one premise, **taken** rather than looked for.
@@ -2215,12 +2215,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         let slot = f.map.entry(h).or_default();
         if !slot.iter().any(|(k, _)| k == e) {
-            slot.push((e.clone(), t.clone()));
+            slot.push((*e, t.clone()));
         }
     }
 
     fn infer_type_inner(&mut self, e: &E) -> R<Typing> {
-        match &**e {
+        match &e.view() {
             Expr::BVar(i) => {
                 let ty = self.local_type(*i)?;
                 // The typing of a `bvar` is the scope's stored assumption:
@@ -2257,12 +2257,12 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // compensates for; here it is one Leibniz step and it is not
                 // optional, because there is nothing else to fall back on.
                 let (f_ty, _, tf) = self.whnf_typing(tf)?;
-                let Expr::Forall { ty, body } = &*f_ty else {
+                let Expr::Forall { ty, body } = &f_ty.view() else {
                     return Err(format!(
                         "Expected a function type in application of {f} to {arg}, got {f_ty}"
                     ))
                 };
-                let (ty, body) = (ty.clone(), body.clone());
+                let (ty, body) = (*ty, *body);
                 // Which of §6.2's three `Π` clauses the function's type took,
                 // read off the interpretation the call above already produced.
                 let shape = tf
@@ -2327,7 +2327,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // evidence nanoda drops 33 587 times as `Dropped::BinderSort`.
                 let (s1, _, t1) = self.whnf_typing(t1)?;
                 let l1 = as_sort(&s1)?;
-                let saved = self.open_slot(ty.clone(), t1.tm.clone());
+                let saved = self.open_slot(*ty, t1.tm.clone());
                 let w = self.current_var();
                 // NB: mini-lean whnfs the codomain's sort *outside* the
                 // binder's scope. Mini does it inside, because the certificate
@@ -2360,7 +2360,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let t1 = self.infer_type(ty)?;
                 let (s1, _, t1) = self.whnf_typing(t1)?;
                 as_sort(&s1)?;
-                let saved = self.open_slot(ty.clone(), t1.tm.clone());
+                let saved = self.open_slot(*ty, t1.tm.clone());
                 let w = self.current_var();
                 let inner = (|c: &mut Self| -> R<(Typing, bool, Ev)> {
                     let tb = c.infer_type(body)?;
@@ -2377,7 +2377,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         return Err(e)
                     }
                 };
-                let out_ty = forall(ty.clone(), tb.ty.clone());
+                let out_ty = forall(*ty, tb.ty);
                 let dep = has_bvar_in_proj(&tb.ty, 0);
                 let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
                 self.close_slot(saved);
@@ -2511,7 +2511,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         Ok(if n == 0 {
             konst(Name::str(&nat, "zero"), no_levels())
         } else {
-            app(konst(Name::str(&nat, "succ"), no_levels()), Rc::new(Expr::NatLit(n - 1)))
+            app(konst(Name::str(&nat, "succ"), no_levels()), crate::expr::nat_lit(n - 1))
         })
     }
 
@@ -2926,14 +2926,14 @@ impl<'e, 'i> Checker<'e, 'i> {
         if depth == 0 {
             return bottom(self)
         }
-        let Expr::Forall { ty: dom_e, body } = &**ty else {
+        let Expr::Forall { ty: dom_e, body } = &ty.view() else {
             return Err(format!("expected {depth} more binders, got {ty}"))
         };
-        let (dom_e, body) = (dom_e.clone(), body.clone());
+        let (dom_e, body) = (*dom_e, *body);
         let t1 = self.infer_type(&dom_e)?;
         let (s1, _, t1) = self.whnf_typing(t1)?;
         as_sort(&s1)?;
-        let saved = self.open_slot(dom_e.clone(), t1.tm.clone());
+        let saved = self.open_slot(dom_e, t1.tm.clone());
         let w = self.current_var();
         let inner = (|c: &mut Self| -> R<(Typing, bool, Ev)> {
             let tb = c.lam_nest(&body, depth - 1, bottom)?;
@@ -2947,7 +2947,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 return Err(e)
             }
         };
-        let out_ty = forall(dom_e, tb.ty.clone());
+        let out_ty = forall(dom_e, tb.ty);
         let dep = has_bvar_in_proj(&tb.ty, 0);
         let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
         self.close_slot(saved);
@@ -3011,7 +3011,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let t1 = self.infer_type(ty)?;
         let (s1, _, t1) = self.whnf_typing(t1)?;
         as_sort(&s1)?;
-        self.push(ty.clone(), t1.tm.clone());
+        self.push(*ty, t1.tm.clone());
         Ok(t1.tm)
     }
 
@@ -3230,7 +3230,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let t = te.ty;
         let ty = self.whnf(&t)?;
         let (head, args) = get_app(&ty);
-        let Expr::Const(ind_name, us) = &*head else {
+        let Expr::Const(ind_name, us) = &head.view() else {
             return Err(format!("Type of projected expression is not an inductive: {ty}"))
         };
         let Some(ConstantInfo::Inductive { num_params, num_indices, ctors, .. }) =
@@ -3253,8 +3253,8 @@ impl<'e, 'i> Checker<'e, 'i> {
         let mut ctor_ty = self.instantiate_foralls(&ctor_ty, &params)?;
         let is_prop_type = self.is_prop(&ctor_ty)?;
         for i in 0..idx {
-            let cur = ctor_ty.clone();
-            let Expr::Forall { ty: d, body: b } = &*cur else {
+            let cur = ctor_ty;
+            let Expr::Forall { ty: d, body: b } = &cur.view() else {
                 return Err(format!(
                     "Projection index {} out of bounds for {ind_name}",
                     idx + 1
@@ -3266,10 +3266,10 @@ impl<'e, 'i> Checker<'e, 'i> {
                     i + 1
                 ))
             }
-            ctor_ty = subst(b, &Rc::new(Expr::Proj { ind: *n, idx: i, s: e.clone() }));
+            ctor_ty = subst(b, &crate::expr::proj(*n, i, *e));
         }
-        let cur = ctor_ty.clone();
-        let Expr::Forall { ty: d, .. } = &*cur else {
+        let cur = ctor_ty;
+        let Expr::Forall { ty: d, .. } = &cur.view() else {
             return Err(format!("Projection index {} out of bounds for {ind_name}", idx + 1))
         };
         if strict && is_prop_type && !self.is_prop(d)? {
@@ -3278,7 +3278,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 idx + 1
             ))
         }
-        Ok((d.clone(), sub))
+        Ok((*d, sub))
     }
 
     // ─────────────────────────────────────────── telescope helpers ──
@@ -3286,13 +3286,13 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `openForall n type k`, push form: opens `n` binders and returns the body.
     /// The caller must be inside [`Checker::scoped`].
     fn open_forall_push(&mut self, n: u32, ty: &E) -> R<E> {
-        let mut cur = ty.clone();
+        let mut cur = *ty;
         for _ in 0..n {
             let t = self.whnf(&cur)?;
-            let Expr::Forall { ty: d, body } = &*t else {
+            let Expr::Forall { ty: d, body } = &t.view() else {
                 return Err(format!("Insufficient number of parameters: {t}"))
             };
-            let (d, body) = (d.clone(), body.clone());
+            let (d, body) = (*d, *body);
             self.push(d, None);
             cur = body;
         }
@@ -3302,12 +3302,12 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `openForallEager`, push form: returns `(binders opened, the whnf'd
     /// non-`Π` body)`. The caller must be inside [`Checker::scoped`].
     fn open_forall_eager_push(&mut self, ty: &E) -> R<(u32, E)> {
-        let mut cur = ty.clone();
+        let mut cur = *ty;
         let mut n = 0u32;
         loop {
             let t = self.whnf(&cur)?;
-            let Expr::Forall { ty: d, body } = &*t else { return Ok((n, t.clone())) };
-            let (d, body) = (d.clone(), body.clone());
+            let Expr::Forall { ty: d, body } = &t.view() else { return Ok((n, t)) };
+            let (d, body) = (*d, *body);
             self.push(d, None);
             cur = body;
             n += 1;
@@ -3316,10 +3316,10 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `instantiateForalls`.
     fn instantiate_foralls(&mut self, ty: &E, xs: &[E]) -> R<E> {
-        let mut result = ty.clone();
+        let mut result = *ty;
         for x in xs {
             let t = self.whnf(&result)?;
-            let Expr::Forall { body, .. } = &*t else {
+            let Expr::Forall { body, .. } = &t.view() else {
                 return Err(format!("Expected a function type, got {t}"))
             };
             result = subst(body, x);
@@ -3379,7 +3379,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         let tw = self.whnf(t)?;
         let (head, _) = get_app(&tw);
-        let Expr::Const(name, _) = &*head else { return Ok(None) };
+        let Expr::Const(name, _) = &head.view() else { return Ok(None) };
         let Some(ConstantInfo::Inductive { is_unit, .. }) = self.lookup(name) else {
             return Ok(None)
         };
@@ -3424,11 +3424,11 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// a placeholder — §0.4 again, at the smallest scale.
     fn try_structure_eta(&mut self, e1: &E, e2: &E) -> R<Option<Name>> {
         let (head, args) = get_app(e1);
-        let Expr::Const(con_name, _) = &*head else { return Ok(None) };
+        let Expr::Const(con_name, _) = &head.view() else { return Ok(None) };
         let t = self.infer_ty(e1)?;
         let t = self.whnf(&t)?;
         let (ind_head, _) = get_app(&t);
-        let Expr::Const(ind_name, _) = &*ind_head else { return Ok(None) };
+        let Expr::Const(ind_name, _) = &ind_head.view() else { return Ok(None) };
         let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind_name) else {
             return Ok(None)
         };
@@ -3438,12 +3438,8 @@ impl<'e, 'i> Checker<'e, 'i> {
         let ind_name = *ind_name;
         let np = *num_params as usize;
         for (i, arg) in args.iter().enumerate().skip(np) {
-            let p = Rc::new(Expr::Proj {
-                ind: ind_name,
-                idx: u32::try_from(i - np).expect("field index"),
-                s: e2.clone(),
-            });
-            let arg = arg.clone();
+            let p = crate::expr::proj(ind_name, u32::try_from(i - np).expect("field index"), *e2);
+            let arg = *arg;
             if !self.is_def_eq(&arg, &p)? {
                 return Ok(None)
             }
@@ -3453,8 +3449,8 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `tryFunEta`.
     fn try_fun_eta(&mut self, e1: &E, e2: &E) -> R<bool> {
-        let Expr::Lam { ty: t1, body: b1 } = &**e1 else { return Ok(false) };
-        let (t1, b1) = (t1.clone(), b1.clone());
+        let Expr::Lam { ty: t1, body: b1 } = &e1.view() else { return Ok(false) };
+        let (t1, b1) = (*t1, *b1);
         let rhs = app(shift(e2, 0, 1), bvar(0));
         self.scoped(|c| {
             c.push(t1, None);
@@ -3536,7 +3532,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 ip.note_conv(&ev);
             }
         }
-        Ok(Conv { to: e2.clone(), ev })
+        Ok(Conv { to: *e2, ev })
     }
 
     fn def_eq_ev(
@@ -3692,7 +3688,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // the inference saying its type is a sort.
         let dom_conv =
             self.assert_def_eq_as(t1, d1_tm.clone(), t2, d2_tm.clone(), Lhs::Type)?;
-        let saved = self.open_slot(t1.clone(), d1.tm.clone());
+        let saved = self.open_slot(*t1, d1.tm.clone());
         let w = self.current_var();
         let inner = (|c: &mut Self| -> R<Ev> {
             let (bt1, bt2) = match (&shapes, w) {
@@ -3792,7 +3788,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let differ = || {
             Err(format!("Expected definitional equality between {a} and {b}, but they differ."))
         };
-        match (&**a, &**b) {
+        match (&a.view(), &b.view()) {
             (Expr::Sort(l1), Expr::Sort(l2)) => {
                 assert_level_eq(l1, l2)?;
                 // Ground levels: equal levels give the *same* tower term, so
@@ -3802,12 +3798,12 @@ impl<'e, 'i> Checker<'e, 'i> {
                 Ok(if same { refl() } else { Ev::missing(Gap::NoEndpoint) })
             }
             (Expr::Forall { ty: t1, body: b1 }, Expr::Forall { ty: t2, body: b2 }) => {
-                let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
+                let (t1, b1, b2) = (*t1, *b1, *b2);
                 let shapes = self.pi_shapes(&a_tm, &b_tm);
                 self.binder_cong(&t1, t2, &b1, &b2, same, refl(), shapes)
             }
             (Expr::Lam { ty: t1, body: b1 }, Expr::Lam { ty: t2, body: b2 }) => {
-                let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
+                let (t1, b1, b2) = (*t1, *b1, *b2);
                 let shapes = self.lam_shapes(&a_tm, &b_tm);
                 self.binder_cong(&t1, t2, &b1, &b2, same, refl(), shapes)
             }
@@ -3820,7 +3816,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 Ok(refl())
             }
             (Expr::App(f1, a1), Expr::App(f2, a2)) => {
-                let (f1, a1, f2, a2) = (f1.clone(), a1.clone(), f2.clone(), a2.clone());
+                let (f1, a1, f2, a2) = (*f1, *a1, *f2, *a2);
                 // **Decided, not retried** — this clause's own opening
                 // sentence, at the one arm that was not making the decision.
                 //
@@ -3933,7 +3929,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 if n1 != n2 || i1 != i2 {
                     return Err(format!("Projections differ: {a} =?= {b}"))
                 }
-                let (s1, s2) = (s1.clone(), s2.clone());
+                let (s1, s2) = (*s1, *s2);
                 self.assert_is_def_eq(&s1, &s2)?;
                 // **The subjects' conversion was made and thrown away**, and
                 // with route (b) it is the whole content of the congruence:
@@ -4032,16 +4028,16 @@ impl<'e, 'i> Checker<'e, 'i> {
         if n == 0 {
             return Ok(())
         }
-        let Expr::Forall { ty: d1, body: b1 } = &**type1 else {
+        let Expr::Forall { ty: d1, body: b1 } = &type1.view() else {
             return Err(format!("Expected a function type, got {type1}"))
         };
-        let Expr::Forall { ty: d2, body: b2 } = &**type2 else {
+        let Expr::Forall { ty: d2, body: b2 } = &type2.view() else {
             return Err(format!("Expected a function type, got {type2}"))
         };
-        let (d1, b1, b2) = (d1.clone(), b1.clone(), b2.clone());
+        let (d1, b1, b2) = (*d1, *b1, *b2);
         self.assert_is_def_eq(&d1, d2)?;
         self.scoped(|c| {
-            c.push(d1.clone(), None);
+            c.push(d1, None);
             c.def_eq_params(n - 1, &b1, &b2)
         })
     }
@@ -4059,7 +4055,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `which_valid_ind_app`.
     fn which_valid_ind_app(&self, ic: &IndCtx<'_>, sh: u32, ty: &E) -> R<usize> {
         let (head, args) = get_app(ty);
-        let Expr::Const(f, us) = &*head else {
+        let Expr::Const(f, us) = &head.view() else {
             return Err(format!("Expected an application headed by the current inductive, got {ty}"))
         };
         let Some(k) = ic.member(f) else {
@@ -4078,7 +4074,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             ))
         }
         for i in 0..ic.num_params {
-            if *args[i as usize] != Expr::BVar(sh + ic.num_params - (i + 1)) {
+            if args[i as usize].view() != Expr::BVar(sh + ic.num_params - (i + 1)) {
                 return Err(format!("Unexpected parameter {} in {ty}", i + 1))
             }
         }
@@ -4127,11 +4123,11 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `checkCtorType`. NB: no whnf, matching the official kernel.
     fn check_ctor_type(&mut self, ic: &IndCtx<'_>, sh: u32, ty: &E) -> R<()> {
-        if let Expr::Forall { ty: domain, body } = &**ty {
-            let (domain, body) = (domain.clone(), body.clone());
+        if let Expr::Forall { ty: domain, body } = &ty.view() {
+            let (domain, body) = (*domain, *body);
             self.check_ctor_param(ic, sh, &domain)?;
             self.scoped(|c| {
-                c.push(domain.clone(), None);
+                c.push(domain, None);
                 c.check_ctor_type(ic, sh + 1, &body)
             })
         } else {
@@ -4141,16 +4137,16 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// The `elimToSort` walk over a single constructor's telescope.
     fn elim_to_sort_go(&mut self, t: &E) -> R<bool> {
-        let Expr::Forall { ty: domain, body } = &**t else { return Ok(true) };
-        let (domain, body) = (domain.clone(), body.clone());
+        let Expr::Forall { ty: domain, body } = &t.view() else { return Ok(true) };
+        let (domain, body) = (*domain, *body);
         let s = self.infer_ty(&domain)?;
         let u = as_sort(&s)?;
         self.scoped(|c| {
-            c.push(domain.clone(), None);
+            c.push(domain, None);
             let appears = c.scoped(|c2| {
                 let (sh, res) = c2.open_forall_eager_push(&body)?;
                 let (_, args) = get_app(&res);
-                Ok(args.iter().any(|a| **a == Expr::BVar(sh)))
+                Ok(args.iter().any(|a| a.view() == Expr::BVar(sh)))
             })?;
             if !(u.is_zero() || appears) {
                 return Ok(false)
@@ -4352,7 +4348,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 /// else rather than re-running a check at coordinates that no longer hold.
 fn head_member(ic: &IndCtx<'_>, ret: &E) -> R<usize> {
     let (head, _) = get_app(ret);
-    let Expr::Const(f, _) = &*head else {
+    let Expr::Const(f, _) = &head.view() else {
         return Err(format!("Expected a recursive argument headed by an inductive, got {ret}"))
     };
     ic.member(f).ok_or_else(|| format!("{f} is not a member of the block being declared"))
@@ -4399,7 +4395,7 @@ pub fn sort_under(env: &Environment, tys: &[E], e: &E) -> R<Level> {
     let mut c = Checker::new(env);
     c.scoped(|c| {
         for t in tys {
-            c.push(t.clone(), None);
+            c.push(*t, None);
         }
         let s = c.infer_ty(e)?;
         let s = c.whnf(&s)?;
@@ -4420,16 +4416,16 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
     let sort_v = sort(Level::param(v));
     let eq_name = Name::simple("Eq");
 
-    let aar_prop = |i: u32| arrow(bvar(i), arrow(bvar(i + 1), prop.clone()));
+    let aar_prop = |i: u32| arrow(bvar(i), arrow(bvar(i + 1), prop));
     let mk_quot = |a: u32, r: u32| {
         app(app(konst(quot_name, levels(&[Level::param(u)])), bvar(a)), bvar(r))
     };
 
     // Quot : ∀ (α : Sort u) (_ : α → α → Prop), Sort u
-    let quot_type = arrow(sort_u.clone(), arrow(aar_prop(0), sort_u.clone()));
+    let quot_type = arrow(sort_u, arrow(aar_prop(0), sort_u));
     // Quot.mk : ∀ (α : Sort u) (r : α → α → Prop) (a : α), @Quot α r
     let quot_mk_type =
-        arrow(sort_u.clone(), arrow(aar_prop(0), arrow(bvar(1), mk_quot(2, 1))));
+        arrow(sort_u, arrow(aar_prop(0), arrow(bvar(1), mk_quot(2, 1))));
     // Quot.lift
     let f_type = arrow(bvar(2), bvar(1));
     let h_type = arrow(
@@ -4449,14 +4445,14 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
         ),
     );
     let quot_lift_type = arrow(
-        sort_u.clone(),
+        sort_u,
         arrow(
             aar_prop(0),
             arrow(sort_v, arrow(f_type, arrow(h_type, arrow(mk_quot(4, 3), bvar(3))))),
         ),
     );
     // Quot.ind
-    let beta_ind_type = arrow(mk_quot(1, 0), prop.clone());
+    let beta_ind_type = arrow(mk_quot(1, 0), prop);
     let h_ind_type = arrow(
         bvar(2),
         app(
@@ -4526,7 +4522,7 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             }
             env.insert_new(
                 *name,
-                ConstantInfo::Opaque { lparams: lparams.clone(), ty: ty.clone() },
+                ConstantInfo::Opaque { lparams: lparams.clone(), ty: *ty },
             )
         }
         Declaration::Def { name, lparams, ty, value, kind } => {
@@ -4549,11 +4545,11 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             let cinfo = match kind {
                 DefKind::Def | DefKind::Theorem => ConstantInfo::Def {
                     lparams: lparams.clone(),
-                    ty: ty.clone(),
-                    value: value.clone(),
+                    ty: *ty,
+                    value: *value,
                 },
                 DefKind::Opaque => {
-                    ConstantInfo::Opaque { lparams: lparams.clone(), ty: ty.clone() }
+                    ConstantInfo::Opaque { lparams: lparams.clone(), ty: *ty }
                 }
             };
             env.insert_new(*name, cinfo)
@@ -4563,7 +4559,7 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
         // that nothing inside it knows the difference.
         Declaration::Inductive { name, lparams, num_params, ty, ctors } => {
             let types =
-                [IndType { name: *name, ty: ty.clone(), ctors: ctors.clone() }];
+                [IndType { name: *name, ty: *ty, ctors: ctors.clone() }];
             add_maybe_nested(env, lparams, *num_params, &types)
         }
         Declaration::Mutual { lparams, num_params, types } => {
@@ -4659,7 +4655,7 @@ fn add_block(
     };
     nodup(lparams, &first.name)?;
     let names: Vec<Name> = types.iter().map(|t| t.name).collect();
-    let tys: Vec<E> = types.iter().map(|t| t.ty.clone()).collect();
+    let tys: Vec<E> = types.iter().map(|t| t.ty).collect();
     let ctors: Vec<Vec<(Name, E)>> = types.iter().map(|t| t.ctors.clone()).collect();
     let n = u32::try_from(types.len()).expect("block size");
     let num_minors =
@@ -4719,7 +4715,7 @@ fn add_block(
             let mut c = Checker::new(env);
             c.scoped(|c| {
                 let b = c.open_forall_push(num_params, &t.ctors[0].1)?;
-                Ok(!matches!(&*b, Expr::Forall { .. }))
+                Ok(!matches!(&b.view(), Expr::Forall { .. }))
             })?
         } else {
             false
@@ -4734,7 +4730,7 @@ fn add_block(
             t.name,
             ConstantInfo::Inductive {
                 lparams: lparams.to_vec(),
-                ty: t.ty.clone(),
+                ty: t.ty,
                 num_params,
                 num_indices: num_indices[j],
                 ctors: t.ctors.iter().map(|(n, _)| *n).collect(),
@@ -4777,7 +4773,7 @@ fn add_block(
         for (ctor_name, ctor_type) in &t.ctors {
             env.insert_new(
                 *ctor_name,
-                ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: ctor_type.clone() },
+                ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: *ctor_type },
             )?;
             // The index §9 zone B reaches the declaration by. Built here, where
             // the relation is known, so that no later pass has to look for it.
@@ -4819,7 +4815,7 @@ fn add_block(
             let mut c = Checker::new(env);
             c.scoped(|c| {
                 let b = c.open_forall_push(num_params, &first.ctors[0].1)?;
-                Ok(if matches!(&*b, Expr::Forall { .. }) { None } else { Some(b) })
+                Ok(if matches!(&b.view(), Expr::Forall { .. }) { None } else { Some(b) })
             })?
         }
     };
@@ -4878,7 +4874,7 @@ fn add_block(
                 num_minors,
                 num_indices: num_indices[k],
                 rules,
-                k_type: k_type.clone(),
+                k_type,
             },
         )?;
     }
@@ -4895,7 +4891,7 @@ mod tests {
         let mut env = Environment::empty();
         let prop = sort(Level::zero());
         let p_ty = Name::simple("P");
-        add(&mut env, &Declaration::Axiom { name: p_ty, lparams: vec![], ty: prop.clone() })
+        add(&mut env, &Declaration::Axiom { name: p_ty, lparams: vec![], ty: prop })
             .unwrap();
         let pk = konst(p_ty, no_levels());
         add(&mut env, &Declaration::Axiom { name: Name::simple("p"), lparams: vec![], ty: pk })
@@ -4905,7 +4901,7 @@ mod tests {
             &Declaration::Def {
                 name: Name::simple("Id"),
                 lparams: vec![],
-                ty: forall(prop.clone(), sort(Level::zero())),
+                ty: forall(prop, sort(Level::zero())),
                 value: lam(prop, bvar(0)),
                 kind: DefKind::Def,
             },
@@ -4991,7 +4987,7 @@ mod tests {
     fn a_let_classifies_with_its_expansion() {
         let env = env();
         let mut c = Checker::new(&env);
-        let e = Rc::new(Expr::Let { ty: sort(Level::zero()), val: k("P"), body: bvar(0) });
+        let e = crate::expr::let_(sort(Level::zero()), k("P"), bvar(0));
         assert_eq!(c.body_clause(&e).unwrap(), Clause::Prop);
     }
 
@@ -5012,7 +5008,7 @@ mod tests {
         let prop = sort(Level::zero());
         let mut e = bvar(0);
         for _ in 0..depth {
-            e = forall(prop.clone(), e);
+            e = forall(prop, e);
         }
         e
     }
@@ -5025,19 +5021,19 @@ mod tests {
             .map(|(i, n)| Declaration::Def {
                 name: Name::simple(n),
                 lparams: vec![],
-                ty: prop.clone(),
+                ty: prop,
                 // Three distinct propositions, so the middle one is
                 // recognisable: `∀p. p`, `∀p∀q. q`, `∀p∀q∀r. r`.
                 value: quantified(u32::try_from(i).unwrap() + 1),
                 kind: DefKind::Opaque,
             })
             .collect();
-        let sel_ty = arrow(prop.clone(), arrow(prop.clone(), arrow(prop.clone(), prop.clone())));
+        let sel_ty = arrow(prop, arrow(prop, arrow(prop, prop)));
         v.push(Declaration::Def {
             name: Name::simple("sel"),
             lparams: vec![],
             ty: sel_ty,
-            value: lam(prop.clone(), lam(prop.clone(), lam(prop, bvar(1)))),
+            value: lam(prop, lam(prop, lam(prop, bvar(1)))),
             kind: DefKind::Def,
         });
         v
@@ -5070,7 +5066,7 @@ mod tests {
         let t = c.infer_type(&e).expect("infer");
         let tm = t.tm.clone().expect("⟦sel X Y Z⟧");
         let (reduct, conv) = c.whnf_conv(&e, Some(tm.clone()), &Gap::NoEndpoint).expect("whnf");
-        assert_eq!(*reduct, *k("Y"), "the middle argument, not the first or the last");
+        assert_eq!(reduct, k("Y"), "the middle argument, not the first or the last");
         let thm = conv.ev.thm().expect("whnf certificate").clone();
         drop(c);
 
@@ -5163,22 +5159,22 @@ mod tests {
             Declaration::Def {
                 name: Name::simple("B"),
                 lparams: vec![],
-                ty: ty0.clone(),
-                value: prop.clone(),
+                ty: ty0,
+                value: prop,
                 kind: DefKind::Opaque,
             },
             Declaration::Def {
                 name: Name::simple("Idf"),
                 lparams: vec![],
-                ty: forall(ty0.clone(), arrow(bvar(0), bvar(1))),
+                ty: forall(ty0, arrow(bvar(0), bvar(1))),
                 value: lam(ty0, lam(bvar(0), bvar(0))),
                 kind: DefKind::Def,
             },
             Declaration::Def {
                 name: Name::simple("C"),
                 lparams: vec![],
-                ty: arrow(k("B"), arrow(k("B"), prop.clone())),
-                value: lam(k("B"), lam(k("B"), forall(prop.clone(), bvar(0)))),
+                ty: arrow(k("B"), arrow(k("B"), prop)),
+                value: lam(k("B"), lam(k("B"), forall(prop, bvar(0)))),
                 kind: DefKind::Opaque,
             },
         ];
@@ -5247,7 +5243,7 @@ mod tests {
         // **The value-λ clause** — `λ p q r. q`, three binders, each closing a
         // scope that discharges. One binder would not separate "once" from
         // "per binder".
-        let value_lam = lam(prop.clone(), lam(prop.clone(), lam(prop.clone(), bvar(1))));
+        let value_lam = lam(prop, lam(prop, lam(prop, bvar(1))));
         crate::blocker::arm(true);
         crate::blocker::enter_pair();
         let t = c.infer_type(&value_lam).expect("infer");
@@ -5270,8 +5266,8 @@ mod tests {
         // `assert_def_eq` legitimately mints `Gap::NoEndpoint` for the
         // sub-conversions it is not asked to certify. `Gap::Skeleton` is the
         // one this clause can file, and it must not.
-        let l = forall(prop.clone(), bvar(0));
-        let r = forall(prop.clone(), app(lam(prop.clone(), bvar(0)), bvar(0)));
+        let l = forall(prop, bvar(0));
+        let r = forall(prop, app(lam(prop, bvar(0)), bvar(0)));
         let lt = c.infer_type(&l).expect("infer lhs").tm.expect("⟦∀p. p⟧");
         let rt = c.infer_type(&r).expect("infer rhs").tm.expect("⟦∀p. (λr. r) p⟧");
         crate::blocker::enter_pair();
@@ -5349,7 +5345,7 @@ mod tests {
         crate::blocker::enter_pair();
         let reduct = c.whnf(&e).expect("whnf");
         let whnf_trail = crate::blocker::trail();
-        assert_eq!(*reduct, *k("Y"), "the middle argument; the walk really ran");
+        assert_eq!(reduct, k("Y"), "the middle argument; the walk really ran");
         assert!(
             whnf_trail.is_empty(),
             "an acceptance-only `whnf` filed {} mints: {whnf_trail:?}",
@@ -5550,7 +5546,7 @@ mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
         let (reduct, conv) = c.whnf_conv(&e, None, &Gap::NoEndpoint).expect("whnf");
-        assert_eq!(*reduct, *k("Y"), "the reduction is unaffected by the certificate");
+        assert_eq!(reduct, k("Y"), "the reduction is unaffected by the certificate");
         assert_eq!(conv.ev.gap(), Some(&Gap::NoEndpoint));
 
         // **A reduction with no steps**, so the `acc` arm is the only thing
@@ -5561,7 +5557,7 @@ mod tests {
         let (reduct, conv) = c.whnf_conv(&k("X"), None, &Gap::FunEta).expect("whnf");
         let trail = crate::blocker::trail();
         crate::blocker::arm(false);
-        assert_eq!(*reduct, *k("X"), "an opaque constant is already in normal form");
+        assert_eq!(reduct, k("X"), "an opaque constant is already in normal form");
         assert_eq!(conv.ev.gap(), Some(&Gap::FunEta), "§0.4: the caller's reason, unrelabelled");
         assert!(trail.is_empty(), "and propagating it is not minting it: {trail:?}");
     }
@@ -5599,7 +5595,7 @@ mod tests {
         assert_eq!(tb.ev.mem_set(), Some(ip_sort(&c, 0)), "X : Prop, so ⟦X⟧ ∈ U₀");
 
         let pi = |c: &mut Checker<'_, '_>, tb: &Typing| {
-            let saved = c.open_slot(prop.clone(), t1.tm.clone());
+            let saved = c.open_slot(prop, t1.tm.clone());
             let w = c.current_var();
             let out = c.pi_evidence(&t1, tb, w, false, &Level::zero(), &Level::zero());
             c.close_slot(saved);
@@ -5638,7 +5634,7 @@ mod tests {
         let t1 = c.infer_type(&prop).expect("infer Prop");
         let tb = c.infer_type(&k("X")).expect("infer X");
 
-        let saved = c.open_slot(prop.clone(), t1.tm.clone());
+        let saved = c.open_slot(prop, t1.tm.clone());
         let w = c.current_var();
         assert!(w.is_some(), "the binder must really be open, or the claim is vacuous");
         let (tm, ev) = c.pi_evidence(&t1, &tb, w, false, &Level::zero(), &Level::zero());

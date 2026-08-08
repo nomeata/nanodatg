@@ -206,21 +206,21 @@ impl Encoding {
 
 /// `∀ tys, body`, `tys` outermost-first and each already in its own scope.
 fn foralls(tys: &[E], body: E) -> E {
-    tys.iter().rev().fold(body, |b, t| forall(t.clone(), b))
+    tys.iter().rev().fold(body, |b, t| forall(*t, b))
 }
 
 /// `fun tys => body`, same convention.
-fn lams(tys: &[E], body: E) -> E { tys.iter().rev().fold(body, |b, t| lam(t.clone(), b)) }
+fn lams(tys: &[E], body: E) -> E { tys.iter().rev().fold(body, |b, t| lam(*t, b)) }
 
 /// Peel exactly `n` `∀` binders; `None` if there are fewer. No whnf: every
 /// telescope this module peels is one the export wrote as a literal `Π`-nest.
 fn peel(ty: &E, n: usize) -> Option<(Vec<E>, E)> {
     let mut tys = Vec::with_capacity(n);
-    let mut cur = ty.clone();
+    let mut cur = *ty;
     for _ in 0..n {
-        let Expr::Forall { ty: d, body } = &*cur else { return None };
-        tys.push(d.clone());
-        let b = body.clone();
+        let Expr::Forall { ty: d, body } = &cur.view() else { return None };
+        tys.push(*d);
+        let b = *body;
         cur = b;
     }
     Some((tys, cur))
@@ -229,10 +229,10 @@ fn peel(ty: &E, n: usize) -> Option<(Vec<E>, E)> {
 /// Peel every `∀`.
 fn peel_all(ty: &E) -> (Vec<E>, E) {
     let mut tys = Vec::new();
-    let mut cur = ty.clone();
-    while let Expr::Forall { ty: d, body } = &*cur {
-        tys.push(d.clone());
-        let b = body.clone();
+    let mut cur = *ty;
+    while let Expr::Forall { ty: d, body } = &cur.view() {
+        tys.push(*d);
+        let b = *body;
         cur = b;
     }
     (tys, cur)
@@ -284,7 +284,7 @@ fn to_aux(
     us: &Rc<[Level]>,
 ) -> Result<E, Reason> {
     let (head, args) = crate::expr::get_app(e);
-    if let Expr::Const(f, _) = &*head {
+    if let Expr::Const(f, _) = &head.view() {
         if let Some(k) = names.iter().position(|n| n == f) {
             if args.len() != np + nis[k] {
                 return Err(Reason::Malformed)
@@ -302,17 +302,17 @@ fn to_aux(
         }
     }
     let go = |x: &E| to_aux(x, names, tag_ctors, aux, np, nis, us);
-    Ok(match &**e {
+    Ok(match &e.view() {
         Expr::App(f, x) => crate::expr::app(go(f)?, go(x)?),
         Expr::Forall { ty, body } => forall(go(ty)?, go(body)?),
         Expr::Lam { ty, body } => lam(go(ty)?, go(body)?),
         Expr::Let { ty, val, body } => {
-            Rc::new(Expr::Let { ty: go(ty)?, val: go(val)?, body: go(body)? })
+            crate::expr::let_(go(ty)?, go(val)?, go(body)?)
         }
         Expr::Proj { ind, idx, s } => {
-            Rc::new(Expr::Proj { ind: *ind, idx: *idx, s: go(s)? })
+            crate::expr::proj(*ind, *idx, go(s)?)
         }
-        _ => e.clone(),
+        _ => *e,
     })
 }
 
@@ -359,13 +359,13 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     // there unshifted.
     let (param_tys, after_params) = peel(&types[0].ty, np).ok_or(Reason::Malformed)?;
     let (ix0, res0) = peel_all(&after_params);
-    let Expr::Sort(u) = &*res0 else { return Err(Reason::Malformed) };
+    let Expr::Sort(u) = &res0.view() else { return Err(Reason::Malformed) };
     let u = *u;
     let mut ix_tys: Vec<Vec<E>> = vec![ix0];
     for t in &types[1..] {
         let (_, a) = peel(&t.ty, np).ok_or(Reason::Malformed)?;
         let (i, r) = peel_all(&a);
-        if !matches!(&*r, Expr::Sort(_)) {
+        if !matches!(&r.view(), Expr::Sort(_)) {
             return Err(Reason::Malformed)
         }
         ix_tys.push(i);
@@ -430,7 +430,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         let mut w = (Level::zero()).succ();
         for tel in &ix_tys {
             for (j, it) in tel.iter().enumerate() {
-                let s = crate::kernel::sort_under(&tmp, &param_tys[..], &foralls(&tel[..j], it.clone()))
+                let s = crate::kernel::sort_under(&tmp, &param_tys[..], &foralls(&tel[..j], *it))
                     .map_err(|_| Reason::Malformed)?;
                 w = Level::max(w, s);
             }
@@ -491,7 +491,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             Declaration::Def {
                 name: t.name,
                 lparams: lparams.clone(),
-                ty: t.ty.clone(),
+                ty: t.ty,
                 value: lams(&tys, body),
                 kind: DefKind::Def,
             },
@@ -514,7 +514,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 Declaration::Def {
                     name: *cn,
                     lparams: lparams.clone(),
-                    ty: ct.clone(),
+                    ty: *ct,
                     value: lams(&binders, body),
                     kind: DefKind::Def,
                 },
@@ -568,7 +568,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         a.push(bvar(0));
         forall(app_n(konst(aux, us.clone()), &a), sort(v))
     };
-    let packed = lam(tag_at(n as u32), packed_body.clone());
+    let packed = lam(tag_at(n as u32), packed_body);
     let mot_ty = {
         let mut tys = param_tys.clone();
         tys.extend(motive_tys.iter().cloned());
@@ -633,7 +633,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         let Some(ConstantInfo::Recursor { ty: rty, .. }) = env.get(&rec_name) else {
             return Err(Reason::NoRecursor)
         };
-        let rty = rty.clone();
+        let rty = *rty;
         let ni = nis[i];
         let (binders, _) = peel(&rty, np + n + nc + ni + 1).ok_or(Reason::NoRecursor)?;
         let body = {
@@ -667,7 +667,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             let Some(ConstantInfo::Recursor { ty: rty, rules: rl, .. }) = env.get(&rec_name) else {
                 return Err(Reason::NoRecursor)
             };
-            let (rty, rl) = (rty.clone(), rl.clone());
+            let (rty, rl) = (*rty, rl.clone());
             let (spine, _) = peel(&rty, np + n + nc).ok_or(Reason::NoRecursor)?;
             for (j, (cn, ct)) in t.ctors.iter().enumerate() {
                 let Some((_, rhs)) = rl.iter().find(|(c, _)| c == cn) else {
@@ -698,7 +698,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 };
                 let alpha = {
                     let mut a = ridx.clone();
-                    a.push(ctor_app.clone());
+                    a.push(ctor_app);
                     app_n(bvar((nf + nc + (n - 1 - i)) as u32), &a)
                 };
                 let lhs = {
@@ -711,7 +711,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 };
                 let vs: Rc<[Level]> = vec![v].into();
                 let stmt =
-                    app_n(konst(eq, vs.clone()), &[alpha.clone(), lhs.clone(), rhs.clone()]);
+                    app_n(konst(eq, vs.clone()), &[alpha, lhs, *rhs]);
                 let proof = app_n(konst(eq_refl, vs), &[alpha, lhs]);
                 let name =
                     fresh(&tmp, Name::str(&Name::str(&t.name, "rec"), &format!("_auxRule{j}")));
@@ -815,12 +815,12 @@ pub fn demand_over(
     while let Some((n, sigma)) = work.pop() {
         let Some(ci) = env.get(&n) else { continue };
         let map = crate::ground::ground_env(ci.lparams(), &sigma);
-        let mut bodies: Vec<E> = vec![ci.ty().clone()];
+        let mut bodies: Vec<E> = vec![*ci.ty()];
         if let Some(v) = ci.value() {
-            bodies.push(v.clone());
+            bodies.push(*v);
         }
         if let ConstantInfo::Recursor { rules, k_type, .. } = ci {
-            bodies.extend(rules.iter().map(|(_, r)| r.clone()));
+            bodies.extend(rules.iter().map(|(_, r)| *r));
             bodies.extend(k_type.iter().cloned());
         }
         let mut found: Vec<(Name, Vec<u32>)> = Vec::new();
@@ -847,7 +847,7 @@ fn consts(
     mine: &std::collections::HashSet<Name>,
     out: &mut Vec<(Name, Vec<u32>)>,
 ) {
-    match &**e {
+    match &e.view() {
         Expr::Const(n, ls) => {
             if mine.contains(n) {
                 let s: Option<Vec<u32>> = ls.iter().map(|l| crate::ground::eval(l, map)).collect();

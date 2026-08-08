@@ -296,7 +296,7 @@ fn former(
     let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let ty = crate::expr::sort(crate::zoneb::level_numeral(level));
-        let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) });
+        let gap = |g: Gap| Ok(Typing { ty, tm: None, ev: Ev::missing(g) });
         let Some((ps, _)) = c.binders(np) else { return gap(Gap::NoEndpoint) };
         let ip = c.interp().expect("threaded");
         let carrier = ip.mk(cs.lc.phi, ps.clone());
@@ -372,8 +372,8 @@ fn constructor(
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let CtorSite { ind, inst, i, codomain, np, cs } = site;
     let (i, np) = (*i, *np);
-    let ty = codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = *codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::IndSpec(*ind, w);
     let spec = &cs.spec.base.ctors[i];
     let nf = spec.order.len();
@@ -467,10 +467,10 @@ mod tests {
     fn and_env() -> (Environment, Name, Name) {
         let (a, i) = (nm("And"), Name::str(&nm("And"), "intro"));
         let p = sort(Level::zero());
-        let ty = forall(p.clone(), forall(p.clone(), sort(Level::zero())));
+        let ty = forall(p, forall(p, sort(Level::zero())));
         let at = |f: E, x: E, y: E| crate::expr::app(crate::expr::app(f, x), y);
         let cty = forall(
-            p.clone(),
+            p,
             forall(
                 p,
                 forall(
@@ -540,7 +540,7 @@ mod tests {
                     num_params: 0,
                     ty: sort(Level::zero()),
                     ctors: (0..k)
-                        .map(|j| (Name::str(&t, &format!("c{j}")), ty.clone()))
+                        .map(|j| (Name::str(&t, &format!("c{j}")), ty))
                         .collect(),
                 },
             )

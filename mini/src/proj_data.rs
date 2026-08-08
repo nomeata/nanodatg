@@ -495,7 +495,7 @@ pub(crate) fn typing(
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let (sty, _, te) = c.whnf_typing(te).map_err(|_| Gap::Classifier)?;
     let (head, args) = crate::expr::get_app(&sty);
-    let Expr::Const(name, us) = &*head else { return Err(miss!()) };
+    let Expr::Const(name, us) = &head.view() else { return Err(miss!()) };
     if name != ind {
         return Err(miss!())
     }
@@ -687,7 +687,7 @@ pub(crate) fn iota(
     let ctor_ty = c
         .environment()
         .get(ctor)
-        .map(|ci| ci.ty().clone())
+        .map(|ci| *ci.ty())
         .ok_or_else(|| miss!())?;
     let lparams: Vec<Name> =
         c.environment().get(ctor).map(|ci| ci.lparams().to_vec()).unwrap_or_default();
@@ -784,7 +784,7 @@ pub(crate) fn structure_eta(
 ) -> Result<Thm, Gap> {
     // ── `e1 = T.mk p⃗ a⃗`, and which declaration that is ──────────────────────
     let (head, args) = crate::expr::get_app(e1);
-    let Expr::Const(ctor, cls) = &*head else { return Err(Gap::NoEndpoint) };
+    let Expr::Const(ctor, cls) = &head.view() else { return Err(Gap::NoEndpoint) };
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
         cls.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
@@ -822,7 +822,7 @@ pub(crate) fn structure_eta(
         arg_tms.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
     }
     let ctor_former = c.stored_term(ctor, &inst).ok_or_else(|| miss!())?;
-    let ctor_ty = c.environment().get(ctor).map(|ci| ci.ty().clone()).ok_or_else(|| miss!())?;
+    let ctor_ty = c.environment().get(ctor).map(|ci| *ci.ty()).ok_or_else(|| miss!())?;
     let lparams: Vec<Name> =
         c.environment().get(ctor).map(|ci| ci.lparams().to_vec()).unwrap_or_default();
     let ctor_ty = ground::subst_ground(&ctor_ty, &lparams, &inst);
@@ -851,11 +851,7 @@ pub(crate) fn structure_eta(
     }
     let mut convs = Vec::with_capacity(k);
     for (i, pi) in pis.iter().enumerate() {
-        let p = std::rc::Rc::new(Expr::Proj {
-            ind: *ind,
-            idx: u32::try_from(i).map_err(|_| miss!())?,
-            s: e2.clone(),
-        });
+        let p = crate::expr::proj(*ind, u32::try_from(i).map_err(|_| miss!())?, *e2);
         let conv = c
             .assert_def_eq(&args[np + i], Some(arg_tms[np + i].clone()), &p, Some(pi.clone()))
             .map_err(|_| miss!())?;

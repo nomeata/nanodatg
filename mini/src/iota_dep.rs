@@ -739,17 +739,17 @@ mod tests {
     fn elim(major: E) -> E {
         let (b, l) = (nm("B"), nm("L"));
         let bty = konst(b, no());
-        let lb = app(konst(l, no()), bty.clone());
+        let lb = app(konst(l, no()), bty);
         app_n(konst(Name::str(&l, "rec"), vec![Level::zero().succ()].into()), &[
-            bty.clone(),
+            bty,
             // the motive, constant: `fun _ : L B => B`
-            lam(lb.clone(), bty.clone()),
+            lam(lb, bty),
             // `nil`'s minor
             konst(Name::str(&b, "b"), no()),
             // `cons`'s minor, which **uses the induction hypothesis** — so the
             // Lean right-hand side names the eliminator again and step 4 has
             // something to do.
-            lam(bty.clone(), lam(lb, lam(bty, bvar(0)))),
+            lam(bty, lam(lb, lam(bty, bvar(0)))),
             major,
         ])
     }
@@ -831,6 +831,6 @@ mod tests {
         // again at `nil` — so the whole thing is `B.b`. The middle argument is
         // `L.nil B` and the last is the recursive call, so a transport that put
         // the recursive result where the plain field goes would not land here.
-        assert_eq!(*reduct, *konst(Name::str(&nm("B"), "b"), no()));
+        assert_eq!(reduct, konst(Name::str(&nm("B"), "b"), no()));
     }
 }

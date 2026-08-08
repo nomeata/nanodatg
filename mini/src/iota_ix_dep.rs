@@ -291,7 +291,7 @@ pub(crate) fn fire(
     // the actual arguments substituted, and the parameters as the expressions
     // the use site applied them at.
     let sources: Vec<Source> = (0..n)
-        .map(|j| Source { mty: doms[np + 1 + j].clone(), params: args[..np].to_vec() })
+        .map(|j| Source { mty: doms[np + 1 + j], params: args[..np].to_vec() })
         .collect();
 
     let ix =
@@ -476,10 +476,10 @@ pub(crate) fn fire(
 /// no de Bruijn arithmetic leaks out of this function.
 fn binder_types(ty: &E, args: &[E]) -> Option<Vec<E>> {
     let mut out = Vec::with_capacity(args.len());
-    let mut cur = ty.clone();
+    let mut cur = *ty;
     for a in args {
-        let crate::expr::Expr::Forall { ty: dom, body } = &*cur.clone() else { return None };
-        out.push(dom.clone());
+        let crate::expr::Expr::Forall { ty: dom, body } = &cur.clone().view() else { return None };
+        out.push(*dom);
         cur = crate::expr::subst(body, a);
     }
     Some(out)
@@ -547,25 +547,25 @@ mod tests {
         let b0 = konst(Name::str(&b, "b0"), no());
         // `C := λ (x y : B) (t : T B x y). B`
         let motive =
-            lam(bt.clone(), lam(bt.clone(), lam(tap(bt.clone(), bvar(1), bvar(0)), bt.clone())));
+            lam(bt, lam(bt, lam(tap(bt, bvar(1), bvar(0)), bt)));
         // `c0`'s minor: `k + m = 0`, so `Hᵢ` is empty and the ι rule is applied
         // with no `mp` at all.
-        let s0 = b0.clone();
+        let s0 = b0;
         // `c1`'s: `λ (x : B) (r : T B x b0) (ih : C x b0 r). ih`
         let s1 = lam(
-            bt.clone(),
-            lam(tap(bt.clone(), bvar(0), b0.clone()), lam(bt.clone(), bvar(0))),
+            bt,
+            lam(tap(bt, bvar(0), b0), lam(bt, bvar(0))),
         );
         // `c2`'s: `λ (x y : B) (r₁ : T B x y) (r₂ : T B y x) ih₁ ih₂. ih₂`
         let s2 = lam(
-            bt.clone(),
+            bt,
             lam(
-                bt.clone(),
+                bt,
                 lam(
-                    tap(bt.clone(), bvar(1), bvar(0)),
+                    tap(bt, bvar(1), bvar(0)),
                     lam(
-                        tap(bt.clone(), bvar(1), bvar(2)),
-                        lam(bt.clone(), lam(bt.clone(), bvar(0))),
+                        tap(bt, bvar(1), bvar(2)),
+                        lam(bt, lam(bt, bvar(0))),
                     ),
                 ),
             ),
@@ -583,18 +583,18 @@ mod tests {
         let b1 = konst(Name::str(&b, "b1"), no());
         let c = |s: &str| konst(Name::str(&t, s), no());
         // `c0 B : T B b0 b0`
-        let c0 = app(c("c0"), bt.clone());
+        let c0 = app(c("c0"), bt);
         // `c1 B b0 (c0 B) : T B b1 b0`
-        let c1 = app_n(c("c1"), &[bt.clone(), b0.clone(), c0.clone()]);
+        let c1 = app_n(c("c1"), &[bt, b0, c0]);
         // `c2 B b0 b0 (c0 B) (c0 B) : T B b0 b1`
         let c2_inner =
-            app_n(c("c2"), &[bt.clone(), b0.clone(), b0.clone(), c0.clone(), c0.clone()]);
+            app_n(c("c2"), &[bt, b0, b0, c0, c0]);
         // `c2 B b1 b0 (c1 …) (c2 …) : T B b0 b1` — the two children at
         // **different** index vectors, `(b1,b0)` and `(b0,b1)`.
-        let c2 = app_n(c("c2"), &[bt, b1.clone(), b0.clone(), c1.clone(), c2_inner]);
+        let c2 = app_n(c("c2"), &[bt, b1, b0, c1, c2_inner]);
         vec![
-            ("c0", b0.clone(), b0.clone(), c0),
-            ("c1", b1.clone(), b0.clone(), c1),
+            ("c0", b0, b0, c0),
+            ("c1", b1, b0, c1),
             ("c2", b0, b1, c2),
         ]
     }
@@ -661,8 +661,8 @@ mod tests {
             let mut c = Checker::threaded(&env, &mut ip);
             let reduct = c.whnf(&elim(x, y, major)).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(
-                *reduct,
-                *konst(Name::str(&nm("B"), "b0"), no()),
+                reduct,
+                konst(Name::str(&nm("B"), "b0"), no()),
                 "{what}: the reduct is not the nullary minor"
             );
         }

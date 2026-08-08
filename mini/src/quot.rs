@@ -184,7 +184,7 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     if !matches!(ci, ConstantInfo::Opaque { .. } | ConstantInfo::Recursor { .. }) {
         return Err(miss())
     }
-    let (lparams, ty) = (ci.lparams().to_vec(), ci.ty().clone());
+    let (lparams, ty) = (ci.lparams().to_vec(), *ci.ty());
     if lparams.len() != inst.len() {
         return Err(miss())
     }
@@ -226,8 +226,8 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
 /// The bottom of one primitive's nest — the denoting term and its membership in
 /// the declared codomain's interpretation.
 fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Typing {
-    let ty = cod.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = *cod;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let u = inst.first().copied().unwrap_or(0);
     let Some((xs, mems)) = c.binders(prim.depth()) else { return gap(Gap::NoEndpoint) };
 
@@ -459,7 +459,7 @@ fn quot_classes_bottom(
     inst: &[u32],
     cod: &E,
 ) -> Typing {
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let u = inst.first().copied().unwrap_or(0);
     let owed = |p: Prim| Gap::Quotient(u, p);
     let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };

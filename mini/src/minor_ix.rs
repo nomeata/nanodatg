@@ -559,11 +559,11 @@ fn walk(
     let mut ys: Vec<Term> = Vec::with_capacity(k);
 
     let mut f_mem = at.s_mems[i].clone();
-    let mut cur = from.mty.clone();
+    let mut cur = from.mty;
     let (mut plains, mut recs, mut bound) = (0usize, 0usize, 0usize);
     for (l, atom) in src.iter().enumerate().take(nlev) {
-        let Expr::Forall { ty: dom_e, body } = &*cur.clone() else { return Err(fail()) };
-        let (dom_e, body) = (dom_e.clone(), body.clone());
+        let Expr::Forall { ty: dom_e, body } = &cur.clone().view() else { return Err(fail()) };
+        let (dom_e, body) = (*dom_e, *body);
 
         // The set the interpretation opened this binder at, and the one the
         // rule states the level's atom in. The rule's set mentions only

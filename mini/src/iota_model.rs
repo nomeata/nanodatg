@@ -258,9 +258,9 @@ pub(crate) fn fire(
     let head = konst(thm, ls.to_vec().into());
     let t = c.infer_type(&head).map_err(|_| bad(NORULE))?;
     let mut mem = t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
-    let mut ty = t.ty.clone();
+    let mut ty = t.ty;
     for a in &applied {
-        let Expr::Forall { body, .. } = &*ty.clone() else { return Err(bad(SHAPE)) };
+        let Expr::Forall { body, .. } = &ty.clone().view() else { return Err(bad(SHAPE)) };
         let set = mem.concl().as_mem().map(|(_, s)| s).ok_or_else(|| bad(WALK))?;
         // **Every level of the nest is `Prop`-valued**, because the statement
         // is an `Eq` and `∀x, Prop` is `Prop`. Reading the clause off the
@@ -296,13 +296,13 @@ pub(crate) fn fire(
     // not make the two statements one set, this stops at `eq-cash-retarget`
     // rather than claiming the model's theorem about the export's terms.
     let (ty_head, ty_args) = crate::expr::get_app(&ty);
-    let Expr::Const(ty_nm, ty_ls) = &*ty_head else { return Err(bad(SHAPE)) };
+    let Expr::Const(ty_nm, ty_ls) = &ty_head.view() else { return Err(bad(SHAPE)) };
     if *ty_nm != eq_name() || ty_args.len() != 3 {
         return Err(bad(SHAPE))
     }
     let lhs_e = app_n(konst(*rec, ls.to_vec().into()), args);
     let alpha = c.infer_type(&lhs_e).map_err(|_| Gap::Classifier)?.ty;
-    let stmt = app_n(konst(eq_name(), ty_ls.clone()), &[alpha, lhs_e, rhs.clone()]);
+    let stmt = app_n(konst(eq_name(), ty_ls.clone()), &[alpha, lhs_e, *rhs]);
     let cashed = crate::eq_cash::cash_stmt(c, &stmt, mem)?;
 
     // ── and it is about *this* redex ────────────────────────────────────────

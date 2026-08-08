@@ -214,7 +214,7 @@ fn former(
     let name = *ind_name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let ty = crate::expr::sort(crate::zoneb::level_numeral(level));
-        let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) });
+        let gap = |g: Gap| Ok(Typing { ty, tm: None, ev: Ev::missing(g) });
         let Some((all, _)) = c.binders(np + ni) else { return gap(Gap::NoEndpoint) };
         let (ps, xs) = all.split_at(np);
         let (ps, xs) = (ps.to_vec(), xs.to_vec());
@@ -293,8 +293,8 @@ fn constructor(
 /// The bottom of a class-(S) indexed constructor's nest: `•`, with
 /// `LeIndexCtor::mem` at this nest's own binders.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
     let cs = site.cs.clone();

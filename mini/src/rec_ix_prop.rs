@@ -149,8 +149,8 @@ pub(crate) fn ensure(
 
 /// The bottom of `⟦T.rec⟧`'s nest: `⊢ • ∈ ⟦C x⃗ t⟧`.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: `rec_dep` read it off
@@ -363,8 +363,8 @@ pub(crate) mod tests {
                 num_params: 0,
                 ty: ty1(),
                 ctors: vec![
-                    (Name::str(&b, "b0"), bt.clone()),
-                    (Name::str(&b, "b1"), bt.clone()),
+                    (Name::str(&b, "b0"), bt),
+                    (Name::str(&b, "b1"), bt),
                 ],
             },
         )
@@ -373,16 +373,16 @@ pub(crate) mod tests {
         let b1 = konst(Name::str(&b, "b1"), no_levels());
         let t = nm("T");
         let tap = |a: E, i: E, j: E| app(app(app(konst(t, no_levels()), a), i), j);
-        let ty = forall(ty1(), forall(bt.clone(), forall(bt.clone(), ty1())));
+        let ty = forall(ty1(), forall(bt, forall(bt, ty1())));
         let ctors = vec![
-            (Name::str(&t, "c0"), forall(ty1(), tap(bvar(0), b0.clone(), b0.clone()))),
+            (Name::str(&t, "c0"), forall(ty1(), tap(bvar(0), b0, b0))),
             (
                 Name::str(&t, "c1"),
                 forall(
                     ty1(),
                     forall(
-                        bt.clone(),
-                        forall(tap(bvar(1), bvar(0), b0.clone()), tap(bvar(2), b1.clone(), bvar(1))),
+                        bt,
+                        forall(tap(bvar(1), bvar(0), b0), tap(bvar(2), b1, bvar(1))),
                     ),
                 ),
             ),
@@ -391,7 +391,7 @@ pub(crate) mod tests {
                 forall(
                     ty1(),
                     forall(
-                        bt.clone(),
+                        bt,
                         forall(
                             bt,
                             forall(

@@ -102,7 +102,7 @@ pub(crate) fn typing(
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let sty = c.whnf(&te.ty).map_err(|_| Gap::Classifier)?;
     let (head, args) = crate::expr::get_app(&sty);
-    let Expr::Const(name, us) = &*head else { return Err(miss!()) };
+    let Expr::Const(name, us) = &head.view() else { return Err(miss!()) };
     if name != ind {
         return Err(miss!())
     }
@@ -271,7 +271,7 @@ fn trunc_typing(
     let mut betas = Vec::with_capacity(j + 1);
     for q in 0..=idx {
         let e = if q == idx {
-            field_ty.clone()
+            *field_ty
         } else {
             c.infer_proj_ty(ind, q, s).map_err(|_| Gap::Classifier)?
         };
@@ -458,7 +458,7 @@ fn decl_typing(
     let mut betas = Vec::with_capacity(j + 1);
     for q in 0..=idx {
         let e = if q == idx {
-            field_ty.clone()
+            *field_ty
         } else {
             c.infer_proj_ty(ind, q, s).map_err(|_| Gap::Classifier)?
         };
@@ -611,7 +611,7 @@ fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
     }
     let ty = c.whnf(e).ok()?;
     let (head, args) = crate::expr::get_app(&ty);
-    let Expr::Const(name, us) = &*head else { return None };
+    let Expr::Const(name, us) = &head.view() else { return None };
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> = us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>()?;
     let ConstantInfo::Inductive { num_params, .. } = c.environment().get(name)? else {
@@ -704,11 +704,11 @@ mod tests {
         // so `#2` and `#1`.
         let cod = bvar(2 - idx);
         let ty = forall(
-            field_sort.clone(),
-            forall(field_sort.clone(), forall(structure.clone(), cod)),
+            field_sort,
+            forall(field_sort, forall(structure, cod)),
         );
-        let body = Rc::new(crate::expr::Expr::Proj { ind: p2, idx, s: bvar(0) });
-        (ty, lam(field_sort.clone(), lam(field_sort, lam(structure, body))))
+        let body = crate::expr::proj(p2, idx, bvar(0));
+        (ty, lam(field_sort, lam(field_sort, lam(structure, body))))
     }
 
     /// **A projection out of a class-(S) structure carries a typing, at each
@@ -740,7 +740,7 @@ mod tests {
                 .thm()
                 .unwrap_or_else(|| panic!("idx {idx}: the projection has no typing: {:?}", t.ev))
                 .clone();
-            assert_eq!(*t.ty, *ty, "idx {idx}: infer_proj chose the wrong field type");
+            assert_eq!(t.ty, ty, "idx {idx}: infer_proj chose the wrong field type");
             let point = c.interp().expect("threaded").point();
             assert_eq!(t.tm, Some(point.clone()), "idx {idx}: a proof denotes •");
             let want = c
@@ -776,11 +776,11 @@ mod tests {
                 name: p2,
                 lparams: vec![],
                 num_params: 2,
-                ty: forall(field_sort.clone(), forall(field_sort.clone(), ty0)),
+                ty: forall(field_sort, forall(field_sort, ty0)),
                 ctors: vec![(
                     Name::str(&p2, "mk"),
                     forall(
-                        field_sort.clone(),
+                        field_sort,
                         forall(field_sort, forall(bvar(1), forall(bvar(1), spine(3, 2)))),
                     ),
                 )],
@@ -820,7 +820,7 @@ mod tests {
                 .thm()
                 .unwrap_or_else(|| panic!("idx {idx}: the projection has no typing: {:?}", t.ev))
                 .clone();
-            assert_eq!(*t.ty, *ty, "idx {idx}: infer_proj chose the wrong field type");
+            assert_eq!(t.ty, ty, "idx {idx}: infer_proj chose the wrong field type");
             let point = c.interp().expect("threaded").point();
             assert_eq!(t.tm, Some(point.clone()), "idx {idx}: a proof denotes •");
             let want = c
@@ -861,11 +861,11 @@ mod tests {
     #[test]
     fn a_data_field_of_a_class_t_structure_is_typed_at_a_real_term() {
         let ty0 = sort(Level::zero().succ());
-        let env = class_t_env(ty0.clone());
+        let env = class_t_env(ty0);
         for idx in [0u32, 1] {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
-            let (_, val) = projector_at(idx, ty0.clone());
+            let (_, val) = projector_at(idx, ty0);
             let t = c.infer_type(&val).expect("infer");
             assert!(
                 t.ev.thm().is_some(),
@@ -977,7 +977,7 @@ mod tests {
         let unit = Name::str(&nm("PU"), "unit");
         let at1u: Rc<[Level]> = vec![Level::zero().succ()].into();
         let subject = app(konst(mk, no()), konst(unit, at1u));
-        let e = Rc::new(Expr::Proj { ind: nm("W"), idx: 0, s: subject });
+        let e = crate::expr::proj(nm("W"), 0, subject);
 
         let at1: Rc<[Level]> = vec![Level::zero().succ()].into();
         let field_ty = konst(nm("PU"), at1);

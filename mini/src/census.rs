@@ -156,7 +156,7 @@ impl Census {
     fn bump(&mut self, k: Clause) { *self.counts.entry(k).or_insert(0) += 1; }
 
     fn walk(&mut self, e: &E) {
-        match &**e {
+        match &e.view() {
             Expr::BVar(_) => self.bump(Clause::BVar),
             Expr::Sort(_) => self.bump(Clause::Sort),
             Expr::Const(..) => self.bump(Clause::Const),
@@ -178,7 +178,7 @@ impl Census {
                 // codomain is the degenerate fibre — so a reader sizing work
                 // off these two rows should add them. The `PiProp` row is still
                 // a real clause boundary (`n2 == 0` routes to `cond`).
-                let k = if matches!(&**body, Expr::Sort(l) if l.is_zero_syntactically()) {
+                let k = if matches!(&body.view(), Expr::Sort(l) if l.is_zero_syntactically()) {
                     Clause::PiProp
                 } else if has_bvar(body, 0) {
                     Clause::PiDep
@@ -249,11 +249,11 @@ mod tests {
         let ty1 = sort(Level::zero().succ());
         // `Π (_ : Type 0). Prop` — the Prop clause.
         let mut c = Census::default();
-        c.walk(&forall(ty1.clone(), prop.clone()));
+        c.walk(&forall(ty1, prop));
         assert_eq!(c.counts.get(&Clause::PiProp), Some(&1));
         // `Π (_ : Prop). Type 0` — a plain arrow.
         let mut c = Census::default();
-        c.walk(&forall(prop.clone(), ty1.clone()));
+        c.walk(&forall(prop, ty1));
         assert_eq!(c.counts.get(&Clause::PiArrow), Some(&1));
         // `Π (x : Type 0). x` — dependent.
         let mut c = Census::default();

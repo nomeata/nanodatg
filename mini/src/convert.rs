@@ -40,15 +40,13 @@
 //! never reaches mini at all — it becomes a decline at the parser panic.
 
 use crate::env::{Declaration, DefKind, IndType};
-use crate::expr::{self, Expr, Level, Name, E, NameView, LevelView};
+use crate::expr::{self, Level, Name, E, NameView, LevelView};
 use nanoda_lib::env::Declar;
 use nanoda_lib::expr::Expr as CExpr;
 use nanoda_lib::instantiations::{Inst, Instantiations};
-use nanoda_lib::level::Level as CLevel;
 use nanoda_lib::util::{Config, ExprPtr, LevelPtr, NamePtr};
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
 
 /// What the corpus harness measures at step 1 of MINI-DESIGN.md §12, plus the
 /// audit rows §3 and §11 pin.
@@ -552,18 +550,19 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
     }
 }
 
-/// The export file's items, brought into mini's vocabulary.
+/// The export file's items, in mini's normal form.
 ///
-/// **Shrinking as the representations converge.** `names` is already gone:
-/// mini's `Name` *is* a `NamePtr`, so there is nothing to convert and nothing
-/// to memoise. `levels` and `exprs` remain until steps 3 and 4.
+/// **One table left of three.** `names` and `levels` are gone: mini's `Name`
+/// and `Level` *are* `checker`'s pointers, so there is nothing to convert and
+/// nothing to memoise. `exprs` survives because [`Cv::expr`] is not the
+/// identity — it erases binder metadata — and without a memo it would walk a
+/// hash-consed DAG as a tree.
 struct Cv {
-    levels: HashMap<LevelPtr<'static>, Level>,
     exprs: HashMap<ExprPtr<'static>, E>,
 }
 
 impl Cv {
-    fn new() -> Self { Cv { levels: HashMap::new(), exprs: HashMap::new() } }
+    fn new() -> Self { Cv { exprs: HashMap::new() } }
 
     /// One inductive member: its type and its constructors, in `ctor_idx`
     /// order. The same code for a single declaration and for a member of a
@@ -635,20 +634,14 @@ impl Cv {
     /// call sites do not all have to change in the same commit.
     fn name(&mut self, p: NamePtr<'static>) -> Name { Name(p) }
 
-    fn level(&mut self, p: LevelPtr<'static>) -> Level {
-        if let Some(l) = self.levels.get(&p) {
-            return *l
-        }
-        let l = match crate::arena::read_level(p) {
-            CLevel::Zero => Level::zero(),
-            CLevel::Succ(x, _) => self.level(x).succ(),
-            CLevel::Max(x, y, _) => Level::max(self.level(x), self.level(y)),
-            CLevel::IMax(x, y, _) => Level::imax(self.level(x), self.level(y)),
-            CLevel::Param(n, _) => Level::param(self.name(n)),
-        };
-        self.levels.insert(p, l);
-        l
-    }
+    /// **The identity**, as [`Cv::name`] is.
+    ///
+    /// This used to rebuild the level node by node. It cannot do anything now:
+    /// mini's `Level` *is* `checker`'s `LevelPtr`, and a level carries no
+    /// binder metadata, so rebuilding would hash-cons its way back to the
+    /// pointer it started from — a walk with no output. Dropping it takes the
+    /// memo that cached the walk with it.
+    fn level(&mut self, p: LevelPtr<'static>) -> Level { Level(p) }
 
     fn uparams(&mut self, p: nanoda_lib::util::LevelsPtr<'static>) -> LR<Vec<Name>> {
         let ls = crate::arena::read_levels(p);
@@ -667,19 +660,32 @@ impl Cv {
         Ok(out)
     }
 
+    /// **The export's expression, in mini's normal form.**
+    ///
+    /// Not a conversion any more — the representations are the same — but not
+    /// the identity either, and the difference is the whole correctness
+    /// argument of the migration. Rebuilding every node through
+    /// `crate::expr`'s constructors is what *erases the binder metadata*:
+    /// `checker` hash-conses `binder_name`, `binder_style` and `nondep` into
+    /// the node, mini has always dropped binder names on purpose
+    /// (`crate::expr`'s header), and a parsed `∀ x : A, B` must come out as
+    /// the same pointer as a generated `∀ _ : A, B` or mini's whole-expression
+    /// comparisons start distinguishing spellings. `crate::arena::erase_binders`
+    /// states that normal form on its own and four tests there pin it; this is
+    /// the same form, realised inline because the walk has to happen anyway —
+    /// it counts literals, enforces mini-lean's `natLit > 10` decline, bounds
+    /// the projection index and refuses a free variable.
+    ///
+    /// So the memo stays: without it this is a *tree* walk over a DAG.
     fn expr(&mut self, p: ExprPtr<'static>, facts: &mut Facts) -> LR<E> {
         if let Some(e) = self.exprs.get(&p) {
-            return Ok(e.clone())
+            return Ok(*e)
         }
         let e = match crate::arena::read_expr(p) {
-            CExpr::Var { dbj_idx, .. } => expr::bvar(u32::from(dbj_idx)),
-            CExpr::Sort { level, .. } => expr::sort(self.level(level)),
-            CExpr::Const { name, levels, .. } => {
-                let n = self.name(name);
-                let ls: Vec<Level> =
-                    crate::arena::read_levels(levels).iter().map(|l| self.level(*l)).collect();
-                expr::konst(n, ls.into())
-            }
+            CExpr::Var { .. } => E(p),
+            // `Const` and `Sort` carry no binders, so both are already in
+            // normal form and the pointer passes straight through.
+            CExpr::Const { .. } | CExpr::Sort { .. } => E(p),
             CExpr::App { fun, arg, .. } => {
                 expr::app(self.expr(fun, facts)?, self.expr(arg, facts)?)
             }
@@ -689,20 +695,19 @@ impl Cv {
             CExpr::Lambda { binder_type, body, .. } => {
                 expr::lam(self.expr(binder_type, facts)?, self.expr(body, facts)?)
             }
-            CExpr::Let { binder_type, val, body, .. } => Rc::new(Expr::Let {
-                ty: self.expr(binder_type, facts)?,
-                val: self.expr(val, facts)?,
-                body: self.expr(body, facts)?,
-            }),
-            CExpr::Proj { ty_name, idx, structure, .. } => Rc::new(Expr::Proj {
-                ind: self.name(ty_name),
-                idx: u32::try_from(idx).map_err(|_| declined("projection index too large"))?,
-                s: self.expr(structure, facts)?,
-            }),
+            CExpr::Let { binder_type, val, body, .. } => crate::expr::let_(
+                self.expr(binder_type, facts)?,
+                self.expr(val, facts)?,
+                self.expr(body, facts)?,
+            ),
+            CExpr::Proj { ty_name, idx, structure, .. } => crate::expr::proj(
+                self.name(ty_name),
+                u32::try_from(idx).map_err(|_| declined("projection index too large"))?,
+                self.expr(structure, facts)?,
+            ),
             CExpr::NatLit { ptr, .. } => {
-                // No num-bigint dependency in `mini`: the decimal form is
-                // enough, and anything that does not fit `u64` is above 10 and
-                // declined regardless.
+                // The decimal form is enough: mini's literals are `u64` and
+                // anything that does not fit is above 10 and declined anyway.
                 let s = crate::arena::read_nat_lit_decimal(ptr)
                     .ok_or_else(|| declined("nat literal not found in the arena"))?;
                 let n: u64 = s.parse().unwrap_or(u64::MAX);
@@ -713,17 +718,17 @@ impl Cv {
                         "The mini kernel does not support nat literals larger than 10",
                     ))
                 }
-                Rc::new(Expr::NatLit(n))
+                E(p)
             }
-            CExpr::StringLit { ptr, .. } => {
+            CExpr::StringLit { .. } => {
                 facts.str_lits += 1;
-                Rc::new(Expr::StrLit(Rc::from(crate::arena::read_string(ptr).as_ref())))
+                E(p)
             }
             CExpr::Local { .. } => {
                 return Err(declined("export file contains a free variable"))
             }
         };
-        self.exprs.insert(p, e.clone());
+        self.exprs.insert(p, e);
         Ok(e)
     }
 }

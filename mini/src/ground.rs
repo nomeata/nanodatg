@@ -124,7 +124,7 @@ mod tests {
                 for l in &ls {
                     let g = crate::expr::sort(*l);
                     let g = subst_ground(&g, &uparams, &[a, b]);
-                    let crate::expr::Expr::Sort(gl) = &*g else { unreachable!() };
+                    let crate::expr::Expr::Sort(gl) = &g.view() else { unreachable!() };
                     let n = eval(l, &env).unwrap();
                     crate::kernel::assert_level_eq(gl, &numeral(n))
                         .unwrap_or_else(|e| panic!("{l} at [{a},{b}]: {e}"));

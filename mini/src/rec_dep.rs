@@ -307,7 +307,7 @@ pub(crate) fn ensure(
 /// be a second chance to disagree.
 pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     let after = crate::zoneb::peel(rec_ty, np)?;
-    let Expr::Forall { ty: motive, .. } = &*after else { return None };
+    let Expr::Forall { ty: motive, .. } = &after.view() else { return None };
     // **`ni + 1`, not one.** An indexed family's motive is
     // `C : ∀ x⃗ (t : T p⃗ x⃗). Sort u₁`, so the `Sort` sits under the index
     // binders as well as the major premise's. Reading only one binder deep
@@ -315,7 +315,7 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     // Lean motive", it is this function not knowing about indices, and it
     // reported the first as the second until `RBTree` was asked.
     let inner = crate::zoneb::peel(motive, ni + 1)?;
-    let Expr::Sort(l) = &*inner else { return None };
+    let Expr::Sort(l) = &inner.view() else { return None };
     ground::eval(l, &Default::default())
 }
 
@@ -353,8 +353,8 @@ pub(crate) struct Site {
 
 /// The bottom of `⟦T.rec⟧`'s nest.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
@@ -708,18 +708,18 @@ pub(crate) fn ctor_bridges(
 /// endpoint check anyway.
 fn field_types(ctor_ty: &E, param_es: &[E], nf: usize) -> Vec<Option<E>> {
     let mut out: Vec<Option<E>> = Vec::with_capacity(nf);
-    let mut ty = ctor_ty.clone();
+    let mut ty = *ctor_ty;
     for p in param_es {
-        let Expr::Forall { body, .. } = &*ty.clone() else {
+        let Expr::Forall { body, .. } = &ty.clone().view() else {
             out.resize(nf, None);
             return out
         };
         ty = crate::expr::subst(body, p);
     }
     for _ in 0..nf {
-        let Expr::Forall { ty: dom, body } = &*ty.clone() else { break };
-        out.push(Some(dom.clone()));
-        let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
+        let Expr::Forall { ty: dom, body } = &ty.clone().view() else { break };
+        out.push(Some(*dom));
+        let at = |l: Level| crate::expr::subst(body, &crate::expr::sort(l));
         let (a, b) = (at(Level::zero()), at(Level::zero().succ()));
         if a != b {
             break
@@ -750,7 +750,7 @@ fn rec_slot_eq(
     ty: Option<&E>,
     ng: usize,
 ) -> Option<Thm> {
-    let mut b = ty?.clone();
+    let mut b = *ty?;
     for _ in 0..ng {
         b = crate::zoneb::rec_field_codomain(&b)?;
     }
@@ -2125,7 +2125,7 @@ pub(crate) fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
 /// the motive binder's type rather than the one the motive lands in; see that
 /// module's header for why the two rungs differ and why it is the outer one.
 pub(crate) fn sort_of(ty: &E) -> Option<u32> {
-    let Expr::Sort(l) = &**ty else { return None };
+    let Expr::Sort(l) = &ty.view() else { return None };
     ground::eval(l, &Default::default())
 }
 
@@ -2172,7 +2172,7 @@ mod tests {
                 name: l,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(ty0.clone(), ty0),
+                ty: forall(ty0, ty0),
                 ctors: vec![
                     (nil, forall(sort(Level::zero().succ()), spine(0))),
                     (
@@ -2286,8 +2286,8 @@ mod tests {
         if depth == 0 {
             return cod
         }
-        let Expr::Forall { ty: d, body } = &**ty else { panic!("fewer than {depth} binders") };
-        forall(d.clone(), with_codomain(body, depth - 1, cod))
+        let Expr::Forall { ty: d, body } = &ty.view() else { panic!("fewer than {depth} binders") };
+        forall(*d, with_codomain(body, depth - 1, cod))
     }
 
     /// **`derived::inductive::motive::cod_at_funspace` works, and it is still
@@ -2474,12 +2474,12 @@ mod tests {
         // it is the fixture it will need. `A` and `B` are two declarations of
         // the same shape rather than one used twice, so their `β₀`s are
         // separated by their defining axioms and not by an arity.
-        let only = forall(forall(enum_of(&a), spine.clone()), spine.clone());
+        let only = forall(forall(enum_of(&a), spine), spine);
         let mixed = forall(
-            spine.clone(),
+            spine,
             forall(
-                forall(enum_of(&a), spine.clone()),
-                forall(forall(enum_of(&b), spine.clone()), spine.clone()),
+                forall(enum_of(&a), spine),
+                forall(forall(enum_of(&b), spine), spine),
             ),
         );
 
@@ -2492,7 +2492,7 @@ mod tests {
                         name: *e,
                         lparams: vec![],
                         num_params: 0,
-                        ty: ty0.clone(),
+                        ty: ty0,
                         ctors: vec![
                             (Name::str(e, "t"), enum_of(e)),
                             (Name::str(e, "f"), enum_of(e)),
@@ -2507,7 +2507,7 @@ mod tests {
                     name: t,
                     lparams: vec![],
                     num_params: 0,
-                    ty: ty0.clone(),
+                    ty: ty0,
                     ctors: vec![(Name::str(&t, "c"), ctor_ty)],
                 },
             )
@@ -2531,12 +2531,12 @@ mod tests {
         // used three times, so their `β₀`s are separated by their defining
         // axioms and not by an arity.
         let three = forall(
-            forall(enum_of(&a), spine.clone()),
+            forall(enum_of(&a), spine),
             forall(
                 enum_of(&a),
                 forall(
-                    forall(enum_of(&b), spine.clone()),
-                    forall(forall(enum_of(&cc), spine.clone()), spine.clone()),
+                    forall(enum_of(&b), spine),
+                    forall(forall(enum_of(&cc), spine), spine),
                 ),
             ),
         );
@@ -2568,8 +2568,8 @@ mod tests {
         // spelled through a reducible definition; this cell is that shape with
         // the alias taken out, so it isolates the frame.
         let param_slot = forall(
-            ty0.clone(),
-            forall(forall(bvar(0), app(pspine.clone(), bvar(1))), app(pspine.clone(), bvar(1))),
+            ty0,
+            forall(forall(bvar(0), app(pspine, bvar(1))), app(pspine, bvar(1))),
         );
         let parameterised = || {
             let mut env = Environment::empty();
@@ -2579,8 +2579,8 @@ mod tests {
                     name: p,
                     lparams: vec![],
                     num_params: 1,
-                    ty: forall(ty0.clone(), ty0.clone()),
-                    ctors: vec![(Name::str(&p, "c"), param_slot.clone())],
+                    ty: forall(ty0, ty0),
+                    ctors: vec![(Name::str(&p, "c"), param_slot)],
                 },
             )
             .expect("a function-typed slot at the parameter is accepted");
@@ -2590,7 +2590,7 @@ mod tests {
         // `T.e : (A → B → T) → T` — the slot's `γ` is **two** binders deep, a
         // currying rather than a reindexing, which `derived::sigma` refuses on
         // both operators for a stated reason.
-        let deep = forall(forall(enum_of(&a), forall(enum_of(&b), spine.clone())), spine.clone());
+        let deep = forall(forall(enum_of(&a), forall(enum_of(&b), spine)), spine);
 
         // ── the two reducible aliases, which surface Lean cannot write ──────
         //
@@ -2612,7 +2612,7 @@ mod tests {
         // rung apart in the two uses below and is the whole reason it is a
         // parameter rather than a constant.
         let alias = |e: E, s: Level| app(lam(sort(s), bvar(0)), e);
-        let ty0_alias = alias(ty0.clone(), Level::zero().succ().succ());
+        let ty0_alias = alias(ty0, Level::zero().succ().succ());
 
         // **`Q (α : Type 0) : Type 0 | c : Q α → Q α`, with the constructor's
         // *parameter binder* written as the alias.** The type former's is
@@ -2626,8 +2626,8 @@ mod tests {
         // the whole eliminator declined as `MINOR`. The recursive slot is
         // spelled as the spine, so nothing else is owed and this cell isolates
         // the parameter frame.
-        let q_ctor = forall(ty0_alias.clone(), forall(app(qspine.clone(), bvar(0)),
-            app(qspine.clone(), bvar(1))));
+        let q_ctor = forall(ty0_alias, forall(app(qspine, bvar(0)),
+            app(qspine, bvar(1))));
         let param_binder = || {
             let mut env = Environment::empty();
             crate::kernel::add(
@@ -2636,8 +2636,8 @@ mod tests {
                     name: q,
                     lparams: vec![],
                     num_params: 1,
-                    ty: forall(ty0.clone(), ty0.clone()),
-                    ctors: vec![(Name::str(&q, "c"), q_ctor.clone())],
+                    ty: forall(ty0, ty0),
+                    ctors: vec![(Name::str(&q, "c"), q_ctor)],
                 },
             )
             .expect("a constructor's parameter binder may reduce to the type former's");
@@ -2653,10 +2653,10 @@ mod tests {
         // `def` — and `mini/tests/fixtures/reducible_ctor_binders.lean`'s `Cod`
         // is that spelling end to end.
         let r_ctor = forall(
-            ty0.clone(),
+            ty0,
             forall(
-                alias(app(rspine.clone(), bvar(0)), Level::zero().succ()),
-                app(rspine.clone(), bvar(1)),
+                alias(app(rspine, bvar(0)), Level::zero().succ()),
+                app(rspine, bvar(1)),
             ),
         );
         let plain_cod = || {
@@ -2667,8 +2667,8 @@ mod tests {
                     name: r,
                     lparams: vec![],
                     num_params: 1,
-                    ty: forall(ty0.clone(), ty0.clone()),
-                    ctors: vec![(Name::str(&r, "c"), r_ctor.clone())],
+                    ty: forall(ty0, ty0),
+                    ctors: vec![(Name::str(&r, "c"), r_ctor)],
                 },
             )
             .expect("a plain recursive field may only reduce to the spine");

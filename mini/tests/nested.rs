@@ -817,13 +817,13 @@ fn the_round_trip_the_encoding_would_need_is_not_definitional() {
     // built once and instantiated three ways.
     let claim = |arg: E, binder: Option<E>| {
         let stmt = app_n(konst(Name::simple("Eq"), one()), &[
-            list_tree.clone(),
-            trip(arg.clone()),
-            arg.clone(),
+            list_tree,
+            trip(arg),
+            arg,
         ]);
-        let proof = app_n(eq_refl(), &[list_tree.clone(), trip(arg)]);
+        let proof = app_n(eq_refl(), &[list_tree, trip(arg)]);
         let (ty, value) = match binder {
-            Some(b) => (forall(b.clone(), stmt), lam(b, proof)),
+            Some(b) => (forall(b, stmt), lam(b, proof)),
             None => (stmt, proof),
         };
         Declaration::Def {
@@ -844,7 +844,7 @@ fn the_round_trip_the_encoding_would_need_is_not_definitional() {
 
     // The controls: closed arguments, one at `nil` and one after a `cons` step.
     let nil = app(dotted("List", "nil"), k("Tree"));
-    let cons1 = app_n(dotted("List", "cons"), &[k("Tree"), k("treeLeaf"), nil.clone()]);
+    let cons1 = app_n(dotted("List", "cons"), &[k("Tree"), k("treeLeaf"), nil]);
     for (what, arg) in [("nil", nil), ("cons leaf nil", cons1)] {
         let mut e = env.clone();
         mini::kernel::add(&mut e, &refl_at_one(claim(arg, None))).unwrap_or_else(|m| {
@@ -855,7 +855,7 @@ fn the_round_trip_the_encoding_would_need_is_not_definitional() {
 
     // The claim: the same equation at a variable.
     let mut e = env.clone();
-    let err = mini::kernel::add(&mut e, &refl_at_one(claim(bvar(0), Some(list_tree.clone()))))
+    let err = mini::kernel::add(&mut e, &refl_at_one(claim(bvar(0), Some(list_tree))))
         .expect_err(
             "`fromAux (toAux l) ≡ l` was accepted at a variable — the round trip has become \
              definitional, and the nested increment should be re-scoped rather than this test \
@@ -896,9 +896,9 @@ fn the_fixture_declares_the_constants_the_finding_is_about() {
     // `toAux : List Tree → LT` and `fromAux : LT → List Tree`, by their
     // *codomains*, which is what makes them a round trip rather than two maps.
     let cod = |n: &str| {
-        let t = env.get(&Name::simple(n)).expect("declared").ty().clone();
-        match &*t {
-            mini::expr::Expr::Forall { body, .. } => body.clone(),
+        let t = *env.get(&Name::simple(n)).expect("declared").ty();
+        match &t.view() {
+            mini::expr::Expr::Forall { body, .. } => *body,
             _ => panic!("{n} is not a function"),
         }
     };
@@ -937,10 +937,10 @@ fn env_with(name: &str, opts: LoadOptions) -> (Environment, Vec<Declaration>) {
 /// Peel every `∀`, returning the binder types outermost-first and the body.
 fn peel_all(ty: &E) -> (Vec<E>, E) {
     let mut tys = Vec::new();
-    let mut cur = ty.clone();
-    while let mini::expr::Expr::Forall { ty: d, body } = &*cur.clone() {
-        tys.push(d.clone());
-        cur = body.clone();
+    let mut cur = *ty;
+    while let mini::expr::Expr::Forall { ty: d, body } = &cur.clone().view() {
+        tys.push(*d);
+        cur = *body;
     }
     (tys, cur)
 }
@@ -951,17 +951,17 @@ fn peel_all(ty: &E) -> (Vec<E>, E) {
 fn refl_proof_of(stmt: &E) -> (E, E) {
     let (binders, body) = peel_all(stmt);
     let (head, args) = mini::expr::get_app(&body);
-    let mini::expr::Expr::Const(n, ls) = &*head else {
+    let mini::expr::Expr::Const(n, ls) = &head.view() else {
         panic!("the statement does not end in a constant application")
     };
     assert_eq!(n.to_string(), "Eq", "the statement is not an `Eq`");
     assert_eq!(args.len(), 3, "`Eq` is not applied to three arguments");
     let refl = konst(Name::str(&Name::simple("Eq"), "refl"), ls.clone());
-    let mut proof = app_n(refl, &[args[0].clone(), args[1].clone()]);
+    let mut proof = app_n(refl, &[args[0], args[1]]);
     for b in binders.iter().rev() {
-        proof = lam(b.clone(), proof);
+        proof = lam(*b, proof);
     }
-    (stmt.clone(), proof)
+    (*stmt, proof)
 }
 
 /// **A `Tree.rec_1` that computes exists, and mini's kernel checks it.**
@@ -1037,7 +1037,7 @@ fn two_of_the_four_model_iota_rules_are_definitional_and_two_are_not() {
         let n = d.name().to_string();
         if let Some((name, _)) = MODEL_IOTA.iter().find(|(m, _)| *m == n) {
             let Declaration::Def { ty, .. } = d else { panic!("{n} is not a definition") };
-            rules.push((name, ty.clone()));
+            rules.push((name, *ty));
             continue
         }
         mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{n}: {e}"));
@@ -1201,7 +1201,7 @@ fn a_model_whose_iota_theorem_is_about_another_rule_declines() {
     // is no longer one the kernel would accept. That is deliberate and is what
     // makes this a test of the recognition rather than of the kernel — the
     // question here is what the table does with a tower whose indices lie.
-    let (ta, tb) = (env.get(&a).unwrap().ty().clone(), env.get(&b).unwrap().ty().clone());
+    let (ta, tb) = (*env.get(&a).unwrap().ty(), *env.get(&b).unwrap().ty());
     retype(&mut env, &a, tb);
     retype(&mut env, &b, ta);
     let r = mini::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
@@ -1264,7 +1264,7 @@ fn a_model_whose_recursor_states_another_recursor_declines() {
     }
     let a = Name::str(&dot("Tree", "_model"), "rec_0");
     let b = Name::str(&dot("Tree", "_model"), "rec_1");
-    let tb = env.get(&b).expect("rec_1").ty().clone();
+    let tb = *env.get(&b).expect("rec_1").ty();
     retype(&mut env, &a, tb);
     let r = mini::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
     assert_eq!(

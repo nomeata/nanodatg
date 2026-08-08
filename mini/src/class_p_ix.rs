@@ -346,8 +346,8 @@ const RULE: &str = "TruncCtor's rule does not discharge here";
 /// The bottom of `⟦T.ctorᵢ⟧`'s nest: `•`, with `TruncCtor::mem` (or, when the
 /// constructor is recursive, `TruncCtor::trunc_mem`) at this nest's binders.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::IndexedCtor(site.ctor, w, Cause::Threading);
     let (np, ni, nf) = (site.np, site.ni, site.nf);
 
@@ -405,13 +405,13 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let g = cs.rec_dom(j).len();
         j += 1;
         let mut gammas: Vec<E> = Vec::with_capacity(g);
-        let mut cur = dty.clone();
+        let mut cur = dty;
         for _ in 0..g {
-            let crate::expr::Expr::Forall { ty: gt, body } = &*cur.clone() else {
+            let crate::expr::Expr::Forall { ty: gt, body } = &cur.clone().view() else {
                 return gap(bad(REC_ARG))
             };
-            gammas.push(gt.clone());
-            cur = body.clone();
+            gammas.push(*gt);
+            cur = *body;
         }
         let Some(ds) = crate::zoneb::ind_spine(&site.ind, &cur, np, ni, nf + g) else {
             return gap(bad(REC_ARG))
@@ -450,7 +450,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
                     .map_err(|_| bad(REC_ARG))?
                     .tm
                     .ok_or_else(|| bad(REC_ARG))?;
-                c.push_interpreted(gt.clone(), dom);
+                c.push_interpreted(*gt, dom);
             }
             crate::ctor_ix::infer_indices(c, ds).ok_or_else(|| bad(REC_ARG))
         });
@@ -885,7 +885,7 @@ pub(crate) mod tests {
                 lparams: vec![],
                 num_params: np,
                 ty,
-                ctors: names.iter().cloned().zip(ctors.iter().map(|(_, t)| t.clone())).collect(),
+                ctors: names.iter().cloned().zip(ctors.iter().map(|(_, t)| *t)).collect(),
             },
         )
         .unwrap_or_else(|e| panic!("{name} is accepted: {e}"));

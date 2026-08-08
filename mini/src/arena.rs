@@ -73,6 +73,7 @@ use nanoda_lib::util::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// The binder style every expression mini builds carries. See the header:
 /// it is in the hash-cons key, so it has to be one value and not a choice.
@@ -99,6 +100,8 @@ pub fn install_export_file(ef: ExportFile<'static>) -> &'static ExportFile<'stat
     let ef: &'static ExportFile<'static> = Box::leak(Box::new(ef));
     let dag: &'static mut LeanDag<'static> = Box::leak(Box::new(LeanDag::new(&ef.config)));
     CTX.with(|c| *c.borrow_mut() = Some(TcCtx::new(ef, dag)));
+    // A pointer from the previous installation indexes a different dag.
+    LEVELS.with(|m| m.borrow_mut().clear());
     ef
 }
 
@@ -340,6 +343,36 @@ pub fn str_lit(s: &str) -> ExprPtr<'static> {
 /// Intern a universe-parameter list.
 pub fn alloc_levels(ls: &[LevelPtr<'static>]) -> LevelsPtr<'static> {
     write(|c| c.alloc_levels_slice(ls))
+}
+
+thread_local! {
+    /// `LevelsPtr` -> the `Rc<[Level]>` `Expr::Const`'s view hands back.
+    static LEVELS: RefCell<HashMap<LevelsPtr<'static>, Rc<[crate::expr::Level]>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// A `Const`'s universe arguments, in mini's `Rc<[Level]>` shape.
+///
+/// **Memoised, and that is not premature.** Mini's `Expr::Const` carries an
+/// `Rc<[Level]>` and 76 signatures take one, so keeping that shape is what
+/// let step 4 leave those alone. But `Const` is read on every `whnf` and
+/// every `infer_type`, and rebuilding the slice each time would turn a
+/// pointer read into an allocation on the hottest path in the crate — a
+/// regression introduced by a migration whose whole premise is that it is not
+/// about speed. Level lists are few and heavily shared, so the table is tiny
+/// and never invalidated: a `LevelsPtr` denotes one immutable list for the
+/// life of the arena.
+///
+/// It is cleared by [`install_export_file`] along with everything else,
+/// because a pointer from a previous installation means nothing.
+pub fn levels_of(ls: LevelsPtr<'static>) -> Rc<[crate::expr::Level]> {
+    if let Some(hit) = LEVELS.with(|m| m.borrow().get(&ls).cloned()) {
+        return hit
+    }
+    let built: Rc<[crate::expr::Level]> =
+        read(|c| c.read_levels(ls).iter().map(|l| crate::expr::Level(*l)).collect());
+    LEVELS.with(|m| m.borrow_mut().insert(ls, Rc::clone(&built)));
+    built
 }
 
 // ─────────────────────────────────────────────────────── the normaliser ──

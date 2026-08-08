@@ -166,8 +166,8 @@ struct Site {
 
 /// The bottom of `⟦T.rec⟧`'s nest: `•`, with `⊢ • ∈ ⟦C t⟧`.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's

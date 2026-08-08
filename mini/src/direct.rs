@@ -238,7 +238,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
     // The resultant sort, as a ground numeral: the universe the former's
     // bottom must land in, read off the declaration rather than assumed.
     let own = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad("type shape"))?;
-    let Expr::Sort(l) = &*own else { return Err(bad("resultant sort")) };
+    let Expr::Sort(l) = &own.view() else { return Err(bad("resultant sort")) };
     let level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
@@ -279,10 +279,10 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
 /// else, and the codomain check below is what confirms it.
 fn arity_of(ty: &E) -> usize {
     let mut n = 0;
-    let mut cur = ty.clone();
-    while let Expr::Forall { body, .. } = &*cur.clone() {
+    let mut cur = *ty;
+    while let Expr::Forall { body, .. } = &cur.clone().view() {
         n += 1;
-        cur = body.clone();
+        cur = *body;
     }
     n
 }
@@ -297,7 +297,7 @@ fn former_bottom(
     level: u32,
 ) -> Typing {
     let ty = crate::expr::sort(level_of(level));
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let Some((xs, _)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
@@ -390,7 +390,7 @@ pub(crate) fn eq_bottom(
         ind: Name::simple("Eq"),
         inst,
         clause: Clause::Eq,
-        codomain: codomain.clone(),
+        codomain: *codomain,
         eq,
     };
     ctor_bottom(c, &site)
@@ -417,11 +417,11 @@ struct CtorSite {
 /// established about the set the export says the constructor lands in.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let CtorSite { ind, inst, clause, codomain, eq } = site;
-    let ty = codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = *codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     // The codomain must be this declaration, applied to something.
     let (head, args) = crate::expr::get_app(codomain);
-    match &*head {
+    match &head.view() {
         Expr::Const(n, _) if n == ind => {}
         _ => return gap(Gap::IndSpec(*ind, "ctor codomain")),
     }
@@ -465,7 +465,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // `tm: None` here would take the type former down with it — `zoneb::store`
     // reads a missing term as a decline of the whole declaration, and `ensure`
     // then records it against the declaration's own key.
-    let undecided = |g: Gap| Typing { ty: ty.clone(), tm: Some(point.clone()), ev: Ev::missing(g) };
+    let undecided = |g: Gap| Typing { ty, tm: Some(point.clone()), ev: Ev::missing(g) };
 
     // `⊢ • ∈ carrier`, per clause.
     let mem = match clause {
@@ -711,7 +711,7 @@ pub(crate) mod tests {
         let us: std::rc::Rc<[Level]> = vec![u].into();
         // `Acc : ∀ (α : Sort u) (r : α → α → Prop), α → Prop`
         let rel = forall(bvar(0), forall(bvar(1), sort(Level::zero())));
-        let ty = forall(sort(u), forall(rel.clone(), forall(bvar(1), sort(Level::zero()))));
+        let ty = forall(sort(u), forall(rel, forall(bvar(1), sort(Level::zero()))));
         // `Acc α r y`, under `α r x y _`.
         let acc_at = |d_a: u32, d_r: u32, d_x: u32| {
             crate::expr::app(

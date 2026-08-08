@@ -154,7 +154,7 @@ pub(crate) fn ensure(
     // slot that is not a bare field is `NOT_BARE`.
     let mut field_of_slot = Vec::with_capacity(ni);
     for e in &slots {
-        let Expr::BVar(d) = &**e else { return Err(bad(NOT_BARE)) };
+        let Expr::BVar(d) = &e.view() else { return Err(bad(NOT_BARE)) };
         let d = *d as usize;
         if d >= nf {
             // A *parameter*, not a field — legitimate in Lean, and it means the
@@ -213,8 +213,8 @@ struct Site {
 
 /// The bottom of `⟦T.rec⟧`'s nest.
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
-    let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let ty = site.codomain;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree.
