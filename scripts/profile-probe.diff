@@ -1,0 +1,1096 @@
+diff --git a/kernel/src/term.rs b/kernel/src/term.rs
+index 8ca5d90..60e9618 100644
+--- a/kernel/src/term.rs
++++ b/kernel/src/term.rs
+@@ -156,6 +156,30 @@ fn mix(seed: u64, x: u64) -> u64 {
+     h
+ }
+ 
++// ─── PROFILING PROBE, worktree only: allocation traffic vs distinct structure.
++/// PROBE: total `Term::new` calls.
++pub static TERM_ALLOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++/// PROBE: distinct cached hashes seen (process-global).
++pub static TERM_DISTINCT: std::sync::Mutex<Option<std::collections::HashSet<u64>>> =
++    std::sync::Mutex::new(None);
++/// PROBE: armed by `KERNEL_TERM_PROBE`.
++pub static TERM_PROBE_ON: std::sync::atomic::AtomicBool =
++    std::sync::atomic::AtomicBool::new(false);
++
++/// PROBE: arm the counters. Called once from `main`.
++pub fn term_probe_arm() {
++    TERM_PROBE_ON.store(true, std::sync::atomic::Ordering::Relaxed);
++    *TERM_DISTINCT.lock().unwrap() = Some(std::collections::HashSet::new());
++}
++
++/// `(allocations, distinct cached hashes)` since arming.
++pub fn term_probe() -> (u64, usize) {
++    (
++        TERM_ALLOC.load(std::sync::atomic::Ordering::Relaxed),
++        TERM_DISTINCT.lock().unwrap().as_ref().map_or(0, |s| s.len()),
++    )
++}
++
+ impl Term {
+     fn new(data: TermData) -> Term {
+         let hash = match &data {
+@@ -169,6 +193,12 @@ impl Term {
+                 h
+             }
+         };
++        if TERM_PROBE_ON.load(std::sync::atomic::Ordering::Relaxed) {
++            TERM_ALLOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            if let Some(s) = TERM_DISTINCT.lock().unwrap().as_mut() {
++                s.insert(hash);
++            }
++        }
+         Term { data: Rc::new(data), hash }
+     }
+ 
+diff --git a/mini/examples/tower.rs b/mini/examples/tower.rs
+new file mode 100644
+index 0000000..a0e08e4
+--- /dev/null
++++ b/mini/examples/tower.rs
+@@ -0,0 +1,125 @@
++//! PROFILING PROBE — not for landing. The acceptance axis, timed and split.
++//!
++//! `tower <fixture-name>…` loads each fixture with `--nested` semantics and,
++//! for every nested inductive in it, times
++//!
++//!   * `nested::plan`      — the shape analysis;
++//!   * `nested_ev::iso`    — tower generation *and* every `kernel::add` inside
++//!                           it (the generator checks everything it emits);
++//!   * `kernel::add(d)`    — zone A's own acceptance of the export declaration.
++//!
++//! No `Interp` is constructed anywhere on this path, so nothing below touches
++//! `kernel::Term` or `kernel::Thm`.
++
++use std::path::{Path, PathBuf};
++use std::time::Instant;
++
++use mini::convert::{load_with, LoadOptions};
++use mini::env::{Declaration, Environment};
++use mini::expr::{Expr, E};
++
++fn fixture(name: &str) -> PathBuf {
++    if name.ends_with(".ndjson") {
++        return PathBuf::from(name)
++    }
++    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(format!("{name}.ndjson"))
++}
++
++/// Expression nodes, counted as a tree (no DAG sharing) — the axis
++/// MEASUREMENTS.md's tower table uses.
++fn nodes(e: &E) -> u64 {
++    1 + match &**e {
++        Expr::App(f, a) => nodes(f) + nodes(a),
++        Expr::Lam { ty, body } | Expr::Forall { ty, body } => nodes(ty) + nodes(body),
++        Expr::Let { ty, val, body } => nodes(ty) + nodes(val) + nodes(body),
++        Expr::Proj { s, .. } => nodes(s),
++        _ => 0,
++    }
++}
++
++fn decl_nodes(d: &Declaration) -> u64 {
++    match d {
++        Declaration::Axiom { ty, .. } => nodes(ty),
++        Declaration::Def { ty, value, .. } => nodes(ty) + nodes(value),
++        Declaration::Quot => 0,
++        Declaration::Inductive { ty, ctors, .. } => {
++            nodes(ty) + ctors.iter().map(|(_, t)| nodes(t)).sum::<u64>()
++        }
++        Declaration::Mutual { types, .. } => types
++            .iter()
++            .map(|t| nodes(&t.ty) + t.ctors.iter().map(|(_, c)| nodes(c)).sum::<u64>())
++            .sum(),
++    }
++}
++
++fn main() {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    let opts = LoadOptions { nested: true, mutual: true, ..Default::default() };
++    for f in &args {
++        let loaded = load_with(&fixture(f), opts).expect("load");
++        let mut env = Environment::empty();
++        let mut export_add = 0f64;
++        for d in &loaded.decls {
++            if let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d {
++                let types = vec![mini::env::IndType {
++                    name: name.clone(),
++                    ty: ty.clone(),
++                    ctors: ctors.clone(),
++                }];
++                let t0 = Instant::now();
++                let plan = mini::nested::plan(&env, lparams, *num_params, &types);
++                let t_plan = t0.elapsed().as_secs_f64();
++                if let Ok(Some(plan)) = plan {
++                    mini::probe::reset();
++                    let t1 = Instant::now();
++                    let r = mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan);
++                    let t_iso = t1.elapsed().as_secs_f64();
++                    let mut sizes: std::collections::HashMap<String, u64> =
++                        std::collections::HashMap::new();
++                    let (k, n) = match &r {
++                        Ok(iso) => {
++                            for d in &iso.decls {
++                                sizes.insert(d.name().to_string(), decl_nodes(d));
++                            }
++                            (iso.decls.len(), iso.decls.iter().map(decl_nodes).sum::<u64>())
++                        }
++                        Err(e) => {
++                            println!("{f}/{name}: declined {}", e.label());
++                            continue
++                        }
++                    };
++                    let t_add = mini::probe::add_secs();
++                    println!(
++                        "ISO {f}/{name} plan={t_plan:.3}s iso={t_iso:.3}s add={t_add:.3}s \
++                         gen={:.3}s decls={k} nodes={n}",
++                        t_iso - t_add
++                    );
++                    let mut rows = mini::probe::add_rows();
++                    rows.sort_by(|a, b| b.1.total_cmp(&a.1));
++                    let mut prev = 0u64;
++                    let mut byname: Vec<(String, f64, u64)> = Vec::new();
++                    for (nm, dt, cum) in mini::probe::add_rows() {
++                        byname.push((nm, dt, cum - prev));
++                        prev = cum;
++                    }
++                    byname.sort_by(|a, b| b.1.total_cmp(&a.1));
++                    for (nm, dt, infers) in byname.iter() {
++                        let sz = sizes.get(nm).copied().unwrap_or(0);
++                        println!("  ADD-IN-ISO {nm} {dt:.4}s infer={infers} nodes={sz}");
++                    }
++                    mini::probe::report(&format!("{f}/{name}"));
++                }
++            }
++            mini::probe::reset();
++            let t2 = Instant::now();
++            mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
++            let dt = t2.elapsed().as_secs_f64();
++            export_add += dt;
++            if dt > 0.05 {
++                println!("ADD {f}/{} {dt:.3}s nodes={}", d.name(), decl_nodes(d));
++                mini::probe::report(&format!("add {}", d.name()));
++            }
++        }
++        println!("EXPORT-ADD {f} total={export_add:.3}s");
++    }
++}
+diff --git a/mini/src/convert.rs b/mini/src/convert.rs
+index 74547d7..70a30f7 100644
+--- a/mini/src/convert.rs
++++ b/mini/src/convert.rs
+@@ -646,12 +646,12 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
+             CExpr::Lambda { binder_type, body, .. } => {
+                 expr::lam(self.expr(binder_type, facts)?, self.expr(body, facts)?)
+             }
+-            CExpr::Let { binder_type, val, body, .. } => Rc::new(Expr::Let {
++            CExpr::Let { binder_type, val, body, .. } => crate::expr::mk(Expr::Let {
+                 ty: self.expr(binder_type, facts)?,
+                 val: self.expr(val, facts)?,
+                 body: self.expr(body, facts)?,
+             }),
+-            CExpr::Proj { ty_name, idx, structure, .. } => Rc::new(Expr::Proj {
++            CExpr::Proj { ty_name, idx, structure, .. } => crate::expr::mk(Expr::Proj {
+                 ind: self.name(ty_name),
+                 idx: u32::try_from(idx).map_err(|_| declined("projection index too large"))?,
+                 s: self.expr(structure, facts)?,
+@@ -673,11 +673,11 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
+                         "The mini kernel does not support nat literals larger than 10",
+                     ))
+                 }
+-                Rc::new(Expr::NatLit(n))
++                crate::expr::mk(Expr::NatLit(n))
+             }
+             CExpr::StringLit { ptr, .. } => {
+                 facts.str_lits += 1;
+-                Rc::new(Expr::StrLit(Rc::from(self.ctx.read_string(ptr).as_ref())))
++                crate::expr::mk(Expr::StrLit(Rc::from(self.ctx.read_string(ptr).as_ref())))
+             }
+             CExpr::Local { .. } => {
+                 return Err(declined("export file contains a free variable"))
+diff --git a/mini/src/env.rs b/mini/src/env.rs
+index 7929e7a..bfd2b09 100644
+--- a/mini/src/env.rs
++++ b/mini/src/env.rs
+@@ -185,6 +185,7 @@ impl Environment {
+ 
+ /// `Expr.instantiateLParams`.
+ pub fn instantiate_lparams(e: &E, lparams: &[Name], levels: &[Level]) -> Result<E, String> {
++    crate::probe::bump(&crate::probe::INST_LPARAMS);
+     if levels.len() != lparams.len() {
+         return Err(format!("Expected {} levels, got {}", lparams.len(), levels.len()))
+     }
+diff --git a/mini/src/expr.rs b/mini/src/expr.rs
+index c9b6d8f..81af6e4 100644
+--- a/mini/src/expr.rs
++++ b/mini/src/expr.rs
+@@ -200,7 +200,7 @@ impl fmt::Display for Level {
+ 
+ // ───────────────────────────────────────────────────────── expressions ──
+ 
+-#[derive(Clone, PartialEq, Eq, Debug)]
++#[derive(Clone, Eq, Debug)]
+ pub enum Expr {
+     Const(Name, Rc<[Level]>),
+     BVar(u32),
+@@ -214,14 +214,45 @@ pub enum Expr {
+     Let { ty: Rc<Expr>, val: Rc<Expr>, body: Rc<Expr> },
+ }
+ 
++impl PartialEq for Expr {
++    fn eq(&self, other: &Expr) -> bool {
++        crate::probe::bump(&crate::probe::EXPR_EQ_NODES);
++        match (self, other) {
++            (Expr::Const(a, x), Expr::Const(b, y)) => a == b && x == y,
++            (Expr::BVar(a), Expr::BVar(b)) => a == b,
++            (Expr::App(a, x), Expr::App(b, y)) => a == b && x == y,
++            (Expr::Lam { ty: a, body: x }, Expr::Lam { ty: b, body: y }) => a == b && x == y,
++            (Expr::Forall { ty: a, body: x }, Expr::Forall { ty: b, body: y }) => a == b && x == y,
++            (Expr::NatLit(a), Expr::NatLit(b)) => a == b,
++            (Expr::StrLit(a), Expr::StrLit(b)) => a == b,
++            (Expr::Sort(a), Expr::Sort(b)) => a == b,
++            (Expr::Proj { ind: a, idx: i, s: x }, Expr::Proj { ind: b, idx: j, s: y }) => {
++                a == b && i == j && x == y
++            }
++            (Expr::Let { ty: a, val: v, body: x }, Expr::Let { ty: b, val: w, body: y }) => {
++                a == b && v == w && x == y
++            }
++            _ => false,
++        }
++    }
++}
++
+ pub type E = Rc<Expr>;
+ 
+-pub fn bvar(i: u32) -> E { Rc::new(Expr::BVar(i)) }
+-pub fn sort(l: Level) -> E { Rc::new(Expr::Sort(l)) }
+-pub fn konst(n: Name, ls: Rc<[Level]>) -> E { Rc::new(Expr::Const(n, ls)) }
+-pub fn app(f: E, a: E) -> E { Rc::new(Expr::App(f, a)) }
+-pub fn lam(ty: E, body: E) -> E { Rc::new(Expr::Lam { ty, body }) }
+-pub fn forall(ty: E, body: E) -> E { Rc::new(Expr::Forall { ty, body }) }
++#[inline(always)]
++pub fn mk(e: Expr) -> E {
++    crate::probe::bump(&crate::probe::EXPR_ALLOC);
++    if crate::probe::intern_on() {
++        return crate::probe::intern(e)
++    }
++    Rc::new(e)
++}
++pub fn bvar(i: u32) -> E { mk(Expr::BVar(i)) }
++pub fn sort(l: Level) -> E { mk(Expr::Sort(l)) }
++pub fn konst(n: Name, ls: Rc<[Level]>) -> E { mk(Expr::Const(n, ls)) }
++pub fn app(f: E, a: E) -> E { mk(Expr::App(f, a)) }
++pub fn lam(ty: E, body: E) -> E { mk(Expr::Lam { ty, body }) }
++pub fn forall(ty: E, body: E) -> E { mk(Expr::Forall { ty, body }) }
+ 
+ /// `Expr.arrow` — a non-dependent `Π`. Note the original does **not** shift
+ /// `b`: callers (only `addQuot`) write the de Bruijn indices out by hand.
+@@ -250,6 +281,7 @@ pub fn app_n(f: E, args: &[E]) -> E {
+ 
+ /// `Expr.shift`.
+ pub fn shift(e: &E, n: u32, d: u32) -> E {
++    crate::probe::bump(&crate::probe::SHIFT_NODES);
+     if d == 0 {
+         return e.clone()
+     }
+@@ -264,13 +296,13 @@ pub fn shift(e: &E, n: u32, d: u32) -> E {
+         Expr::App(f, a) => app(shift(f, n, d), shift(a, n, d)),
+         Expr::Lam { ty, body } => lam(shift(ty, n, d), shift(body, n + 1, d)),
+         Expr::Forall { ty, body } => forall(shift(ty, n, d), shift(body, n + 1, d)),
+-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
++        Expr::Let { ty, val, body } => mk(Expr::Let {
+             ty: shift(ty, n, d),
+             val: shift(val, n, d),
+             body: shift(body, n + 1, d),
+         }),
+         Expr::Proj { ind, idx, s } => {
+-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: shift(s, n, d) })
++            mk(Expr::Proj { ind: ind.clone(), idx: *idx, s: shift(s, n, d) })
+         }
+         Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+     }
+@@ -279,6 +311,7 @@ pub fn shift(e: &E, n: u32, d: u32) -> E {
+ /// `Expr.substs`. `s` is in *argument* order: `s[0]` replaces the outermost of
+ /// the substituted variables, `s[len-1]` replaces `bvar n`.
+ pub fn substs(e: &E, s: &[E], n: u32) -> E {
++    crate::probe::bump(&crate::probe::SUBSTS_NODES);
+     let len = s.len() as u32;
+     match &**e {
+         Expr::BVar(i) => {
+@@ -297,20 +330,23 @@ pub fn substs(e: &E, s: &[E], n: u32) -> E {
+         Expr::App(f, a) => app(substs(f, s, n), substs(a, s, n)),
+         Expr::Lam { ty, body } => lam(substs(ty, s, n), substs(body, s, n + 1)),
+         Expr::Forall { ty, body } => forall(substs(ty, s, n), substs(body, s, n + 1)),
+-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
++        Expr::Let { ty, val, body } => mk(Expr::Let {
+             ty: substs(ty, s, n),
+             val: substs(val, s, n),
+             body: substs(body, s, n + 1),
+         }),
+         Expr::Proj { ind, idx, s: x } => {
+-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: substs(x, s, n) })
++            mk(Expr::Proj { ind: ind.clone(), idx: *idx, s: substs(x, s, n) })
+         }
+         Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+     }
+ }
+ 
+ /// `Expr.subst`.
+-pub fn subst(e: &E, a: &E) -> E { substs(e, std::slice::from_ref(a), 0) }
++pub fn subst(e: &E, a: &E) -> E {
++    crate::probe::bump(&crate::probe::SUBSTS_CALLS);
++    substs(e, std::slice::from_ref(a), 0)
++}
+ 
+ /// `Expr.substLevel`.
+ pub fn subst_level(e: &E, f: &dyn Fn(&Name) -> Level) -> E {
+@@ -321,13 +357,13 @@ pub fn subst_level(e: &E, f: &dyn Fn(&Name) -> Level) -> E {
+         Expr::App(g, a) => app(subst_level(g, f), subst_level(a, f)),
+         Expr::Lam { ty, body } => lam(subst_level(ty, f), subst_level(body, f)),
+         Expr::Forall { ty, body } => forall(subst_level(ty, f), subst_level(body, f)),
+-        Expr::Let { ty, val, body } => Rc::new(Expr::Let {
++        Expr::Let { ty, val, body } => mk(Expr::Let {
+             ty: subst_level(ty, f),
+             val: subst_level(val, f),
+             body: subst_level(body, f),
+         }),
+         Expr::Proj { ind, idx, s } => {
+-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: subst_level(s, f) })
++            mk(Expr::Proj { ind: ind.clone(), idx: *idx, s: subst_level(s, f) })
+         }
+         Expr::Sort(l) => sort(l.subst(f)),
+         Expr::BVar(..) | Expr::NatLit(..) | Expr::StrLit(..) => e.clone(),
+diff --git a/mini/src/kernel.rs b/mini/src/kernel.rs
+index 5c603f5..92fb053 100644
+--- a/mini/src/kernel.rs
++++ b/mini/src/kernel.rs
+@@ -503,13 +503,79 @@ struct Frame {
+     /// has no `Hash`, and a hash is a hint: a hit is confirmed by `==` before
+     /// the `Typing` is handed back, exactly as `wt_memo` confirms its own.
+     map: HashMap<u64, Vec<(E, Typing)>>,
++    /// PROBE, experiment B: acceptance-only `whnf` reducts at this telescope.
++    wmap: HashMap<u64, Vec<(E, E)>>,
+ }
+ 
+ /// A structural hash of a Lean expression. Not a canonical form and not
+ /// required to be one — [`Frame::map`] confirms every hit by equality.
++/// PROBE, experiment G: a non-allocating structural key. No `format!`, no
++/// SipHash — the same information, at the cost a hash-consed representation
++/// would pay once at construction.
++struct Fx(u64);
++impl Fx {
++    #[inline(always)]
++    fn w(&mut self, x: u64) {
++        self.0 = (self.0 ^ x).wrapping_mul(0x517c_c1b7_2722_0a95).rotate_left(26);
++    }
++}
++fn fast_level(l: &Level, h: &mut Fx) {
++    match l {
++        Level::Zero => h.w(0),
++        Level::Succ(a) => { h.w(1); fast_level(a, h) }
++        Level::Max(a, b) => { h.w(2); fast_level(a, h); fast_level(b, h) }
++        Level::IMax(a, b) => { h.w(3); fast_level(a, h); fast_level(b, h) }
++        Level::Param(n) => { h.w(4); fast_name(n, h) }
++    }
++}
++fn fast_name(n: &Name, h: &mut Fx) {
++    match n {
++        Name::Anon => h.w(5),
++        Name::Str(p, s) => {
++            h.w(6);
++            for b in s.as_bytes() {
++                h.w(*b as u64);
++            }
++            fast_name(p, h)
++        }
++        Name::Num(p, i) => { h.w(7); h.w(*i); fast_name(p, h) }
++    }
++}
++fn fast_hash_expr(e: &E) -> u64 {
++    fn go(e: &E, h: &mut Fx) {
++        crate::probe::bump(&crate::probe::HASH_NODES);
++        match &**e {
++            Expr::BVar(i) => { h.w(0); h.w(*i as u64) }
++            Expr::Sort(u) => { h.w(1); fast_level(u, h) }
++            Expr::Const(n, ls) => {
++                h.w(2);
++                fast_name(n, h);
++                h.w(ls.len() as u64);
++                for l in ls.iter() {
++                    fast_level(l, h);
++                }
++            }
++            Expr::App(f, a) => { h.w(3); go(f, h); go(a, h) }
++            Expr::Lam { ty, body } => { h.w(4); go(ty, h); go(body, h) }
++            Expr::Forall { ty, body } => { h.w(5); go(ty, h); go(body, h) }
++            Expr::Let { ty, val, body } => { h.w(6); go(ty, h); go(val, h); go(body, h) }
++            Expr::Proj { ind, idx, s } => { h.w(7); fast_name(ind, h); h.w(*idx as u64); go(s, h) }
++            Expr::NatLit(n) => { h.w(8); h.w(*n) }
++            Expr::StrLit(s) => { h.w(9); for b in s.as_bytes() { h.w(*b as u64) } }
++        }
++    }
++    let mut h = Fx(0xcbf2_9ce4_8422_2325);
++    go(e, &mut h);
++    h.0
++}
++
+ fn hash_expr(e: &E) -> u64 {
++    if crate::probe::fast_hash() {
++        return fast_hash_expr(e)
++    }
+     use std::hash::{Hash, Hasher};
+     fn go<H: Hasher>(e: &E, h: &mut H) {
++        crate::probe::bump(&crate::probe::HASH_NODES);
+         match &**e {
+             Expr::BVar(i) => {
+                 0u8.hash(h);
+@@ -517,6 +583,7 @@ fn hash_expr(e: &E) -> u64 {
+             }
+             Expr::Sort(u) => {
+                 1u8.hash(h);
++                crate::probe::bump(&crate::probe::HASH_FMT);
+                 format!("{u}").hash(h);
+             }
+             Expr::Const(n, ls) => {
+@@ -524,6 +591,7 @@ fn hash_expr(e: &E) -> u64 {
+                 n.hash(h);
+                 ls.len().hash(h);
+                 for l in ls.iter() {
++                    crate::probe::bump(&crate::probe::HASH_FMT);
+                     format!("{l}").hash(h);
+                 }
+             }
+@@ -907,6 +975,48 @@ impl<'e, 'i> Checker<'e, 'i> {
+     /// heuristic; `go`'s recursion is a loop here, and the certificate is a
+     /// `trans` chain composed along it.
+     pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
++        crate::probe::bump(&crate::probe::WHNF_CALLS);
++        if tm.is_none() && crate::probe::whnf_memo() {
++            let h = hash_expr(e);
++            let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
++            let hit = (|| {
++                let f = self.frames.last_mut()?;
++                if f.scopes_len != n {
++                    f.map.clear();
++                    f.wmap.clear();
++                    f.scopes_len = n;
++                    return None
++                }
++                f.wmap.get(&h)?.iter().find(|(k, _)| k == e).map(|(_, r)| r.clone())
++            })();
++            if let Some(r) = hit {
++                crate::probe::bump(&crate::probe::WHNF_HIT);
++                return Ok((r.clone(), Conv { to: r, ev: Ev::Gap(why.clone()) }))
++            }
++            crate::probe::bump(&crate::probe::WHNF_MISS);
++            let out = self.whnf_conv_uncached(e, None, why)?;
++            let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
++            if let Some(f) = self.frames.last_mut() {
++                if f.scopes_len != n {
++                    f.map.clear();
++                    f.wmap.clear();
++                    f.scopes_len = n;
++                }
++                let slot = f.wmap.entry(h).or_default();
++                if !slot.iter().any(|(k, _)| k == e) {
++                    slot.push((e.clone(), out.0.clone()));
++                }
++            }
++            return Ok(out)
++        }
++        self.whnf_conv_uncached(e, tm, why)
++    }
++
++    fn whnf_conv_uncached(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
++        if crate::probe::armed() {
++            let lh = self.lenv.iter().fold(0u64, |a, t| a.wrapping_mul(1000003).wrapping_add(hash_expr(t)));
++            crate::probe::note_whnf(lh, hash_expr(e));
++        }
+         let tm_asked = tm.is_some();
+         let mut cur = e.clone();
+         let mut cur_tm = tm;
+@@ -954,6 +1064,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+             }};
+         }
+         loop {
++            crate::probe::bump(&crate::probe::WHNF_STEPS);
+             let node = cur.clone();
+             match &*node {
+                 Expr::Const(name, ls) => {
+@@ -965,6 +1076,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+                         // the store. Mini-lean's whnf is eagerly unfolding, so
+                         // nanoda's `lazy_delta_step`/`recall_eq` machinery has
+                         // no counterpart and this is the whole of the step.
++                        crate::probe::bump(&crate::probe::DELTA_UNFOLD);
+                         let (leg, to_tm) = self.delta_evidence(name, ls, &cur_tm);
+                         step!(leg);
+                         cur_tm = to_tm;
+@@ -1536,7 +1648,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+                     // this seat does not own.
+                     let (s2, s_conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
+                     let stuck =
+-                        Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
++                        crate::expr::mk(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
+                     let (head, args) = get_app(&s2);
+                     let Expr::Const(f, cls) = &*head else { done!(app_n(stuck, &stack)) };
+                     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind)
+@@ -2042,10 +2154,16 @@ impl<'e, 'i> Checker<'e, 'i> {
+     // ────────────────────────────────────────────────── inferType ──
+ 
+     pub fn infer_type(&mut self, e: &E) -> R<Typing> {
+-        let h = hash_expr(e);
++        crate::probe::bump(&crate::probe::INFER_ENTRIES);
++        if crate::probe::armed() {
++            let lh = self.lenv.iter().fold(0u64, |a, t| a.wrapping_mul(1000003).wrapping_add(hash_expr(t)));
++            crate::probe::note_infer(lh, hash_expr(e));
++        }
++        let h = if crate::probe::no_hash() { 0 } else { hash_expr(e) };
+         if let Some(t) = self.frame_get(h, e) {
+             return Ok(t)
+         }
++        crate::probe::bump(&crate::probe::INFER_INNER);
+         let t = self.infer_type_inner(e)?;
+         self.frame_put(h, e, &t);
+         Ok(t)
+@@ -2068,6 +2186,11 @@ impl<'e, 'i> Checker<'e, 'i> {
+             f.map.get(&h)?.iter().find(|(k, _)| k == e).map(|(_, t)| t.clone())
+         })();
+         crate::census::note_frame_cache(hit.is_some());
++        crate::probe::bump(if hit.is_some() {
++            &crate::probe::FRAME_HIT
++        } else {
++            &crate::probe::FRAME_MISS
++        });
+         hit
+     }
+ 
+@@ -2075,7 +2198,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         // **Only a certificate is kept.** A `Gap` is cheap to re-reach and
+         // caching one would keep it out of `blocker`'s trail on every call but
+         // the first — `wt_memo`'s policy, and the instrument it had to repair.
+-        if t.ev.thm().is_none() {
++        if t.ev.thm().is_none() && !crate::probe::frame_all() {
+             return
+         }
+         let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
+@@ -2086,6 +2209,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         }
+         let slot = f.map.entry(h).or_default();
+         if !slot.iter().any(|(k, _)| k == e) {
++            crate::probe::bump(&crate::probe::FRAME_STORE);
+             slot.push((e.clone(), t.clone()));
+         }
+     }
+@@ -2382,7 +2506,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         Ok(if n == 0 {
+             konst(Name::str(&nat, "zero"), no_levels())
+         } else {
+-            app(konst(Name::str(&nat, "succ"), no_levels()), Rc::new(Expr::NatLit(n - 1)))
++            app(konst(Name::str(&nat, "succ"), no_levels()), crate::expr::mk(Expr::NatLit(n - 1)))
+         })
+     }
+ 
+@@ -3137,7 +3261,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+                     i + 1
+                 ))
+             }
+-            ctor_ty = subst(b, &Rc::new(Expr::Proj { ind: n.clone(), idx: i, s: e.clone() }));
++            ctor_ty = subst(b, &crate::expr::mk(Expr::Proj { ind: n.clone(), idx: i, s: e.clone() }));
+         }
+         let cur = ctor_ty.clone();
+         let Expr::Forall { ty: d, .. } = &*cur else {
+@@ -3309,7 +3433,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         let ind_name = ind_name.clone();
+         let np = *num_params as usize;
+         for (i, arg) in args.iter().enumerate().skip(np) {
+-            let p = Rc::new(Expr::Proj {
++            let p = crate::expr::mk(Expr::Proj {
+                 ind: ind_name.clone(),
+                 idx: u32::try_from(i - np).expect("field index"),
+                 s: e2.clone(),
+@@ -3342,6 +3466,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+     /// hands in no endpoints and no certificate is built. That is not a drop:
+     /// there is no downstream step that would have to re-derive it.
+     pub fn is_def_eq(&mut self, e1: &E, e2: &E) -> R<bool> {
++        crate::probe::bump(&crate::probe::DEFEQ_CALLS);
+         let saved = self.lenv.len();
+         let r = self.assert_is_def_eq(e1, e2);
+         self.close_slot(saved);
+@@ -3640,6 +3765,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         b: &E,
+         b_tm: Option<Term>,
+     ) -> R<Ev> {
++        crate::probe::bump(&crate::probe::DEFEQ_STRUCT);
+         // **Identical interpretations settle it by reflexivity**, whatever the
+         // expressions look like. This is not an optimisation but the whole
+         // point of `⟦·⟧` being a function: two Lean terms with one
+@@ -4380,6 +4506,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
+ /// which is observably the same because the only caller aborts the file on the
+ /// first rejection — mini-lean's `--liberal` mode is not ported.
+ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
++    let _g = crate::probe::add_enter(decl.name().to_string());
+     match decl {
+         Declaration::Axiom { name, lparams, ty } => {
+             nodup(lparams, name)?;
+@@ -4855,7 +4982,7 @@ mod tests {
+     fn a_let_classifies_with_its_expansion() {
+         let env = env();
+         let mut c = Checker::new(&env);
+-        let e = Rc::new(Expr::Let { ty: sort(Level::Zero), val: k("P"), body: bvar(0) });
++        let e = crate::expr::mk(Expr::Let { ty: sort(Level::Zero), val: k("P"), body: bvar(0) });
+         assert_eq!(c.body_clause(&e).unwrap(), Clause::Prop);
+     }
+ 
+diff --git a/mini/src/lib.rs b/mini/src/lib.rs
+index 01fbd36..9883812 100644
+--- a/mini/src/lib.rs
++++ b/mini/src/lib.rs
+@@ -89,6 +89,7 @@ pub mod mutual_aux;
+ pub mod nested;
+ pub mod nested_ev;
+ pub mod nested_splice;
++pub mod probe;
+ pub mod proj_data;
+ pub mod proj_prop;
+ pub mod quot;
+diff --git a/mini/src/main.rs b/mini/src/main.rs
+index d268046..38f8173 100644
+--- a/mini/src/main.rs
++++ b/mini/src/main.rs
+@@ -58,6 +58,9 @@
+ use std::path::PathBuf;
+ 
+ fn main() {
++    if std::env::var_os("KERNEL_TERM_PROBE").is_some() {
++        kernel::term::term_probe_arm();
++    }
+     let args: Vec<String> = std::env::args().skip(1).collect();
+     let (flags, paths): (Vec<String>, Vec<String>) =
+         args.into_iter().partition(|a| a.starts_with("--"));
+@@ -166,6 +169,14 @@ fn main() {
+     if let Some(d) = &out.dump {
+         print!("{d}");
+     }
++    if std::env::var_os("KERNEL_TERM_PROBE").is_some() {
++        let (alloc, distinct) = kernel::term::term_probe();
++        let (ea, ed) = (
++            mini::probe::snapshot().into_iter().find(|(n, _)| *n == "EXPR_ALLOC").map(|(_, v)| v),
++            mini::probe::intern_size(),
++        );
++        println!("TERM-PROBE alloc={alloc} distinct={distinct} expr_alloc={ea:?} expr_distinct={ed}");
++    }
+     if let Some(b) = out.blocker() {
+         print!("{b}");
+         std::process::exit(3);
+diff --git a/mini/src/mutual_aux.rs b/mini/src/mutual_aux.rs
+index 767f25e..8958210 100644
+--- a/mini/src/mutual_aux.rs
++++ b/mini/src/mutual_aux.rs
+@@ -307,10 +307,10 @@ fn to_aux(
+         Expr::Forall { ty, body } => forall(go(ty)?, go(body)?),
+         Expr::Lam { ty, body } => lam(go(ty)?, go(body)?),
+         Expr::Let { ty, val, body } => {
+-            Rc::new(Expr::Let { ty: go(ty)?, val: go(val)?, body: go(body)? })
++            crate::expr::mk(Expr::Let { ty: go(ty)?, val: go(val)?, body: go(body)? })
+         }
+         Expr::Proj { ind, idx, s } => {
+-            Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: go(s)? })
++            crate::expr::mk(Expr::Proj { ind: ind.clone(), idx: *idx, s: go(s)? })
+         }
+         _ => e.clone(),
+     })
+diff --git a/mini/src/nested.rs b/mini/src/nested.rs
+index e5f33bc..02e0ba1 100644
+--- a/mini/src/nested.rs
++++ b/mini/src/nested.rs
+@@ -387,12 +387,12 @@ pub fn restore(heads: &HashMap<Name, (u32, E)>, e: &E) -> E {
+         Expr::Forall { ty, body } => {
+             crate::expr::forall(restore(heads, ty), restore(heads, body))
+         }
+-        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
++        Expr::Let { ty, val, body } => crate::expr::mk(Expr::Let {
+             ty: restore(heads, ty),
+             val: restore(heads, val),
+             body: restore(heads, body),
+         }),
+-        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
++        Expr::Proj { ind, idx, s } => crate::expr::mk(Expr::Proj {
+             ind: ind.clone(),
+             idx: *idx,
+             s: restore(heads, s),
+@@ -478,12 +478,12 @@ impl Sp<'_> {
+             Expr::Forall { ty, body } => {
+                 Ok(crate::expr::forall(self.spec(ty, d)?, self.spec(body, d + 1)?))
+             }
+-            Expr::Let { ty, val, body } => Ok(std::rc::Rc::new(Expr::Let {
++            Expr::Let { ty, val, body } => Ok(crate::expr::mk(Expr::Let {
+                 ty: self.spec(ty, d)?,
+                 val: self.spec(val, d)?,
+                 body: self.spec(body, d + 1)?,
+             })),
+-            Expr::Proj { ind, idx, s } => Ok(std::rc::Rc::new(Expr::Proj {
++            Expr::Proj { ind, idx, s } => Ok(crate::expr::mk(Expr::Proj {
+                 ind: ind.clone(),
+                 idx: *idx,
+                 s: self.spec(s, d)?,
+@@ -640,12 +640,12 @@ fn lower_general(e: &E, k: u32, cut: u32) -> E {
+         Expr::Forall { ty, body } => {
+             crate::expr::forall(lower_general(ty, k, cut), lower_general(body, k, cut + 1))
+         }
+-        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
++        Expr::Let { ty, val, body } => crate::expr::mk(Expr::Let {
+             ty: lower_general(ty, k, cut),
+             val: lower_general(val, k, cut),
+             body: lower_general(body, k, cut + 1),
+         }),
+-        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
++        Expr::Proj { ind, idx, s } => crate::expr::mk(Expr::Proj {
+             ind: ind.clone(),
+             idx: *idx,
+             s: lower_general(s, k, cut),
+diff --git a/mini/src/probe.rs b/mini/src/probe.rs
+new file mode 100644
+index 0000000..ca87c77
+--- /dev/null
++++ b/mini/src/probe.rs
+@@ -0,0 +1,286 @@
++//! PROFILING PROBE — worktree-only instrumentation, never to be landed.
++//!
++//! Counters for the **acceptance axis** (`Checker::new`, `th: None`), where no
++//! `Interp` exists and so `APP-SPINES.md`'s `kernel::Term`/`Thm` counters see
++//! nothing at all. Everything here is a thread-local `Cell`; the two census
++//! maps are behind `MINI_PROBE_CENSUS=1` because they are `O(term)` per entry.
++
++use std::cell::{Cell, RefCell};
++use std::collections::HashMap;
++
++macro_rules! counters {
++    ($($n:ident),* $(,)?) => {
++        thread_local! {
++            $(pub static $n: Cell<u64> = const { Cell::new(0) };)*
++        }
++        pub fn reset() {
++            $($n.with(|c| c.set(0));)*
++            CENSUS.with(|m| m.borrow_mut().clear());
++            reset_adds();
++            WHNF_CENSUS.with(|m| m.borrow_mut().clear());
++        }
++        pub fn snapshot() -> Vec<(&'static str, u64)> {
++            vec![$((stringify!($n), $n.with(|c| c.get()))),*]
++        }
++    };
++}
++
++counters! {
++    INFER_ENTRIES,
++    INFER_INNER,
++    FRAME_HIT,
++    FRAME_MISS,
++    FRAME_STORE,
++    WHNF_CALLS,
++    WHNF_HIT,
++    WHNF_MISS,
++    WHNF_STEPS,
++    DEFEQ_CALLS,
++    DEFEQ_STRUCT,
++    DELTA_UNFOLD,
++    BETA_STEP,
++    IOTA_STEP,
++    EXPR_ALLOC,
++    EXPR_EQ_NODES,
++    SUBSTS_CALLS,
++    SUBSTS_NODES,
++    SHIFT_CALLS,
++    SHIFT_NODES,
++    HASH_NODES,
++    HASH_FMT,
++    INST_LPARAMS,
++    INTERN_HIT,
++    INTERN_MISS,
++    UNINTERNED_CHILD,
++}
++
++#[inline(always)]
++pub fn bump(c: &'static std::thread::LocalKey<Cell<u64>>) {
++    c.with(|x| x.set(x.get() + 1));
++}
++
++#[inline(always)]
++pub fn add(c: &'static std::thread::LocalKey<Cell<u64>>, n: u64) {
++    c.with(|x| x.set(x.get() + n));
++}
++
++thread_local! {
++    static ARMED: Cell<bool> = Cell::new(std::env::var_os("MINI_PROBE_CENSUS").is_some());
++    /// `infer_type` judgement key → times asked.
++    static CENSUS: RefCell<HashMap<(u64, u64), u64>> = RefCell::new(HashMap::new());
++    /// `whnf` subject key → times asked.
++    static WHNF_CENSUS: RefCell<HashMap<(u64, u64), u64>> = RefCell::new(HashMap::new());
++}
++
++pub fn armed() -> bool { ARMED.with(|a| a.get()) }
++
++thread_local! {
++    /// Experiment A: let the frame memo store `Typing`s whose evidence is a
++    /// `Gap` — i.e. every one, on the acceptance axis.
++    static FRAME_ALL: Cell<bool> = Cell::new(std::env::var_os("MINI_FRAME_ALL").is_some());
++    /// Experiment B: a frame-local `whnf` memo for acceptance-only calls.
++    static WHNF_MEMO: Cell<bool> = Cell::new(std::env::var_os("MINI_WHNF_MEMO").is_some());
++}
++
++thread_local! {
++    /// Experiment D: do not compute the memo key at all (`h = 0`). Sound
++    /// whenever the frame map is empty, which on the acceptance axis it always
++    /// is unless `MINI_FRAME_ALL` is also set.
++    static NO_HASH: Cell<bool> = Cell::new(std::env::var_os("MINI_NO_HASH").is_some());
++    /// Experiment G: a non-allocating FxHash-style key instead of SipHash +
++    /// `format!` per level.
++    static FAST_HASH: Cell<bool> = Cell::new(std::env::var_os("MINI_FASTHASH").is_some());
++}
++
++pub fn no_hash() -> bool { NO_HASH.with(|a| a.get()) }
++
++// ───────────────────────────── experiment H: hash-consing `Expr` ──
++//
++// `mk` routes every `Expr` allocation here when `MINI_INTERN` is set. The
++// intern table holds a strong `Rc` for every distinct node, so a pointer that
++// is in `HASHES` can never be reused for a different node while the run lives.
++
++use crate::expr::{Expr, E};
++
++thread_local! {
++    static INTERN_ON: Cell<bool> = Cell::new(std::env::var_os("MINI_INTERN").is_some());
++    static TABLE: RefCell<HashMap<u64, Vec<E>>> = RefCell::new(HashMap::new());
++    static HASHES: RefCell<HashMap<usize, u64>> = RefCell::new(HashMap::new());
++}
++
++pub fn intern_on() -> bool { INTERN_ON.with(|a| a.get()) }
++
++#[inline(always)]
++fn mix(a: u64, b: u64) -> u64 { (a ^ b).wrapping_mul(0x517c_c1b7_2722_0a95).rotate_left(26) }
++
++fn name_hash(n: &crate::expr::Name) -> u64 {
++    use crate::expr::Name;
++    match n {
++        Name::Anon => 5,
++        Name::Str(p, s) => {
++            let mut h = 6u64;
++            for b in s.as_bytes() {
++                h = mix(h, *b as u64);
++            }
++            mix(h, name_hash(p))
++        }
++        Name::Num(p, i) => mix(mix(7, *i), name_hash(p)),
++    }
++}
++
++fn level_hash(l: &crate::expr::Level) -> u64 {
++    use crate::expr::Level;
++    match l {
++        Level::Zero => 0,
++        Level::Succ(a) => mix(1, level_hash(a)),
++        Level::Max(a, b) => mix(mix(2, level_hash(a)), level_hash(b)),
++        Level::IMax(a, b) => mix(mix(3, level_hash(a)), level_hash(b)),
++        Level::Param(n) => mix(4, name_hash(n)),
++    }
++}
++
++/// The hash of an already-interned child, in O(1).
++fn child(e: &E) -> u64 {
++    let k = std::rc::Rc::as_ptr(e) as usize;
++    HASHES.with(|m| m.borrow().get(&k).copied()).unwrap_or_else(|| {
++        bump(&UNINTERNED_CHILD);
++        0
++    })
++}
++
++/// One node's hash from its children's — O(1), which is the whole point: a
++/// hash-consed representation pays for the key once, at construction.
++fn shallow(e: &Expr) -> u64 {
++    match e {
++        Expr::BVar(i) => mix(0, *i as u64),
++        Expr::Sort(u) => mix(1, level_hash(u)),
++        Expr::Const(n, ls) => {
++            let mut h = mix(2, name_hash(n));
++            for l in ls.iter() {
++                h = mix(h, level_hash(l));
++            }
++            h
++        }
++        Expr::App(f, a) => mix(mix(3, child(f)), child(a)),
++        Expr::Lam { ty, body } => mix(mix(4, child(ty)), child(body)),
++        Expr::Forall { ty, body } => mix(mix(5, child(ty)), child(body)),
++        Expr::Let { ty, val, body } => mix(mix(mix(6, child(ty)), child(val)), child(body)),
++        Expr::Proj { ind, idx, s } => mix(mix(mix(7, name_hash(ind)), *idx as u64), child(s)),
++        Expr::NatLit(n) => mix(8, *n),
++        Expr::StrLit(s) => {
++            let mut h = 9u64;
++            for b in s.as_bytes() {
++                h = mix(h, *b as u64);
++            }
++            h
++        }
++    }
++}
++
++pub fn intern(e: Expr) -> E {
++    let h = shallow(&e);
++    let hit = TABLE.with(|t| {
++        t.borrow().get(&h).and_then(|v| v.iter().find(|c| ***c == e).cloned())
++    });
++    if let Some(c) = hit {
++        bump(&INTERN_HIT);
++        return c
++    }
++    bump(&INTERN_MISS);
++    let rc: E = std::rc::Rc::new(e);
++    HASHES.with(|m| m.borrow_mut().insert(std::rc::Rc::as_ptr(&rc) as usize, h));
++    TABLE.with(|t| t.borrow_mut().entry(h).or_default().push(rc.clone()));
++    rc
++}
++
++pub fn intern_size() -> usize { TABLE.with(|t| t.borrow().values().map(|v| v.len()).sum()) }
++pub fn fast_hash() -> bool { FAST_HASH.with(|a| a.get()) }
++
++pub fn frame_all() -> bool { FRAME_ALL.with(|a| a.get()) }
++pub fn whnf_memo() -> bool { WHNF_MEMO.with(|a| a.get()) }
++
++thread_local! {
++    static ADD_DEPTH: Cell<u32> = const { Cell::new(0) };
++    static ADD_NANOS: Cell<u128> = const { Cell::new(0) };
++    static ADD_ROWS: RefCell<Vec<(String, f64, u64)>> = RefCell::new(Vec::new());
++}
++
++/// RAII guard around one **outermost** `kernel::add`.
++pub struct AddGuard(Option<std::time::Instant>, String);
++
++pub fn add_enter(name: String) -> AddGuard {
++    let d = ADD_DEPTH.with(|c| { let v = c.get(); c.set(v + 1); v });
++    AddGuard(if d == 0 { Some(std::time::Instant::now()) } else { None }, name)
++}
++
++impl Drop for AddGuard {
++    fn drop(&mut self) {
++        ADD_DEPTH.with(|c| c.set(c.get() - 1));
++        if let Some(t) = self.0 {
++            let dt = t.elapsed();
++            ADD_NANOS.with(|c| c.set(c.get() + dt.as_nanos()));
++            let n = INFER_ENTRIES.with(|c| c.get());
++            ADD_ROWS.with(|r| r.borrow_mut().push((self.1.clone(), dt.as_secs_f64(), n)));
++        }
++    }
++}
++
++pub fn add_secs() -> f64 { ADD_NANOS.with(|c| c.get()) as f64 / 1e9 }
++
++pub fn add_rows() -> Vec<(String, f64, u64)> { ADD_ROWS.with(|r| r.borrow().clone()) }
++
++pub fn reset_adds() {
++    ADD_NANOS.with(|c| c.set(0));
++    ADD_ROWS.with(|r| r.borrow_mut().clear());
++}
++
++pub fn note_infer(lenv: u64, e: u64) {
++    if !armed() {
++        return
++    }
++    CENSUS.with(|m| *m.borrow_mut().entry((lenv, e)).or_insert(0) += 1);
++}
++
++pub fn note_whnf(lenv: u64, e: u64) {
++    if !armed() {
++        return
++    }
++    WHNF_CENSUS.with(|m| *m.borrow_mut().entry((lenv, e)).or_insert(0) += 1);
++}
++
++fn census_line(name: &str, m: &HashMap<(u64, u64), u64>) -> String {
++    let total: u64 = m.values().sum();
++    let distinct = m.len() as u64;
++    // Distinct expressions ignoring the telescope — what a memo keyed on the
++    // expression alone, across openings, could collapse to.
++    let mut by_expr: HashMap<u64, u64> = HashMap::new();
++    for ((_, e), n) in m {
++        *by_expr.entry(*e).or_insert(0) += n;
++    }
++    let top = m.values().copied().max().unwrap_or(0);
++    format!(
++        "{name}: total={total} distinct(lenv,e)={distinct} distinct(e)={} \
++         dup={:.1}x pct_distinct={:.3}% max_repeat={top}",
++        by_expr.len(),
++        if distinct == 0 { 0.0 } else { total as f64 / distinct as f64 },
++        if total == 0 { 0.0 } else { 100.0 * distinct as f64 / total as f64 },
++    )
++}
++
++pub fn report(tag: &str) {
++    let s = snapshot();
++    let mut parts = Vec::new();
++    for (n, v) in &s {
++        if *v != 0 {
++            parts.push(format!("{n}={v}"));
++        }
++    }
++    println!("PROBE [{tag}] {}", parts.join(" "));
++    if intern_on() {
++        println!("PROBE [{tag}] intern_distinct={}", intern_size());
++    }
++    if armed() {
++        CENSUS.with(|m| println!("PROBE [{tag}] {}", census_line("infer", &m.borrow())));
++        WHNF_CENSUS.with(|m| println!("PROBE [{tag}] {}", census_line("whnf", &m.borrow())));
++    }
++}
+diff --git a/mini/src/proj_data.rs b/mini/src/proj_data.rs
+index eb30766..7550c7b 100644
+--- a/mini/src/proj_data.rs
++++ b/mini/src/proj_data.rs
+@@ -796,7 +796,7 @@ pub(crate) fn structure_eta(
+     }
+     let mut convs = Vec::with_capacity(k);
+     for (i, pi) in pis.iter().enumerate() {
+-        let p = std::rc::Rc::new(Expr::Proj {
++        let p = crate::expr::mk(Expr::Proj {
+             ind: ind.clone(),
+             idx: u32::try_from(i).map_err(|_| miss!())?,
+             s: e2.clone(),
+diff --git a/mini/src/proj_prop.rs b/mini/src/proj_prop.rs
+index 0a8db0d..1348674 100644
+--- a/mini/src/proj_prop.rs
++++ b/mini/src/proj_prop.rs
+@@ -977,7 +977,7 @@ mod tests {
+         let unit = Name::str(&nm("PU"), "unit");
+         let at1u: Rc<[Level]> = vec![Level::Zero.succ()].into();
+         let subject = app(konst(mk, no()), konst(unit, at1u));
+-        let e = Rc::new(Expr::Proj { ind: nm("W"), idx: 0, s: subject });
++        let e = crate::expr::mk(Expr::Proj { ind: nm("W"), idx: 0, s: subject });
+ 
+         let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
+         let field_ty = konst(nm("PU"), at1);
+diff --git a/mini/src/rec_dep.rs b/mini/src/rec_dep.rs
+index 099265c..7ba1168 100644
+--- a/mini/src/rec_dep.rs
++++ b/mini/src/rec_dep.rs
+@@ -719,7 +719,7 @@ fn field_types(ctor_ty: &E, param_es: &[E], nf: usize) -> Vec<Option<E>> {
+     for _ in 0..nf {
+         let Expr::Forall { ty: dom, body } = &*ty.clone() else { break };
+         out.push(Some(dom.clone()));
+-        let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
++        let at = |l: Level| crate::expr::subst(body, &crate::expr::mk(Expr::Sort(l)));
+         let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+         if a != b {
+             break
+diff --git a/mini/src/zoneb.rs b/mini/src/zoneb.rs
+index ce60046..9c19665 100644
+--- a/mini/src/zoneb.rs
++++ b/mini/src/zoneb.rs
+@@ -2423,7 +2423,7 @@ fn rec_field(
+ /// which expression `⟦B⟧` is or they compose two different sets.)*
+ pub(crate) fn rec_field_codomain(ty: &E) -> Option<E> {
+     let Expr::Forall { body, .. } = &**ty else { return None };
+-    let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
++    let at = |l: Level| crate::expr::subst(body, &crate::expr::mk(Expr::Sort(l)));
+     let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+     (a == b).then_some(a)
+ }
