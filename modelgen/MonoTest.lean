@@ -45,6 +45,7 @@ def expected : List Row :=
   , { file := "mono_proj",  declsIn := 12, outA := 19, outB := 19, regen := 0 }
   , { file := "mono_prop",  declsIn := 17, outA := 23, outB := 23, regen := 2 }
   , { file := "mono_mutual",declsIn := 14, outA := 21, outB := 21, regen := 0 }
+  , { file := "mono_offname", declsIn := 13, outA := 19, outB := 19, regen := 0 }
   , { file := "marker_taken"
       refused := some "the file already declares foo._at.bar, which spells a marker" } ]
 

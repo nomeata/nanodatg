@@ -37,35 +37,58 @@ output needs to know the pass only through what is written here.
 
 Let `d` be a declaration with universe parameters `ℓ⃗` and let `σ` be one ground
 instantiation of them — a natural number per parameter, in `d`'s own order.
+Write `k = |σ|`. Then
 
-Define `d`'s **owner** `o(d)`:
+> **`mono(d, σ)`** is `d`'s name with `_at ++ ⟨k⟩ ++ ⟨σ₀⟩ ++ … ++ ⟨σₖ₋₁⟩`
+> prepended at the **root**, where `_at` is a `Name.str` component and every
+> `⟨·⟩` is a `Name.num` component. **`σ` empty is the identity.**
 
-* if `d` is a member, a constructor or a recursor of an inductive block, `o(d)`
-  is the block member it belongs to: the member itself; a constructor's
-  `induct`; and for a recursor, the **longest** block-member name that is a
-  prefix of the recursor's name — a real member's recursor lives in that
-  member's own namespace and a nested mimic's in the first member's
-  (`modelgen/tests/nest_mutual_both.ndjson` is where that was measured);
-* otherwise `o(d)` is `d`'s own name.
-
-Then
-
-> **`mono(d, σ)`** is `d`'s name with the prefix `o(d)` replaced by
-> `o(d) ++ _at ++ ⟨σ₀⟩ ++ … ++ ⟨σₖ₋₁⟩`, where `_at` is a `Name.str` component
-> and each `⟨σᵢ⟩` is a `Name.num` component. **`σ` empty is the identity.**
-
-`Wrap.{u}` at `[0]` is `Wrap._at.0`; its constructor `Wrap.mk` is
-`Wrap._at.0.mk`; its recursor `Wrap.rec` is `Wrap._at.0.rec`. `Pair.{u,v}` at
-`[1,0]` is `Pair._at.1.0`. A monomorphic declaration — `Nat`, `Nat.succ`,
+`Wrap.{u}` at `[0]` is `_at.1.0.Wrap`; its constructor `Wrap.mk` is
+`_at.1.0.Wrap.mk`; its recursor `Wrap.rec` is `_at.1.0.Wrap.rec`. `Pair.{u,v}`
+at `[1,0]` is `_at.2.1.0.Pair`. A monomorphic declaration — `Nat`, `Nat.succ`,
 `N.rec` — keeps its name **exactly**.
 
-The owner is not a flourish. Lean's kernel and `nanoda` both *derive* a
-recursor's name from the inductive's, so `Wrap._at.0`'s recursor has to be
-`Wrap._at.0.rec` and cannot be `Wrap.rec._at.0`.
+**Why the prefix, and why it is the whole scheme.** One relationship has to
+survive monomorphization: Lean's kernel and `nanoda` both *derive* a recursor's
+name from its inductive's rather than reading it, so the copy of `Wrap` at `σ`
+must have its recursor named `⟨that copy⟩.rec`. Prepending a fixed prefix to
+every name in the file preserves *every* suffix relationship at once — `I`
+becomes `p ++ I` and `I ++ rec` becomes `p ++ I ++ rec` — so the derived name
+follows with no case for it, and the pass never asks what a name looks like.
+
+That last clause is the property, not a convenience. The scheme this replaced
+renamed by substituting an **owner** prefix (a constructor's `induct`, a
+recursor's block member) and was therefore the identity whenever the owner was
+not a prefix of the name; Mathlib has 142 such constructors — private
+constructors of public inductives — and every copy of those blocks came out with
+one name (§9.2). A scheme that reads name structure has a shape it cannot
+rename; a prefix has none.
+
+**Why the length `⟨k⟩` is there.** So that the marker's extent is known without
+looking at what follows it. An inverter reads `_at`, reads `k`, takes the next
+`k` components as `σ`, and everything after that is the input's name — whatever
+shape it has, including a name whose own root component is numeric. Without the
+length, `_at.0` prepended to `1.Foo` and `_at.0.1` prepended to `Foo` are the
+same name, and the scheme would only be invertible under an assumption about the
+input's names. It makes no such assumption.
 
 **Mode B** adds one suffix, and only to recursors: a recursor whose copy at
 eliminating universe `w` is emitted is named `mono(d, σ) ++ _elim ++ ⟨w⟩`.
-`Wrap._at.0.rec._elim.2`.
+`_at.1.0.Wrap.rec._elim.2`. Mode B is the one place the output is *not* a
+kernel's to re-derive, which §4.2 already says.
+
+**It composes with names another pass invented.** The pipeline is `modelgen`,
+then `monomorph`, then `mini` (`MODELGEN.md`), so by the time this scheme runs,
+the file contains names `modelgen` synthesised — `T._model.k`, `T._model.self`,
+`T._model.pack_i`, `T.rec_k`. Because the marker is a root prefix, they are
+renamed by the same rule as everything else and their internal structure keeps
+working: `modelgen/tests/poly_nested.ndjson` through both passes in mode B
+yields `_at.1.0.PTree._model.0`, its constructors, its recursor
+`_at.1.0.PTree._model.0.rec._elim.0` — derived from the model's *own* name,
+which is itself derived — and `_at.1.0.PTree._model.pack_0`. Nothing about
+`_model` is known here, and nothing needs to be. A copy's marker also makes the
+instantiation of `T.rec` and of `T._model.rec_k` visibly the same prefix, which
+is what a rule tying the second to the first (task #116) will want.
 
 ## 1.2 The three properties a consumer may rely on
 
@@ -94,9 +117,15 @@ eliminating universe `w` is emitted is named `mono(d, σ) ++ _elim ++ ⟨w⟩`.
 3. **The scheme is invertible.** `_at` and `_elim` occur in no name of the
    input — a file that spells either is **refused whole** (§6), which is what
    makes this a theorem rather than a convention. To invert a name: strip a
-   trailing `._elim.⟨w⟩` if present, then find the unique `_at` component; the
-   `Name.num` components immediately after it are `σ`, in the declaration's own
-   parameter order, and deleting them gives the input's name.
+   trailing `._elim.⟨w⟩` if present; if the **root** component is then the
+   `Name.str` `_at`, read the next component as `k`, take the following `k`
+   `Name.num` components as `σ` in the declaration's own parameter order, and
+   what remains is the input's name; otherwise `σ` is empty and the name is the
+   input's unchanged.
+
+   Inversion needs no other fact about the name — not where the declaration
+   lives, not whether it is private, not whether it is a constructor. That is
+   the same property, read from the other end.
 
 ## 1.3 What the contract does **not** say
 
@@ -355,7 +384,7 @@ and the reason is printed.
 | decline | fixture | what Lean does |
 | --- | --- | --- |
 | `the file already declares N, which spells a marker` | `modelgen/monotests/marker_taken.ndjson` | accepts `def foo._at.bar : N := N.z`, and mints `_at` names itself for specialised code. §1.2's property 3 is a theorem only on a file with no `_at` or `_elim` component, so the pass refuses rather than emit a name a consumer could not invert. |
-| `two output declarations are both named N` | `vendor/arena-tests/bad/126_dup_defs`, `127_dup_ind_def`, `128_dup_ctor_def`, `129_dup_rec_def`, `132_dup_ctor_rec` | these five are files Lean would reject too, so as *files* they are a boundary — but the guard is a gap in principle: a legitimate input in which two distinct declarations monomorphize to one name would be refused rather than merged. **Mathlib is such an input** (§9.2): a *private constructor of a public inductive* has an owner that is not a prefix of its own name, `Name.replacePrefix` is then the identity, and every copy of the block gets one name. 142 constructors of 9299, 52 of them in a block with level parameters. |
+| `two output declarations are both named N` | `vendor/arena-tests/bad/126_dup_defs`, `127_dup_ind_def`, `128_dup_ctor_def`, `129_dup_rec_def`, `132_dup_ctor_rec` | these five are files Lean would reject too, so as *files* they are a boundary. The guard remains a gap in principle — a legitimate input in which two distinct declarations monomorphize to one name would be refused rather than merged — but §1.1's scheme is injective by construction, so no such input is reachable through the renaming itself: `mono` prepends the same prefix to every name of a copy, and two copies differ in `σ`. Mathlib **was** such an input under the previous scheme and is not under this one (§9.2), and `modelgen/monotests/mono_offname.ndjson` is the shape, kept as a fixture. |
 
 ## 6.2 Boundaries — shapes Lean does not support either
 
@@ -532,25 +561,37 @@ content rather than a smaller module standing in for it.
 
 Run unmodified, `monomorph` refuses Mathlib twice.
 
-**The first is a bug in the naming scheme.** At 30 million lines:
+**The first was a bug in the naming scheme, and §1.1 no longer has it.** At 30
+million lines, under the *previous* scheme:
 
 ```
 pre-30000000.ndjson: passed through unchanged — two output declarations are both
 named _private.Mathlib.Algebra.Category.MonCat.Basic.0.AddMonCat.Hom.mk
 ```
 
-The input has **no duplicate declaration names** (checked over that same 30 M
-prefix: 184,960 declaration names, 184,960 distinct), so the pass creates the
-collision. `AddMonCat.Hom` is a **public** inductive with a **private**
-constructor
-`_private.Mathlib.Algebra.Category.MonCat.Basic.0.AddMonCat.Hom.mk`. §1.1 makes
-the constructor's owner its `induct`, and `monoName`'s
-`full.replacePrefix owner …` is **the identity when `owner` is not a prefix of
-`full`** — so the constructor keeps one name at every instantiation, and the
-block's second copy collides with its first. Across all of Mathlib: **142 of
+**The pass did not, and does not, strip a private prefix.** What happened is the
+opposite: it **failed to rename**. The input has no duplicate declaration names
+(checked over that same 30 M prefix: 184,960 declaration names, 184,960
+distinct), so the pass created the collision. `AddMonCat.Hom` is a **public**
+inductive with a **private** constructor
+`_private.Mathlib.Algebra.Category.MonCat.Basic.0.AddMonCat.Hom.mk`. The old
+§1.1 made a constructor's *owner* its `induct` and renamed by
+`full.replacePrefix owner …`, which is **the identity when `owner` is not a
+prefix of `full`** — so the constructor kept one name at every instantiation and
+the block's second copy collided with its first. Across all of Mathlib: **142 of
 9299 constructors** are private under a public inductive, **52** of them in a
-block with level parameters, and **0 of 6796 recursors** are affected. This is
-§6.1's second row, which said "no such input is known".
+block with level parameters, and **0 of 6796 recursors** were affected.
+
+Private names are not the defect and no rule about them is the fix. The defect
+was reading name *structure* at all; §1.1's marker is a root prefix and reads
+none, and the private constructor is renamed by exactly the same rule as every
+other name. `modelgen/monotests/mono_offname.ndjson` is the shape as a fixture —
+a public `Off.{u}` with a private `mk`, used at three universes; the old binary
+refuses it by name and the current one emits `_at.1.0.Off`,
+`_at.1.0._private.MonoOffname.0.Off.mk` and `_at.1.0.Off.rec`, three times over,
+with the kernel accepting all of it. On the 30 M prefix the pass now runs to
+completion: **184,960 declarations in, 213,727 out, 0 rejected**, 155.72 s at
+9,791,652 KB.
 
 **The second is a property of the export.** On the whole file:
 
@@ -587,7 +628,10 @@ handles these five and the backward pass does not.
 
 ## 9.4 Duplication — the answer
 
-Measured with the two experimental patches of §9.6.
+Measured with §9.6's `MONO_UNSORTED` on the Mathlib row, and re-measured after
+§1.1's naming scheme replaced the other patch: **the counts are unchanged**,
+which they must be — the scheme changes what a copy is called and not how many
+there are.
 
 | | declarations in | mode A | mode B |
 | --- | ---: | ---: | ---: |
@@ -648,23 +692,38 @@ becomes 118 declarations, and the `<= 5` of §5.1 is not a bound.
 | mode A, output **not** written | **749.32 s** | **34,426,172 KB** |
 | mode A, instrumented (§9.6), output not written | 769.70 s | 34,353,660 KB |
 | mode B, output not written | **1053.09 s** | **37,520,836 KB** |
-| mode A, `-o mathlib-A.ndjson` | **fails at 953.28 s** | **44,869,080 KB** |
+| mode A, `-o` — *accumulating writer* | **fails at 953.28 s** | **44,869,080 KB** |
+| **mode A, `-o` — streaming writer** | **815.42 s** | **36,203,968 KB** |
+| *30 M prefix:* mode A, `-o`, unpatched binary | 155.72 s | 9,791,652 KB |
 | *20 M prefix:* mode A | 86.87 s | 9,308,000 KB |
 | *20 M prefix:* mode A `--check` (Lean's kernel over all 144,404) | 213.37 s | 6,380,364 KB |
 | *20 M prefix:* mode B | 138.60 s | 9,542,160 KB |
 
-**Where it stops.** With `-o`, the pass finishes the whole computation — it
-prints the full report, all 776,723 declarations accounted for — and then dies:
+**It used to stop at serialisation, and no longer does.** With `-o`, the pass
+would finish the whole computation — printing the full report, all 776,723
+declarations accounted for — and then die:
 
 ```
 INTERNAL PANIC: out of memory
 ```
 
 in `Export.render`, under a deliberate `ulimit -v` of 46,000,000 KB. Render
-builds an `Array String` of ~110 million lines and `String.intercalate`s it into
-one ~6 GB `String`; that is the step with no streaming in it. **`monomorph` can
-monomorphize Mathlib and cannot serialise it.** The output file was never
-written, so nothing downstream of it was measured on the full input.
+built an `Array String` of ~102 million lines and `String.intercalate`d it into
+one ~6 GB `String`; that was the step with no streaming in it. `monomorph` could
+monomorphize Mathlib and could not serialise it.
+
+`Export.stream` (`Modelgen/Format.lean`) drains the writer's line buffer after
+every record and flushes to the handle in 4 MiB chunks, so the largest live
+object is that buffer rather than the file. **Mathlib now writes**:
+**5,816,574,517 bytes, 101,934,568 lines, in 815.42 s at 36,203,968 KB**, under
+a `ulimit -v` of 40,000,000 KB, exit 0. Against the run that wrote nothing at
+all, serialising the whole 5.8 GB costs **+66.1 s (+8.8 %) and +1.78 GB
+(+5.2 %)** — the extra memory is the writer's three interning tables, which the
+`-o`-less run never builds.
+
+Both paths through the writer are the same fold, and `monotest` checks that
+`Export.writeTo` and `Export.render` produce the same bytes on every fixture in
+both modes and that both reproduce `001_basicDef.ndjson` exactly.
 
 Phase timings, from `monomorphize` entry (`MONO_PHASES=1`, §9.6), mode A:
 
@@ -686,8 +745,8 @@ Replaying the input to infer projected types costs **103.0 s, 13.4 %** of a
 It is, however, the reason the pass needs a Lean `Environment` at all, and that
 is where §9.7's hazard lives.
 
-The ladder, mode A, on genuine Mathlib prefixes (unmodified binary except the
-last row):
+The ladder, mode A, `-o` written, on genuine Mathlib prefixes (unmodified binary
+except the last row, which needs §9.6's `MONO_UNSORTED`):
 
 | lines | bytes | decls in | out | ratio | groups | worst | recRegen | wall | peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -695,16 +754,17 @@ last row):
 | 3 M | 161,692,734 | 29,640 | 31,083 | 1.049× | 27,389 | 12 | 175 | 12.93 s | 1,488,672 KB |
 | 10 M | 537,800,217 | 72,901 | 80,521 | 1.105× | 69,038 | 25 | 396 | 43.13 s | 4,826,692 KB |
 | 20 M | 1,097,064,174 | 132,184 | 144,404 | 1.093× | 124,788 | 28 | 654 | 86.87 s | 9,308,000 KB |
-| 30 M | 1,653,766,803 | — | *refused, §9.2* | — | — | — | — | 105.24 s | 9,495,244 KB |
-| 100 M | 5,636,308,621 | 670,630 | 776,723 | 1.158× | 654,305 | 118 | 2,027 | 749.32 s | 34,426,172 KB |
+| 30 M | 1,653,766,803 | 184,960 | 213,727 | 1.156× | 175,012 | 44 | 1,032 | 155.72 s | 9,791,652 KB |
+| 100 M | 5,636,308,621 | 670,630 | 776,723 | 1.158× | 654,305 | 118 | 2,027 | 815.42 s | 36,203,968 KB |
 
 **Memory is sublinear in the input and time is mildly superlinear.** Peak RSS
-per input byte *falls* across the ladder — 9.45×, 9.43×, 9.19×, 8.69×, **6.25×**
-— because the interning tables amortise. Wall per million lines is flat at
-3.8–4.3 s up to 20 M and then **7.49 s** at 100 M; the extra is the backward
-sweep and emission, not the parse. So the failure in §9.5 is a large constant
-meeting a fixed budget, not an explosion — but a linear extrapolation from the
-small end would have *under*-predicted the time by 40 %.
+per input byte *falls* across the ladder and then flattens — 9.45×, 9.43×,
+9.19×, 8.69×, 6.06×, **6.58×** — because the interning tables amortise; the last
+two are within GC noise of each other and should not be read as a turn upwards.
+Wall per million lines is flat at 3.8–4.3 s up to 20 M, 5.19 s at 30 M and
+**8.15 s** at 100 M; the extra is the backward sweep and emission, not the
+parse. So the wall clock is a large constant, not an explosion — but a linear
+extrapolation from the small end would have *under*-predicted it by half.
 
 **Both external oracles hold at Mathlib scale.** On the 20-million-line prefix,
 `monomorph --check` — Lean's own kernel over every emitted declaration — takes
@@ -736,37 +796,55 @@ level" — added exactly one group, `Nonempty`, reached from `Classical.choice`,
 which is the same single addition it makes on `init-prelude`. Over 654,305
 groups the closure did not run away.
 
-**Two patches were needed to measure §9.4 at all, and neither is committed.**
-Both live in `Modelgen/Mono.lean` in a scratch worktree, marked
-`EXPERIMENTAL, NOT FOR COMMIT`, and both are inert unless triggered:
+**Two patches were needed to measure §9.4 at the time, and one of them is now
+unnecessary.**
 
-1. `monoName` falls back to putting the marker at the *end* of the name when the
-   owner is not a prefix of it — §9.2's private constructors. Verified
-   **byte-identical output on `init-prelude`** and all `monotest` fixtures pass,
-   so it is a no-op on everything the corpus contains.
+1. `monoName` falling back to putting the marker at the *end* of the name when
+   the owner is not a prefix of it — §9.2's private constructors. **Gone.**
+   §1.1's scheme has no owner and no fallback; the shape it worked around is
+   `monotests/mono_offname.ndjson` and is handled by the ordinary rule.
 2. `MONO_UNSORTED=1` downgrades the sortedness refusal to a counted warning.
-   **This makes the result an undercount**, and the size of the undercount is
-   bounded: demand that the 5 violating groups of §9.3 push onto the 3 groups
-   they reference forward is dropped, so at most those 3 groups have fewer
-   copies than they should. 3 of 654,305.
+   **Still needed, and still not committed** — it lives in `Modelgen/Mono.lean`
+   in a scratch worktree marked `EXPERIMENTAL, NOT FOR COMMIT`, inert unless
+   triggered. §9.3's five forward references are a real defect in the single
+   backward pass and are not fixed here, so the full-file rows of §9.4 and §9.5
+   are measured with it on. **This makes the result an undercount**, and the
+   size of the undercount is bounded: demand that the 5 violating groups push
+   onto the 3 groups they reference forward is dropped, so at most those 3
+   groups have fewer copies than they should. 3 of 654,305. Every row up to and
+   including the 30 M prefix is the unmodified binary.
 
-A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints. The right fix for (1) is
-a real design decision — put the marker at the end, or key the copy off the
-block rather than the name — and is not made here.
+A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
 
 ## 9.7 What was not run, and one hazard found
 
-* **Lean's kernel over the full mode A output.** Not run: at 776,723
-  declarations the pass cannot get that far in the memory available, and §9.5's
-  run died before the file existed. It **was** run on the 20-million-line
-  prefix, and both halves of §4.1's oracle hold there — see §9.5.
-* **`nanoda` on the full Mathlib mode A output.** Same reason.
+* **Lean's kernel over the full mode A output.** Still not run: `--check`
+  roughly doubles a pass that already peaks at 36 GB. It **is** run on the
+  30-million-line prefix — the scale at which the old naming scheme collided —
+  and rejects **0 of 213,727** in 297.36 s at 9,824,728 KB, and on the
+  20-million-line prefix (0 of 144,404). §4.1's oracle holds at both.
+* **`nanoda` on the full Mathlib mode A output.** **Run, and it stops**, at
+  266.89 s / 6,514,308 KB:
+
+  ```
+  declaration not found in infer_const,
+  Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM
+  ```
+
+  That name is §9.3's, and this is the `MONO_UNSORTED` undercount made visible
+  rather than a defect in the output: the pass was told to ignore the forward
+  reference, so the group that mentions `AnalyzeAppM` is emitted before the
+  group that declares it, and `nanoda` reads the file strictly in order. It is
+  the same thing the unpatched binary refuses the file for. Nothing about the
+  naming or the writer is implicated — the file parses to its last line, and
+  `nanoda` had already accepted 5.8 GB of it.
 * **Mode B's output, at any Mathlib scale.** Counted, never written or checked —
   and §4.2 says no checker accepts it anyway.
 * **The maximal sorted prefix.** §9.3 puts the first violation at group 135,365
   of 654,305, so a prefix cut exactly there would be the largest input the
-  *unpatched* pass could accept. It was not built; the 20 M prefix (124,788
-  groups) is close to it and is what the tables use.
+  *unpatched* pass could accept. It was not built; the 30 M prefix (175,012
+  groups) overshoots it and needs no patch only because the forward reference's
+  *target* is not in the prefix either.
 
 **The hazard.** During both replays — the `proj` environment and mode A's
 recursor regeneration — Lean panics:
@@ -776,15 +854,31 @@ PANIC at Lean.AsyncConsts.add: duplicate normalized declaration name
   Lean.Meta.evalList vs. _private.Lean.Meta.ReduceEval.0.Lean.Meta.evalList
 ```
 
-**1,726 times on the full file, over 767 distinct name pairs.** Lean normalises
-a private name by stripping its `_private.<module>.<n>.` prefix, and Mathlib
-contains public/private pairs that collide once flattened into one
-`Environment`. The panic is non-fatal — the pass reports `0` rejected and no
-errors — which is precisely the problem: **the environment silently loses a
-declaration, and it is the environment `inferProjType` is asked about in §6.3.**
-No wrong output was observed and none was looked for. The pass's own duplicate
-guard compares names *exactly* and cannot see this; Lean's kernel, which
-compares them *normalized*, can. That makes it a real obstacle to §4.1's oracle
-on full Mathlib and not only a noisy log.
+**1,726 times on the full file, over 767 distinct name pairs.** **This is Lean's
+own private-name normalization and nothing the pass asks for.** `AsyncConsts.add`
+keys a declaration by `privateToUserName`, which strips a `_private.<module>.<n>.`
+root prefix; Mathlib contains public/private pairs that collide once flattened
+into one `Environment`. `monomorph` never strips, never inspects and never
+special-cases a private name — §1.1 renames one, if it renames it at all, by the
+same root prefix as everything else. Do not read this paragraph and §9.2
+together as one story: they are two unrelated mechanisms that happen to both
+involve Mathlib's private names.
+
+The panic is non-fatal — the pass reports `0` rejected and no errors — which is
+precisely the problem: **the environment silently loses a declaration, and it is
+the environment `inferProjType` is asked about in §6.3.** No wrong output was
+observed and none was looked for. The pass's own duplicate guard compares names
+*exactly* and cannot see this; Lean's kernel, which compares them *normalized*,
+can. That makes it a real obstacle to §4.1's oracle on full Mathlib and not only
+a noisy log.
+
+One side effect of §1.1 is worth naming, because it is a side effect and not a
+fix: a renamed declaration's root component is `_at`, so Lean no longer
+classifies it as private and `privateToUserName` is the identity on it. The
+panic therefore cannot fire between two *monomorphized* declarations, and the
+count on the full file falls from **1,726 over 767 distinct pairs to 1,028 over
+418**. What remains still fires during the input replay (§6.3), which is where
+the hazard actually lives, and between declarations the pass left alone. The
+obstacle is unchanged; only the noise is smaller.
 
 None of §8 changes. `mini/` is still untouched by this work.

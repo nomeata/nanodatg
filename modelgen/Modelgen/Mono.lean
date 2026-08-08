@@ -63,14 +63,30 @@ def natLevel : Nat → Level
   | 0 => .zero
   | n + 1 => .succ (natLevel n)
 
-/-- The marker: a `Name.str` component `_at`, then one `Name.num` per level. -/
-def atName (base : Name) (σ : Inst) : Name :=
-  σ.foldl (fun n k => .num n k) (.str base "_at")
+/-- **The marker.** A `Name.str` component `_at` at the *root*, then `|σ|` as a
+`Name.num`, then one `Name.num` per level.
 
-/-- `full` at `σ`, where `owner` is the prefix that carries the marker. Empty
-`σ` is the identity, so a monomorphic declaration keeps its name exactly. -/
-def monoName (owner full : Name) (σ : Inst) : Name :=
-  if σ.isEmpty then full else full.replacePrefix owner (atName owner σ)
+The length comes first so that the marker's extent is known without looking at
+what follows it: an inverter reads `_at`, reads `k`, takes the next `k`
+components as `σ`, and everything after that is the input's name, whatever shape
+it has. Nothing here consults the declaration's own name. -/
+def atPrefix (σ : Inst) : Name :=
+  σ.foldl (fun n k => .num n k) (.num (.str .anonymous "_at") σ.size)
+
+/-- `full` at `σ`: the marker, prepended whole. Empty `σ` is the identity, so a
+monomorphic declaration keeps its name exactly.
+
+**Why a prefix and not surgery.** The one thing that *must* survive is the
+relationship Lean and `nanoda` both derive rather than read: the recursor of an
+inductive named `I` is `I ++ rec`. Prepending a fixed prefix to every name in
+the file preserves every such suffix relationship automatically — `I` becomes
+`p ++ I` and `I ++ rec` becomes `p ++ I ++ rec` — for *any* names, without the
+pass ever asking what a name looks like. The scheme this replaced instead
+replaced an *owner* prefix, which is the identity whenever the owner is not a
+prefix (Mathlib's private constructors of public inductives), and then every
+copy of the block shared one name. -/
+def monoName (full : Name) (σ : Inst) : Name :=
+  if σ.isEmpty then full else atPrefix σ ++ full
 
 /-- Mode B's suffix for a recursor at elimination universe `w`. -/
 def elimName (n : Name) (w : Nat) : Name := .num (.str n "_elim") w
@@ -88,10 +104,6 @@ def usesMarker : Name → Bool
 structure Info where
   /-- The group that declares it. -/
   group : Nat
-  /-- The prefix the `_at` marker is inserted after. For a block member it is
-  the member itself; for a constructor its inductive; for a recursor the member
-  in whose namespace it lives. -/
-  owner : Name
   /-- A recursor's own elimination universe, when it has one. -/
   elim : Option Name := none
   deriving Inhabited
@@ -107,26 +119,23 @@ structure Group where
   elims : Array Name := #[]
   deriving Inhabited
 
-/-- The names one record introduces, paired with the owner each is renamed
-under. -/
-def introOf (d : EDecl) : Array (Name × Name × Option Name) :=
+/-- The names one record introduces, each with its elimination universe if it
+has one.
+
+There is no *owner* here any more, and that absence is the point: the renaming
+([`monoName`]) is a prefix and needs to know nothing about which member a
+constructor or a recursor belongs to. -/
+def introOf (d : EDecl) : Array (Name × Option Name) :=
   match d with
-  | .ax n .. | .defn n .. | .thm n .. | .opaq n .. | .quot n .. => #[(n, n, none)]
+  | .ax n .. | .defn n .. | .thm n .. | .opaq n .. | .quot n .. => #[(n, none)]
   | .induct ts cs rs => Id.run do
-    let members := ts.toArray.map (·.name)
     let blockLp := match ts with | t :: _ => t.levelParams | [] => []
-    let mut out : Array (Name × Name × Option Name) := #[]
-    for t in ts do out := out.push (t.name, t.name, none)
-    for c in cs do out := out.push (c.name, c.induct, none)
+    let mut out : Array (Name × Option Name) := #[]
+    for t in ts do out := out.push (t.name, none)
+    for c in cs do out := out.push (c.name, none)
     for r in rs do
-      -- The longest member name that is a prefix of the recursor's: a real
-      -- member's recursor lives in its own namespace, a mimic's in the first
-      -- member's (`nest_mutual_both` measured that).
-      let mut owner := members[0]!
-      for m in members do
-        if m.isPrefixOf r.name && owner.getNumParts ≤ m.getNumParts then owner := m
       let elim := r.levelParams.filter (fun p => !blockLp.contains p)
-      out := out.push (r.name, owner, elim.head?)
+      out := out.push (r.name, elim.head?)
     return out
 
 /-- Partition the file into groups and index every name it introduces.
@@ -185,8 +194,8 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
       { decls := g.decls.push i, levelParams := lp
         isInd := g.isInd || (match d with | .induct .. => true | _ => false)
         elims }
-    for (n, owner, elim) in introOf d do
-      info := info.insert n { group := gi, owner, elim }
+    for (n, elim) in introOf d do
+      info := info.insert n { group := gi, elim }
     for n in allF do promised := promised.insert n gi
   return (groups, info)
 
@@ -307,7 +316,7 @@ def RwCtx.level (c : RwCtx) (l : Level) : Level := (substLevel c.env l).normaliz
 /-- A name the group itself introduces, at this copy. -/
 def RwCtx.own (c : RwCtx) (n : Name) : Name :=
   match c.info[n]? with
-  | some i => if c.carried.contains i.group then n else monoName i.owner n c.sigma
+  | some i => if c.carried.contains i.group then n else monoName n c.sigma
   | none => n
 
 /-- The rewrite state: the memo for projection-free subterms, and the levels
@@ -335,7 +344,7 @@ def RwCtx.const (c : RwCtx) (n : Name) (us : List Level) : Name × List Level ×
     else match i.elim, us' with
       | some _, w :: rest =>
         let (σ, e1) := ground "a level argument" rest
-        let base := monoName i.owner n σ
+        let base := monoName n σ
         match c.recArity[base]?.getD 1 with
         | 0 =>
           -- The block became small-eliminating at `σ`; the recursor has no
@@ -347,7 +356,7 @@ def RwCtx.const (c : RwCtx) (n : Name) (us : List Level) : Name × List Level ×
         | _ => (base, [w], e1)
       | _, _ =>
         let (σ, e1) := ground "a level argument" us'
-        let base := monoName i.owner n σ
+        let base := monoName n σ
         match i.elim, c.recArity[base]? with
         -- The block became large-eliminating at `σ`. The original recursor
         -- eliminated into `Prop`, so the copy is used at `0`.
@@ -738,7 +747,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     let d := x.decls[groups[gi]!.decls[0]!]!
     match d with
     | .quot .. => carried := carried.insert gi
-    | _ => if (introOf d).any (fun (n, _, _) => seed.contains n) then carried := carried.insert gi
+    | _ => if (introOf d).any (fun (n, _) => seed.contains n) then carried := carried.insert gi
   let mut changed := true
   while changed do
     changed := false
