@@ -111,16 +111,24 @@ with a cycle of mimics whose family recursors are themselves indexed (`XT` over
 
 **`funext_binder` is a field at a mimic under a binder**, and `infinitary`'s
 `HTree`/`RTree`/`OTree` are the same three shapes in a file with no `funext` in
-it. What is left declining is therefore not a *shape* but a **missing constant
-in the input**, and there are two of those:
+it. **Neither declines any more, and neither does `decline_no_eq`**: a prelude
+constant the input does not declare is now *spliced* rather than refused
+(`MODELGEN.md` §1.5), so these two files are the fixtures for the splice and
+the polarity they pin has flipped, not gone:
 
-* `decline_no_eq` — the export declares no `Eq`. The round trips are
-  equations, and this tool does not fabricate an equality Lean never wrote.
-* `infinitary` — the export declares no `funext`. Same principle at the other
-  constant: the proofs for a binder position transport along
-  `(fun x⃗ => pack (unpack (f x⃗))) = f`, and that equality is read from the
-  export or the declaration declines. It is read **lazily**, so no other file
-  in the tree is asked for it.
+* `decline_no_eq` — the input declares no `Eq`, so `Tree`'s model carries
+  Lean's own `Eq`, `Eq.refl` and the `Eq.rec` the kernel mints for it. The
+  file's name is now about what it *lacks* rather than what it gets. 15
+  declarations plus one for the `Eq`.
+* `infinitary` — the input declares no `funext`, so `HTree` splices the
+  quotient, `Quot.sound` and `HTree._model.funext` (three declarations on top
+  of its 15, the quotient counting once) and `RTree` and `OTree` splice only
+  their own `funext`, the quotient being installed by then. This is the file
+  that says a splice happens **once**: three declarations need `funext` and
+  only the first pays for `Quot`.
+* `funext_binder` is the control. It declares Lean's development itself, so
+  nothing is spliced and its five counts are unchanged from before the splice
+  existed — the input's own `funext` beats a derived one.
 
 **`nest_through_mutual` and `nest_mutual_both` are no longer refusals at all.**
 A mutual block whose members nest is a shape Lean has and nothing in the
@@ -177,13 +185,18 @@ def expectedOwn : List Row :=
     -- **The three places a binder can sit relative to the nesting, without a
     -- `funext` in the export.** All three are shapes Lean accepts and all
     -- three are models in `funext_binder.lean`, which is the same three with
-    -- one; here the export declares none and the decline says exactly that,
-    -- which is `decline_no_eq`'s principle at the other constant this module
-    -- reads rather than fabricates.
-  , ("infinitary", [("FTree", 17), ("GTree", 15), ("ZTree", 22)],
-      [ ("HTree", "nested model without funext")
-      , ("RTree", "nested model without funext")
-      , ("OTree", "nested model without funext") ])
+    -- one; here the input declares none and the model derives one from
+    -- `Quot.sound` and splices it in. The three counts are `funext_binder`'s
+    -- 15, 13 and 19 **plus what each had to splice**: `HTree` pays for the
+    -- quotient (one declaration, four records), `Quot.sound` and its own
+    -- `funext`; `RTree` and `OTree` find the quotient already installed and
+    -- pay for a `funext` alone. A treatment that spliced the quotient once per
+    -- declaration would read 18/16/22 here and be rejected by the kernel on
+    -- the second, so these three numbers pin the "once" as well as the
+    -- derivation.
+  , ("infinitary",
+      [("FTree", 17), ("GTree", 15), ("ZTree", 22),
+       ("HTree", 18), ("RTree", 14), ("OTree", 20)], [])
     -- **A field at a mimic under a binder, with a `funext` to prove it with.**
     -- The three positions again — the root (`HTree`), the container's own
     -- recursive field (`RTree`), a container's field at another mimic
@@ -225,7 +238,10 @@ def expectedOwn : List Row :=
   , ("nest_odd_shapes",
       [("EmpT", 11), ("ImpT", 12), ("LetT", 20), ("FunP", 13), ("Deep3", 29),
        ("EvT", 29)], [])
-  , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
+    -- **No `Eq` in the input at all**, which used to be a refusal and is now a
+    -- splice: 15 declarations plus Lean's own `Eq`. The file is still named
+    -- for what it does *not* declare.
+  , ("decline_no_eq", [("Tree", 16)], [])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])
   , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
@@ -357,11 +373,17 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   let r ← mg [input, "-o", "-"]
   a := check a (r.exitCode == 0) s!"CLI: `-o -` exited {r.exitCode}"
   -- The report is on stderr, all of it, and none of it is on stdout.
-  a := check a ((r.stderr.splitOn "declined — nested model without funext").length == 4)
-    s!"CLI: stderr does not carry the three decline reasons: {r.stderr}"
   a := check a ((r.stderr.splitOn "FTree: model of 17 declarations").length == 2)
     s!"CLI: stderr does not carry the models: {r.stderr}"
-  a := check a ((r.stdout.splitOn "declined").length == 1)
+  -- **A splice is reported.** `infinitary` declares no `funext`, so its report
+  -- has to say which declarations were not the input's — that is the one thing
+  -- permissiveness does not excuse (`MODELGEN.md` §1.5).
+  a := check a ((r.stderr.splitOn "prelude spliced").length == 4)
+    s!"CLI: stderr does not carry the three splice lines: {r.stderr}"
+  a := check a ((r.stderr.splitOn "HTree: prelude spliced — Quot, Quot.mk, Quot.lift, \
+      Quot.ind, Quot.sound, HTree._model.funext").length == 2)
+    s!"CLI: the splice line does not name what was spliced: {r.stderr}"
+  a := check a ((r.stdout.splitOn "prelude spliced").length == 1)
     "CLI: a report line reached stdout"
   -- …and stdout is the export, byte for byte what `-o FILE` writes.
   let tmp := s!"{root}/modelgen/.lake/build/cli-test.ndjson"

@@ -74,15 +74,16 @@ namespace Modelgen
 /-- Why a nested declaration's model could not be built. Each is a shape. -/
 inductive Decline where
   | dependentFields
-  | noEq
-  /-- The declaration has a constructor field the block holds at a **mimic**
-  *under a binder* — `HTree.node : (N → List HTree) → HTree` — and the export
-  declares no usable `funext`. That shape's proofs transport along
-  `(fun x⃗ => pack (unpack (f x⃗))) = f`, which is function extensionality, and
-  this module fabricates no equality Lean did not write. Read **lazily**: no
-  other shape asks for `funext`, and `funext` is in 1 of the 157 corpus
-  files, so requiring it of every export would decline all of them. -/
-  | noFunext
+  /-- **A prelude constant the input declares at something other than Lean's
+  statement.** Absence is not this: a prelude constant the input simply does
+  not have is *spliced* ([`Modelgen.ensureEq`], [`Modelgen.ensureFunext`]).
+  This is the case a splice cannot reach, because the name is already bound —
+  by the input, in the output, and in every one of the input's own terms — and
+  Lean's `Environment` has no way to rebind a constant, so replacing it would
+  mean replaying the whole file a second time. The message names the constant
+  and what is wrong with it. No file in the corpus or the fixture tree reaches
+  it (`MODELGEN.md` §5.2). -/
+  | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
@@ -93,14 +94,14 @@ inductive Decline where
 /-- The word that reaches a report line. -/
 def Decline.label : Decline → String
   | .dependentFields => "nested model with dependent fields"
-  | .noEq => "nested model without Eq"
-  | .noFunext => "nested model without funext"
+  | .notLeans n why => s!"nested model: the input's {n} is not Lean's ({why})"
   | .nameTaken n => s!"nested model name taken ({n})"
   | .cyclicMimics => "nested model with mutually recursive occurrences"
   | .malformed m => s!"nested model shape: {m}"
 
 /-- `Eq`, `Eq.refl` and `Eq.rec` at the arities the round trips need. The
-export's own — this module does not fabricate an equality Lean never wrote. -/
+input's own where it has them, and Lean's spliced in where it does not — see
+[`Modelgen.ensureEq`]. -/
 structure EqInfo where
   eqN : Name
   reflN : Name
@@ -108,17 +109,22 @@ structure EqInfo where
   deriving Inhabited
 
 /-- Read the three constants and check the recursor is Lean's shape:
-`Eq.rec α a motive base b h`, two parameters and one index. -/
-def EqInfo.read (env : Environment) : Except Decline EqInfo := do
+`Eq.rec α a motive base b h`, two parameters and one index. The error says
+*which* of them is wrong, because a reason that names where a value stopped
+rather than why is the defect class this repository has paid for most. -/
+def EqInfo.check (env : Environment) : Except String EqInfo := do
   let eq := `Eq
-  let some (.inductInfo iv) := env.constants.find? eq | throw .noEq
-  unless iv.numParams == 2 && iv.numIndices == 1 && iv.ctors.length == 1 do throw .noEq
+  let some (.inductInfo iv) := env.constants.find? eq | throw "it is not an inductive type"
+  unless iv.numParams == 2 && iv.numIndices == 1 && iv.ctors.length == 1 do
+    throw s!"it has {iv.numParams} parameters, {iv.numIndices} indices and \
+      {iv.ctors.length} constructors, where Lean's has 2, 1 and 1"
   let rc := Name.str eq "rec"
-  let some (.recInfo rv) := env.constants.find? rc | throw .noEq
+  let some (.recInfo rv) := env.constants.find? rc | throw "Eq.rec is not a recursor"
   unless rv.numParams == 2 && rv.numMotives == 1 && rv.numMinors == 1 && rv.numIndices == 1 do
-    throw .noEq
+    throw s!"Eq.rec has {rv.numParams} parameters, {rv.numMotives} motives, {rv.numMinors} \
+      minors and {rv.numIndices} indices, where Lean's has 2, 1, 1 and 1"
   let rf := Name.str eq "refl"
-  unless env.constants.contains rf do throw .noEq
+  unless env.constants.contains rf do throw "Eq.refl is not declared"
   return { eqN := eq, reflN := rf, recN := rc }
 
 /-- `Eq.{u} α a b`. -/
@@ -134,6 +140,159 @@ def EqInfo.refl' (e : EqInfo) (u : Level) (α a : Expr) : Expr :=
 *value* is; each caller passes `v` explicitly for that reason. -/
 def EqInfo.recAt (e : EqInfo) (v u : Level) (α a motive base b h : Expr) : Expr :=
   mkAppN (.const e.recN [v, u]) #[α, a, motive, base, b, h]
+
+/-! ## The prelude this construction depends on
+
+Four constants are reached by the *proofs* this module writes and by nothing in
+§1's signatures: `Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it),
+and — only for a field at a mimic **under a binder** — `Quot`, `Quot.sound` and
+`funext`. An export is not obliged to declare any of them: `Eq` is in most of
+the corpus but `decline_no_eq.lean` is a file without one, and `funext` is in
+**1 of the 157 corpus files** and not in `init-prelude`.
+
+**A prelude constant the input lacks is spliced, and a spliced constant is
+reported.** This is the one place `modelgen` writes a declaration that is not
+*about* the nested type, so three things hold it down:
+
+* **Only when a model is actually being spliced.** Every one of these is built
+  inside [`Modelgen.iso`], so a file with nothing to splice is untouched and
+  the identity property — 73 corpus files and all 41 committed
+  `mini/tests/fixtures` copied byte for byte — is not at risk.
+* **Exactly what Lean's prelude declares**, taken from `Init/Prelude.lean`
+  (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
+  `modelgen/tests/funext_binder.lean` is that development written out as a
+  fixture. Each goes through [`Modelgen.addChecked`] like everything else here,
+  so the kernel has agreed to it before it is emitted.
+* **Present beats spliced.** If the input declares one, the input's own is
+  used and nothing is written. A splice adds; it never substitutes.
+
+**`funext` is derived, not asserted.** It is a theorem in Lean and it is a
+theorem here: `congrArg` — inlined from `Eq.rec`, as
+[`Modelgen.Gen.congrFunFor`] already is — applied to the extensional
+application of a `Quot`, at `Quot.sound`. An axiom would have been worse than
+useless, because `mini` declines every non-standard axiom and would refuse a
+fabricated `funext` downstream.
+
+**The names.** `Eq`, `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` and
+`Quot.sound` are spliced under **Lean's own names**, because those names are
+load-bearing beyond this file: the ι theorems of §1 are stated at `Eq`, the
+kernel fixes the four quotient names, and `mini/src/axiom.rs` selects the
+`Quot.sound` clause by that exact name — a namespaced copy would be a
+*non-standard axiom* and declined. `funext` appears in **no** emitted
+statement, only inside proofs, so it is the one that can be namespaced and is:
+`T._model.funext`, per §1's convention, which is also where the collision risk
+was (a file may declare a `funext` of its own later, and
+`nested_keying.lean` exists because a file can declare a name the model wants).
+-/
+
+/-- **Lean's `Eq`**, as `Init/Prelude.lean` declares it:
+
+```lean
+inductive Eq : α → α → Prop where
+  | refl (a : α) : Eq a a
+```
+
+Two parameters and one index — `α` and the left-hand side are parameters, which
+is what [`Modelgen.EqInfo.check`] asserts of the input's own. Written as raw
+`Expr` rather than through a telescope because it is a closed term with two
+binders and no context. -/
+def eqDecl : Declaration :=
+  let lu := Level.param `u
+  -- `{α : Sort u} → α → α → Prop`
+  let eqTy : Expr := .forallE `α (.sort lu)
+    (.forallE `a (.bvar 0) (.forallE `b (.bvar 1) (.sort .zero) .default) .default) .implicit
+  -- `{α : Sort u} → (a : α) → Eq α a a`
+  let reflTy : Expr := .forallE `α (.sort lu)
+    (.forallE `a (.bvar 0) (mkAppN (.const `Eq [lu]) #[.bvar 1, .bvar 0, .bvar 0]) .default)
+    .implicit
+  .inductDecl [`u] 2 [{ name := `Eq, type := eqTy, ctors := [{ name := `Eq.refl, type := reflTy }] }]
+    false
+
+/-- **`Quot.sound`'s statement**, as `Init/Core.lean` declares it:
+`∀ {α : Sort u} {r : α → α → Prop} {a b : α}, r a b → Eq (Quot.mk r a)
+(Quot.mk r b)`. Built at a given level so that the same builder both checks the
+input's own and types the one this module splices. -/
+def quotSoundType (eqN : Name) (lu : Level) : MetaM Expr := do
+  withLocalDecl `α .implicit (.sort lu) fun α => do
+    let relTy ← mkArrow α (← mkArrow α (.sort .zero))
+    withLocalDecl `r .implicit relTy fun r =>
+      withLocalDecl `a .implicit α fun a => withLocalDecl `b .implicit α fun b => do
+        let mk := fun (x : Expr) => mkAppN (.const `Quot.mk [lu]) #[α, r, x]
+        let q := mkAppN (.const `Quot [lu]) #[α, r]
+        withLocalDecl `h .default (mkAppN r #[a, b]) fun h =>
+          mkForallFVars #[α, r, a, b, h] (mkAppN (.const eqN [lu]) #[q, mk a, mk b])
+
+/-- **`funext`'s statement**, as `Init/Core.lean` declares it: `∀ {α : Sort u}
+{β : α → Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x) (g x)) → Eq f g`. One builder
+for both uses — the input's own is compared against it with `isDefEq`, which is
+indifferent to binder names and binder info where a syntactic comparison would
+not be, and the spliced one is declared at it. -/
+def funextType (eqN : Name) (lu lv : Level) : MetaM Expr := do
+  withLocalDecl `α .implicit (.sort lu) fun α => do
+    withLocalDecl `β .implicit (← mkArrow α (.sort lv)) fun β => do
+      let fty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (mkApp β x)
+      withLocalDecl `f .implicit fty fun f => withLocalDecl `g .implicit fty fun g => do
+        let hyp ← withLocalDeclD `x α fun x =>
+          mkForallFVars #[x] (mkAppN (.const eqN [lv]) #[mkApp β x, mkApp f x, mkApp g x])
+        withLocalDecl `h .default hyp fun h =>
+          mkForallFVars #[α, β, f, g, h]
+            (mkAppN (.const eqN [.imax lu lv]) #[fty, f, g])
+
+/-- **`funext`, derived from `Quot.sound`** — Lean's own proof, written out at
+the given name and with `congrArg` inlined:
+
+```lean
+theorem funext {α : Sort u} {β : α → Sort v} {f g : (x : α) → β x}
+    (h : (x : α) → Eq (f x) (g x)) : Eq f g :=
+  congrArg (fun q x => Quot.lift (fun a => a x) (fun _ _ hab => hab x) q) (Quot.sound h)
+```
+
+`E := fun q x => Quot.lift …` is the extensional application of a `Quot` of the
+pointwise-equality relation, and `E (Quot.mk eqv f)` is `f`: the `Quot.lift` ι
+rule gives `f x` at each point and η closes the lambda. So the base case of the
+`Eq.rec` — `Eq.refl f` — has the motive's type at `Quot.mk eqv f`, and the
+conclusion `Eq f (E (Quot.mk eqv g))` is the declared `Eq f g`. Both steps are
+definitional and the kernel does them; `addChecked` is what says so.
+
+`congrArg` is **not** emitted as a declaration of its own. It is one `Eq.rec`,
+built here the way [`Modelgen.Gen.congrFunFor`] and [`Modelgen.Gen.congrOne`]
+are built, so nothing is added to the input that this module does not need to
+name. -/
+def funextDecl (eqi : EqInfo) (nm : Name) : MetaM Declaration := do
+  let un := `u
+  let vn := `v
+  let lu := Level.param un
+  let lv := Level.param vn
+  let luv := Level.imax lu lv
+  let ty ← funextType eqi.eqN lu lv
+  let val ← withLocalDecl `α .implicit (.sort lu) fun α => do
+    withLocalDecl `β .implicit (← mkArrow α (.sort lv)) fun β => do
+      let fty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (mkApp β x)
+      -- `eqv a b`, the pointwise equality, as a proposition and as a relation.
+      let pw := fun (a b : Expr) => withLocalDeclD `x α fun x =>
+        mkForallFVars #[x] (mkAppN (.const eqi.eqN [lv]) #[mkApp β x, mkApp a x, mkApp b x])
+      withLocalDecl `f .implicit fty fun f => withLocalDecl `g .implicit fty fun g => do
+        withLocalDecl `h .default (← pw f g) fun h => do
+          let eqv ← withLocalDeclD `a fty fun a => withLocalDeclD `b fty fun b => do
+            mkLambdaFVars #[a, b] (← pw a b)
+          let qt := mkAppN (.const `Quot [luv]) #[fty, eqv]
+          let mkq := fun (t : Expr) => mkAppN (.const `Quot.mk [luv]) #[fty, eqv, t]
+          -- `E : Quot eqv → ∀ x, β x`, the extensional application.
+          let ee ← withLocalDeclD `q qt fun q => withLocalDeclD `x α fun x => do
+            let lf ← withLocalDeclD `a fty fun a => mkLambdaFVars #[a] (mkApp a x)
+            let lh ← withLocalDeclD `a fty fun a => withLocalDeclD `b fty fun b => do
+              withLocalDeclD `hab (← pw a b) fun hab => mkLambdaFVars #[a, b, hab] (mkApp hab x)
+            mkLambdaFVars #[q, x]
+              (mkAppN (.const `Quot.lift [luv, lv]) #[fty, eqv, mkApp β x, lf, lh, q])
+          -- `congrArg E`, inlined: `Eq.rec` at the motive `fun z _ => Eq f (E z)`.
+          let mot ← withLocalDeclD `z qt fun z =>
+            withLocalDeclD `hz (mkAppN (.const eqi.eqN [luv]) #[qt, mkq f, z]) fun hz =>
+              mkLambdaFVars #[z, hz]
+                (mkAppN (.const eqi.eqN [luv]) #[fty, f, (mkApp ee z).headBeta])
+          let sound := mkAppN (.const `Quot.sound [luv]) #[fty, eqv, f, g, h]
+          mkLambdaFVars #[α, β, f, g, h]
+            (eqi.recAt .zero luv qt (mkq f) mot (eqi.refl' luv fty f) (mkq g) sound)
+  return .thmDecl { name := nm, levelParams := [un, vn], type := ty, value := val }
 
 /-- **The name the export gives block index `k`'s recursor**, for a block whose
 own members are `all`.
@@ -220,12 +379,14 @@ structure Gen where
   container's index telescope is applied. -/
   occs : Array Expr
   eqi : EqInfo
-  /-- **`funext`, if the export declares one.** Read lazily and only asked for
+  /-- **The `funext` this declaration's proofs use.** Asked for lazily and only
   by a declaration with a field at a mimic *under a binder*, because that is
   the one shape whose proofs need it: the block types such a field `∀ x⃗, Bₘ ι⃗`
   and something has to transport along `(fun x⃗ => pack (unpack (f x⃗))) = f`.
-  `none` for every other declaration, and a declaration that needs it and does
-  not have it declines `nested model without funext` (§5.1). -/
+  `none` for every other declaration. It is the **input's own** `funext` where
+  the input has one and `T._model.funext` — derived from `Quot.sound`, spliced
+  into the output — where it does not; [`Modelgen.ensureFunext`] is the choice
+  between them and this field is only its answer. -/
   fx : Option Name
   /-- **Do the block's recursors carry a motive universe?** Lean mints one only
   when the block supports large elimination; `inductive S : Prop | mk : PL S →
@@ -260,32 +421,22 @@ partial def zetaHead : Expr → Expr
 this module that asks which member a field sits at reads it through here. -/
 def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)
 
-/-- **`funext` as the export declares it**, checked against the statement Lean's
-own carries — `∀ {α : Sort u} {β : α → Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x)
-(g x)) → Eq f g` — by building that type at the found declaration's own two
-level parameters and asking `isDefEq`, which is indifferent to binder names and
-binder info where a syntactic comparison would not be.
+/-- **The input's own `funext`, if it has one and it is Lean's.** Checked
+against the statement Lean's own carries by building that type at the found
+declaration's own two level parameters ([`Modelgen.funextType`]) and asking
+`isDefEq`, which is indifferent to binder names and binder info where a
+syntactic comparison would not be.
 
-This is read **lazily**: it is not part of any statement in §1, only of the
-proofs one shape needs, so requiring it of every export would decline
-everything that works today. `funext` is in 1 of the 157 corpus files. -/
-def readFunext (eqi : EqInfo) : GenM Name := do
+`none` is *not* a decline. It means the model's proofs will use a `funext` of
+their own, derived and spliced — [`Modelgen.ensureFunext`]. This is asked
+**lazily**, because `funext` is in no statement in §1, only in the proofs one
+shape needs, and is in 1 of the 157 corpus files. -/
+def usableFunext? (eqi : EqInfo) : GenM (Option Name) := do
   let n := `funext
-  let some ci := (← getEnv).constants.find? n | declineWith .noFunext
-  let [u, v] := ci.levelParams | declineWith .noFunext
-  let lu := Level.param u
-  let lv := Level.param v
-  let want ← withLocalDeclD `α (.sort lu) fun α => do
-    let βty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (.sort lv)
-    withLocalDeclD `β βty fun β => do
-      let fty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (mkApp β x)
-      withLocalDeclD `f fty fun f => withLocalDeclD `g fty fun g => do
-        let hyp ← withLocalDeclD `x α fun x =>
-          mkForallFVars #[x] (eqi.mk' lv (mkApp β x) (mkApp f x) (mkApp g x))
-        withLocalDeclD `h hyp fun h =>
-          mkForallFVars #[α, β, f, g, h] (eqi.mk' (.imax lu lv) fty f g)
-  unless ← isDefEq ci.type want do declineWith .noFunext
-  return n
+  let some ci := (← getEnv).constants.find? n | return none
+  let [u, v] := ci.levelParams | return none
+  unless ← isDefEq ci.type (← funextType eqi.eqN (.param u) (.param v)) do return none
+  return some n
 
 def constInfo (n : Name) : GenM ConstantInfo := do
   let some ci := (← getEnv).constants.find? n | badShape s!"{n} is not declared"
@@ -472,7 +623,11 @@ b` in the scope of `x⃗`, `Eq (fun x⃗ => a) (fun x⃗ => b)`. Each step η-re
 its two sides, so closing over `f x⃗` gives `f` back rather than its
 η-expansion and the fold downstream compares equal to the field. -/
 def funextFor (g : Gen) (xs : Array Expr) (a b p : Expr) : GenM Expr := do
-  let some fx := g.fx | declineWith .noFunext
+  -- `g.fx` is set by [`Modelgen.ensureFunext`] for exactly the declarations
+  -- that have a packed position under a binder, which is exactly the
+  -- declarations that reach here; `none` is an internal inconsistency and not
+  -- an input's shortcoming.
+  let some fx := g.fx | badShape "a packed position under a binder without a funext"
   let mut a := a; let mut b := b; let mut p := p
   for i in [0:xs.size] do
     let x := xs[xs.size - 1 - i]!
@@ -1715,6 +1870,12 @@ structure Iso where
   recs : Array Name
   /-- `(member, the rule's constructor as the export names it, the theorem)`. -/
   iotas : Array (Nat × Name × Name)
+  /-- **Prelude constants the input did not declare and this model spliced in**
+  — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
+  `T._model.funext`, in the order they were emitted, and **empty** for every
+  declaration whose input already had what it needed. The report prints it:
+  a splice is a decision on record and not a silent one. -/
+  spliced : Array Name
   deriving Inhabited
 
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
@@ -1727,6 +1888,83 @@ def addChecked (d : Declaration) : GenM Unit := do
   | .ok e => setEnv e
   | .error ex =>
     badShape s!"{d.getTopLevelNames} rejected by the kernel: {← (ex.toMessageData {}).toString}"
+
+/-- **The `Eq` the round trips are written at.** The input's own if it declares
+one; Lean's, spliced in, if it does not.
+
+An `Eq` the input *does* declare and that is not Lean's is the one case a
+splice cannot reach — the name is already bound in the output and in the
+input's own terms, and Lean's `Environment` cannot rebind a constant — so it
+declines and says which part of the shape is wrong. Nothing in the corpus or
+the fixture tree reaches that (`MODELGEN.md` §5.2). -/
+def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) := do
+  if (← getEnv).constants.contains `Eq then
+    match EqInfo.check (← getEnv) with
+    | .ok e => return (e, #[])
+    | .error why => declineWith (.notLeans `Eq why)
+  -- **A name the file itself introduces later is not ours to write.** The
+  -- guard is the same one the model's own names go through, and
+  -- `mini/tests/fixtures/nested_keying.lean` is why it looks at the whole file
+  -- rather than the prefix replayed so far.
+  for n in [`Eq, `Eq.refl] do
+    if reserved.contains n then declineWith (.nameTaken n)
+  addChecked eqDecl
+  match EqInfo.check (← getEnv) with
+  | .ok e => return (e, #[eqDecl])
+  | .error why => badShape s!"the spliced Eq is not Lean's ({why})"
+
+/-- **The `funext` a packed position under a binder transports along**, and
+whatever it takes to have one.
+
+The input's own is used when it declares a `funext` at Lean's statement. When
+it does not — 156 of the 157 corpus files — this derives one: `Quot` (the
+kernel's quotient, four names), `Quot.sound` (Lean's axiom, at Lean's
+statement), and then `T._model.funext` proved from them, each checked by the
+kernel as it is added. Only the ones the input is missing are emitted.
+
+`T._model.funext` is namespaced and the quotient names are not, and that
+asymmetry is forced rather than chosen: `mini/src/axiom.rs` selects the
+`Quot.sound` clause by that exact name, and the kernel fixes `Quot`,
+`Quot.mk`, `Quot.lift` and `Quot.ind`, so a namespaced copy of either would be
+refused downstream. `funext` is in no emitted statement at all, so it is free
+to sit under the model's namespace — and that is where the collision was. -/
+def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
+    GenM (Name × Array Declaration) := do
+  if let some n ← usableFunext? eqi then return (n, #[])
+  let mut out : Array Declaration := #[]
+  -- ── the quotient ──
+  -- Recognised **structurally**, by the record kind the kernel gives it, and
+  -- not by name: that is how `MONOMORPH.md`'s carried built-ins identify it.
+  match (← getEnv).constants.find? `Quot with
+  | some (.quotInfo _) => pure ()
+  | some _ => declineWith (.notLeans `Quot "it is declared and is not the kernel's quotient type")
+  | none =>
+    for n in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
+      if reserved.contains n then declineWith (.nameTaken n)
+    addChecked .quotDecl
+    out := out.push .quotDecl
+  -- ── Quot.sound ──
+  match (← getEnv).constants.find? `Quot.sound with
+  | some ci =>
+    let [su] := ci.levelParams
+      | declineWith (.notLeans `Quot.sound
+          s!"it has {ci.levelParams.length} level parameters, where Lean's has 1")
+    unless ← isDefEq ci.type (← quotSoundType eqi.eqN (.param su)) do
+      declineWith (.notLeans `Quot.sound "its statement is not Lean's")
+  | none =>
+    if reserved.contains `Quot.sound then declineWith (.nameTaken `Quot.sound)
+    let d := Declaration.axiomDecl
+      { name := `Quot.sound, levelParams := [`u], type := ← quotSoundType eqi.eqN (.param `u)
+        isUnsafe := false }
+    addChecked d
+    out := out.push d
+  -- ── funext, under the model's namespace ──
+  let nm := Name.str model "funext"
+  if reserved.contains nm || (← getEnv).constants.contains nm then declineWith (.nameTaken nm)
+  let d ← funextDecl eqi nm
+  addChecked d
+  out := out.push d
+  return (nm, out)
 
 /-- **The ι rules of one member's recursor**, one per rule `Bₖ.rec` carries, in
 the order it carries them.
@@ -1918,10 +2156,14 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
   for i in [0:pl.types.size] do taken (b i)
   for n in selfNames do taken n
-  let eqi ← match EqInfo.read (← getEnv) with
-    | .ok e => pure e
-    | .error d => declineWith d
-  let mut out : Array Declaration := #[]
+  -- **The `Eq` first, because everything downstream is written at it** — and
+  -- spliced in when the input has none, which is the whole of what
+  -- `decline_no_eq.lean` used to refuse. It goes at the head of `out`, ahead
+  -- of the block, so that it precedes its first use in the round trips no
+  -- matter how the rest of the emission is ordered.
+  let (eqi, eqDecls) ← ensureEq reserved
+  let mut out : Array Declaration := eqDecls
+  let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
 
   -- ── 1. the block, renamed ──────────────────────────────────────────────
   --
@@ -2001,8 +2243,15 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
                 unless g0.isReal m do here := true
           return here)
     return any
-  let g : Gen ←
-    if anyUnderBinder then do pure { g0 with fx := some (← readFunext eqi) } else pure g0
+  let (fxName?, fxDecls) ←
+    if anyUnderBinder then do
+      let (n, ds) ← ensureFunext model eqi reserved
+      pure (some n, ds)
+    else pure (none, #[])
+  for d in fxDecls do
+    out := out.push d
+    spliced := spliced ++ d.getNames.toArray
+  let g : Gen := { g0 with fx := fxName? }
 
   -- ── 3. pack, unpack, and the two round trips, group by group ───────────
   --
@@ -2158,6 +2407,6 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
 
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
-           recs := (Array.range pl.types.size).map g.recName, iotas }
+           recs := (Array.range pl.types.size).map g.recName, iotas, spliced }
 
 end Modelgen

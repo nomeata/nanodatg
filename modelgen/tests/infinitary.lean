@@ -12,9 +12,11 @@
      binder. Lean accepts it; `HTree.rec_1`'s minor for `node` binds
      `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)`.
 
-   A field at a mimic under a binder is the one shape here that is still
-   refused, and it has **three** witnesses rather than one, at three different
-   proofs. Each is a `funext` (MODELGEN.md §5.1) and Lean accepts all three:
+   A field at a mimic under a binder is the one shape here whose proofs need a
+   `funext`, and **this file declares none** — so `modelgen` derives one from
+   `Quot.sound` and splices it in beside the model (`MODELGEN.md` §1.5). It has
+   **three** witnesses rather than one, at three different proofs, and all three
+   are models. Each is a `funext` and Lean accepts all three:
 
    * `HTree.node : (N → List HTree) → HTree` — the **root's** field. The
      recursor's minor has to transport along `(fun n => pack₀ (unpack₀ (f n)))
@@ -28,6 +30,12 @@
      α` — a container's field at **another** mimic, under a binder. `Outer` is
      not recursive at all, so there is no induction hypothesis to lean on and
      the round trips transport along `funext (fun n => unpackPack₁ (f n))`.
+
+   The three are also what says the splice happens **once**: `HTree` pays for
+   the quotient, `Quot.sound` and its own `funext`, and `RTree` and `OTree` find
+   the quotient already installed and pay for a `funext` alone — 18, 14 and 20
+   declarations against `funext_binder.lean`'s 15, 13 and 19 for the same three
+   shapes with a `funext` in the file.
 
    Three, because the first cannot reach the other two: `HTree`'s binder is at
    the root and never enters `retractValue` or `sectionValue`, and `RTree`'s

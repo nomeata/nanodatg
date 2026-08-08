@@ -37,6 +37,12 @@ namespace Modelgen
 structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
+  /-- **Prelude constants the input did not declare and a model spliced in**,
+  per declaration. `Eq`, the quotient and `Quot.sound` come out under Lean's
+  own names and `funext` under the model's; `Modelgen.ensureEq` and
+  `Modelgen.ensureFunext` say why the two are named differently. Printed,
+  always: an insertion is a decision on record. -/
+  spliced : Array (Name × Array Name) := #[]
   /-- Recursors whose replayed shape differs from the export's own. -/
   recMismatch : Array Name := #[]
   recChecked : Nat := 0
@@ -123,6 +129,28 @@ def toEDecl : Declaration → MetaM EDecl
   | .opaqueDecl v => return .opaq v.name v.levelParams v.type v.value v.isUnsafe [v.name]
   | .inductDecl _ _ ts _ => indEDecl (ts.toArray.map (·.name))
   | d => throwError "cannot serialise {d.getTopLevelNames}"
+
+/-- The export's word for each of the four quotient records. Read off the
+`QuotKind` the kernel stamped on the constant, so the record is recognised
+**structurally** on the way back out exactly as `MONOMORPH.md`'s carried
+built-ins recognise it on the way in. -/
+def quotKindStr : QuotKind → String
+  | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
+
+/-- A generated declaration as export records — **plural**, because
+`Declaration.quotDecl` is one kernel declaration and four records. Everything
+else is one record and goes through [`Modelgen.toEDecl`]. -/
+def toEDecls (d : Declaration) : MetaM (Array EDecl) := do
+  match d with
+  | .quotDecl =>
+    let env ← getEnv
+    let mut out : Array EDecl := #[]
+    for n in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
+      let some (.quotInfo qi) := env.constants.find? n
+        | throwError "{n} was not installed by the quotient declaration"
+      out := out.push (.quot qi.name qi.levelParams qi.type (quotKindStr qi.kind))
+    return out
+  | _ => return #[← toEDecl d]
 
 /-- Compare the export's own recursors against the ones the kernel just
 regenerated. Returns the names that differ. -/
@@ -307,8 +335,11 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
               setEnv saved
               rep := { rep with declined := rep.declined.push (t.name, dec.label) }
             | .ok is =>
-              for gd in is.decls do out := out.push (← toEDecl gd)
+              for gd in is.decls do
+                for e in ← toEDecls gd do out := out.push e
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
+              unless is.spliced.isEmpty do
+                rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
               pending := pending.push (all, t.numParams, is)
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately

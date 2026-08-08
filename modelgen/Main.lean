@@ -95,6 +95,12 @@ def report (o : Opts) (rep : Modelgen.Report) : IO Unit := do
   if let some why := rep.unreplayable then
     IO.eprintln s!"{o.input}: passed through unchanged — {why}"
   for (n, k) in rep.generated do IO.eprintln s!"{n}: model of {k} declarations"
+  -- **A splice is reported, never silent.** The input did not declare these and
+  -- the model's proofs need them, so `modelgen` wrote Lean's own; a consumer
+  -- reading the filtered export is told which of its declarations are not the
+  -- input's (`MODELGEN.md` §1.5).
+  for (n, ns) in rep.spliced do
+    IO.eprintln s!"{n}: prelude spliced — {", ".intercalate (ns.map toString).toList}"
   for (n, why) in rep.declined do IO.eprintln s!"{n}: declined — {why}"
   unless rep.stmtChecked == 0 do
     IO.eprintln s!"statements: {rep.stmtChecked} compared against the installed recursors' \

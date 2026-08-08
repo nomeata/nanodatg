@@ -1,5 +1,8 @@
-/- The export declares no `Eq`: the round trips are equations and this tool
-   does not fabricate an equality Lean never wrote. -/
+/- **The export declares no `Eq`.** The round trips are equations, so the model
+   cannot be written without one — and `modelgen` splices Lean's own in rather
+   than declining (`MODELGEN.md` §1.5): `Tree`'s model is 15 declarations plus
+   the `Eq`, `Eq.refl` and `Eq.rec` that come with it. The file is named for
+   what its **input** lacks, not for what happens to it. -/
 prelude
 inductive N : Type where
   | z : N

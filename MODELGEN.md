@@ -169,8 +169,9 @@ report does not have to be silenced to keep the export clean:
 
 ```
 FTree: model of 17 declarations
-HTree: declined — nested model without funext
-statements: 21 compared against the installed recursors' own rules, 0 differ
+HTree: model of 18 declarations
+HTree: prelude spliced — Quot, Quot.mk, Quot.lift, Quot.ind, Quot.sound, HTree._model.funext
+statements: 38 compared against the installed recursors' own rules, 0 differ
 ```
 
 `--quiet` suppresses the report. It is a preference, not a correctness
@@ -211,6 +212,85 @@ on stderr; the filter did what a filter should when it can do nothing.
 the *input's* recursors, not about anything this tool generated, and §4.2's
 five `bad/` files have ten.
 
+## 1.5 The prelude a model splices, and why the report names it
+
+The model's **proofs** reach four constants that no signature in §1 mentions:
+`Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it), and — only for
+a constructor field at a mimic *under a binder* — `Quot`, `Quot.sound` and
+`funext`. An export is not obliged to declare any of them. `Eq` is in most of
+the corpus but `modelgen/tests/decline_no_eq.lean` is a file without one, and
+**`funext` is in 1 of the 157 corpus files** and not in `init-prelude`.
+
+**A prelude constant the input does not declare is spliced in.** Lean's own,
+verbatim: `Eq` and the quotient from `Init/Prelude.lean`, `Quot.sound` and
+`funext` from `Init/Core.lean`, and `modelgen/tests/funext_binder.lean` is that
+development written out as a fixture so the two can be read side by side. Each
+goes through `Environment.addDeclCore` with checking on, like everything else
+this tool emits.
+
+**`funext` is derived and not asserted.** It is a theorem in Lean — `congrArg`
+on the extensional application of a `Quot`, at `Quot.sound` — and it is a
+theorem here, with `congrArg` inlined to one `Eq.rec` the way
+[`Modelgen.Gen.congrFunFor`] already is. An **axiom** would have been worse than
+useless rather than merely inelegant: `mini` declines every non-standard axiom
+(`mini/src/axiom.rs`), so a fabricated `funext` axiom would trade a decline here
+for a decline downstream and widen the trust surface to buy nothing.
+
+Four properties hold this down, and each is measured:
+
+1. **Only when a model is actually being spliced.** Every prelude declaration
+   is built inside `Modelgen.iso`, so a file with nothing to splice is untouched
+   and §3's byte-identity survives: over the 221 `.ndjson` in the tree, 196 come
+   back byte-identical and all 41 `mini/tests/fixtures` are among them. Exactly
+   **one** file left that set for this feature — `decline_no_eq`, which now gets
+   a model. Filtering an already-spliced output again is byte-stable too: the
+   name guard declines the whole file and it passes through unchanged.
+2. **Present beats spliced.** If the input declares one, the input's own is
+   used and nothing is written. `funext_binder` declares Lean's development
+   itself and its five models are unchanged, byte for byte, from before the
+   splice existed. A splice **adds**; it never substitutes.
+3. **Once.** The second declaration in a file to need `funext` finds the
+   quotient already installed and pays only for its own `funext`.
+   `infinitary`'s three binder shapes are 18, 14 and 20 declarations for that
+   reason and not 18, 16 and 22.
+4. **Reported, always.** A splice is a decision on record:
+
+   ```
+   HTree: prelude spliced — Quot, Quot.mk, Quot.lift, Quot.ind, Quot.sound, HTree._model.funext
+   RTree: prelude spliced — RTree._model.funext
+   ```
+
+   A consumer reading the filtered export is told which of its declarations are
+   not the input's, by name, on the same stream as the models and the declines.
+
+**The names, and why one of them is different.** `Eq`, `Quot`, `Quot.mk`,
+`Quot.lift`, `Quot.ind` and `Quot.sound` are spliced under **Lean's own names**,
+because those names are load-bearing beyond this file: §1.1's ι theorems are
+stated at `Eq`, the kernel fixes the four quotient names, and
+`mini/src/axiom.rs` selects the `Quot.sound` clause **by that exact name** — a
+namespaced copy of either would be a non-standard axiom and refused. `funext`
+appears in **no** emitted statement, only inside proofs, so it is the one that
+can carry the model's namespace and does: **`T._model.funext`**, per §1's
+convention. That is also where the collision risk actually was — a file may
+declare a `funext` of its own later, and `nested_keying.lean` exists because a
+file can declare a name the model wants. The `nested model name taken` guard
+covers all of them and scans the whole input file, not the prefix.
+
+**The quotient is emitted as the quotient**, four records of `{"quot": …}` with
+`kind` read off the `QuotKind` the kernel stamped on each constant — the same
+structural recognition `MONOMORPH.md`'s carried-built-ins set uses on the way
+in, and not a name test. `nanoda_bin` accepts the result.
+
+**What this cost in fidelity to Lean's acceptance.** Nothing measured: the
+whole `vendor/arena-tests` corpus filtered through this and run under
+`nanoda_bin` gives `152 matched, 0 mismatched, 2 declined`, identical to the
+unfiltered corpus, and **no `bad/` file flips from rejected to accepted**. That
+is not an accident of care — no corpus file splices anything, because every one
+with a nested inductive already declares `Eq` and none has a field at a mimic
+under a binder — but it is measured rather than argued, because
+`MONOMORPH.md` §9's precedent is that a permissiveness change flips `bad/`
+files and the honest thing is to name them.
+
 ---
 
 # 2. What is generated, and how much of it
@@ -240,6 +320,9 @@ member (recursors) + m (congruences) + one per ι rule.
 | `infinitary` / `FTree` | 1 | 5 | 17 |
 | `infinitary` / `GTree` | 1 | 5 | 15 |
 | `infinitary` / `ZTree` | 2 | 7 | 22 |
+| `infinitary` / `HTree` | 1 | 4 | 15 + 3 spliced |
+| `infinitary` / `RTree` | 1 | 3 | 13 + 1 spliced |
+| `infinitary` / `OTree` | 2 | 3 | 19 + 1 spliced |
 | `indexed_decl` / `ITree` | 1 | 4 | 15 |
 | `indexed_decl` / `I2` | 1 | 4 | 15 |
 | `indexed_decl` / `I3` | 1 | 4 | 15 |
@@ -279,9 +362,19 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_odd_shapes` / `FunP f` | 1 | 4 | 13 |
 | `nest_odd_shapes` / `Deep3` | 3 | 7 | 29 |
 | `nest_odd_shapes` / **`EvT`/`EvU`** | 2 | 8 | 29 |
+| `decline_no_eq` / `Tree` | 1 | 4 | 15 + 1 spliced |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
+
+**The four rows with a `+ n spliced`** are the two files whose input lacks a
+prelude constant the proofs need (§1.5), and the split is deliberate: the model
+proper is the same size as `funext_binder`'s and `nested_shapes`' — the same
+shapes with the constant already in the file — and what is added is Lean's own
+declaration and nothing about the nested type. `HTree` pays for the quotient
+(one kernel declaration, four export records), `Quot.sound` and its `funext`;
+`RTree` and `OTree` come after it in the same file and pay for a `funext`
+alone.
 
 ## 2.1 Equivalence with the Rust generator, and what it does and does not say
 
@@ -391,26 +484,43 @@ runs the last two on every file.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
 `mini/tests/fixtures` (41) and `modelgen/tests` (23): **221 files, 0 failures,
-61 models, 450 statements compared with 0 differing, 962 recursors of which 10
+65 models, 473 statements compared with 0 differing, 962 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
+**196 of the 221 come back byte-identical**, and all 41 `mini/tests/fixtures`
+are among them.
 
 Three of those numbers moved at `6ae6515`, which recommitted
-`mini/tests/fixtures`' five nested exports **already filtered**, and the
-sentence above went stale rather than wrong-by-a-little: on an already-filtered
-file this tool declines by name, so the tree fell to **51 models and 383
-statements** while the recursor total *rose* to 920 — a spliced model's own
-recursors are replayed and checked too. `modelgen/tests` now carries the
-unfiltered export of each of the five (`modelgen/tests/export.sh`,
-`MODELGEN_FILTER=0`), which is what restores 61 and 450 to being true, and 962
-is 920 plus the raw copies' 42.
+`mini/tests/fixtures`' five nested exports **already filtered**: on an
+already-filtered file this tool declines by name, so the tree fell to **51
+models and 383 statements** while the recursor total *rose* to 920 — a spliced
+model's own recursors are replayed and checked too. `modelgen/tests` now
+carries the unfiltered export of each of the five
+(`modelgen/tests/export.sh`, `MODELGEN_FILTER=0`), which restored 61 and 450,
+and 962 is 920 plus the raw copies' 42.
+
+**61 → 65 and 450 → 473 is the prelude splice** (§1.5), which turned four
+declines into models: `decline_no_eq`'s `Tree`, which lacked `Eq`, and
+`infinitary`'s `HTree`/`RTree`/`OTree`, which lacked `funext`. Those four are
+the *only* declarations in the tree whose outcome changed, and it is measured
+rather than reasoned: filtering all 221 files with the binary before and after
+and diffing the outputs, **two files differ and they are those two**. The
+decline list loses `nested model without funext` (three occurrences) and
+`nested model without Eq` (one) and gains nothing; what is left is eleven
+`nested model name taken` — every one of them an already-filtered input — and
+the one `nested model shape:` in `bad/nested-unused-param` that §5.4 names.
 
 Acceptance is `nanoda_bin` — the same parser `mini` uses — on the filtered
 export. It accepts every file this tool wrote a model into, and the negative
 control fires: give `Tree._model.iota_0_1` the *statement* of `iota_0_0` and it
-stops at `assert_def_eq: not definitionally equal`.
+stops at `assert_def_eq: not definitionally equal`. That includes the two files
+whose model carries a spliced prelude (§1.5): `infinitary` — 214 declarations,
+among them the four `{"quot": …}` records this tool wrote and the `Quot.sound`
+it derived `funext` from — and `decline_no_eq`, 38 declarations over an `Eq`
+the input did not have. Filtered, the whole `vendor/arena-tests` corpus still
+gives `152 matched, 0 mismatched, 2 declined`, the same as unfiltered.
 
 **Five files it does not accept, and all five are the same upstream
 limitation.** `mini/tests/fixtures`' `mutual_index_sorts`,
@@ -477,6 +587,15 @@ saturating it — and the per-file figures above, measured the same afternoon,
 are each *at or below* their recorded value. Process start is ~0.07 s of every
 one of the 212.
 
+**The prelude splice (§1.5) is free.** Whole tree, 221 files with
+`--check-recursors`, the same binary with and without it, interleaved:
+**31.4 / 32.3 s** against **32.9 s** — the splice is not distinguishable from
+run-to-run noise, and neither are the four extra models. Per file, on the two
+that splice and the two that measure the same shapes without splicing:
+`infinitary` 0.10 s (0.08 s before), `decline_no_eq` 0.07 s (0.07 s),
+`funext_binder` 0.10 s (0.09 s), `nest_binder_cross` 0.10 s (0.10 s) — which is
+what one extra `Eq.rec` and a kernel check should cost.
+
 ---
 
 # 4.2 Coverage, and where the edges are
@@ -534,9 +653,9 @@ Beyond the Rust path, and new:
 * **A constructor field the block holds at a *mimic*, under a binder** —
   `HTree.node : (N → List HTree) → HTree`. This is the one shape whose
   obstruction was the *proof* rather than the statement, and closing it is the
-  one place this module reads a constant out of the export that no §1 statement
-  mentions. `funext_binder.lean` and §5.2's `nested model without funext`
-  below. `nest_binder_cross.lean` crosses it with the rest, and the **cycle**
+  one place this module needs a constant that no §1 statement mentions — the
+  input's `funext` if it has one, and a derived `T._model.funext` if it does not
+  (§1.5). `funext_binder.lean` is the first and `infinitary.lean` the second. `nest_binder_cross.lean` crosses it with the rest, and the **cycle**
   crossing did not come for free: `packFamMinor` and `retractFamilyValue` are a
   second copy of the one-at-a-time path and were measured refusing `CycB` until
   they were taught the same telescope. Also there: a *dependent* two-binder
@@ -764,8 +883,10 @@ shape Lean accepts and this refuses is a *gap* and is marked one; a shape Lean
 refuses too is a boundary and is marked that.
 
 **There are no gaps.** §5.1 is empty: there is no shape Lean accepts and this
-refuses. What is left is a shape Lean refuses too, or a constant the input does
-not declare.
+refuses. **A constant the input does not declare is no longer a decline
+either** — §1.5 splices it — so what is left is a shape Lean refuses too, a
+name the input has already taken, or a prelude constant the input declares at
+something other than Lean's statement.
 
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
@@ -800,8 +921,12 @@ refusals when they were first written**.
 What `modelgen` still declines is of exactly two other kinds, and neither is a
 shape:
 
-* **A constant the input does not declare** — §5.2's `nested model without Eq`
-  and `nested model without funext`, and `nested model name taken`.
+* **A name the input has already taken** — `nested model name taken`; and a
+  prelude constant the input declares at something other than Lean's statement
+  — `nested model: the input's N is not Lean's (…)`. A constant the input
+  simply *lacks* is not on this list any more: §1.5 splices `Eq`, the quotient,
+  `Quot.sound` and `funext`, and `nested model without Eq` and `nested model
+  without funext` are gone.
 * **Shapes Lean rejects too** — the rest of §5.2.
 
 ### The one shape that was here last, and what closing it cost
@@ -816,14 +941,26 @@ unpack (g x⃗)) ≡ g` for the recursor's minor to typecheck at a *variable* `g
 the only candidate is `fun k x⃗ => pack (k x⃗)`, and `pack (unpack (g x⃗))` is a
 recursor application stuck on a variable.
 
-So `funext` is read from the export, the way `Eq` is — **never fabricated** —
-and **lazily**: only a declaration with such a field asks for it, because
-`funext` is in 1 of the 157 corpus files and *not* in `init-prelude`, and an
-unconditional requirement would decline everything that works today. A
-declaration that has the shape and finds no `funext` declines `nested model
-without funext` (§5.2). **§1 does not move**: no signature changes and no new
-name is emitted; only *which* declarations get a model does, and §1.3 already
-tells a consumer to read a missing `T._model.self` as "no model".
+So `funext` is asked for **lazily**: only a declaration with such a field asks
+for it, because `funext` is in 1 of the 157 corpus files and *not* in
+`init-prelude`, and asking every export for one would decline everything that
+works today.
+
+**Where it comes from was, for one round, the wrong answer, and this paragraph
+is the correction rather than an appendix to it.** The rule was "read from the
+export, the way `Eq` is — never fabricated", and a declaration with the shape
+and no `funext` in its input declined. The reasoning behind that was sound
+about `Eq` and false about `funext`, for one reason: **`funext` is a theorem in
+Lean, not an axiom.** It is proved from `Quot.sound` by the standard quotient
+trick, so "fabricating" it is not asserting anything — it is emitting a proof,
+and this tool emits nothing but kernel-checked proofs. `pack`, `unpack`, the
+round trips, `congrPack` and every ι rule are on exactly that footing.
+
+So `modelgen` **derives** `funext` and emits it with its proof when the input
+has none, under `T._model.funext`, and uses the input's own when the input has
+one. §1.5 is the contract and `Modelgen.ensureFunext` is the code. **§1 does
+not move**: no signature changes, and the one new name is namespaced and in no
+statement.
 
 The binder can sit in three places and they reach three different proofs, which
 is why `funext_binder.lean` carries five declarations and not one:
@@ -842,7 +979,9 @@ only the innermost `funext` is caught, and `H3.node : List H3 → (N → List H3
 H3` puts a moving position with a binder beside one without in the *same*
 constructor, where the congruence fold builds the two steps differently.
 `infinitary.lean` is the same three shapes in a file with **no** `funext`, and
-is the fixture for the decline.
+is the fixture for the *derivation*: the two files run the same three proofs
+over two different `funext`s, `funext_binder`'s own and `infinitary`'s derived
+one, and their declaration counts differ by exactly what was spliced.
 
 **The part that is not `funext`, and is the reason this looked harder than it
 was.** A single funext'd equation `Eq (fun x⃗ => unpack (pack (f x⃗))) f` is not
@@ -892,19 +1031,32 @@ taught the same telescope.
   two. **Lean rejects it too**: the members of a mutual inductive must land in
   the same universe. A boundary, and deliberately without a fixture, because
   the source would not compile.
-* `nested model without Eq` — the export declares no `Eq`, or one whose
-  recursor is not Lean's shape. The round trips are equations and this tool
-  does not fabricate an equality Lean never wrote. `decline_no_eq.lean`.
-* `nested model without funext` — the declaration has a field at a mimic
-  **under a binder** and the export declares no `funext`, or one whose
-  statement is not Lean's. The same principle at the other constant, and
-  checked the same way: the expected statement is built at the found
-  declaration's own two level parameters and compared with `isDefEq`, so binder
-  names and binder info do not matter. Read **lazily** — no other shape asks
-  for it, and `funext` is in 1 of the 157 corpus files, so an unconditional
-  requirement would decline all of them. `infinitary.lean`'s `HTree`, `RTree`
-  and `OTree`; `funext_binder.lean` is the same three with a `funext` and they
-  are models.
+* **`nested model without Eq` and `nested model without funext` are gone.** An
+  input that declares neither now gets Lean's own, spliced (§1.5), and both
+  fixtures are models: `decline_no_eq.lean`'s `Tree` over a spliced `Eq`, and
+  `infinitary.lean`'s `HTree`/`RTree`/`OTree` over a `funext` derived from
+  `Quot.sound`. What replaces them is narrower and is the next entry.
+* `nested model: the input's N is not Lean's (…)` — the input **does** declare
+  `Eq`, `Quot` or `Quot.sound`, at something other than Lean's statement. The
+  check is the same one the old reasons used: the expected type is built at the
+  found declaration's own level parameters and compared with `isDefEq`, so
+  binder names and binder info do not matter, and the message says which part
+  of the shape is wrong rather than that something was.
+
+  **This is the one case a splice cannot reach**, and the reason is mechanical
+  rather than a matter of principle: the name is already bound — in the
+  environment the input was replayed into, in the output records already
+  written, and in every one of the input's own terms — and `Lean.Environment`
+  has no way to rebind a constant, so replacing it would mean replaying the
+  whole file a second time. `funext` is *not* on this list, because the derived
+  one is namespaced: an input with a wrong-shaped `funext` keeps it, and the
+  model uses `T._model.funext` beside it.
+
+  **No file in the corpus or the fixture tree reaches this**, and there is
+  deliberately no fixture: a `bad/`-style export with a deliberately-wrong `Eq`
+  is a test artefact and not a workload, and the guard exists so that such an
+  input is *declined* rather than silently certified against an `Eq` that is
+  not Lean's.
 * `nested model name taken (N)` — `N` is declared somewhere in the input. Not a
   shape at all: a collision with the file's own names.
   `mini/tests/fixtures/nested_keying.lean`.
