@@ -1017,6 +1017,15 @@ Mathlib peak as "≈10 GB of replay plus ≈22 GiB of substitution" is refuted b
 this table**: at 10 M the substitution is a quarter, and it is the parse and the
 input DAG that are the large terms.
 
+**And the split holds at Mathlib scale, without running the pass again.**
+`MODELGEN.md` §6.6 measures the same 5,636,308,621-byte export parsed and
+stopped: **23,865,020 KB**, and adding the whole replay on top of it raises the
+peak by nothing. `monomorph`'s 34,426,172 KB on the same file is therefore
+**23.9 GB of input and ≈10.5 GB of emission** — 30 %, against the 26 % this
+table measures at ten million lines, which is as close as two different tools
+have any right to be. It also settles the arithmetic that motivated this work:
+the substitution is *not* ≈22 GiB, and the replay is not ≈10 GB.
+
 Two things that look like they should matter and were measured not to.
 
 * **`IO.FS.readFile` costs the file twice** — `readBinFile` and the `String`
