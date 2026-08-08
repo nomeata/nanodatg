@@ -570,7 +570,7 @@ mod tests {
                 ),
             ),
         );
-        app_n(konst(Name::str(&t, "rec"), vec![Level::Zero.succ()].into()), &[
+        app_n(konst(Name::str(&t, "rec"), vec![Level::zero().succ()].into()), &[
             bt, motive, s0, s1, s2, x, y, major,
         ])
     }

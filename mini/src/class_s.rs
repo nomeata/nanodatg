@@ -466,8 +466,8 @@ mod tests {
     /// `And (a b : Prop) : Prop`, with `And.intro : ∀ a b, a → b → And a b`.
     fn and_env() -> (Environment, Name, Name) {
         let (a, i) = (nm("And"), Name::str(&nm("And"), "intro"));
-        let p = sort(Level::Zero);
-        let ty = forall(p.clone(), forall(p.clone(), sort(Level::Zero)));
+        let p = sort(Level::zero());
+        let ty = forall(p.clone(), forall(p.clone(), sort(Level::zero())));
         let at = |f: E, x: E, y: E| crate::expr::app(crate::expr::app(f, x), y);
         let cty = forall(
             p.clone(),
@@ -538,7 +538,7 @@ mod tests {
                     name: t,
                     lparams: vec![],
                     num_params: 0,
-                    ty: sort(Level::Zero),
+                    ty: sort(Level::zero()),
                     ctors: (0..k)
                         .map(|j| (Name::str(&t, &format!("c{j}")), ty.clone()))
                         .collect(),
@@ -593,7 +593,7 @@ mod tests {
                 name: f,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero),
+                ty: sort(Level::zero()),
                 ctors: vec![],
             },
         )

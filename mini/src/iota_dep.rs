@@ -686,7 +686,7 @@ mod tests {
 
     fn nm(s: &str) -> Name { Name::simple(s) }
     fn no() -> Rc<[Level]> { Vec::<Level>::new().into() }
-    fn ty0() -> E { sort(Level::Zero.succ()) }
+    fn ty0() -> E { sort(Level::zero().succ()) }
 
     /// ```text
     /// inductive B : Type 0        | b : B
@@ -740,7 +740,7 @@ mod tests {
         let (b, l) = (nm("B"), nm("L"));
         let bty = konst(b, no());
         let lb = app(konst(l, no()), bty.clone());
-        app_n(konst(Name::str(&l, "rec"), vec![Level::Zero.succ()].into()), &[
+        app_n(konst(Name::str(&l, "rec"), vec![Level::zero().succ()].into()), &[
             bty.clone(),
             // the motive, constant: `fun _ : L B => B`
             lam(lb.clone(), bty.clone()),

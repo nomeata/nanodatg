@@ -371,7 +371,7 @@ fn first_reason(own: &Gap, g1: Gap, g2: Gap) -> Gap { if g1 == *own { g2 } else 
 /// `sort` — the shape check, not the interpretation.
 pub fn as_sort(e: &E) -> R<Level> {
     match &**e {
-        Expr::Sort(u) => Ok(u.clone()),
+        Expr::Sort(u) => Ok(*u),
         _ => Err(format!("Expected a sort, got {e}")),
     }
 }
@@ -2234,7 +2234,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 Ok(Typing { ty, tm, ev })
             }
             Expr::Sort(u) => {
-                let ty = sort(u.clone().succ());
+                let ty = sort((*u).succ());
                 let n = crate::ground::eval(u, &std::collections::HashMap::new());
                 let (tm, ev) = match (n, self.th.as_mut()) {
                     (Some(n), Some(th)) => {
@@ -2348,7 +2348,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         return Err(e)
                     }
                 };
-                let out_ty = sort(Level::imax(l1.clone(), l2.clone()));
+                let out_ty = sort(Level::imax(l1, l2));
                 // **The clause is `l2 == 0`, already computed.** No classifier
                 // call: §6.2's `∀` column is exactly a codomain in `Sort 0`.
                 let dep = has_bvar_in_proj(body, 0);
@@ -4066,7 +4066,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Err(format!("Expected an application headed by the current inductive, got {ty}"))
         };
         if us.len() != ic.lparams.len()
-            || us.iter().zip(ic.lparams.iter()).any(|(l, p)| *l != Level::Param(*p))
+            || us.iter().zip(ic.lparams.iter()).any(|(l, p)| *l != Level::param(*p))
         {
             return Err(format!("Level parameters do not match those of {f} in {ty}"))
         }
@@ -4107,7 +4107,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn check_ctor_param(&mut self, ic: &IndCtx<'_>, sh: u32, ctor_param: &E) -> R<()> {
         let s = self.infer_ty(ctor_param)?;
         let u = as_sort(&s)?;
-        if !matches!(ic.ind_level, Level::Zero) {
+        if !ic.ind_level.is_zero_syntactically() {
             assert_level_le(&u, ic.ind_level)?;
         }
         let cp = self.whnf(ctor_param)?;
@@ -4210,7 +4210,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     a.extend(bvars(ni, 0));
                     let major_type = app_n(konst(ic.names[j], us.clone()), &a);
                     c.push(major_type, None);
-                    c.mk_forall(ni + 1, sort(motive_level.clone()))
+                    c.mk_forall(ni + 1, sort(*motive_level))
                 })?;
                 motive_types.push(mt);
             }
@@ -4415,14 +4415,14 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
     let quot_ind_name = Name::str(&quot_name, "ind");
     let u = Name::simple("u");
     let v = Name::simple("v");
-    let prop = sort(Level::Zero);
-    let sort_u = sort(Level::Param(u));
-    let sort_v = sort(Level::Param(v));
+    let prop = sort(Level::zero());
+    let sort_u = sort(Level::param(u));
+    let sort_v = sort(Level::param(v));
     let eq_name = Name::simple("Eq");
 
     let aar_prop = |i: u32| arrow(bvar(i), arrow(bvar(i + 1), prop.clone()));
     let mk_quot = |a: u32, r: u32| {
-        app(app(konst(quot_name, levels(&[Level::Param(u)])), bvar(a)), bvar(r))
+        app(app(konst(quot_name, levels(&[Level::param(u)])), bvar(a)), bvar(r))
     };
 
     // Quot : ∀ (α : Sort u) (_ : α → α → Prop), Sort u
@@ -4440,7 +4440,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
                 app(app(bvar(4), bvar(1)), bvar(0)),
                 app(
                     app(
-                        app(konst(eq_name, levels(&[Level::Param(v)])), bvar(4)),
+                        app(konst(eq_name, levels(&[Level::param(v)])), bvar(4)),
                         app(bvar(3), bvar(2)),
                     ),
                     app(bvar(3), bvar(1)),
@@ -4463,7 +4463,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
             bvar(1),
             app(
                 app(
-                    app(konst(quot_mk_name, levels(&[Level::Param(u)])), bvar(3)),
+                    app(konst(quot_mk_name, levels(&[Level::param(u)])), bvar(3)),
                     bvar(2),
                 ),
                 bvar(0),
@@ -4828,14 +4828,14 @@ fn add_block(
         let v = fresh_level_name(lparams);
         let mut l = vec![v];
         l.extend(lparams.iter().cloned());
-        (Level::Param(v), l)
+        (Level::param(v), l)
     } else {
-        (Level::Zero, lparams.to_vec())
+        (Level::zero(), lparams.to_vec())
     };
     let us: Rc<[Level]> =
-        lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
+        lparams.iter().map(|n| Level::param(*n)).collect::<Vec<_>>().into();
     let us2: Rc<[Level]> =
-        lparams2.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
+        lparams2.iter().map(|n| Level::param(*n)).collect::<Vec<_>>().into();
 
     let ic = IndCtx {
         names: &names,
@@ -4893,7 +4893,7 @@ mod tests {
     /// `axiom P : Prop`, `axiom p : P`, `def Id : Prop → Prop := fun q => q`.
     fn env() -> Environment {
         let mut env = Environment::empty();
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         let p_ty = Name::simple("P");
         add(&mut env, &Declaration::Axiom { name: p_ty, lparams: vec![], ty: prop.clone() })
             .unwrap();
@@ -4905,7 +4905,7 @@ mod tests {
             &Declaration::Def {
                 name: Name::simple("Id"),
                 lparams: vec![],
-                ty: forall(prop.clone(), sort(Level::Zero)),
+                ty: forall(prop.clone(), sort(Level::zero())),
                 value: lam(prop, bvar(0)),
                 kind: DefKind::Def,
             },
@@ -4965,8 +4965,8 @@ mod tests {
         assert_eq!(c.term_clause(&k("P")).unwrap(), Clause::Type);
         // `Prop : Type 0`, so `Prop` is *not* a proposition, and `Prop` is not
         // a proof either.
-        assert_eq!(c.body_clause(&sort(Level::Zero)).unwrap(), Clause::Type);
-        assert_eq!(c.term_clause(&sort(Level::Zero)).unwrap(), Clause::Type);
+        assert_eq!(c.body_clause(&sort(Level::zero())).unwrap(), Clause::Type);
+        assert_eq!(c.term_clause(&sort(Level::zero())).unwrap(), Clause::Type);
     }
 
     /// **The redex case, which nanoda's syntactic walk needs a special arm
@@ -4981,7 +4981,7 @@ mod tests {
         assert_eq!(c.body_clause(&redex).unwrap(), c.body_clause(&k("P")).unwrap());
         assert_eq!(c.body_clause(&redex).unwrap(), Clause::Prop);
         // And a literal `λ`-redex, not just a delta one.
-        let lam_redex = app(lam(sort(Level::Zero), bvar(0)), k("P"));
+        let lam_redex = app(lam(sort(Level::zero()), bvar(0)), k("P"));
         assert_eq!(c.body_clause(&lam_redex).unwrap(), Clause::Prop);
     }
 
@@ -4991,7 +4991,7 @@ mod tests {
     fn a_let_classifies_with_its_expansion() {
         let env = env();
         let mut c = Checker::new(&env);
-        let e = Rc::new(Expr::Let { ty: sort(Level::Zero), val: k("P"), body: bvar(0) });
+        let e = Rc::new(Expr::Let { ty: sort(Level::zero()), val: k("P"), body: bvar(0) });
         assert_eq!(c.body_clause(&e).unwrap(), Clause::Prop);
     }
 
@@ -5009,7 +5009,7 @@ mod tests {
     /// `whnf`. An `opaque` definition gets its typing from its value and keeps
     /// no defining equation, so it is inert under delta *and* inhabited.
     fn quantified(depth: u32) -> E {
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         let mut e = bvar(0);
         for _ in 0..depth {
             e = forall(prop.clone(), e);
@@ -5018,7 +5018,7 @@ mod tests {
     }
 
     fn decls3() -> Vec<Declaration> {
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         let mut v: Vec<Declaration> = ["X", "Y", "Z"]
             .iter()
             .enumerate()
@@ -5155,8 +5155,8 @@ mod tests {
     /// `072` is the first declaration whose *recursor type* needs one.
     #[test]
     fn a_delta_redex_in_an_argument_converts_under_a_binder() {
-        let ty0 = sort(Level::Zero.succ());
-        let prop = sort(Level::Zero);
+        let ty0 = sort(Level::zero().succ());
+        let prop = sort(Level::zero());
         // `B` and `C` are **opaque**, so nothing unfolds them and the
         // conversion has to go through the argument rather than round it.
         let decls = vec![
@@ -5242,7 +5242,7 @@ mod tests {
         let mut ip = Interp::new();
         crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
         let mut c = Checker::threaded(&env, &mut ip);
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
 
         // **The value-λ clause** — `λ p q r. q`, three binders, each closing a
         // scope that discharges. One binder would not separate "once" from
@@ -5468,15 +5468,15 @@ mod tests {
             Declaration::Def {
                 name: Name::simple("D"),
                 lparams: vec![],
-                ty: sort(Level::Zero.succ()),
-                value: sort(Level::Zero),
+                ty: sort(Level::zero().succ()),
+                value: sort(Level::zero()),
                 kind: DefKind::Opaque,
             },
             Declaration::Inductive {
                 name: e2,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: vec![
                     (Name::str(&e2, "a"), konst(e2, no_levels())),
                     (Name::str(&e2, "b"), konst(e2, no_levels())),
@@ -5494,7 +5494,7 @@ mod tests {
 
         crate::blocker::arm(true);
         for (what, ty) in [
-            ("a sort-headed type", sort(Level::Zero.succ())),
+            ("a sort-headed type", sort(Level::zero().succ())),
             ("a constant that is not an inductive", k("D")),
         ] {
             crate::blocker::enter_pair();
@@ -5589,7 +5589,7 @@ mod tests {
         let mut ip = Interp::new();
         crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
         let mut c = Checker::threaded(&env, &mut ip);
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         // `⟦Prop⟧ ∈ ⟦Sort 1⟧` — a perfectly good typing, of a codomain that is
         // *not* in `U₀`.
         let t1 = c.infer_type(&prop).expect("infer Prop");
@@ -5601,7 +5601,7 @@ mod tests {
         let pi = |c: &mut Checker<'_, '_>, tb: &Typing| {
             let saved = c.open_slot(prop.clone(), t1.tm.clone());
             let w = c.current_var();
-            let out = c.pi_evidence(&t1, tb, w, false, &Level::Zero, &Level::Zero);
+            let out = c.pi_evidence(&t1, tb, w, false, &Level::zero(), &Level::zero());
             c.close_slot(saved);
             out
         };
@@ -5634,14 +5634,14 @@ mod tests {
         let mut ip = Interp::new();
         crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
         let mut c = Checker::threaded(&env, &mut ip);
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         let t1 = c.infer_type(&prop).expect("infer Prop");
         let tb = c.infer_type(&k("X")).expect("infer X");
 
         let saved = c.open_slot(prop.clone(), t1.tm.clone());
         let w = c.current_var();
         assert!(w.is_some(), "the binder must really be open, or the claim is vacuous");
-        let (tm, ev) = c.pi_evidence(&t1, &tb, w, false, &Level::Zero, &Level::Zero);
+        let (tm, ev) = c.pi_evidence(&t1, &tb, w, false, &Level::zero(), &Level::zero());
         c.close_slot(saved);
 
         assert!(tm.is_some(), "the clause must derive, or the assertion below is about nothing");
@@ -5678,7 +5678,7 @@ mod tests {
         let env = env();
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let gap = || Typing { ty: sort(Level::Zero), tm: None, ev: Ev::missing(Gap::StrLit) };
+        let gap = || Typing { ty: sort(Level::zero()), tm: None, ev: Ev::missing(Gap::StrLit) };
         let (tm, ev) =
             c.lam_evidence(&gap(), &gap(), None, true, false, Ev::missing(Gap::StrLit));
         assert!(tm.is_none(), "the point may not be minted from `prop` alone");

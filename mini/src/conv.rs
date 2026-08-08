@@ -332,16 +332,16 @@ mod tests {
     fn conversions_compose_and_gaps_propagate() {
         let mut ip = Interp::new();
         let t0 = ip.sort(0);
-        let a = Conv::refl(sort(Level::Zero), &t0);
-        let b = Conv::refl(sort(Level::Zero), &t0);
+        let a = Conv::refl(sort(Level::zero()), &t0);
+        let b = Conv::refl(sort(Level::zero()), &t0);
         let ab = a.clone().then(&mut ip, b);
         assert!(ab.is_proved());
         assert_eq!(*ab.ev.thm().unwrap().concl(), Formula::eq(t0.clone(), t0.clone()));
 
-        let g = Conv::gap(sort(Level::Zero), Gap::FunEta);
+        let g = Conv::gap(sort(Level::zero()), Gap::FunEta);
         assert_eq!(a.clone().then(&mut ip, g.clone()).ev.gap(), Some(&Gap::FunEta));
         assert_eq!(
-            g.then(&mut ip, Conv::gap(sort(Level::Zero), Gap::StrLit)).ev.gap(),
+            g.then(&mut ip, Conv::gap(sort(Level::zero()), Gap::StrLit)).ev.gap(),
             Some(&Gap::FunEta),
             "the left gap wins"
         );
@@ -411,7 +411,7 @@ mod tests {
             &Ev::Proved(f_mem.clone()),
             &Ev::Proved(f_mem),
             &Ev::Proved(pw),
-            sort(Level::Zero),
+            sort(Level::zero()),
         );
         let thm = conv.ev.thm().expect("fun eta certificate");
         assert_eq!(*thm.concl(), Formula::eq(f.clone(), f));

@@ -933,7 +933,7 @@ mod tests {
 
     fn nm(s: &str) -> Name { Name::simple(s) }
     fn no_levels() -> Rc<[Level]> { Vec::new().into() }
-    fn ty1() -> E { sort(Level::Zero.succ()) }
+    fn ty1() -> E { sort(Level::zero().succ()) }
 
     /// The same family `zoneb`'s `indexed_env` walks — three constructors with
     /// three distinct plain/rec counts:

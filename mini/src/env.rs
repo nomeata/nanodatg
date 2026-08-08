@@ -189,8 +189,8 @@ pub fn instantiate_lparams(e: &E, lparams: &[Name], levels: &[Level]) -> Result<
         return Err(format!("Expected {} levels, got {}", lparams.len(), levels.len()))
     }
     Ok(crate::expr::subst_level(e, &|n: &Name| match lparams.iter().position(|p| p == n) {
-        Some(i) => levels[i].clone(),
+        Some(i) => levels[i],
         // "should not happen", as the original says.
-        None => Level::Param(*n),
+        None => Level::param(*n),
     }))
 }

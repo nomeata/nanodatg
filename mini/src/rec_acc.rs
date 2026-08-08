@@ -580,7 +580,7 @@ mod tests {
     use std::rc::Rc;
 
     fn level(n: u32) -> Level {
-        let mut l = Level::Zero;
+        let mut l = Level::zero();
         for _ in 0..n {
             l = l.succ();
         }

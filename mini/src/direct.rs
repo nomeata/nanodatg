@@ -354,7 +354,7 @@ fn former_bottom(
 
 /// `Sort ℓ` at a ground numeral.
 fn level_of(n: u32) -> Level {
-    let mut l = Level::Zero;
+    let mut l = Level::zero();
     for _ in 0..n {
         l = l.succ();
     }
@@ -586,11 +586,11 @@ pub(crate) mod tests {
     /// two-deep nest whose typing is about `⟦Eq α a a⟧`.
     fn eq_env(l: Level) -> (Environment, Name, Name) {
         let (e, r) = (nm("Eq"), Name::str(&nm("Eq"), "refl"));
-        let us: std::rc::Rc<[Level]> = vec![l.clone()].into();
+        let us: std::rc::Rc<[Level]> = vec![l].into();
         // `Eq : ∀ (α : Sort l) (a : α), α → Prop`
         let ty = forall(
-            sort(l.clone()),
-            forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+            sort(l),
+            forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
         );
         // `Eq.refl : ∀ (α : Sort l) (a : α), Eq α a a`
         let cty = forall(
@@ -623,10 +623,10 @@ pub(crate) mod tests {
 
     #[test]
     fn eq_and_its_constructor_are_interpreted_with_their_typings() {
-        let (env, e, r) = eq_env(Level::Param(nm("u")));
+        let (env, e, r) = eq_env(Level::param(nm("u")));
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let us: std::rc::Rc<[Level]> = vec![Level::zero()].into();
 
         let t = c.infer_type(&konst(e, us.clone())).expect("infer ⟦Eq⟧");
         let m = t.ev.thm().unwrap_or_else(|| panic!("⟦Eq⟧ has no typing: {:?}", t.ev)).clone();
@@ -649,14 +649,14 @@ pub(crate) mod tests {
     #[test]
     fn a_misshapen_declaration_named_eq_is_declined_not_believed() {
         let (e, r) = (nm("Eq"), Name::str(&nm("Eq"), "refl"));
-        let us: std::rc::Rc<[Level]> = vec![Level::Param(nm("u"))].into();
+        let us: std::rc::Rc<[Level]> = vec![Level::param(nm("u"))].into();
         let ty = forall(
-            sort(Level::Param(nm("u"))),
-            forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+            sort(Level::param(nm("u"))),
+            forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
         );
         // `Eq.refl : ∀ (α : Sort u) (a x : α), Eq α a x` — same name, wrong law.
         let cty = forall(
-            sort(Level::Param(nm("u"))),
+            sort(Level::param(nm("u"))),
             forall(
                 bvar(0),
                 forall(
@@ -685,7 +685,7 @@ pub(crate) mod tests {
         .expect("accepted");
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let at: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let at: std::rc::Rc<[Level]> = vec![Level::zero()].into();
         let ct = c.infer_type(&konst(r, at)).expect("infer");
         // Its *interpretation* is still `•`: §6.2's proof clause gives every
         // proof that denotation whatever its type, and proof irrelevance is not
@@ -707,11 +707,11 @@ pub(crate) mod tests {
     /// with well-foundedness pointing the other way.
     pub(crate) fn acc_env(swapped: bool) -> (Environment, Name, Name) {
         let (a, i) = (nm("Acc"), Name::str(&nm("Acc"), "intro"));
-        let u = Level::Param(nm("u"));
-        let us: std::rc::Rc<[Level]> = vec![u.clone()].into();
+        let u = Level::param(nm("u"));
+        let us: std::rc::Rc<[Level]> = vec![u].into();
         // `Acc : ∀ (α : Sort u) (r : α → α → Prop), α → Prop`
-        let rel = forall(bvar(0), forall(bvar(1), sort(Level::Zero)));
-        let ty = forall(sort(u.clone()), forall(rel.clone(), forall(bvar(1), sort(Level::Zero))));
+        let rel = forall(bvar(0), forall(bvar(1), sort(Level::zero())));
+        let ty = forall(sort(u), forall(rel.clone(), forall(bvar(1), sort(Level::zero()))));
         // `Acc α r y`, under `α r x y _`.
         let acc_at = |d_a: u32, d_r: u32, d_x: u32| {
             crate::expr::app(
@@ -755,7 +755,7 @@ pub(crate) mod tests {
         let (env, a, i) = acc_env(false);
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let us: std::rc::Rc<[Level]> = vec![Level::zero()].into();
 
         let t = c.infer_type(&konst(a, us.clone())).expect("infer ⟦Acc⟧");
         assert!(t.ev.thm().is_some(), "⟦Acc⟧ has no typing: {:?}", t.ev);
@@ -783,7 +783,7 @@ pub(crate) mod tests {
         let (env, a, i) = acc_env(true);
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let us: std::rc::Rc<[Level]> = vec![Level::zero()].into();
         // The type former still lands — the clause is about `Acc α r x` and the
         // step hypothesis is nowhere in it.
         let t = c.infer_type(&konst(a, us.clone())).expect("infer ⟦Acc⟧");

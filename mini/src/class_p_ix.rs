@@ -778,8 +778,8 @@ pub(crate) mod tests {
     /// silently testing the wrong module.
     #[allow(clippy::type_complexity)]
     pub(crate) fn cells() -> Vec<(&'static str, u32, E, Vec<(&'static str, E)>)> {
-        let ty0 = || sort(Level::Zero.succ());
-        let prop = || sort(Level::Zero);
+        let ty0 = || sort(Level::zero().succ());
+        let prop = || sort(Level::zero());
         let k = |n: &str| konst(Name::simple(n), Vec::new().into());
         let fam = || forall(ty0(), prop());
         vec![
@@ -954,8 +954,8 @@ pub(crate) mod tests {
     /// the whole declaration would fail too.
     #[test]
     fn a_function_typed_recursive_field_declines_under_its_own_name() {
-        let ty0 = || sort(Level::Zero.succ());
-        let prop = || sort(Level::Zero);
+        let ty0 = || sort(Level::zero().succ());
+        let prop = || sort(Level::zero());
         let k = |n: &str| konst(Name::simple(n), Vec::new().into());
         // `Pf α x`, at the two binder depths the two constructors need it.
         let pf = |a: E, x: E| app(app(k("Pf"), a), x);

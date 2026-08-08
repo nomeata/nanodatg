@@ -22,7 +22,7 @@
 //! which is what mini-lean does and what acceptance fidelity is measured
 //! against — so nothing here is on the (b) path.
 
-use crate::expr::{Level, Name, E};
+use crate::expr::{Level, Name, E, LevelView};
 use std::collections::HashMap;
 
 /// A ground `Level` at `env`, as a numeral. `None` when a parameter is unbound,
@@ -30,25 +30,25 @@ use std::collections::HashMap;
 /// nanoda counterpart asserts every parameter a declaration mentions is one of
 /// its own.
 pub fn eval(l: &Level, env: &HashMap<Name, u32>) -> Option<u32> {
-    match l {
-        Level::Zero => Some(0),
-        Level::Succ(a) => Some(eval(a, env)? + 1),
-        Level::Max(a, b) => Some(eval(a, env)?.max(eval(b, env)?)),
-        Level::IMax(a, b) => {
-            let rb = eval(b, env)?;
+    match l.view() {
+        LevelView::Zero => Some(0),
+        LevelView::Succ(a) => Some(eval(&a, env)? + 1),
+        LevelView::Max(a, b) => Some(eval(&a, env)?.max(eval(&b, env)?)),
+        LevelView::IMax(a, b) => {
+            let rb = eval(&b, env)?;
             if rb == 0 {
                 Some(0)
             } else {
-                Some(eval(a, env)?.max(rb))
+                Some(eval(&a, env)?.max(rb))
             }
         }
-        Level::Param(n) => env.get(n).copied(),
+        LevelView::Param(n) => env.get(&n).copied(),
     }
 }
 
 /// `succ^n(zero)`.
 pub fn numeral(n: u32) -> Level {
-    let mut l = Level::Zero;
+    let mut l = Level::zero();
     for _ in 0..n {
         l = l.succ();
     }
@@ -69,7 +69,7 @@ pub fn subst_ground(e: &E, uparams: &[Name], sigma: &[u32]) -> E {
     crate::expr::subst_level(e, &|n: &Name| match env.get(n) {
         Some(k) => numeral(*k),
         // As in `instantiate_lparams`: should not happen.
-        None => Level::Param(*n),
+        None => Level::param(*n),
     })
 }
 
@@ -77,7 +77,7 @@ pub fn subst_ground(e: &E, uparams: &[Name], sigma: &[u32]) -> E {
 mod tests {
     use super::*;
 
-    fn p(s: &str) -> Level { Level::Param(Name::simple(s)) }
+    fn p(s: &str) -> Level { Level::param(Name::simple(s)) }
 
     /// The semantics `checker::instantiations`' module doc states, pinned here
     /// so that mini's substitution and nanoda's scheduling cannot drift apart
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn eval_matches_the_documented_semantics() {
         let env = ground_env(&[Name::simple("u"), Name::simple("v")], &[3, 0]);
-        assert_eq!(eval(&Level::Zero, &env), Some(0));
+        assert_eq!(eval(&Level::zero(), &env), Some(0));
         assert_eq!(eval(&p("u"), &env), Some(3));
         assert_eq!(eval(&p("u").succ(), &env), Some(4));
         assert_eq!(eval(&Level::max(p("u"), p("v")), &env), Some(3));
@@ -122,7 +122,7 @@ mod tests {
             for b in 0..4u32 {
                 let env = ground_env(&uparams, &[a, b]);
                 for l in &ls {
-                    let g = crate::expr::sort(l.clone());
+                    let g = crate::expr::sort(*l);
                     let g = subst_ground(&g, &uparams, &[a, b]);
                     let crate::expr::Expr::Sort(gl) = &*g else { unreachable!() };
                     let n = eval(l, &env).unwrap();

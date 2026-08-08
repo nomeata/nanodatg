@@ -594,7 +594,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         c.infer_type(&konst(t, Vec::new().into())).expect("infer ⟦T⟧");
-        let at: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let at: Rc<[Level]> = vec![Level::zero().succ()].into();
         let got = c.infer_type(&konst(rec, at)).expect("infer ⟦T.rec.{1}⟧");
         let m = got
             .ev

@@ -101,7 +101,7 @@ use kernel::{Formula, Term, Thm};
 
 use crate::env::ConstantInfo;
 use crate::ev::{Cause, Ev, Gap, Sealed};
-use crate::expr::{Expr, Level, Name, E};
+use crate::expr::{Expr, Level, Name, E, LevelView};
 use crate::ground;
 use crate::interp::ConstInterp;
 use crate::kernel::{Checker, Typing, R};
@@ -118,17 +118,17 @@ use derived::inductive::{CtorSpec, DeclSpec, Inductive, Slot};
 /// may be instantiated at `0`, and the whole point of deciding per declaration
 /// rather than per σ is that `PUnit.{u}` must take one branch at every `u`.
 pub fn provably_nonzero(l: &Level) -> bool {
-    match l {
-        Level::Succ(_) => true,
-        Level::Max(a, b) => provably_nonzero(a) || provably_nonzero(b),
-        Level::IMax(_, b) => provably_nonzero(b),
-        Level::Zero | Level::Param(_) => false,
+    match l.view() {
+        LevelView::Succ(_) => true,
+        LevelView::Max(a, b) => provably_nonzero(&a) || provably_nonzero(&b),
+        LevelView::IMax(_, b) => provably_nonzero(&b),
+        LevelView::Zero | LevelView::Param(_) => false,
     }
 }
 
 /// `Sort ℓ` at a ground numeral, as a mini expression.
 pub(crate) fn level_numeral(n: u32) -> Level {
-    let mut l = Level::Zero;
+    let mut l = Level::zero();
     for _ in 0..n {
         l = l.succ();
     }
@@ -2424,7 +2424,7 @@ fn rec_field(
 pub(crate) fn rec_field_codomain(ty: &E) -> Option<E> {
     let Expr::Forall { body, .. } = &**ty else { return None };
     let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
-    let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+    let (a, b) = (at(Level::zero()), at(Level::zero().succ()));
     (a == b).then_some(a)
 }
 
@@ -3694,7 +3694,7 @@ mod tests {
     use crate::expr::{app, bvar, forall, konst, sort};
     use crate::interp::Interp;
 
-    fn p(s: &str) -> Level { Level::Param(Name::simple(s)) }
+    fn p(s: &str) -> Level { Level::param(Name::simple(s)) }
 
     /// **The eliminator trichotomy, at the shapes the corpus actually
     /// presents.** Each line is a real declaration's resultant sort, and the
@@ -3709,10 +3709,10 @@ mod tests {
     #[test]
     fn the_branch_is_decided_by_the_declarations_own_level() {
         // Class (T): a W-type.
-        assert!(provably_nonzero(&Level::Zero.succ()), "Bool : Type 0");
+        assert!(provably_nonzero(&Level::zero().succ()), "Bool : Type 0");
         assert!(provably_nonzero(&p("u").succ()), "List at Type u");
         assert!(
-            provably_nonzero(&Level::max(Level::max(Level::Zero.succ(), p("u")), p("v"))),
+            provably_nonzero(&Level::max(Level::max(Level::zero().succ(), p("u")), p("v"))),
             "PProd at Sort (max (max 1 u) v) — the 1 is what decides it"
         );
         assert!(
@@ -3720,7 +3720,7 @@ mod tests {
             "Prod at Type (max u v)"
         );
         // Class (S) or (P): never a W-type, at any σ.
-        assert!(!provably_nonzero(&Level::Zero), "And : Prop");
+        assert!(!provably_nonzero(&Level::zero()), "And : Prop");
         assert!(!provably_nonzero(&p("u")), "PUnit at Sort u — a Prop when u is 0");
         assert!(
             !provably_nonzero(&Level::imax(p("u").succ(), p("v"))),
@@ -3776,7 +3776,7 @@ mod tests {
         // state at all, and the reason the general one exists.
         let a = konst(Name::simple("A"), ls.clone());
         let b = app(konst(Name::simple("F"), ls.clone()), a.clone());
-        let cc = sort(Level::Zero);
+        let cc = sort(Level::zero());
         let ps = vec![a.clone(), b.clone(), cc.clone()];
         let ix = app(konst(Name::simple("g"), ls.clone()), bvar(0));
         let use_site = sp(&[a.clone(), b.clone(), cc.clone(), ix.clone()]);
@@ -3818,7 +3818,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors,
             },
         )
@@ -3891,7 +3891,7 @@ mod tests {
                     name: *n,
                     lparams: vec![],
                     num_params: 0,
-                    ty: sort(Level::Zero.succ()),
+                    ty: sort(Level::zero().succ()),
                     ctors: vec![(Name::str(n, "pt"), ty(n))],
                 },
             )
@@ -3909,7 +3909,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: ctors.clone(),
             },
         )
@@ -3927,7 +3927,7 @@ mod tests {
         assert_ne!(ia, ib, "the two domains must be distinguishable");
 
         let (shape, spec, _) =
-            spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Skip)
+            spec_of(&mut c, &t, 0, 0, &sort(Level::zero().succ()), &ctors, Legs::Skip)
                 .expect("the walk expresses a function-typed recursive argument");
         assert!(spec.well_formed(), "the spec must satisfy Telescope's arity contract");
         let cs = &spec.ctors[0];
@@ -3983,7 +3983,7 @@ mod tests {
     fn alias_env() -> (Environment, Vec<Declaration>, Name, Name) {
         let (a, alias) = (Name::simple("A"), Name::simple("alias"));
         let ty = |n: &Name| konst(*n, Vec::new().into());
-        let u = sort(Level::Zero.succ());
+        let u = sort(Level::zero().succ());
         let decls = vec![
             Declaration::Inductive {
                 name: a,
@@ -4035,7 +4035,7 @@ mod tests {
             name: t,
             lparams: vec![],
             num_params: 0,
-            ty: sort(Level::Zero.succ()),
+            ty: sort(Level::zero().succ()),
             ctors: ctors.clone(),
         };
         crate::kernel::add(&mut env, &d)
@@ -4046,7 +4046,7 @@ mod tests {
         {
             let mut c = Checker::threaded(&env, &mut ip);
             let (_, spec, _) =
-                spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+                spec_of(&mut c, &t, 0, 0, &sort(Level::zero().succ()), &ctors, Legs::Derive)
                     .expect("the walk reads the spine through the reduction");
             assert_eq!(spec.ctors[0].order, vec![Slot::Rec], "one field, and it is recursive");
             assert!(spec.ctors[0].rec_dom(0).is_empty(), "a plain recursive occurrence has γ = ∅");
@@ -4087,7 +4087,7 @@ mod tests {
                 name: s,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: ctors.clone(),
             },
         )
@@ -4098,7 +4098,7 @@ mod tests {
         let ta = c.infer_type(&ty(&a)).expect("⟦A⟧");
         let ia = ta.tm.clone().expect("A interprets");
         let (shape, spec, _) =
-            spec_of(&mut c, &s, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+            spec_of(&mut c, &s, 0, 0, &sort(Level::zero().succ()), &ctors, Legs::Derive)
                 .expect("the walk reads the spine through the reduction under the binder");
         let cs = &spec.ctors[0];
         assert_eq!(cs.order, vec![Slot::Rec], "one field, and it is recursive");
@@ -4137,7 +4137,7 @@ mod tests {
                 name: u,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: ctors.clone(),
             },
         )
@@ -4145,7 +4145,7 @@ mod tests {
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let g = spec_of(&mut c, &u, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+        let g = spec_of(&mut c, &u, 0, 0, &sort(Level::zero().succ()), &ctors, Legs::Derive)
             .err()
             .expect("the walk declines");
         assert_eq!(
@@ -4181,7 +4181,7 @@ mod tests {
                     name: *n,
                     lparams: vec![],
                     num_params: 0,
-                    ty: sort(Level::Zero.succ()),
+                    ty: sort(Level::zero().succ()),
                     ctors: vec![(Name::str(n, "pt"), ty(n))],
                 },
             )
@@ -4197,7 +4197,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: ctors.clone(),
             },
         )
@@ -4208,7 +4208,7 @@ mod tests {
         let want = c.infer_type(&ty(&b)).expect("⟦B⟧").ev.thm().expect("⟦B⟧'s typing").clone();
 
         let (shape, spec, _) =
-            spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Skip)
+            spec_of(&mut c, &t, 0, 0, &sort(Level::zero().succ()), &ctors, Legs::Skip)
                 .expect("a plain field before a function-typed recursive argument");
         assert!(spec.well_formed(), "the spec must satisfy Telescope's arity contract");
         let cs = &spec.ctors[0];
@@ -4266,7 +4266,7 @@ mod tests {
     /// end-to-end witness, and it is cell A's shape.)*
     #[test]
     fn a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (d, b) = (Name::simple("D"), Name::simple("B"));
         let bty = konst(b, no.clone());
@@ -4460,7 +4460,7 @@ mod tests {
     #[test]
     fn a_parameter_domain_certifies_under_its_own_scope_discharged() {
         let t = Name::simple("T");
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let spine = |d: u32| app(konst(t, no.clone()), bvar(d));
         // `c : ∀α. (α → T α) → T α` — the recursive argument's domain *is* the
@@ -4579,7 +4579,7 @@ mod tests {
     /// backwards. `A` is placed at every cell so that no row is `A`'s fault.
     #[test]
     fn the_fibre_summand_frontier_at_np_one_is_closed() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a) = (Name::simple("T"), Name::simple("A"));
         let ty = |n: &Name| konst(*n, no.clone());
@@ -4742,7 +4742,7 @@ mod tests {
     /// nowhere else.
     #[test]
     fn three_constructors_each_reach_their_own_fibre_summand_at_np_one() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let t = Name::simple("T");
         let doms = [Name::simple("A"), Name::simple("B"), Name::simple("C")];
@@ -4838,7 +4838,7 @@ mod tests {
     /// escaped the nest into a different one.
     #[test]
     fn a_mixed_constructor_carries_every_recursive_slot_to_its_own_summand() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
         let ty = |n: &Name| konst(*n, no.clone());
@@ -5000,7 +5000,7 @@ mod tests {
                 name: b,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: vec![
                     (Name::str(&b, "b0"), bt.clone()),
                     (Name::str(&b, "b1"), bt.clone()),
@@ -5015,15 +5015,15 @@ mod tests {
         let tap = |a: E, i: E, j: E| {
             crate::expr::app(crate::expr::app(crate::expr::app(konst(t, Vec::new().into()), a), i), j)
         };
-        let ty = forall(sort(Level::Zero.succ()), forall(bt.clone(), forall(bt.clone(), sort(Level::Zero.succ()))));
+        let ty = forall(sort(Level::zero().succ()), forall(bt.clone(), forall(bt.clone(), sort(Level::zero().succ()))));
         let ctors = vec![
             // c0 : ∀ α. T α b0 b0
-            (Name::str(&t, "c0"), forall(sort(Level::Zero.succ()), tap(bvar(0), b0.clone(), b0.clone()))),
+            (Name::str(&t, "c0"), forall(sort(Level::zero().succ()), tap(bvar(0), b0.clone(), b0.clone()))),
             // c1 : ∀ α (x : B). T α x b0 → T α b1 x
             (
                 Name::str(&t, "c1"),
                 forall(
-                    sort(Level::Zero.succ()),
+                    sort(Level::zero().succ()),
                     forall(
                         bt.clone(),
                         forall(tap(bvar(1), bvar(0), b0.clone()), tap(bvar(2), b1.clone(), bvar(1))),
@@ -5034,7 +5034,7 @@ mod tests {
             (
                 Name::str(&t, "c2"),
                 forall(
-                    sort(Level::Zero.succ()),
+                    sort(Level::zero().succ()),
                     forall(
                         bt.clone(),
                         forall(
@@ -5339,7 +5339,7 @@ mod tests {
     #[test]
     fn a_constructor_with_plain_fields_translates_and_its_typings_are_unconditional() {
         let t = Name::simple("T");
-        let u1 = || sort(Level::Zero.succ());
+        let u1 = || sort(Level::zero().succ());
         let ty = forall(u1(), forall(u1(), forall(u1(), u1())));
         let spine = crate::expr::app(
             crate::expr::app(
@@ -5407,7 +5407,7 @@ mod tests {
                 name: t,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ().succ()),
+                ty: sort(Level::zero().succ().succ()),
                 ctors,
             },
         )
@@ -5444,7 +5444,7 @@ mod tests {
     fn a_possibly_prop_declaration_never_acquires_a_w_type() {
         let t = Name::simple("P");
         let u = Name::simple("u");
-        let ty = konst(t, vec![Level::Param(u)].into());
+        let ty = konst(t, vec![Level::param(u)].into());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
@@ -5452,7 +5452,7 @@ mod tests {
                 name: t,
                 lparams: vec![u],
                 num_params: 0,
-                ty: sort(Level::Param(Name::simple("u"))),
+                ty: sort(Level::param(Name::simple("u"))),
                 ctors: vec![
                     (Name::str(&t, "a"), ty.clone()),
                     (Name::str(&t, "b"), ty),
@@ -5468,7 +5468,7 @@ mod tests {
         );
         // `σ = [1]`: `Sort 1` is `Type 0`, so a *per-instantiation* branch
         // would build a W-type right here.
-        let at: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let at: std::rc::Rc<[Level]> = vec![Level::zero().succ()].into();
         let r = c.infer_type(&konst(t, at.clone())).expect("infer");
         assert!(r.tm.is_none(), "a possibly-Prop declaration must not acquire a W-type");
         assert_eq!(
@@ -5532,7 +5532,7 @@ mod tests {
         let mk = Name::str(&p3, "mk");
         let no: Rc<[Level]> = Vec::new().into();
         let k = || konst(p3, no.clone());
-        let ty0 = || sort(Level::Zero.succ());
+        let ty0 = || sort(Level::zero().succ());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
@@ -5540,7 +5540,7 @@ mod tests {
                 name: p3,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(ty0(), forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::Zero))))),
+                ty: forall(ty0(), forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::zero()))))),
                 ctors: vec![(
                     mk,
                     forall(
@@ -5643,11 +5643,11 @@ mod tests {
                 name: q,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(sort(Level::Zero.succ()), sort(Level::Zero)),
+                ty: forall(sort(Level::zero().succ()), sort(Level::zero())),
                 ctors: vec![(
                     mk,
                     forall(
-                        sort(Level::Zero.succ()),
+                        sort(Level::zero().succ()),
                         forall(bvar(0), app(konst(q, no.clone()), bvar(1))),
                     ),
                 )],

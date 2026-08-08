@@ -539,7 +539,7 @@ fn shape(
         let at = crate::env::instantiate_lparams(
             ci.ty(),
             ci.lparams(),
-            &t_ci.lparams().iter().map(|n| crate::expr::Level::Param(*n)).collect::<Vec<_>>(),
+            &t_ci.lparams().iter().map(|n| crate::expr::Level::param(*n)).collect::<Vec<_>>(),
         );
         if ci.lparams().len() != t_ci.lparams().len()
             || at.ok().as_ref() != Some(&rename(&rho, c_ty))
@@ -624,7 +624,7 @@ fn at_export_levels(model: &ConstantInfo, export: &ConstantInfo) -> Option<E> {
         return None
     }
     let us: Vec<crate::expr::Level> =
-        export.lparams().iter().map(|n| crate::expr::Level::Param(*n)).collect();
+        export.lparams().iter().map(|n| crate::expr::Level::param(*n)).collect();
     crate::env::instantiate_lparams(model.ty(), model.lparams(), &us).ok()
 }
 

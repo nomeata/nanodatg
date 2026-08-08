@@ -720,7 +720,7 @@ fn field_types(ctor_ty: &E, param_es: &[E], nf: usize) -> Vec<Option<E>> {
         let Expr::Forall { ty: dom, body } = &*ty.clone() else { break };
         out.push(Some(dom.clone()));
         let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
-        let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+        let (a, b) = (at(Level::zero()), at(Level::zero().succ()));
         if a != b {
             break
         }
@@ -2140,7 +2140,7 @@ mod tests {
     fn nm(s: &str) -> Name { Name::simple(s) }
 
     fn level(n: u32) -> Level {
-        let mut l = Level::Zero;
+        let mut l = Level::zero();
         for _ in 0..n {
             l = l.succ();
         }
@@ -2162,7 +2162,7 @@ mod tests {
     fn list_env() -> (Environment, Name, Name) {
         let l = nm("L");
         let (nil, cons) = (Name::str(&l, "nil"), Name::str(&l, "cons"));
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let spine = |d: u32| app(konst(l, no.clone()), bvar(d));
         let mut env = Environment::empty();
@@ -2174,11 +2174,11 @@ mod tests {
                 num_params: 1,
                 ty: forall(ty0.clone(), ty0),
                 ctors: vec![
-                    (nil, forall(sort(Level::Zero.succ()), spine(0))),
+                    (nil, forall(sort(Level::zero().succ()), spine(0))),
                     (
                         cons,
                         forall(
-                            sort(Level::Zero.succ()),
+                            sort(Level::zero().succ()),
                             forall(bvar(0), forall(spine(1), spine(2))),
                         ),
                     ),
@@ -2451,7 +2451,7 @@ mod tests {
     /// `derived::sigma`'s depth-one guard, which is real and is second in line.
     #[test]
     fn a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a, b, cc, p) = (nm("T"), nm("A"), nm("B"), nm("C"), nm("P"));
         let (q, r) = (nm("Q"), nm("R"));
@@ -2612,7 +2612,7 @@ mod tests {
         // rung apart in the two uses below and is the whole reason it is a
         // parameter rather than a constant.
         let alias = |e: E, s: Level| app(lam(sort(s), bvar(0)), e);
-        let ty0_alias = alias(ty0.clone(), Level::Zero.succ().succ());
+        let ty0_alias = alias(ty0.clone(), Level::zero().succ().succ());
 
         // **`Q (α : Type 0) : Type 0 | c : Q α → Q α`, with the constructor's
         // *parameter binder* written as the alias.** The type former's is
@@ -2655,7 +2655,7 @@ mod tests {
         let r_ctor = forall(
             ty0.clone(),
             forall(
-                alias(app(rspine.clone(), bvar(0)), Level::Zero.succ()),
+                alias(app(rspine.clone(), bvar(0)), Level::zero().succ()),
                 app(rspine.clone(), bvar(1)),
             ),
         );

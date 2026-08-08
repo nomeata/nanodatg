@@ -117,6 +117,7 @@ dependencies = [
  "derived",
  "kernel",
  "nanoda_lib",
+ "num-bigint",
  "serde_json",
 ]
 

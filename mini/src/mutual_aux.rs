@@ -259,7 +259,7 @@ fn shift_all(tys: &[E], d: u32) -> Vec<E> {
 }
 
 fn params_of(lparams: &[Name]) -> Rc<[Level]> {
-    lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into()
+    lparams.iter().map(|n| Level::param(*n)).collect::<Vec<_>>().into()
 }
 
 /// `T_k p⃗ ix⃗` becomes `Aux p⃗ (Tag.t_k p⃗ ix⃗)`, everywhere.
@@ -360,7 +360,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     let (param_tys, after_params) = peel(&types[0].ty, np).ok_or(Reason::Malformed)?;
     let (ix0, res0) = peel_all(&after_params);
     let Expr::Sort(u) = &*res0 else { return Err(Reason::Malformed) };
-    let u = u.clone();
+    let u = *u;
     let mut ix_tys: Vec<Vec<E>> = vec![ix0];
     for t in &types[1..] {
         let (_, a) = peel(&t.ty, np).ok_or(Reason::Malformed)?;
@@ -427,7 +427,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     // the `imax` of the earlier ones with `sⱼ` — above `sⱼ` and below the
     // `max` being built, because every earlier `sᵢ` is in that `max` too.
     let big_w = {
-        let mut w = Level::Succ(Rc::new(Level::Zero));
+        let mut w = (Level::zero()).succ();
         for tel in &ix_tys {
             for (j, it) in tel.iter().enumerate() {
                 let s = crate::kernel::sort_under(&tmp, &param_tys[..], &foralls(&tel[..j], it.clone()))
@@ -446,7 +446,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             name: tag,
             lparams: lparams.clone(),
             num_params: *num_params,
-            ty: foralls(&param_tys, sort(big_w.clone())),
+            ty: foralls(&param_tys, sort(big_w)),
             ctors: (0..n)
                 .map(|i| {
                     // `∀p⃗ ix⃗ᵢ, Tag p⃗`.
@@ -473,7 +473,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             lparams: lparams.clone(),
             num_params: *num_params,
             // `∀p⃗, Tag p⃗ → Sort u`.
-            ty: foralls(&param_tys, forall(tag_at(0), sort(u.clone()))),
+            ty: foralls(&param_tys, forall(tag_at(0), sort(u))),
             ctors: aux_ctors.clone(),
         },
     )?;
@@ -538,7 +538,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     // `elimToSort` gave the recursor one level parameter more than the block
     // when it eliminates large, and that extra one is the motive's.
     let big = lp2.len() == lparams.len() + 1;
-    let v = if big { Level::Param(lp2[0]) } else { Level::Zero };
+    let v = if big { Level::param(lp2[0]) } else { Level::zero() };
     let us2 = params_of(&lp2);
 
     // 5. The packed motive, `fun p⃗ m⃗ (t : Tag p⃗) => Aux p⃗ t → Sort v`.
@@ -549,7 +549,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     //    because `v+1` is never zero. What used to be in this `max` and is not
     //    is the index types' own sorts, and those have not gone anywhere: they
     //    are `big_w`, the sort `Tag` itself was declared at.
-    let w = Level::max(u.clone(), Level::Succ(Rc::new(v.clone()))).simplify();
+    let w = Level::max(u, v.succ()).simplify();
     // Motive `k`'s type: `∀ix⃗_k, T_k p⃗ ix⃗_k → Sort v`, under `p⃗` and the `k`
     // motives before it — the one index shift the encoding still has.
     let motive_tys: Vec<E> = (0..n)
@@ -558,7 +558,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             a.extend(bvars(nis[k] as u32, 0));
             foralls(
                 &shift_all(&ix_tys[k], k as u32),
-                forall(app_n(konst(names[k], us.clone()), &a), sort(v.clone())),
+                forall(app_n(konst(names[k], us.clone()), &a), sort(v)),
             )
         })
         .collect();
@@ -566,7 +566,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     let packed_body = {
         let mut a = bvars(np as u32, (n + 1) as u32);
         a.push(bvar(0));
-        forall(app_n(konst(aux, us.clone()), &a), sort(v.clone()))
+        forall(app_n(konst(aux, us.clone()), &a), sort(v))
     };
     let packed = lam(tag_at(n as u32), packed_body.clone());
     let mot_ty = {
@@ -618,7 +618,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         return Err(Reason::NoRecursor)
     };
     let aux_rec_levels: Rc<[Level]> = if alp.len() == lparams.len() + 1 {
-        let mut l = vec![v.clone()];
+        let mut l = vec![v];
         l.extend(us.iter().cloned());
         l.into()
     } else if alp.len() == lparams.len() {
@@ -709,7 +709,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                     a.push(ctor_app);
                     app_n(konst(Name::str(&t.name, "rec"), us2.clone()), &a)
                 };
-                let vs: Rc<[Level]> = vec![v.clone()].into();
+                let vs: Rc<[Level]> = vec![v].into();
                 let stmt =
                     app_n(konst(eq, vs.clone()), &[alpha.clone(), lhs.clone(), rhs.clone()]);
                 let proof = app_n(konst(eq_refl, vs), &[alpha, lhs]);

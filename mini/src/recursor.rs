@@ -548,7 +548,7 @@ mod tests {
     fn nm(s: &str) -> Name { Name::simple(s) }
 
     fn level(n: u32) -> Level {
-        let mut l = Level::Zero;
+        let mut l = Level::zero();
         for _ in 0..n {
             l = l.succ();
         }
@@ -561,9 +561,9 @@ mod tests {
     /// hand-written imitation of it.
     fn eq_env() -> (Environment, Name, Name) {
         let (e, refl) = (nm("Eq"), Name::str(&nm("Eq"), "refl"));
-        let u: Level = Level::Param(nm("u"));
-        let us: Rc<[Level]> = vec![u.clone()].into();
-        let ty = forall(sort(u.clone()), forall(bvar(0), forall(bvar(1), sort(Level::Zero))));
+        let u: Level = Level::param(nm("u"));
+        let us: Rc<[Level]> = vec![u].into();
+        let ty = forall(sort(u), forall(bvar(0), forall(bvar(1), sort(Level::zero()))));
         let at = |f: E, x: E, y: E, z: E| app(app(app(f, x), y), z);
         let cty =
             forall(sort(u), forall(bvar(0), at(konst(e, us), bvar(1), bvar(0), bvar(0))));
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn a_recursor_at_the_wrong_index_is_declined_not_believed() {
         let (mut env, e, rec) = eq_env();
-        let us: Rc<[Level]> = vec![Level::Param(nm("u"))].into();
+        let us: Rc<[Level]> = vec![Level::param(nm("u"))].into();
         // `C a (Eq.refl α a)`, at binders `α a C r b t` = `#5 … #0`.
         let cod = app(
             app(bvar(3), bvar(4)),
@@ -704,7 +704,7 @@ mod tests {
                 name: empty,
                 lparams: vec![],
                 num_params: 0,
-                ty: sort(Level::Zero.succ()),
+                ty: sort(Level::zero().succ()),
                 ctors: vec![],
             },
         )
@@ -713,7 +713,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         let rec = Name::str(&empty, "rec");
-        let at: Rc<[Level]> = vec![Level::Zero].into();
+        let at: Rc<[Level]> = vec![Level::zero()].into();
         let t = c.infer_type(&konst(rec, at)).expect("infer ⟦E.rec⟧");
         let tm = t.tm.clone().unwrap_or_else(|| panic!("no interpretation: {:?}", t.ev));
         let m = t.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", t.ev)).clone();

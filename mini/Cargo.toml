@@ -30,6 +30,10 @@ kernel = { path = "../kernel" }
 derived = { path = "../derived" }
 nanoda_lib = { path = "../checker" }
 serde_json = "1.0.111"
+# For `arena::nat_lit` only: `checker`'s `NatLit` holds a `BigUint`, and the
+# arena seam is the one place mini has to build one. Mini's own literals stay
+# `u64` — the parser declines anything above ten.
+num-bigint = "0.4.4"
 
 [[bin]]
 name = "mini"

@@ -20,8 +20,9 @@
 //! Nat literals are `u64`; the parser declines anything above 10 (mini-lean's
 //! own guard), so the width is never load-bearing.
 
+use nanoda_lib::level::Level as CLevel;
 use nanoda_lib::name::Name as CName;
-use nanoda_lib::util::NamePtr;
+use nanoda_lib::util::{LevelPtr, NamePtr};
 use std::fmt;
 use std::rc::Rc;
 
@@ -120,84 +121,135 @@ impl fmt::Debug for Name {
 
 // ────────────────────────────────────────────────────────────── levels ──
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Level {
+/// A Lean universe level, as a pointer into [`crate::arena`].
+///
+/// **The representation is `checker`'s; the algebra is mini's, and that
+/// separation is deliberate.** `checker` has its own `leq`, `simplify` and
+/// `imax` smart constructor, and substituting them here would be a behaviour
+/// change on the *acceptance* axis: everything below is a clause-for-clause
+/// port of `mini-lean`'s `Level` helpers, in the original's clause order,
+/// which is what `MINI-DESIGN.md` §3 and the mini-vs-nanoda gate are about.
+/// So the nodes are shared and the decision procedure is not.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Level(pub LevelPtr<'static>);
+
+/// [`Level`] destructured one level. `Copy`, so reading costs no allocation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LevelView {
     Zero,
-    Succ(Rc<Level>),
-    Max(Rc<Level>, Rc<Level>),
-    IMax(Rc<Level>, Rc<Level>),
+    Succ(Level),
+    Max(Level, Level),
+    IMax(Level, Level),
     Param(Name),
 }
 
 impl Level {
-    pub fn succ(self) -> Level { Level::Succ(Rc::new(self)) }
-    pub fn max(a: Level, b: Level) -> Level { Level::Max(Rc::new(a), Rc::new(b)) }
-    pub fn imax(a: Level, b: Level) -> Level { Level::IMax(Rc::new(a), Rc::new(b)) }
+    /// `Level.zero`.
+    pub fn zero() -> Level { Level(crate::arena::level_zero()) }
+
+    /// `Level.param`.
+    pub fn param(n: Name) -> Level { Level(crate::arena::level_param(n.0)) }
+
+    pub fn succ(self) -> Level { Level(crate::arena::level_succ(self.0)) }
+
+    /// `Level.max` — **the dumb constructor**, as in the original. `checker`'s
+    /// `TcCtx::max` is dumb too; the simplifying one is [`Level::mk_imax`] and
+    /// [`Level::simplify`], both ported below.
+    pub fn max(a: Level, b: Level) -> Level { Level(crate::arena::level_max(a.0, b.0)) }
+
+    pub fn imax(a: Level, b: Level) -> Level { Level(crate::arena::level_imax(a.0, b.0)) }
+
+    /// One level of structure. See [`LevelView`].
+    pub fn view(&self) -> LevelView {
+        match crate::arena::read_level(self.0) {
+            CLevel::Zero => LevelView::Zero,
+            CLevel::Succ(l, _) => LevelView::Succ(Level(l)),
+            CLevel::Max(a, b, _) => LevelView::Max(Level(a), Level(b)),
+            CLevel::IMax(a, b, _) => LevelView::IMax(Level(a), Level(b)),
+            CLevel::Param(n, _) => LevelView::Param(Name(n)),
+        }
+    }
+
+    /// **Whether this is literally the `zero` node.**
+    ///
+    /// Not [`Level::is_zero`], and the difference is load-bearing: that one is
+    /// `Level.isZero`, which recurses through `max` and `imax` and answers
+    /// `true` for `max 0 0`. This is what `matches!(l, Level::Zero)` used to
+    /// say at the two sites that ask it — `census`'s `PiProp` row and
+    /// `kernel`'s constructor-argument level check — and widening either to
+    /// the recursive test would move an acceptance boundary. Hash-consing
+    /// makes it a pointer comparison.
+    pub fn is_zero_syntactically(&self) -> bool { self.0 == crate::arena::level_zero() }
 
     /// `Level.isZero`.
     pub fn is_zero(&self) -> bool {
-        match self {
-            Level::Zero => true,
-            Level::Max(a, b) => a.is_zero() && b.is_zero(),
-            Level::IMax(_, b) => b.is_zero(),
-            Level::Succ(_) | Level::Param(_) => false,
+        match self.view() {
+            LevelView::Zero => true,
+            LevelView::Max(a, b) => a.is_zero() && b.is_zero(),
+            LevelView::IMax(_, b) => b.is_zero(),
+            LevelView::Succ(_) | LevelView::Param(_) => false,
         }
     }
 
     /// `Level.isNotZero`.
     pub fn is_not_zero(&self) -> bool {
-        match self {
-            Level::Zero => false,
-            Level::Max(a, b) => a.is_not_zero() || b.is_not_zero(),
-            Level::IMax(_, b) => b.is_not_zero(),
-            Level::Succ(_) => true,
-            Level::Param(_) => false,
+        match self.view() {
+            LevelView::Zero => false,
+            LevelView::Max(a, b) => a.is_not_zero() || b.is_not_zero(),
+            LevelView::IMax(_, b) => b.is_not_zero(),
+            LevelView::Succ(_) => true,
+            LevelView::Param(_) => false,
         }
     }
 
     /// `Level.substLevel`.
     pub fn subst(&self, f: &dyn Fn(&Name) -> Level) -> Level {
-        match self {
-            Level::Param(n) => f(n),
-            Level::Zero => Level::Zero,
-            Level::Succ(l) => Level::Succ(Rc::new(l.subst(f))),
-            Level::Max(a, b) => Level::Max(Rc::new(a.subst(f)), Rc::new(b.subst(f))),
-            Level::IMax(a, b) => Level::IMax(Rc::new(a.subst(f)), Rc::new(b.subst(f))),
+        match self.view() {
+            LevelView::Param(n) => f(&n),
+            LevelView::Zero => Level::zero(),
+            LevelView::Succ(l) => l.subst(f).succ(),
+            LevelView::Max(a, b) => Level::max(a.subst(f), b.subst(f)),
+            LevelView::IMax(a, b) => Level::imax(a.subst(f), b.subst(f)),
         }
     }
 
     /// `Level.substOneLevel`.
     pub fn subst_one(&self, n: &Name, l: &Level) -> Level {
-        self.subst(&|m| if m == n { l.clone() } else { Level::Param(*m) })
+        self.subst(&|m| if m == n { *l } else { Level::param(*m) })
     }
 
     /// `Level.mkIMax` — the smart constructor keeping `imax`'s rhs a parameter.
     pub fn mk_imax(l1: &Level, l2: &Level) -> Level {
-        match l2 {
-            Level::Zero => Level::Zero,
-            Level::Succ(_) => Level::max(l1.clone(), l2.clone()),
-            Level::Max(a, b) => Level::max(Level::mk_imax(l1, a), Level::mk_imax(l1, b)),
-            Level::IMax(a, b) => Level::mk_imax(&Level::max(l1.clone(), (**a).clone()), b),
-            Level::Param(_) => Level::imax(l1.clone(), l2.clone()),
+        match l2.view() {
+            LevelView::Zero => Level::zero(),
+            LevelView::Succ(_) => Level::max(*l1, *l2),
+            LevelView::Max(a, b) => Level::max(Level::mk_imax(l1, &a), Level::mk_imax(l1, &b)),
+            LevelView::IMax(a, b) => Level::mk_imax(&Level::max(*l1, a), &b),
+            LevelView::Param(_) => Level::imax(*l1, *l2),
         }
     }
 
     /// `Level.simplify`.
     pub fn simplify(&self) -> Level {
-        match self {
-            Level::Zero => Level::Zero,
-            Level::Succ(l) => Level::Succ(Rc::new(l.simplify())),
-            Level::Max(a, b) => Level::max(a.simplify(), b.simplify()),
-            Level::IMax(a, b) => Level::mk_imax(&a.simplify(), &b.simplify()),
-            Level::Param(n) => Level::Param(*n),
+        match self.view() {
+            LevelView::Zero => Level::zero(),
+            LevelView::Succ(l) => l.simplify().succ(),
+            LevelView::Max(a, b) => Level::max(a.simplify(), b.simplify()),
+            LevelView::IMax(a, b) => Level::mk_imax(&a.simplify(), &b.simplify()),
+            LevelView::Param(n) => Level::param(n),
         }
     }
 
     /// `Level.byCases`.
     fn by_cases(p: &Name, l1: &Level, l2: &Level, balance: i64) -> bool {
-        let succ_p = Level::Param(*p).succ();
-        Level::le(&l1.subst_one(p, &Level::Zero).simplify(), &l2.subst_one(p, &Level::Zero).simplify(), balance)
-            && Level::le(&l1.subst_one(p, &succ_p).simplify(), &l2.subst_one(p, &succ_p).simplify(), balance)
+        let succ_p = Level::param(*p).succ();
+        let zero = Level::zero();
+        Level::le(&l1.subst_one(p, &zero).simplify(), &l2.subst_one(p, &zero).simplify(), balance)
+            && Level::le(
+                &l1.subst_one(p, &succ_p).simplify(),
+                &l2.subst_one(p, &succ_p).simplify(),
+                balance,
+            )
     }
 
     /// `Level.le` — the balance algorithm, ported clause for clause and in the
@@ -206,40 +258,41 @@ impl Level {
     /// hot path is at ground levels where it is exact (MINI-DESIGN.md §3).
     pub fn le(l1: &Level, l2: &Level, balance: i64) -> bool {
         // The rhs-is-a-parameter shape an `imax` must have after `simplify`.
-        fn imax_param(l: &Level) -> Option<&Name> {
-            match l {
-                Level::IMax(_, r) => match &**r {
-                    Level::Param(p) => Some(p),
+        fn imax_param(l: &Level) -> Option<Name> {
+            match l.view() {
+                LevelView::IMax(_, r) => match r.view() {
+                    LevelView::Param(p) => Some(p),
                     _ => None,
                 },
                 _ => None,
             }
         }
-        if let Level::Succ(a) = l1 {
-            return Level::le(a, l2, balance - 1)
+        let (v1, v2) = (l1.view(), l2.view());
+        if let LevelView::Succ(a) = v1 {
+            return Level::le(&a, l2, balance - 1)
         }
-        if let Level::Succ(b) = l2 {
-            return Level::le(l1, b, balance + 1)
+        if let LevelView::Succ(b) = v2 {
+            return Level::le(l1, &b, balance + 1)
         }
-        if let Level::Max(a, b) = l1 {
-            return Level::le(a, l2, balance) && Level::le(b, l2, balance)
+        if let LevelView::Max(a, b) = v1 {
+            return Level::le(&a, l2, balance) && Level::le(&b, l2, balance)
         }
-        if let (Level::Param(n), Level::Param(m)) = (l1, l2) {
+        if let (LevelView::Param(n), LevelView::Param(m)) = (v1, v2) {
             return n == m && balance >= 0
         }
         if let Some(p) = imax_param(l1).or_else(|| imax_param(l2)) {
-            return Level::by_cases(&p.clone(), l1, l2, balance)
+            return Level::by_cases(&p, l1, l2, balance)
         }
         // Unreachable by the simplification invariant, and `false` there too.
-        if matches!(l1, Level::IMax(..)) || matches!(l2, Level::IMax(..)) {
+        if matches!(v1, LevelView::IMax(..)) || matches!(v2, LevelView::IMax(..)) {
             return false
         }
-        if matches!(l1, Level::Param(_) | Level::Zero) {
-            if let Level::Max(a, b) = l2 {
-                return Level::le(l1, a, balance) || Level::le(l1, b, balance)
+        if matches!(v1, LevelView::Param(_) | LevelView::Zero) {
+            if let LevelView::Max(a, b) = v2 {
+                return Level::le(l1, &a, balance) || Level::le(l1, &b, balance)
             }
         }
-        if matches!(l1, Level::Zero) && balance >= 0 {
+        if matches!(v1, LevelView::Zero) && balance >= 0 {
             return true
         }
         // Everything left — `(zero, zero|param)` at a negative balance and
@@ -248,14 +301,19 @@ impl Level {
     }
 }
 
+/// Renders the level, not the pointer — the argument [`Name`]'s `Debug` gives.
+impl fmt::Debug for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self}") }
+}
+
 impl fmt::Display for Level {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Level::Zero => write!(f, "0"),
-            Level::Succ(l) => write!(f, "({l}+1)"),
-            Level::Max(a, b) => write!(f, "max({a},{b})"),
-            Level::IMax(a, b) => write!(f, "imax({a},{b})"),
-            Level::Param(n) => write!(f, "{n}"),
+        match self.view() {
+            LevelView::Zero => write!(f, "0"),
+            LevelView::Succ(l) => write!(f, "({l}+1)"),
+            LevelView::Max(a, b) => write!(f, "max({a},{b})"),
+            LevelView::IMax(a, b) => write!(f, "imax({a},{b})"),
+            LevelView::Param(n) => write!(f, "{n}"),
         }
     }
 }

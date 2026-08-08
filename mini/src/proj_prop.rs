@@ -658,7 +658,7 @@ mod tests {
 
     fn nm(s: &str) -> Name { Name::simple(s) }
     fn no() -> Rc<[Level]> { Vec::<Level>::new().into() }
-    fn prop() -> E { sort(Level::Zero) }
+    fn prop() -> E { sort(Level::zero()) }
 
     /// ```text
     /// inductive P2 (a : Prop) (b : Prop) : Prop | mk : a → b → P2 a b
@@ -767,7 +767,7 @@ mod tests {
     /// sort is the whole corner walk.
     fn class_t_env(field_sort: E) -> Environment {
         let p2 = nm("P2");
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let spine = |x: u32, y: u32| app(app(konst(p2, no()), bvar(x)), bvar(y));
         let mut env = Environment::empty();
         add(
@@ -860,7 +860,7 @@ mod tests {
     /// revisions could only pin negatively.
     #[test]
     fn a_data_field_of_a_class_t_structure_is_typed_at_a_real_term() {
-        let ty0 = sort(Level::Zero.succ());
+        let ty0 = sort(Level::zero().succ());
         let env = class_t_env(ty0.clone());
         for idx in [0u32, 1] {
             let mut ip = Interp::new();
@@ -906,8 +906,8 @@ mod tests {
     fn unit_field_env() -> Environment {
         let (pu, w) = (nm("PU"), nm("W"));
         let u = nm("u");
-        let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
-        let ty0 = sort(Level::Zero.succ());
+        let at1: Rc<[Level]> = vec![Level::zero().succ()].into();
+        let ty0 = sort(Level::zero().succ());
         let mut env = Environment::empty();
         add(
             &mut env,
@@ -915,10 +915,10 @@ mod tests {
                 name: pu,
                 lparams: vec![u],
                 num_params: 0,
-                ty: sort(Level::Param(u)),
+                ty: sort(Level::param(u)),
                 ctors: vec![(
                     Name::str(&pu, "unit"),
-                    konst(pu, vec![Level::Param(u)].into()),
+                    konst(pu, vec![Level::param(u)].into()),
                 )],
             },
         )
@@ -975,11 +975,11 @@ mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         let mk = Name::str(&nm("W"), "mk");
         let unit = Name::str(&nm("PU"), "unit");
-        let at1u: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let at1u: Rc<[Level]> = vec![Level::zero().succ()].into();
         let subject = app(konst(mk, no()), konst(unit, at1u));
         let e = Rc::new(Expr::Proj { ind: nm("W"), idx: 0, s: subject });
 
-        let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let at1: Rc<[Level]> = vec![Level::zero().succ()].into();
         let field_ty = konst(nm("PU"), at1);
         let (is_prop, _) = c.is_prop_ev(&field_ty).expect("PU has a sort");
         assert!(!is_prop, "the witness is only a witness while `PU`'s Lean sort is not `Prop`");

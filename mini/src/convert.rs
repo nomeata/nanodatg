@@ -40,7 +40,7 @@
 //! never reaches mini at all — it becomes a decline at the parser panic.
 
 use crate::env::{Declaration, DefKind, IndType};
-use crate::expr::{self, Expr, Level, Name, E, NameView};
+use crate::expr::{self, Expr, Level, Name, E, NameView, LevelView};
 use nanoda_lib::env::Declar;
 use nanoda_lib::expr::Expr as CExpr;
 use nanoda_lib::instantiations::{Inst, Instantiations};
@@ -637,16 +637,16 @@ impl Cv {
 
     fn level(&mut self, p: LevelPtr<'static>) -> Level {
         if let Some(l) = self.levels.get(&p) {
-            return l.clone()
+            return *l
         }
         let l = match crate::arena::read_level(p) {
-            CLevel::Zero => Level::Zero,
-            CLevel::Succ(x, _) => Level::Succ(Rc::new(self.level(x))),
+            CLevel::Zero => Level::zero(),
+            CLevel::Succ(x, _) => self.level(x).succ(),
             CLevel::Max(x, y, _) => Level::max(self.level(x), self.level(y)),
             CLevel::IMax(x, y, _) => Level::imax(self.level(x), self.level(y)),
-            CLevel::Param(n, _) => Level::Param(self.name(n)),
+            CLevel::Param(n, _) => Level::param(self.name(n)),
         };
-        self.levels.insert(p, l.clone());
+        self.levels.insert(p, l);
         l
     }
 
@@ -654,11 +654,12 @@ impl Cv {
         let ls = crate::arena::read_levels(p);
         let mut out = Vec::with_capacity(ls.len());
         for l in ls.iter() {
-            match self.level(*l) {
-                Level::Param(n) => out.push(n),
-                other => {
+            let lvl = self.level(*l);
+            match lvl.view() {
+                LevelView::Param(n) => out.push(n),
+                _ => {
                     return Err(declined(format!(
-                        "universe parameter list contains a non-parameter: {other}"
+                        "universe parameter list contains a non-parameter: {lvl}"
                     )))
                 }
             }

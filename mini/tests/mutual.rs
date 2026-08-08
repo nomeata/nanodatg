@@ -90,7 +90,7 @@ mod skip_guard;
 
 use mini::convert::{load_with, LoadOptions};
 use mini::env::{instantiate_lparams, ConstantInfo, Declaration, Environment, IndType};
-use mini::expr::{arrow, konst, sort, Expr, Level, Name, E};
+use mini::expr::{arrow, konst, sort, Expr, Level, LevelView, Name, E};
 
 /// Every mutual fixture, and the first member of its first block — the name
 /// `convert::load` reports when it declines. Read from the fixture rather than
@@ -463,7 +463,7 @@ fn k(n: &str) -> E { konst(Name::simple(n), Vec::new().into()) }
 /// accepted below, so the rejection is about the domain and not about the file.
 #[test]
 fn a_cross_member_occurrence_in_a_domain_is_not_strictly_positive() {
-    let ty = sort(Level::Succ(std::rc::Rc::new(Level::Zero)));
+    let ty = sort((Level::zero()).succ());
     let good = block(vec![
         ("A", ty.clone(), vec![("A.mk", arrow(k("B"), k("A")))]),
         ("B", ty.clone(), vec![("B.mk", k("B"))]),
@@ -497,8 +497,8 @@ fn a_cross_member_occurrence_in_a_domain_is_not_strictly_positive() {
 /// kernel that rejected every hand-built block would pass.
 #[test]
 fn a_block_whose_members_live_at_different_universes_is_rejected() {
-    let ty0 = sort(Level::Succ(std::rc::Rc::new(Level::Zero)));
-    let ty1 = sort(Level::Succ(std::rc::Rc::new(Level::Succ(std::rc::Rc::new(Level::Zero)))));
+    let ty0 = sort((Level::zero()).succ());
+    let ty1 = sort(Level::zero().succ().succ());
     let mut env = Environment::empty();
     mini::kernel::add(
         &mut env,
@@ -529,7 +529,7 @@ fn a_block_whose_members_live_at_different_universes_is_rejected() {
 /// `l0, l1, …` — one canonical level parameter per position, so that mini's
 /// `v` and Lean's `u` compare equal without either being renamed to the other.
 fn canon(n: usize) -> Vec<Level> {
-    (0..n).map(|i| Level::Param(Name::simple(&format!("l{i}")))).collect()
+    (0..n).map(|i| Level::param(Name::simple(&format!("l{i}")))).collect()
 }
 
 /// Peel every `∀`, returning the body.
@@ -664,7 +664,7 @@ fn compare_recursors(
             let owner_param_sort = env
                 .owner(n)
                 .and_then(|o| env.get(o))
-                .map(|ci| matches!(&*peel_all(ci.ty()).1, Expr::Sort(Level::Param(_))))
+                .map(|ci| matches!(&*peel_all(ci.ty()).1, Expr::Sort(l) if matches!(l.view(), LevelView::Param(_))))
                 .unwrap_or(false);
             let known = k_type.is_some() && !er.is_k && owner_param_sort;
             if known {

@@ -312,7 +312,7 @@ pub(crate) mod tests {
 
     fn nm(s: &str) -> Name { Name::simple(s) }
     fn no_levels() -> Rc<[Level]> { Vec::new().into() }
-    fn ty1() -> E { sort(Level::Zero.succ()) }
+    fn ty1() -> E { sort(Level::zero().succ()) }
 
     /// ```text
     /// inductive B : Type    | b0 | b1
@@ -437,7 +437,7 @@ pub(crate) mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
-        let at: Rc<[Level]> = vec![Level::Zero].into();
+        let at: Rc<[Level]> = vec![Level::zero()].into();
         let got = c.infer_type(&konst(rec, at)).expect("infer ⟦T.rec.{0}⟧");
         let m = got
             .ev
@@ -473,11 +473,11 @@ pub(crate) mod tests {
         c.infer_type(&konst(t, no_levels())).expect("infer ⟦T⟧");
         let point = c.interp().expect("threaded").point();
 
-        let at0: Rc<[Level]> = vec![Level::Zero].into();
+        let at0: Rc<[Level]> = vec![Level::zero()].into();
         let p = c.infer_type(&konst(rec, at0)).expect("infer ⟦T.rec.{0}⟧");
         assert_eq!(p.tm, Some(point.clone()), "a Prop-valued motive gives a proof");
 
-        let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let at1: Rc<[Level]> = vec![Level::zero().succ()].into();
         let v = c.infer_type(&konst(rec, at1)).expect("infer ⟦T.rec.{1}⟧");
         let vt = v.tm.clone().expect("the value clause interprets");
         assert_ne!(vt, point, "a value-valued motive is not a proof");

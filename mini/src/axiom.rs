@@ -249,14 +249,14 @@ mod tests {
     /// it is about and at a law it is not.
     fn env_with_sound(cod: E) -> (Environment, Name) {
         let (e, refl) = (nm("Eq"), Name::str(&nm("Eq"), "refl"));
-        let u = Level::Param(nm("u"));
-        let us: std::rc::Rc<[Level]> = vec![u.clone()].into();
+        let u = Level::param(nm("u"));
+        let us: std::rc::Rc<[Level]> = vec![u].into();
         // `Eq : ∀ (α : Sort u) (a : α), α → Prop`
         let eq_ty =
-            forall(sort(u.clone()), forall(bvar(0), forall(bvar(1), sort(Level::Zero))));
+            forall(sort(u), forall(bvar(0), forall(bvar(1), sort(Level::zero()))));
         // `Eq.refl : ∀ (α : Sort u) (a : α), Eq α a a`
         let refl_ty = forall(
-            sort(u.clone()),
+            sort(u),
             forall(bvar(0), app(app(app(konst(e, us), bvar(1)), bvar(0)), bvar(0))),
         );
         let mut env = Environment::empty();
@@ -276,7 +276,7 @@ mod tests {
         let ty = forall(
             sort(u),
             forall(
-                forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+                forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
                 forall(
                     bvar(1),
                     forall(bvar(2), forall(app(app(bvar(2), bvar(1)), bvar(0)), cod)),
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn the_law_it_is_about_is_certified() {
         // `Eq α a a` — the two sides are one term.
-        let cod = app(app(app(konst(nm("Eq"), vec![Level::Param(nm("u"))].into()), bvar(4)), bvar(2)), bvar(2));
+        let cod = app(app(app(konst(nm("Eq"), vec![Level::param(nm("u"))].into()), bvar(4)), bvar(2)), bvar(2));
         assert!(verdict(cod).is_ok(), "reflexivity at a proof-valued equation must derive");
     }
 
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn an_axiom_named_quot_sound_that_is_not_reflexivity_is_declined() {
         // `Eq α a b` — the sides are the two distinct element binders.
-        let cod = app(app(app(konst(nm("Eq"), vec![Level::Param(nm("u"))].into()), bvar(4)), bvar(2)), bvar(1));
+        let cod = app(app(app(konst(nm("Eq"), vec![Level::param(nm("u"))].into()), bvar(4)), bvar(2)), bvar(1));
         assert_eq!(
             verdict(cod),
             Err(Gap::IndSpec(nm("Eq"), "ctor is not about its own codomain")),

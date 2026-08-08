@@ -773,7 +773,7 @@ fn every_rule_the_model_proved_fires_across_the_whole_specification() {
 }
 
 /// `Sort 1` — the sort `List Tree` lives at, and the level `Eq` is used at.
-fn one() -> Rc<[Level]> { vec![Level::Succ(Rc::new(Level::Zero))].into() }
+fn one() -> Rc<[Level]> { vec![(Level::zero()).succ()].into() }
 
 fn k(n: &str) -> E { konst(Name::simple(n), Vec::new().into()) }
 

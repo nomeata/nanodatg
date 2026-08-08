@@ -228,6 +228,32 @@ pub fn name_str(pre: NamePtr<'static>, s: &str) -> NamePtr<'static> {
 /// `Name.num`.
 pub fn name_num(pre: NamePtr<'static>, i: u64) -> NamePtr<'static> { write(|c| c.num(pre, i)) }
 
+// ────────────────────────────────────────────────── level constructors ──
+//
+// All five are the *dumb* constructors, matching `mini`'s originals. The
+// simplifying ones — `mkIMax`, `simplify`, `le` — stay in `crate::expr`,
+// because they are a clause-for-clause port of mini-lean's and substituting
+// `checker`'s would move an acceptance boundary. See `expr::Level`.
+
+/// `Level.zero`.
+pub fn level_zero() -> LevelPtr<'static> { read(|c| c.zero()) }
+
+/// `Level.succ`.
+pub fn level_succ(l: LevelPtr<'static>) -> LevelPtr<'static> { write(|c| c.succ(l)) }
+
+/// `Level.max`.
+pub fn level_max(a: LevelPtr<'static>, b: LevelPtr<'static>) -> LevelPtr<'static> {
+    write(|c| c.max(a, b))
+}
+
+/// `Level.imax`.
+pub fn level_imax(a: LevelPtr<'static>, b: LevelPtr<'static>) -> LevelPtr<'static> {
+    write(|c| c.imax(a, b))
+}
+
+/// `Level.param`.
+pub fn level_param(n: NamePtr<'static>) -> LevelPtr<'static> { write(|c| c.param(n)) }
+
 // ──────────────────────────────────────────────── pinned constructors ──
 
 /// The anonymous name — every binder mini builds is bound to it.
@@ -277,6 +303,43 @@ pub fn let_(
 ) -> ExprPtr<'static> {
     let n = anon();
     write(|c| c.mk_let(n, ty, val, body, false))
+}
+
+/// `Expr.sort`.
+pub fn sort(l: LevelPtr<'static>) -> ExprPtr<'static> { write(|c| c.mk_sort(l)) }
+
+/// `Expr.const`.
+pub fn konst(n: NamePtr<'static>, ls: LevelsPtr<'static>) -> ExprPtr<'static> {
+    write(|c| c.mk_const(n, ls))
+}
+
+/// `Expr.proj`.
+pub fn proj(ind: NamePtr<'static>, idx: usize, s: ExprPtr<'static>) -> ExprPtr<'static> {
+    write(|c| c.mk_proj(ind, idx, s))
+}
+
+/// `Expr.lit` for a nat.
+///
+/// Mini's literals are `u64` and the parser declines anything above ten, so
+/// the `BigUint` the arena wants is always small. `mk_nat_lit_quick` returns
+/// `None` only when the export file was parsed without the nat extension,
+/// which mini never does — hence the `expect` rather than a `Result` that
+/// every one of the call sites would have to thread.
+pub fn nat_lit(n: u64) -> ExprPtr<'static> {
+    write(|c| c.mk_nat_lit_quick(num_bigint::BigUint::from(n)))
+        .expect("mini::arena: the nat extension is off, which mini never configures")
+}
+
+/// `Expr.lit` for a string. `None` for the same reason [`nat_lit`] cannot be.
+pub fn str_lit(s: &str) -> ExprPtr<'static> {
+    let owned = s.to_string();
+    write(|c| c.mk_string_lit_quick(std::borrow::Cow::Owned(owned)))
+        .expect("mini::arena: the string extension is off, which mini never configures")
+}
+
+/// Intern a universe-parameter list.
+pub fn alloc_levels(ls: &[LevelPtr<'static>]) -> LevelsPtr<'static> {
+    write(|c| c.alloc_levels_slice(ls))
 }
 
 // ─────────────────────────────────────────────────────── the normaliser ──

@@ -550,13 +550,13 @@ mod tests {
                 name: r,
                 lparams: vec![],
                 num_params: 1,
-                ty: forall(sort(Level::Zero.succ()), sort(Level::Zero)),
+                ty: forall(sort(Level::zero().succ()), sort(Level::zero())),
                 ctors: vec![
-                    (leaf, forall(sort(Level::Zero.succ()), app(k(), bvar(0)))),
+                    (leaf, forall(sort(Level::zero().succ()), app(k(), bvar(0)))),
                     (
                         node,
                         forall(
-                            sort(Level::Zero.succ()),
+                            sort(Level::zero().succ()),
                             forall(
                                 bvar(0),
                                 forall(

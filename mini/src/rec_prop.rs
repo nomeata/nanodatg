@@ -594,7 +594,7 @@ mod tests {
     fn nm(s: &str) -> Name { Name::simple(s) }
 
     fn level(n: u32) -> Level {
-        let mut l = Level::Zero;
+        let mut l = Level::zero();
         for _ in 0..n {
             l = l.succ();
         }
@@ -634,8 +634,8 @@ mod tests {
     /// the corpus.
     fn and_env() -> (Environment, Name) {
         let (a, i) = (nm("And"), Name::str(&nm("And"), "intro"));
-        let p = sort(Level::Zero);
-        let ty = forall(p.clone(), forall(p.clone(), sort(Level::Zero)));
+        let p = sort(Level::zero());
+        let ty = forall(p.clone(), forall(p.clone(), sort(Level::zero())));
         let at = |f: E, x: E, y: E| app(app(f, x), y);
         let cty = forall(
             p.clone(),
@@ -724,7 +724,7 @@ mod tests {
     fn punit_rec_at_no_fields() {
         let u = nm("u");
         let (p, unit) = (nm("PUnit"), Name::str(&nm("PUnit"), "unit"));
-        let us: Rc<[Level]> = vec![Level::Param(u)].into();
+        let us: Rc<[Level]> = vec![Level::param(u)].into();
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
@@ -732,7 +732,7 @@ mod tests {
                 name: p,
                 lparams: vec![u],
                 num_params: 0,
-                ty: sort(Level::Param(u)),
+                ty: sort(Level::param(u)),
                 ctors: vec![(unit, konst(p, us))],
             },
         )
@@ -768,7 +768,7 @@ mod tests {
     fn dependent_field_type_is_not_a_parameter() {
         let d = nm("D");
         let mk = Name::str(&d, "mk");
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         // `D : ∀ (a : Prop) (g : a → Prop), Prop`
         let ty = forall(prop.clone(), forall(forall(bvar(0), prop.clone()), prop.clone()));
         // `D.mk : ∀ (a : Prop) (g : a → Prop) (y : a) (z : g y), D a g`
@@ -842,7 +842,7 @@ mod tests {
     fn a_type_resident_field_cannot_reach_this_route() {
         let e = nm("E");
         let mk = Name::str(&e, "mk");
-        let ty = forall(sort(level(1)), sort(Level::Zero));
+        let ty = forall(sort(level(1)), sort(Level::zero()));
         let cty = forall(
             sort(level(1)),
             forall(bvar(0), app(konst(e, no_levels()), bvar(1))),

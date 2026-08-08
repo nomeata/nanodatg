@@ -497,19 +497,19 @@ mod tests {
     /// of the seam, the nest and the two abbreviation transports.
     #[test]
     fn the_index_route_is_wired_and_the_nest_reaches_the_constructor() {
-        let ty0 = || sort(Level::Zero.succ());
+        let ty0 = || sort(Level::zero().succ());
         let k = |n: &str| konst(Name::simple(n), Vec::new().into());
 
         // `Qa : Type → Prop | mk : Qa Prop` — np = 0, kᵢ = 0.
         let (ok, gap, ctor) =
-            route("Qa", 0, forall(ty0(), sort(Level::Zero)), app(k("Qa"), sort(Level::Zero)));
+            route("Qa", 0, forall(ty0(), sort(Level::zero())), app(k("Qa"), sort(Level::zero())));
         assert!(ok && ctor, "np = 0, kᵢ = 0: the carrier and the constructor build ({gap:?})");
 
         // `Qc (α : Type) : Type → Prop | mk : Qc α α` — a **parameter**.
         let (ok, gap, ctor) = route(
             "Qc",
             1,
-            forall(ty0(), forall(ty0(), sort(Level::Zero))),
+            forall(ty0(), forall(ty0(), sort(Level::zero()))),
             forall(ty0(), app(app(k("Qc"), bvar(0)), bvar(0))),
         );
         assert!(ok && ctor, "np = 1, kᵢ = 0: a parameter is not what stops it ({gap:?})");
@@ -519,7 +519,7 @@ mod tests {
         let (ok, gap, ctor) = route(
             "Qb",
             0,
-            forall(ty0(), sort(Level::Zero)),
+            forall(ty0(), sort(Level::zero())),
             forall(ty0(), app(k("Qb"), bvar(0))),
         );
         assert!(ok && ctor, "np = 0, kᵢ = 1: a plain field builds ({gap:?})");
@@ -528,7 +528,7 @@ mod tests {
         let (ok, gap, ctor) = route(
             "Qd",
             1,
-            forall(ty0(), forall(ty0(), sort(Level::Zero))),
+            forall(ty0(), forall(ty0(), sort(Level::zero()))),
             forall(ty0(), forall(ty0(), app(app(k("Qd"), bvar(1)), bvar(0)))),
         );
         assert!(ok && ctor, "np = 1, kᵢ = 1: a parameter and a field together ({gap:?})");

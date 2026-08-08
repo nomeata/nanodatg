@@ -429,7 +429,7 @@ mod tests {
         let sw = Name::simple("Sw");
         let mk = Name::str(&sw, "mk");
         let rec = Name::str(&sw, "rec");
-        let ty0 = || sort(Level::Zero.succ());
+        let ty0 = || sort(Level::zero().succ());
         let k = || konst(sw, Vec::<Level>::new().into());
         let mut env = Environment::empty();
         crate::kernel::add(
@@ -440,7 +440,7 @@ mod tests {
                 num_params: 1,
                 ty: forall(
                     ty0(),
-                    forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::Zero)))),
+                    forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::zero())))),
                 ),
                 ctors: vec![(
                     mk,
@@ -478,8 +478,8 @@ mod tests {
                 .expect("infer the eliminator");
             (t.tm.clone(), t.ev.gap().cloned())
         };
-        let (t0, g0) = at(&mut c, Level::Zero);
-        let (t1, g1) = at(&mut c, Level::Zero.succ());
+        let (t0, g0) = at(&mut c, Level::zero());
+        let (t1, g1) = at(&mut c, Level::zero().succ());
         let t0 = t0.unwrap_or_else(|| panic!("u := 0 derives: {g0:?}"));
         let t1 = t1.unwrap_or_else(|| panic!("u := 1 derives: {g1:?}"));
         let point = c.interp().expect("threaded").point();

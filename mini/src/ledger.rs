@@ -1439,15 +1439,15 @@ mod tests {
             Declaration::Axiom {
                 name: Name::simple("uninhabited"),
                 lparams: vec![],
-                ty: forall(sort(Level::Zero), sort(Level::Zero)),
+                ty: forall(sort(Level::zero()), sort(Level::zero())),
             },
             // And one that owes nothing, so the equality below is not `0 = 0`
             // nor `n = n` over a uniformly broken file.
             Declaration::Def {
                 name: Name::simple("fine"),
                 lparams: vec![],
-                ty: sort(Level::Zero.succ()),
-                value: sort(Level::Zero),
+                ty: sort(Level::zero().succ()),
+                value: sort(Level::zero()),
                 kind: DefKind::Def,
             },
         ];
@@ -1568,7 +1568,7 @@ mod tests {
     #[test]
     fn an_inductive_free_file_interprets_completely() {
         let mut env = Environment::empty();
-        let prop = sort(Level::Zero);
+        let prop = sort(Level::zero());
         let a = Name::simple("A");
         let a_def = Declaration::Def {
             name: a,
@@ -1659,7 +1659,7 @@ mod tests {
         let plain = Declaration::Axiom {
             name: Name::simple("plain"),
             lparams: vec![],
-            ty: forall(sort(Level::Zero), sort(Level::Zero)),
+            ty: forall(sort(Level::zero()), sort(Level::zero())),
         };
 
         let mut ip = Interp::new();
@@ -1694,8 +1694,8 @@ mod tests {
     /// there.
     fn quot_env() -> Environment {
         let (e, refl) = (Name::simple("Eq"), Name::str(&Name::simple("Eq"), "refl"));
-        let u = Level::Param(Name::simple("u"));
-        let us: std::rc::Rc<[Level]> = vec![u.clone()].into();
+        let u = Level::param(Name::simple("u"));
+        let us: std::rc::Rc<[Level]> = vec![u].into();
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
@@ -1704,7 +1704,7 @@ mod tests {
                 lparams: vec![Name::simple("u")],
                 num_params: 2,
                 // `Eq : ∀ (α : Sort u) (a : α), α → Prop`
-                ty: forall(sort(u.clone()), forall(bvar(0), forall(bvar(1), sort(Level::Zero)))),
+                ty: forall(sort(u), forall(bvar(0), forall(bvar(1), sort(Level::zero())))),
                 // `Eq.refl : ∀ (α : Sort u) (a : α), Eq α a a`
                 ctors: vec![(
                     refl,
@@ -1743,9 +1743,9 @@ mod tests {
     #[test]
     fn a_declined_quotient_iota_reports_the_step_that_refused_it() {
         let env = quot_env();
-        let one: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
-        let zero_one: std::rc::Rc<[Level]> = vec![Level::Zero, Level::Zero.succ()].into();
-        let zero: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let one: std::rc::Rc<[Level]> = vec![Level::zero().succ()].into();
+        let zero_one: std::rc::Rc<[Level]> = vec![Level::zero(), Level::zero().succ()].into();
+        let zero: std::rc::Rc<[Level]> = vec![Level::zero()].into();
         let eq = |b: E, x: E, y: E| app(app(app(konst(Name::simple("Eq"), one.clone()), b), x), y);
         // `Quot.lift.{0,1} α r β f h (Quot.mk.{0} α r a)`, under the six
         // binders: `a=#0 h=#1 f=#2 β=#3 r=#4 α=#5`.
@@ -1773,11 +1773,11 @@ mod tests {
         );
         let telescope = |cod: E| {
             forall(
-                sort(Level::Zero),
+                sort(Level::zero()),
                 forall(
-                    forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+                    forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
                     forall(
-                        sort(Level::Zero.succ()),
+                        sort(Level::zero().succ()),
                         forall(forall(bvar(2), bvar(1)), forall(h_ty.clone(), forall(bvar(4), cod))),
                     ),
                 ),
@@ -1785,11 +1785,11 @@ mod tests {
         };
         let lams = |body: E| {
             lam(
-                sort(Level::Zero),
+                sort(Level::zero()),
                 lam(
-                    forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+                    forall(bvar(0), forall(bvar(1), sort(Level::zero()))),
                     lam(
-                        sort(Level::Zero.succ()),
+                        sort(Level::zero().succ()),
                         lam(forall(bvar(2), bvar(1)), lam(h_ty.clone(), lam(bvar(4), body))),
                     ),
                 ),
@@ -1842,8 +1842,8 @@ mod tests {
             Declaration::Def {
                 name: Name::simple("fine"),
                 lparams: vec![],
-                ty: sort(Level::Zero.succ()),
-                value: sort(Level::Zero),
+                ty: sort(Level::zero().succ()),
+                value: sort(Level::zero()),
                 kind: DefKind::Def,
             },
             Declaration::Axiom { name: Name::simple("second"), lparams: vec![], ty: nat() },

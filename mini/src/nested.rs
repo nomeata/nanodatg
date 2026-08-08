@@ -162,7 +162,7 @@ pub fn plan(
         None => return Ok(None),
     };
     let us: std::rc::Rc<[Level]> =
-        lparams.iter().map(|n| Level::Param(*n)).collect::<Vec<_>>().into();
+        lparams.iter().map(|n| Level::param(*n)).collect::<Vec<_>>().into();
     let mut sp = Sp {
         env,
         num_params,
@@ -332,7 +332,7 @@ pub fn add(
 fn rec_levels(env: &Environment, member: &Name) -> R<std::rc::Rc<[Level]>> {
     let n = Name::str(member, "rec");
     let ci = env.get(&n).ok_or_else(|| format!("{n} was not generated"))?;
-    Ok(ci.lparams().iter().map(|p| Level::Param(*p)).collect::<Vec<_>>().into())
+    Ok(ci.lparams().iter().map(|p| Level::param(*p)).collect::<Vec<_>>().into())
 }
 
 fn get_ty<'a>(env: &'a Environment, n: &Name) -> R<&'a E> {

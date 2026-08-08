@@ -32,7 +32,9 @@
 //! the conservative direction for sizing the work.
 
 use crate::env::Declaration;
-use crate::expr::{has_bvar, Expr, Level, E};
+use crate::expr::{has_bvar, Expr, E};
+#[cfg(test)]
+use crate::expr::Level;
 use std::collections::BTreeMap;
 
 /// One §6.2 clause.
@@ -176,7 +178,7 @@ impl Census {
                 // codomain is the degenerate fibre — so a reader sizing work
                 // off these two rows should add them. The `PiProp` row is still
                 // a real clause boundary (`n2 == 0` routes to `cond`).
-                let k = if matches!(&**body, Expr::Sort(Level::Zero)) {
+                let k = if matches!(&**body, Expr::Sort(l) if l.is_zero_syntactically()) {
                     Clause::PiProp
                 } else if has_bvar(body, 0) {
                     Clause::PiDep
@@ -243,8 +245,8 @@ mod tests {
 
     #[test]
     fn the_three_pi_clauses_are_distinguished() {
-        let prop = sort(Level::Zero);
-        let ty1 = sort(Level::Zero.succ());
+        let prop = sort(Level::zero());
+        let ty1 = sort(Level::zero().succ());
         // `Π (_ : Type 0). Prop` — the Prop clause.
         let mut c = Census::default();
         c.walk(&forall(ty1.clone(), prop.clone()));
@@ -263,17 +265,17 @@ mod tests {
     fn split_tracks_what_interp_can_do() {
         let mut c = Census::default();
         // `λ (_ : Prop). (f a)` — one uninterpretable node, three interpretable.
-        c.walk(&lam(sort(Level::Zero), app(bvar(0), bvar(0))));
+        c.walk(&lam(sort(Level::zero()), app(bvar(0), bvar(0))));
         assert_eq!(c.split().1, 0, "lam and its body are interpreted");
         // A non-dependent `Π` is interpreted now; a dependent one is not.
         let mut c = Census::default();
-        c.walk(&forall(sort(Level::Zero), sort(Level::Zero.succ())));
+        c.walk(&forall(sort(Level::zero()), sort(Level::zero().succ())));
         assert_eq!(c.split().1, 0, "pi-arrow is interpreted");
         let mut c = Census::default();
-        c.walk(&forall(sort(Level::Zero.succ()), bvar(0)));
+        c.walk(&forall(sort(Level::zero().succ()), bvar(0)));
         assert_eq!(c.split().1, 0, "pi-dep is interpreted too");
         let mut c = Census::default();
-        c.walk(&forall(sort(Level::Zero.succ()), sort(Level::Zero)));
+        c.walk(&forall(sort(Level::zero().succ()), sort(Level::zero())));
         assert_eq!(c.split().1, 0, "pi-prop is interpreted too");
         // **A nat literal is interpreted and a projection is not**, and the
         // pair is asserted together because they used to be one row: "both
