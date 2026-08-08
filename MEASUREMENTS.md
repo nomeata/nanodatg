@@ -14,6 +14,18 @@ Tarski–Grothendieck backend must discharge as a genuine derivation, so the tot
 is a lower bound on the kernel's work, and the mix says which rules the kernel
 API should be optimised for.
 
+**How to read the numbers in this file — and in `PROFILE.md`, `MONOMORPH.md`,
+`MODELGEN.md` and `CACHING-DESIGN.md`.** The counters are evidence; the wall
+clocks are commentary. This is a shared machine that has carried six seats in a
+day and whose wall times swing **2.1× on load alone**, so no decision should
+rest on a clock, and no two clocks should be divided to make a ratio — *not
+even back-to-back ones on the same binary*, which control for the code and not
+for the load. Any comparison a decision rests on is taken with
+`perf stat -e instructions`; see `DECISIONS.md`, 2026-08-08. The section
+"Which recorded numbers carry weight: counters against clocks" at the end of
+this file classifies every recorded headline, and names the ones whose claim
+survives on a counter even though the figure quoted for it does not.
+
 ## Results, 2026-07-30
 
 Upstream nanoda at `ddfac2b`, `nat_extension` and `string_extension` on.

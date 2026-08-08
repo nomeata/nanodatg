@@ -2753,3 +2753,55 @@ its committed-fixture coverage, which `README.md` promises.
 `--features tg` step in `ci/check.sh` stands between them and a silent zero, so
 `ci/check-test-inputs.sh` now greps for that step — the same rule
 `ci/check-boundary.sh` already applies to its own delegation.
+
+## 2026-08-08 — `perf stat -e instructions` for any comparison a decision rests on; wall time is commentary
+
+**Chosen.** A number that a decision rests on must be a **deterministic property
+of the computation**: an instruction count, one of the project's own counters
+(`conversions`, `INFER_ENTRIES`, `proved`, `gapped`, `constEv`/`pairs`),
+a declaration or expression-node count, a distinct-versus-total from an intern
+table, a cache hit rate, a pass/fail. Wall time is still recorded — it is what
+tells a reader whether a thing takes a second or an afternoon — but it is
+**commentary, and it is never divided to produce a ratio a decision then cites**.
+
+The instrument is
+`perf stat -e instructions,cycles,task-clock,page-faults`. It needs no
+recompile, no feature flag and no probe, it works on this box
+(`perf_event_paranoid` is `-1`), and it costs nothing measurable.
+
+**Rejected — "back-to-back on one binary is good enough."** This was the
+previous house rule and it is not sound. Adjacency controls for the binary and
+the code; it does not control for the load. Two twelve-minute runs can straddle
+another seat starting or finishing, and this machine has carried six seats in a
+day. A back-to-back wall pair is exactly as suspect as a cross-day one.
+
+**Rejected — quoting a wall figure from another document** as one side of a
+ratio. Two chains in this repo did it, and both inherited a number their own
+source disclaims or has since replaced (`MEASUREMENTS.md`, "Which recorded
+numbers carry weight").
+
+**Why, measured.** Instruction counts reproduce on this box to **0.17 %** over
+three repeats of the same 38-billion-instruction `monomorph` run
+(38,469,870,117 / 38,409,636,696 / 38,403,295,774) and to **0.09 %** over two
+`nanoda` runs — while `MODELGEN.md` §4.1 records a **2.1× wall swing from load
+alone** on identical work. The two numbers are three orders of magnitude apart
+in reliability, for the same effort.
+
+**And the counter is not merely more stable — it is a different quantity, and
+the difference is diagnostic.** This box has 96 cores, so a single-threaded job
+never starves for CPU; contention arrives as memory-bandwidth and LLC pressure
+instead. That moves `cycles` and leaves `instructions` fixed, which makes
+**IPC = instructions / cycles a direct read-out of how contended a run was**.
+Recording both means a run carries its own evidence of the conditions it was
+taken under, which no wall clock does.
+
+**Peak RSS keeps its standing, with the caveat stated.** It is per-process and
+has held to fractions of a percent across sittings here, and several decisions
+in this repo correctly rest on it. But allocator behaviour shifts under memory
+pressure and the cgroup ceiling is shared, so it is *probably* sound rather than
+sound, and it should be written that way.
+
+**What this does not require.** Re-taking the corpus. Most load-bearing claims
+here already rest on counters and are unaffected; a good part of the rest has a
+counter twin that carries the claim without its clock. The census tabulates
+both.
