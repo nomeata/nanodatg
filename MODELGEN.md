@@ -133,6 +133,21 @@ one per ι rule.
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
 
+## 2.1 Equivalence with the Rust generator, and what it does and does not say
+
+Over those eight, `nested_ev::iso`'s `Iso::decls` and `modelgen`'s output name
+**the same 190 declarations** — block members, their constructors, and every
+`_model` definition and theorem — diffed as sorted sets and identical. On top
+of that, §4's statement oracle says the two are *stating the same thing*: both
+are compared, syntactically, against the rule the installed `T.rec_k` carries,
+which is one object and not two.
+
+What is **not** claimed is that the proof *terms* agree. Both are checked — by
+`kernel::add` there and by `Environment.addDeclCore` here — and a proof is not
+part of the contract. The output is likewise **not** byte-comparable to the
+input: any file with a model is re-interned whole (§3). A file with nothing to
+splice is byte-identical, and that was measured over 73 of them.
+
 ---
 
 # 3. Why the whole output is re-interned
