@@ -113,12 +113,50 @@
 //! contain* at a σ nothing applies is pure cost. Seeding one it does contain at
 //! a σ it is already checked at is free.
 //!
-//! What is **not** free, and is reported rather than fixed here, is that the
-//! defaulting now applies to the model's own declarations: `T._model.rec_k` and
-//! every `T._model.iota_k_j` are mentioned by nothing, so each is checked at
-//! `[0]` **and** `[1]`. Suppressing that needs `checker::instantiations` to
-//! learn the convention, which is a change in the other crate; the measurement
-//! is in the module's own tests.
+//! What is **not** free is that the model's recursors and ι theorems are
+//! interpreted at **two** σ rather than one. That is real. The obvious reading
+//! of it — "the defaulting applies to the model's own declarations, so teach
+//! `checker::instantiations` this module's naming convention" — was written
+//! here, and it is **wrong**; it is corrected in place rather than appended to
+//! because a seat was briefed off it.
+//!
+//! Measured on `nested_keying` by counting the `(name, σ)` pairs the pre-pass
+//! schedules, without changing any behaviour:
+//!
+//! * **`T._model.rec_k` is not "mentioned by nothing".** `T._model.iota_k_j`
+//!   mentions it, so it is *demanded* at `[0]` and `[1]` — not defaulted there.
+//!   Suppressing the default for it changes nothing.
+//! * **`T._model.iota_k_j` is** defaulted; nothing mentions it. But
+//!   [`Recognised::key`] then demands it at exactly the σ it keys `T.rec_k` at,
+//!   and `T.rec` / `T.rec_1` are themselves at `[0]` and `[1]` **by the same
+//!   default** — a file that declares a nested type need not eliminate one, and
+//!   this one does not. The σ set is therefore unchanged, and suppressing the
+//!   default for the ι theorems is *also* a no-op.
+//!
+//! So the doubling traces to the default on `T.rec_k`, an **ordinary**
+//! declaration where the default is doing the job it exists for — not to the
+//! model's names, and not to anything a convention exported to the other crate
+//! could reach. `post == pre` for every one of this fixture's 48 scheduled
+//! names: the propagation above is entirely subsumed by the pre-pass here.
+//!
+//! **And the doubling is the small half of the cost.** Of the 23 model-tower
+//! names, 15 are monomorphic and already scheduled once; the tower is 31
+//! scheduled pairs against the 23 it would be at one σ apiece, and the whole
+//! file is 65 against 48. Truncating *every* declaration to a single σ — an
+//! unreachable optimum, since it also drops genuinely demanded instantiations —
+//! takes `nested_keying` from 9 775 526 conversions in 5m22 to 4 101 470 in
+//! 2m17, and costs `constEv` 43 → 23 with `lazyFills` 0 → 71. **2.38× is the
+//! ceiling on every scheduling-side fix together**; the `342×` this fixture is
+//! quoted at (`MEASUREMENTS.md`) is the model being *in the file* at all.
+//!
+//! The standing fix is `MONOMORPH.md` §8, which deletes the schedule rather
+//! than narrowing it — and §2.2's `--default 0` emits one copy of a
+//! never-demanded group, which is this doubling, gone. Run **mono before
+//! `modelgen`** and no convention is needed anywhere: the export is already
+//! monomorphic, each `T` appears once per instantiation, and `modelgen` emits
+//! one model per copy. Run mono *second* and the model's declarations are still
+//! unreferenced — this module finds them by name — so mono would have to guess
+//! their σ and this same defect reappears one layer along.
 //!
 //! # The boundary
 //!

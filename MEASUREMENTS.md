@@ -5206,6 +5206,33 @@ code only, and `run::Options` has no such field. A first attempt at this table
 read 5m0 "acceptance" against 5m20 "full" and was measuring the same run
 twice.)*
 
+**The level schedule is not the lever here either, and the reading that it was
+is corrected in place.** `mini/src/nested_splice.rs`'s header used to report
+that `T._model.rec_k` and every `T._model.iota_k_j` are "mentioned by nothing"
+and so padded to `[0]` and `[1]` by `checker::instantiations`' `DEFAULT_LEVELS`,
+and that suppressing it needed the other crate to learn the model's naming
+convention. Counting the scheduled `(name, σ)` pairs on `nested_keying` — no
+behaviour changed — refutes both halves:
+
+* `T._model.rec_k` **is** mentioned, by `T._model.iota_k_j`; it is demanded at
+  both σ, not defaulted there.
+* `T._model.iota_k_j` is defaulted, but `nested_splice::recognise` then demands
+  it at the σ it keys `T.rec_k` at, and `T.rec` / `T.rec_1` are at `[0]` and
+  `[1]` by the **same** default, on an *ordinary* declaration. The σ set is
+  unchanged either way.
+
+`post == pre` for all 48 scheduled names: the propagation is wholly subsumed by
+the pre-pass, and no model-side suppression can move this file. Nor is the
+doubling where the cost is — 15 of the 23 model-tower names are monomorphic and
+already scheduled once (31 pairs against 23; 65 against 48 file-wide).
+Truncating *every* declaration to one σ, which is unreachable because it also
+drops demanded instantiations, gives **9 775 526 → 4 101 470 conversions and
+5m22 → 2m17, with `constEv` 43 → 23 and `lazyFills` 0 → 71**. So **2.38× bounds
+every scheduling-side fix together**, against the 342× above: that 342× is the
+model being in the file, not the model being scheduled twice. The standing fix
+is `MONOMORPH.md` §8 — delete the schedule, not narrow it — with mono run
+**before** `modelgen` so no pass needs the convention.
+
 **`CACHING-DESIGN.md`'s narrowing is not the lever here, measured.** With
 `frame_put`'s `Gap` gate removed *entirely* — strictly more than the narrowing —
 `nested_keying` went **5m20 → 5m14**, while the frame cache went 11.6% → 32.7%
