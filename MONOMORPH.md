@@ -921,6 +921,11 @@ becomes 118 declarations, and the `<= 5` of §5.1 is not a bound.
 
 ## 9.5 Speed, memory, and where it stops
 
+**Every figure in this section predates §9.8 and §9.9** and is kept as the
+baseline they are measured against: the rewrite memo and the chunked reader
+together take the 10-million-line prefix from 3,288,996 KB to 2,170,732 KB.
+§9.9 has the current full-file number.
+
 | | wall | peak RSS |
 | --- | ---: | ---: |
 | `lean4export Mathlib` | 210.69 s | 12,017,472 KB |
@@ -1348,7 +1353,16 @@ has exactly one parent, so it is still computed once — and it is the differenc
 between 3,444,772 KB and 3,099,176 KB. Emission itself, under the gate, peaks at
 3,081,572 KB against `pure`'s 3,207,756 KB.
 
-The ladder, `off` (what this replaces) against `prune-gate` (the default):
+**Re-measured after §9.9's chunked reader**, which removes the large freed arena
+the gate's pre-pass used to be absorbed by, the three sit within 1 % of each
+other on peak and the ordering on instructions is unchanged — 10 M prefix:
+`off` 402.43 G / 2,196,832 KB, `pure` 396.96 G / **2,155,844 KB**,
+`prune-gate` **395.32 G** / 2,170,732 KB. Against the pre-work baseline —
+`off` with the slurping reader — the pair of changes together is
+**−3.1 % instructions and −34.0 % peak RSS**.
+
+The ladder, `off` (what this replaces) against `prune-gate` (the default), with
+the slurping reader so that the memo is the only variable:
 
 | | instructions, off → prune-gate | peak RSS, off → prune-gate |
 | --- | ---: | ---: |
@@ -1451,6 +1465,29 @@ byte-identical on `init-prelude`, on 20 MB, and on the 1 M and 10 M prefixes;
 
 **Less memory and fewer instructions.** The `Export` is now visible on its own:
 **523 MB for a 512.9 MiB input, 1.02×**.
+
+**On the full export it is measured, not extrapolated: 5,504,076 KB in
+141.21 s**, against `MODELGEN.md` §6.6's **23,865,020 KB** for the same file —
+**4.34× less, −18.4 GB** — and **35 % below the arena's `parse-only` baseline of
+8.5 GB**. The parsed `Export` for the whole of Mathlib is 5,504,076 KB against
+an input of 5,504,208 KB: **1.00× the file's bytes**, to four figures.
+
+The rest of that run is not yet a number. Under `ulimit -v 24000000` it reached
+
+| phase | RSS |
+| --- | ---: |
+| parse | 5,504,076 KB |
+| reference sets | 6,492,696 KB |
+| **the `proj` replay** | **11,939,612 KB** |
+| backward sweep | 12,013,400 KB |
+| shared-node scan | 12,013,400 KB (free — it fits in what is already released) |
+| **carriers** | **15,607,540 KB** |
+
+and then `std::bad_alloc` in emission. `-v` bounds *address space*, not resident
+set, and Lean's allocator reserves well beyond what it touches — the 36.2 GB run
+of §9.5 needed `-v 40000000` — so this bounds nothing except the run. What it
+does show is where the remaining memory now is, and it is **not** the parse: the
+`proj` replay is **5.4 GB** and §9.8's gate tables are **3.6 GB**.
 
 This does not make task **#119** — `monomorph` on `nanoda`'s Rust parser —
 unnecessary; it removes the part of the case for it that was an accident of
