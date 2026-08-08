@@ -257,6 +257,25 @@ Two shapes Lean supports and this does **not**, each now with a fixture under
   `mini/src/nested.rs` refuses it outright and so does this; extending to it
   means a carrier and a recursor family per member, which is a naming-convention
   change and a second project. `nest_through_mutual.lean`.
+
+  **The recursor family, measured rather than argued.** `nest_mutual_both.lean`
+  is the non-degenerate fixture for this axis — `A` nests at `List B`, `B` at
+  `Box A`, so a single carrier and a per-member carrier family are not the same
+  thing — and Lean's export of it says:
+
+  | | |
+  | --- | --- |
+  | block members | `A`, `B`, and the mimics `List B`, `Box A` |
+  | `numNested` | **2, on every real member** — the mimic count, not a per-member figure |
+  | `all` | `[A, B]` — the real members only; the mimics are not in it |
+  | recursors | `A.rec`, `B.rec`, `A.rec_1` (`List B`), `A.rec_2` (`Box A`) |
+  | motives / minors | **4 and 7 on every one of the four** — one shared vector |
+
+  So: **a real member's recursor lives in that member's own namespace and a
+  mimic's in the first member's, numbered from 1**, and the motive order is
+  `all` first, mimics after, in discovery order. `T.rec_k`'s index is therefore
+  *not* the block-member index once the block is mutual, which is what breaks
+  §1's "the model's index is the member index, uniformly".
 * **Nesting through a container that is itself a nested inductive**, and this
   one **refutes a load-bearing sentence in `mini/src/nested_ev.rs`**: "nesting
   strictly decreases, so this is a topological order and a cycle cannot arise".

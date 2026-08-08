@@ -70,6 +70,11 @@ interesting half:
   supports it and exports it**: `A`/`B` come back with `numNested = 1` and
   three recursors, `A.rec`, `B.rec` and `A.rec_1`. Nothing in the 205-file
   corpus has the shape, so it was neither covered nor known to decline.
+* `nest_mutual_both` — the same axis, **non-degenerately**: `A` nests at `List
+  B`, `B` nests at `Box A`, so there are four block members, two mimics at two
+  distinct containers, and four recursors sharing one motive and minor vector.
+  With only one member nesting, a single carrier and a per-member carrier
+  family are the same thing; here they are not.
 * `nest_through_nested` — nesting through a container that is *itself* a
   nested inductive. This refutes a load-bearing sentence in
   `mini/src/nested_ev.rs`: "nesting strictly decreases, so this is a
@@ -85,6 +90,7 @@ def expectedOwn : List Row :=
   , ("decline_under_binder", [],
       [("Tree", "nested model shape: Tree._model.1.mk has a recursive field under a binder")])
   , ("nest_through_mutual", [], [("A", "nested model in a mutual block")])
+  , ("nest_mutual_both", [], [("A", "nested model in a mutual block")])
   , ("nest_through_nested", [("Tree", 15)],
       [("T", "nested model with mutually recursive occurrences")])
   ]
