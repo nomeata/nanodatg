@@ -41,6 +41,14 @@ structure Row where
 
 def expected : List Row :=
   [ { file := "mono_poly",  declsIn := 20, outA := 32, outB := 32, regen := 0 }
+  -- **The memo's key, and the one shape that makes it wrong.** `fwd` and `rev`
+  -- share one type expression and order their `levelParams` oppositely, and are
+  -- used at instantiations that agree *positionally*. A rewrite memo keyed on a
+  -- parameter's position in the declaring declaration's own list gives them one
+  -- key and two different right answers; measured, that is `rejected = 2` here
+  -- and `0` with the global key. The counts alone do not move, so it is axis 1
+  -- — the kernel — that catches it and nothing else would.
+  , { file := "mono_share", declsIn := 12, outA := 13, outB := 13, regen := 0 }
   , { file := "mono_elim",  declsIn := 10, outA := 10, outB := 12, regen := 0 }
   , { file := "mono_proj",  declsIn := 12, outA := 19, outB := 19, regen := 0 }
   , { file := "mono_prop",  declsIn := 17, outA := 23, outB := 23, regen := 2 }

@@ -290,7 +290,9 @@ pass emits. `MONOMORPH.md` §9.8 is what they measured.
 * `MONO_STATS=1` — [`shareStats`] over the input and the output. **This is the
   measurement that settles whether sharing is preserved**, and it is not an
   estimate: it counts nodes twice, once by pointer and once by structure.
-* `MONO_NOMEMO=1` — the A/B switch for the cross-declaration memo.
+* `MONO_MEMO=<mode>` — which rewrite memo to run, so that §9.8's A/B table is
+  one binary and not seven. [`MemoMode`] is the list; the default is the row
+  that won.
 -/
 
 /-- Resident set and high-water mark, in KB, from `/proc/self/status`. -/
@@ -307,10 +309,6 @@ def rssKB : IO (Nat × Nat) := do
 
 initialize monoPhases : Bool ← do return (← IO.getEnv "MONO_PHASES").isSome
 initialize monoStats : Bool ← do return (← IO.getEnv "MONO_STATS").isSome
-/-- `MONO_NOMEMO=1` resets [`RwState.pure`] at each copy, as the pass did before
-the cross-declaration memo existed. It is how §9.8's A/B table is reproduced and
-it is the only reason it is here. -/
-initialize monoNoMemo : Bool ← do return (← IO.getEnv "MONO_NOMEMO").isSome
 initialize monoT0 : IO.Ref Nat ← IO.mkRef 0
 
 def phase (name : String) : IO Unit := do
@@ -367,6 +365,139 @@ partial def hasProj (cache : IO.Ref (Std.HashMap Expr Bool)) (e : Expr) : IO Boo
     cache.modify (·.insert e b)
     return b
 
+/-! ## The memo's key
+
+The rewrite of a subterm depends on the copy through **one thing**: the numerals
+the copy binds the level parameters *that subterm mentions* to. Nothing else in
+[`RwCtx`] varies in a way a subterm can see — `sigma` and `own` rename
+declarations, not expressions, and `recArity` is settled for any target before a
+user of it is emitted, because the file is topologically sorted.
+
+So the memo key is `(e, σ restricted to the parameters e mentions)`, and the
+restriction is the point rather than a refinement of it: under the *whole* `σ`, a
+subterm mentioning only `u` gets a different key for every value of every other
+parameter, and `Functor.comp` has six. `Functor.associator` reaches 118 copies
+on Mathlib (§9.4); pruned, everything in it that mentions only `u` is one entry.
+
+**The second component has to be canonical across declarations**, because the
+`Expr` is: the same node is reached from declarations whose `levelParams` lists
+order the same names differently. A position in a declaration's own list is
+therefore *not* a key — bit 0 is `u` in one declaration and `v` in the next, and
+a memo keyed on it returns the wrong rewrite with no check anywhere that would
+catch it. Everything below indexes level parameters **by name, globally and
+injectively**, and `monotests/mono_share.ndjson` is the fixture that fails if
+that ever stops being true. -/
+
+/-- Every level parameter the file declares, numbered by name — **injectively,
+and once for the whole file**, so an index means the same thing in every
+declaration. -/
+def paramIndex (groups : Array Group) : Std.HashMap Name Nat := Id.run do
+  let mut m : Std.HashMap Name Nat := {}
+  for g in groups do
+    for p in g.levelParams do unless m.contains p do m := m.insert p m.size
+    for p in g.elims do unless m.contains p do m := m.insert p m.size
+  return m
+
+/-- The bit a parameter occupies in a carrier mask. **Indices past 63 all share
+the last bit**, which merges those parameters in the mask and therefore only
+ever *over*-approximates a carrier: the key comes out finer than it needed to be
+and the memo misses where it could have hit. It never conflates two
+substitutions, because [`RwCtx.binding`] is keyed on the injective index and not
+on the bit. Mathlib declares 52 distinct level parameters, so this does not
+fire there. -/
+@[inline] def carrierBit (i : Nat) : UInt64 := (1 : UInt64) <<< (UInt64.ofNat (min i 63))
+
+/-- The parameters a level mentions, as a mask. -/
+def levelCarrier (idx : Std.HashMap Name Nat) : Level → UInt64
+  | .zero | .mvar _ => 0
+  | .succ a => levelCarrier idx a
+  | .max a b | .imax a b => levelCarrier idx a ||| levelCarrier idx b
+  | .param n => match idx[n]? with | some i => carrierBit i | none => carrierBit 63
+
+/-- The parameters an expression mentions. Memoised on the DAG, exactly as
+[`hasProj`] is and for the same reason. **A subterm with no level parameter
+costs nothing and gets no entry**: `Expr.hasLevelParam` is a bit in the node
+header that Lean maintains for us. -/
+partial def carrierOf (idx : Std.HashMap Name Nat) (keep : Option (Std.HashSet Expr))
+    (cache : IO.Ref (Std.HashMap Expr UInt64)) (e : Expr) : IO UInt64 := do
+  if !e.hasLevelParam then return 0
+  match (← cache.get)[e]? with
+  | some m => return m
+  | none =>
+    let m ←
+      match e with
+      | .sort l => pure (levelCarrier idx l)
+      | .const _ us => pure (us.foldl (fun a l => a ||| levelCarrier idx l) 0)
+      | .app f a => pure ((← carrierOf idx keep cache f) ||| (← carrierOf idx keep cache a))
+      | .lam _ t b _ | .forallE _ t b _ =>
+        pure ((← carrierOf idx keep cache t) ||| (← carrierOf idx keep cache b))
+      | .letE _ t v b _ =>
+        pure ((← carrierOf idx keep cache t) ||| (← carrierOf idx keep cache v)
+              ||| (← carrierOf idx keep cache b))
+      | .proj _ _ b | .mdata _ b => carrierOf idx keep cache b
+      | _ => pure 0
+    -- **Only where the answer will be kept.** Under a gating mode the memo only
+    -- keys nodes the arena shares, so caching the rest here would build an
+    -- 8.4-million-entry table to throw away — and that table, not emission, was
+    -- what set the peak (§9.8). Recomputing an unshared node is free in the
+    -- aggregate: it has exactly one parent, so it is still computed once.
+    if keep.all (·.contains e) then cache.modify (·.insert e m)
+    return m
+
+/-- **The nodes the arena shares**: reached from more than one parent, counted
+over the whole file. A node with one parent is rebuilt once per rebuild of that
+parent, so memoising it buys nothing that memoising the parent does not already
+buy — and an entry costs about what the node costs. This is the set that decides
+whether a memo pays for itself. -/
+def sharedNodes (roots : Array Expr) : Std.HashSet Expr := Id.run do
+  let mut seen : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
+  let mut shared : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
+  let mut stack : Array Expr := roots
+  while stack.size > 0 do
+    let e := stack[stack.size - 1]!
+    stack := stack.pop
+    if seen.contains e then
+      shared := shared.insert e
+      continue
+    seen := seen.insert e
+    match e with
+    | .app f b => stack := (stack.push f).push b
+    | .lam _ t b _ | .forallE _ t b _ => stack := (stack.push t).push b
+    | .letE _ t v b _ => stack := ((stack.push t).push v).push b
+    | .proj _ _ b | .mdata _ b => stack := stack.push b
+    | _ => pure ()
+  return shared
+
+/-- Which memo the pass runs, so that §9.8's rows are one binary. `MONO_MEMO`:
+
+| | the memo across copies | the key | entries for |
+| --- | --- | --- | --- |
+| `off` | none | — | — |
+| `pure` | level-free subterms only | `e` | every node |
+| `full` | all | `(e, σ)` whole | every node |
+| `full-gate` | all | `(e, σ)` whole | shared nodes |
+| `prune` | all | `(e, σ|carrier e)` | every node |
+| `prune-gate` *(default)* | all | `(e, σ|carrier e)` | shared nodes |
+| `prune-array` | all | `(e, σ|carrier e)` **uninterned** | shared nodes |
+-/
+inductive MemoMode where
+  | off | pure | full | fullGate | prune | pruneGate | pruneArray
+  deriving BEq, Inhabited
+
+def memoModeOf : String → Option MemoMode
+  | "off" => some .off | "pure" => some .pure
+  | "full" => some .full | "full-gate" => some .fullGate
+  | "prune" => some .prune | "prune-gate" => some .pruneGate
+  | "prune-array" => some .pruneArray
+  | _ => none
+
+initialize memoMode : MemoMode ← do
+  match ← IO.getEnv "MONO_MEMO" with
+  | none => return .pruneGate
+  | some s => match memoModeOf s with
+    | some m => return m
+    | none => throw (IO.userError s!"MONO_MEMO: unknown mode {s}")
+
 /-! ## The rewrite -/
 
 /-- Everything one copy of one group needs. -/
@@ -389,6 +520,23 @@ structure RwCtx where
   reduction. Emission is forward and the file is topologically sorted, so the
   block's own answer is known before anything can mention it. -/
   recArity : Std.HashMap Name Nat := {}
+  /-- The carrier of every node the memo may key, by [`carrierOf`]. Under a
+  gating mode this holds **only the nodes the arena shares**, so a miss here is
+  also the answer to "should this be memoised at all". -/
+  carrier : Std.HashMap Expr UInt64 := {}
+  /-- The level-free nodes the arena shares. Only consulted under a gating
+  mode. -/
+  sharedPure : Std.HashSet Expr := {}
+  /-- **This copy's substitution, by global parameter index, sorted.** The
+  index is [`paramIndex`]'s, so the array means the same thing whichever
+  declaration is being emitted — which is the whole soundness argument for
+  sharing a memo across declarations. -/
+  binding : Array (Nat × Nat) := #[]
+  /-- The bits of `binding`'s parameters. -/
+  lpMask : UInt64 := 0
+  /-- The id of the whole `binding`, for the unpruned modes. -/
+  envId : Nat := 0
+  mode : MemoMode := .pruneGate
 
 /-- A level under this copy's instantiation, simplified. -/
 def RwCtx.level (c : RwCtx) (l : Level) : Level := (substLevel c.env l).normalize
@@ -407,16 +555,47 @@ is an arena — one line per node, back-referenced — so a subterm with a hundr
 parents is *one* `Expr` in memory, and a memo that starts empty at each
 declaration rebuilds it a hundred times and turns the DAG into a tree. -/
 structure RwState where
-  /-- **Kept for the whole emission.** A subterm with no level parameter in it
-  rewrites the same way under every copy, so this is where the input's
-  cross-declaration sharing is preserved. The key is the `Expr` itself, as
-  `lean4export`'s own dedup does it: Lean caches the hash in the node header. -/
+  /-- Subterms whose rewrite does not depend on the copy at all: either they
+  mention no level parameter, or none that this copy binds. The key is the
+  `Expr` itself, as `lean4export`'s own dedup does it — Lean caches the hash in
+  the node header. -/
   pure : Std.HashMap Expr Expr := {}
-  /-- Reset at each copy. A subterm that mentions a level parameter rewrites
-  differently under a different instantiation, so its answer is not reusable. -/
-  poly : Std.HashMap Expr Expr := {}
+  /-- Subterms whose rewrite depends on the copy, keyed on the **interned
+  pruned substitution** (`sigmaIds`) and the node. -/
+  poly : Std.HashMap (Nat × Expr) Expr := {}
+  /-- The same, with the pruned substitution carried in the key instead of
+  interned — `MONO_MEMO=prune-array`, which exists to measure whether interning
+  earns the table it needs. -/
+  polyA : Std.HashMap (Array (Nat × Nat) × Expr) Expr := {}
+  /-- **The intern table for pruned substitutions.** Global, so the id means the
+  same substitution in every declaration. `0` is the empty one and lives in
+  `pure`. -/
+  sigmaIds : Std.HashMap (Array (Nat × Nat)) Nat := {}
+  /-- This copy's carrier-mask → id, so the restriction and the intern lookup
+  happen once per distinct mask rather than once per node. Reset at each copy. -/
+  maskIds : Std.HashMap UInt64 Nat := {}
   errs : Array String := #[]
   deriving Inhabited
+
+/-- The id of `a`, interning it if new. `0` is reserved for the empty
+substitution, which is `RwState.pure`. -/
+def sigmaId (a : Array (Nat × Nat)) : StateM RwState Nat := do
+  if a.isEmpty then return 0
+  match (← get).sigmaIds[a]? with
+  | some i => return i
+  | none =>
+    let i := (← get).sigmaIds.size + 1
+    modify fun s => { s with sigmaIds := s.sigmaIds.insert a i }
+    return i
+
+/-- `σ` restricted to the parameters a carrier mask names, interned. -/
+def RwCtx.maskId (c : RwCtx) (m : UInt64) : StateM RwState Nat := do
+  match (← get).maskIds[m]? with
+  | some i => return i
+  | none =>
+    let i ← sigmaId (c.binding.filter (fun (j, _) => m &&& carrierBit j != 0))
+    modify fun s => { s with maskIds := s.maskIds.insert m i }
+    return i
 
 /-- A constant occurrence, rewritten: which copy it names, and at which levels.
 
@@ -461,11 +640,42 @@ def RwCtx.const (c : RwCtx) (n : Name) (us : List Level) : Name × List Level ×
 /-- The rewrite, on a subterm with no projection in it. Memoised: the result
 does not depend on the binder context. -/
 partial def rwPure (c : RwCtx) (e : Expr) : StateM RwState Expr := do
-  let poly := e.hasLevelParam
-  let s ← get
-  match (if poly then s.poly[e]? else s.pure[e]?) with
-  | some r => return r
-  | none =>
+  -- **The slot.** `some 0` is `pure`: the answer does not depend on this copy.
+  -- `some k` is `poly` at the interned pruned substitution `k`. `none` is "do
+  -- not memoise", which under a gating mode is what a node with one parent
+  -- gets. `MONO_MEMO=prune-array` keys on the substitution itself and takes the
+  -- `polyA` path instead.
+  let gate := c.mode == .fullGate || c.mode == .pruneGate || c.mode == .pruneArray
+  let mut arrKey : Array (Nat × Nat) := #[]
+  let mut slot : Option Nat := some 0
+  if e.hasLevelParam then
+    if c.mode == .off || c.mode == .pure then
+      slot := some c.envId
+    else if c.mode == .full then
+      slot := some c.envId
+    else
+      match c.carrier[e]? with
+      | none => slot := none
+      | some cm =>
+        if c.mode == .fullGate then slot := some c.envId
+        else
+          let m := cm &&& c.lpMask
+          if m == 0 then slot := some 0
+          else if c.mode == .pruneArray then
+            arrKey := c.binding.filter (fun (j, _) => m &&& carrierBit j != 0)
+            slot := some 1
+          else slot := some (← c.maskId m)
+  else if gate && !c.sharedPure.contains e then
+    slot := none
+  let hit : Option Expr ←
+    match slot with
+    | none => pure none
+    | some 0 => pure (← get).pure[e]?
+    | some k =>
+      if c.mode == .pruneArray then pure (← get).polyA[(arrKey, e)]?
+      else pure (← get).poly[(k, e)]?
+  if let some r := hit then return r
+  do
     let r ←
       match e with
       | .const n us =>
@@ -480,8 +690,12 @@ partial def rwPure (c : RwCtx) (e : Expr) : StateM RwState Expr := do
       | .mdata _ b => rwPure c b
       | .proj s i b => pure (.proj s i (← rwPure c b))   -- unreachable; see `rw`
       | _ => pure e
-    modify fun s =>
-      if poly then { s with poly := s.poly.insert e r } else { s with pure := s.pure.insert e r }
+    match slot with
+    | none => pure ()
+    | some 0 => modify fun s => { s with pure := s.pure.insert e r }
+    | some k =>
+      if c.mode == .pruneArray then modify fun s => { s with polyA := s.polyA.insert (arrKey, e) r }
+      else modify fun s => { s with poly := s.poly.insert (k, e) r }
     return r
 
 /-- **The structure a projection names, read off the projected term's type.**
@@ -958,6 +1172,29 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   -- it, and `MONOMORPH.md` §9.8 counts what that costs — 2.26× the nodes at ten
   -- million lines.
   let st ← IO.mkRef ({} : RwState)
+  let pidx := paramIndex groups
+  -- The carrier of every node, and — under a gating mode — which nodes the
+  -- arena shares. Both are computed once, before the first copy, and the
+  -- working sets they need are dropped before emission allocates anything.
+  let mut carrier : Std.HashMap Expr UInt64 := {}
+  let mut sharedPure : Std.HashSet Expr := {}
+  let gating := memoMode == .fullGate || memoMode == .pruneGate || memoMode == .pruneArray
+  if memoMode != .off && memoMode != .pure then
+    let roots := x.decls.flatMap rootsOf
+    let mut keep : Option (Std.HashSet Expr) := none
+    if gating then
+      -- The `seen` set this needs is over every node, and it is dropped here —
+      -- before the carriers, so the two working sets never coexist.
+      let shared := sharedNodes roots
+      phase "shared"
+      for e in shared do unless e.hasLevelParam do sharedPure := sharedPure.insert e
+      keep := some shared
+    let cc ← IO.mkRef ({} : Std.HashMap Expr UInt64)
+    for r in roots do discard <| carrierOf pidx keep cc r
+    carrier := ← cc.get
+    if monoStats then
+      IO.eprintln s!"[mono] params={pidx.size} carrierEntries={carrier.size} sharedPure={sharedPure.size}"
+    phase "carriers"
   for gi in [0 : groups.size] do
     let g := groups[gi]!
     let isCarried := carried.contains gi
@@ -967,10 +1204,21 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
       let mut env : Std.HashMap Name Nat := {}
       unless isCarried do
         for (p, v) in g.levelParams.zip σ.toList do env := env.insert p v
-      let c : RwCtx := { info, carried, opts, env, sigma := σ, recArity }
-      -- The polymorphic half of the memo is this copy's; the pure half is the
-      -- file's.
-      st.modify fun t => { t with poly := {}, pure := if monoNoMemo then {} else t.pure }
+      -- This copy's substitution, by **global** parameter index and sorted, so
+      -- that it means the same thing in every declaration that reaches the same
+      -- node. §"The memo's key" is why that is the property that matters.
+      let binding : Array (Nat × Nat) :=
+        (env.toArray.filterMap (fun (n, v) => (pidx[n]?).map (·, v))).qsort (·.1 < ·.1)
+      let lpMask := binding.foldl (fun m (j, _) => m ||| carrierBit j) 0
+      let envId ← st.modifyGet fun t => (sigmaId binding).run t
+      let c : RwCtx :=
+        { info, carried, opts, env, sigma := σ, recArity
+          carrier, sharedPure, binding, lpMask, envId, mode := memoMode }
+      -- The mask table is this copy's. Under `off` so is everything.
+      st.modify fun t =>
+        { t with maskIds := {}
+                 pure := if memoMode == .off then {} else t.pure
+                 poly := if memoMode == .off || memoMode == .pure then {} else t.poly }
       let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[g.decl]!
       -- Replay, so that a block's recursors are the kernel's own and so that
       -- the next block can be elaborated against this one.
@@ -1000,6 +1248,9 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     let outRoots := out.flatMap rootsOf
     let (op, os) := shareStats outRoots
     IO.eprintln s!"[mono] output nodes: ptr={op} struct={os} dup={(1000*op)/(max os 1)}/1000"
+    let t ← st.get
+    IO.eprintln s!"[mono] memo entries: pure={t.pure.size} poly={t.poly.size + t.polyA.size} \
+      distinct pruned σ={t.sigmaIds.size}"
     phase "stats-out"
   let mut carriedNames : Array Name := #[]
   for gi in [0 : groups.size] do

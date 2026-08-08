@@ -1168,55 +1168,120 @@ Two things that look like they should matter and were measured not to.
   and was tried. `IO.FS.Handle.getLine` did not finish the 1-million-line
   prefix in **ten minutes** against 3.6 s for the whole pass. Not a route.
 
-### The memo: what it buys, and what it costs
+### The memo: the key, the lifetime, and the gate, measured apart
 
-Two variants were built, both byte-identical on `init-prelude` and on the 1 M
-prefix, both green on `monotest`'s 108 checks. `MONO_NOMEMO=1` is the A/B.
+The first cut of this section rejected a memo on the strength of one variant
+that changed three things at once. Separated, and measured in **instructions**
+(`perf stat`) rather than wall time, because nothing else on this box is
+controlled:
 
-*Variant A, kept.* [`RwState`] splits in two: subterms with **no level
-parameter** rewrite the same way under every copy, so their memo lives for the
-whole emission and is keyed on the `Expr` itself — hashing an `Expr` is free,
-Lean caches the hash in the node header, which is what `lean4export`'s own dedup
-relies on. Subterms that mention a level parameter keep a per-copy memo.
+* **the key** — the whole `σ`, or `σ` restricted to the level parameters the
+  subterm actually mentions;
+* **the lifetime** — reset at each copy, or kept for the whole emission;
+* **the gate** — an entry for every node, or only for the nodes **the input
+  arena shares**.
 
-*Variant B, rejected.* One memo for everything, keyed on `(envId, Expr)` where
-`envId` indexes the distinct level environments, so that two copies binding the
-same parameters to the same numerals share their answers too.
+**The key must be canonical across declarations, and that is a soundness
+property, not a tuning one.** The memo is looked up while emitting different
+declarations and the `Expr` is shared between them, so naming a level parameter
+by its *position in the declaring declaration's own list* gives two
+declarations with opposite `levelParams` orders one key and two different right
+answers. `monotests/mono_share.lean` is that shape — one shared type
+expression, `fwd.{w,x}` and `rev.{x,w}`, used at instantiations that agree
+positionally — and it is measured to discriminate: **2 of 13 declarations
+rejected by the kernel replay under a positional key, 0 under the global one**,
+with the declaration counts identical either way. So `paramIndex` numbers level
+parameters **by name, once for the file**, and `RwCtx.binding` is sorted by that
+number.
 
-| 10 M prefix | dup | wall | peak RSS |
-| --- | ---: | ---: | ---: |
-| per-copy memo (what this replaces) | 2.264× | 40.73 s | 3,280,084 KB |
-| **A: + a shared memo for level-free subterms** | **2.048×** | **40.24 s** | **3,216,444 KB** |
-| B: + a shared memo for everything, keyed on the environment | 1.370× | 43.85 s | 3,688,712 KB |
+**Pruning is what makes the key pay.** Under the whole `σ`, a subterm mentioning
+only `u` gets a different key for every value of every other parameter, and
+Mathlib's tail is exactly the shape that punishes this: `Functor` has four
+universe parameters, `Functor.comp` six, and `Functor.associator` reaches 118
+copies (§9.4).
 
-**Variant B restores most of the sharing and is a 12.6 % memory regression.**
-That is the whole finding in one row. The reason is arithmetic and does not
-depend on the input: a `Std.HashMap` entry in Lean is an `AssocList` cons — four
-words — plus, for a pair key, a three-word tuple, so **an entry costs about as
-much as the `Expr` node it saves**. Break-even needs the memo to eliminate more
-than one duplicate per entry; at a duplication factor of 2.26× it eliminates
-0.65. This is `APP-SPINES.md`'s result in a different language: hash-consing
-alone was a 14 % regression there too.
+`MONO_MEMO` selects the variant. On the 10-million-line prefix:
 
-Variant A wins because it pays no key-allocation and, at the scales below
-Mathlib, catches a third of the duplication for free:
+| mode | key | lifetime | entries for | **dup** | memo+gate entries | **instructions** | **peak RSS** |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| `off` | — | per copy | — | 2.264× | ~0 | 407.94 G | 3,288,996 KB |
+| `pure` | `e` | level-free only | every node | 2.048× | 1.06 M | 402.54 G | 3,221,304 KB |
+| `full` | `(e, σ)` | emission | every node | 1.370× | 18.9 M | **396.70 G** | 4,198,360 KB |
+| `prune` | `(e, σ|carrier)` | emission | every node | **1.299×** | 18.3 M | 401.78 G | 4,193,428 KB |
+| `full-gate` | `(e, σ)` | emission | shared only | 1.482× | 3.55 M | 399.49 G | 3,175,916 KB |
+| **`prune-gate`** | **`(e, σ|carrier)`** | **emission** | **shared only** | **1.413×** | **3.09 M** | **400.97 G** | **3,099,176 KB** |
+| `prune-array` | `(e, σ|carrier)` uninterned | emission | shared only | 1.413× | 3.09 M | 406.45 G | 3,174,880 KB |
 
-| | dup, off → on | wall, off → on | peak RSS, off → on |
-| --- | ---: | ---: | ---: |
-| 1 M | 2.026× → 1.730× | 3.64 s → 3.60 s | 353,404 → 349,512 KB |
-| 3 M | 2.107× → 1.764× | 11.64 s → 11.42 s | 974,064 → 961,608 KB |
-| 10 M | 2.264× → 2.048× | 40.73 s → 40.24 s | 3,280,084 → 3,216,444 KB |
+**Each change on its own.**
 
-**The win shrinks as the file grows** — 35 %, 31 %, 17 % of the duplication
-removed — because at Mathlib scale most shared subterms *do* mention a level
-parameter, and those are exactly the ones variant A declines to share. A 1–2 %
-improvement on both axes is what is committed; it is not the fix the hypothesis
-predicted and this table is why there is no larger one.
+* **Lifetime** is the one that moves duplication: `pure` → `full` takes it from
+  2.048× to 1.370×. It is also the one that cannot be had for free ungated.
+* **Pruning** beats the whole `σ` on both axes wherever they are compared:
+  ungated, 8.81 M poly entries against 9.43 M and 1.299× against 1.370×; gated,
+  1.39 M against 1.85 M and 1.413× against 1.482×. It buys **25 % fewer entries
+  and a better dedup at the same time**, which is what restricting a key to its
+  actual dependency should do.
+* **The gate decides the memory.** `prune` → `prune-gate` is **6.3× fewer poly
+  entries** (8.81 M → 1.39 M) for a dedup that only slips 1.299× → 1.413×, and
+  **1,094 MB off the peak**. A node with one parent is rebuilt once per rebuild
+  of that parent, so memoising it buys nothing memoising the parent does not
+  already buy — and an entry costs about what the node costs. That was the
+  arithmetic the first cut got right and applied to the wrong population.
+* **Interning the pruned substitution earns its table**: `prune-array` carries
+  the sorted `Array (Name-index × Nat)` in the key instead, and pays **+1.4 %
+  instructions and +2.4 % peak** for it.
+
+**And the gate has to be built without building what it is gating away.** The
+first `prune-gate` was a 4.9 % *regression* whose peak was reached in the
+pre-pass, not in emission: computing the carrier of every node materialises an
+8.4-million-entry table that is then thrown away. Caching a carrier **only for
+the nodes that will keep one** costs nothing in the aggregate — an unshared node
+has exactly one parent, so it is still computed once — and it is the difference
+between 3,444,772 KB and 3,099,176 KB. Emission itself, under the gate, peaks at
+3,081,572 KB against `pure`'s 3,207,756 KB.
+
+The ladder, `off` (what this replaces) against `prune-gate` (the default):
+
+| | instructions, off → prune-gate | peak RSS, off → prune-gate |
+| --- | ---: | ---: |
+| 1 M | 40.48 G → 40.09 G (−1.0 %) | 351,188 → **339,636 KB** (−3.3 %) |
+| 3 M | 124.94 G → 122.15 G (−2.2 %) | 973,948 → **930,684 KB** (−4.4 %) |
+| 10 M | 407.94 G → 400.97 G (−1.7 %) | 3,288,996 → **3,099,176 KB** (−5.8 %) |
+
+**Better on both axes, and the margin grows with the file.** It is still not a
+large number, and §9.8's opening stands: emission is a quarter of the peak, so
+a quarter is all this could ever have been worth. What changed is the sign.
+
+### The first cut, and why it was wrong
+
+The first attempt at this section built two variants and rejected the good one,
+and the mistake is worth keeping because it is a general one.
+
+*What was measured.* `pure` (the `pure` row above) against a single memo over
+**everything**, keyed on the whole environment and with an entry for every node
+— the `full` row. `full` cut duplication 2.048× → 1.370× and cost **+12.6 %
+peak RSS**, so it was rejected, and with it the whole idea.
+
+*What was concluded, and why it does not follow.* "A `Std.HashMap` entry costs
+about what the `Expr` node it saves costs, so break-even needs the memo to
+eliminate more than one duplicate per entry; at 2.26× it eliminates 0.65." The
+arithmetic is right. **The population is wrong.** It is the arithmetic of
+memoising *every* node, and most nodes have one parent, so most of those entries
+could never eliminate anything. Restricted to the nodes the arena actually
+shares, the same memo eliminates **5.5 duplicates per poly entry** and the sign
+flips. Two other things were bundled into the same rejection and never measured
+apart: the key was the whole `σ` rather than the pruned one, and the gate's
+pre-pass built the table it existed to avoid.
+
+*The general form.* A memo rejected on a cost-per-entry argument has to say
+**which entries**. "Hash-consing does not pay" and "hash-consing every node does
+not pay" are different claims, and only the second was tested — here, and
+plausibly in `APP-SPINES.md`'s 14 % too, which was also measured over all terms.
 
 ### The trap under all of it
 
-The first cut of variant B ran the 1-million-line prefix in **143.36 s** against
-**3.80 s**. The memo was not the problem; `IO.Ref.get` was. [`rw`] read the
+The first emission-lifetime memo ran the 1-million-line prefix in **143.36 s**
+against **3.93 s**. The memo was not the problem; `IO.Ref.get` was. [`rw`] read the
 state with `get` and wrote it back with `set`, which leaves the ref holding the
 map as well — so the first `insert` sees a refcount of two and **copies the
 whole table**, once per top-level rewrite. With a per-declaration memo that is a
