@@ -64,7 +64,12 @@ def run (o : Opts') : IO UInt32 := do
   match o.output with
   | none => pure ()
   | some p =>
-    if rep.refused.isSome then IO.FS.writeFile p text else IO.FS.writeFile p y.render
+    if rep.refused.isSome then IO.FS.writeFile p text
+    else
+      -- Streamed, not rendered: the whole file as one `String` is what
+      -- `MONOMORPH.md` §9.5 measured failing on Mathlib.
+      let h ← IO.FS.Handle.mk p .write
+      y.writeTo (IO.FS.Stream.ofHandle h)
   return if rep.errors.isEmpty then 0 else 2
 
 def main (args : List String) : IO UInt32 := do

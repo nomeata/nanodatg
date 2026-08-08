@@ -55,6 +55,17 @@ def readExport (p : String) : IO (Option (String × Export)) := do
   | .error e => throw (IO.userError s!"{p}: {e}")
   | .ok x => return some (t, x)
 
+/-- What `monomorph -o` would put in the file: [`Export.writeTo`] through a
+temporary, read back. -/
+def streamed (y : Export) : IO String := do
+  let (h, p) ← IO.FS.createTempFile
+  try
+    y.writeTo (IO.FS.Stream.ofHandle h)
+    h.flush
+    IO.FS.readFile p
+  finally
+    IO.FS.removeFile p
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   initSearchPath (← findSysroot)
@@ -100,6 +111,11 @@ def main (args : List String) : IO UInt32 := do
         | .ok z =>
           unless z.decls == y.decls do
             fails := fails.push s!"{r.file}[{tag}]: render/parse is not the identity"
+        -- **The two consumers of the writer agree.** `render` is what the
+        -- checks above read and `writeTo` is what the binary actually emits;
+        -- they share one fold, and this is what says so.
+        unless (← streamed y) == y.render do
+          fails := fails.push s!"{r.file}[{tag}]: writeTo and render disagree"
 
   -- ── A file with no universe parameter anywhere is the identity, byte for
   -- byte. Without this, "one copy per instantiation" could be one copy per
@@ -110,6 +126,8 @@ def main (args : List String) : IO UInt32 := do
     let ((y, _), _) ←
       Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (monomorphize x {})) ctx { env }
     unless y.render == text do fails := fails.push "001_basicDef: not byte-identical"
+    unless (← streamed y) == text do
+      fails := fails.push "001_basicDef: not byte-identical through writeTo"
 
   -- ── The corpus, when it is present: no `good/` file may report a problem,
   -- and none of its output may be rejected by the kernel.

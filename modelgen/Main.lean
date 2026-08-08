@@ -72,11 +72,22 @@ where
       if a.startsWith "-" then .error s!"unknown flag {a}" else go rest { o with input := a }
 
 /-- **The export**, to the `-o` target. `-` is stdout, first class, so a
-streaming consumer does not have to rely on `/dev/stdout` existing. -/
-def writeExport : Option String → String → IO Unit
-  | none, _ => pure ()
-  | some "-", s => do let h ← IO.getStdout; h.putStr s; h.flush
-  | some p, s => IO.FS.writeFile p s
+streaming consumer does not have to rely on `/dev/stdout` existing.
+
+`verbatim` is the input's own bytes and is used when there is nothing to splice
+(§3). Otherwise the export is **streamed** record by record
+([`Modelgen.Export.writeTo`]) instead of rendered into one `String`, which is
+what makes a Mathlib-sized export writable at all (`MONOMORPH.md` §9.5) and what
+keeps a streaming consumer's memory bounded by the pipe rather than by the
+file. -/
+def writeExport (out : Option String) (verbatim : Option String) (x : Export) : IO Unit := do
+  let some p := out | return
+  let s ← if p == "-" then IO.getStdout
+          else pure (IO.FS.Stream.ofHandle (← IO.FS.Handle.mk p .write))
+  match verbatim with
+  | some t => s.putStr t
+  | none => x.writeTo s
+  s.flush
 
 /-- **The report**, to stderr, and never a line of the export. -/
 def report (o : Opts) (rep : Modelgen.Report) : IO Unit := do
@@ -132,8 +143,9 @@ def run (o : Opts) : IO UInt32 := do
       return exitInternal
     -- A file with nothing to splice is copied byte for byte; re-interning is
     -- only forced because `nanoda` requires continuous back-references.
-    writeExport o.output <|
-      if rep.generated.isEmpty || rep.unreplayable.isSome then text else ({ x with decls }).render
+    writeExport o.output
+      (if rep.generated.isEmpty || rep.unreplayable.isSome then some text else none)
+      { x with decls }
     return exitOk
 
 def main (args : List String) : IO UInt32 := do

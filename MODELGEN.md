@@ -314,6 +314,55 @@ promise continuity, and `vendor/arena-tests/good/sparse-name-index.ndjson` and
 nested inductive is copied **byte for byte** rather than re-serialised, so the
 filter is exactly the identity where it has nothing to do.
 
+## 3.1 Why the writer is ours and not `lean4export`'s
+
+`lean4export` writes the same format from a `Lean.Environment`; this repository
+writes it from parsed records (`Modelgen/Format.lean`). That is a duplicated
+format definition and the question of collapsing it is a fair one, so here is
+the answer and the reason.
+
+**Reuse is mechanically possible.** `lean4export` exposes a `lean_lib Export`,
+its pinned revision is on this repository's toolchain, and its writer *already
+streams* — `IO.println` per line, no accumulation — so the memory failure
+`MONOMORPH.md` §9.5 records was ours alone. (It prints to stdout with no handle
+parameter, so a library user would have to redirect the process's stdout, but
+that is a wart and not an obstacle.)
+
+**It is nevertheless the wrong writer for this tool, for three reasons that are
+about what is being written and not about the format.**
+
+1. **The output is not what the environment holds.** Both tools replay into an
+   `Environment` — that is why `inferProjType` works — but they emit *records*,
+   and the two are deliberately allowed to differ. A declaration the replay
+   rejects is reported and still written (`monomorph`'s `rejected`, §4.1's
+   oracle); an environment-based writer would silently omit it, turning an
+   oracle into a hole. Worse, `MONOMORPH.md` §9.7 measures the environment
+   **silently losing** declarations on Mathlib — 1,726 `AsyncConsts.add` panics
+   over 767 name pairs — so an environment-based writer would inherit exactly
+   the hazard that document names as the thing to be careful about.
+2. **Mode B has no environment.** `monomorph --mono-recursors` renames recursors
+   to `…._elim.⟨w⟩`, which no kernel will accept as a recursor at all. It is a
+   pure post-pass over records. Writing it requires a record writer, so reuse
+   buys one of two writers rather than none.
+3. **Byte-identity would go.** The claim above — a file with nothing to change
+   comes back byte-identical, measured over 73 — rests on re-interning the
+   *parsed* records in the input's own order. `lean4export` chooses its own
+   order (`dumpDeps`, depth-first from a constant list), skips `unsafe`
+   declarations unless asked, drops `mdata` unless asked, and reconstructs
+   `numNested`, `isRec`, `isReflexive`, `hints` and `all` from what Lean derived
+   rather than from what the file said. Where Lean's answer differs from the
+   file's the round trip stops being the identity — `monomorph`'s `recRegen`
+   counts 2,027 such recursors on Mathlib — and every back-reference index in
+   the file shifts regardless.
+
+So: **keep the writer.** What was genuinely missing from it was streaming, and
+that is `Export.stream` plus its two consumers in `Modelgen/Format.lean`. The
+duplication that remains is the format itself, and it is held in agreement by
+measurement rather than by construction: `monotest` checks that
+`Export.writeTo`, `Export.render` and the input file all agree byte for byte on
+a real export, which is the property that would break first if `lean4export`
+changed the format under us.
+
 ---
 
 # 4. The oracles

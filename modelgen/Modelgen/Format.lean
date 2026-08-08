@@ -304,9 +304,22 @@ def parse (text : String) : Except String Export := do
 
 Fresh interning, in dependency order, with the same key order and spacing the
 exporter uses — so a file the tool does not change comes back byte-identical.
+
+**The writer streams.** [`Writer.out`] holds the lines of **one record** and is
+drained after each; it is never the whole file. That is not a micro-optimisation
+but the difference between finishing and not: on Mathlib the pass emits ~110
+million lines, and an `Array String` of them intercalated into one ~6 GB
+`String` is what `MONOMORPH.md` §9.5 measured dying at 44.9 GB *after* the whole
+computation had succeeded.
+
+[`Export.stream`] is the one fold; [`Export.render`] and [`Export.writeTo`] are
+its two consumers, which is what keeps them byte-identical rather than merely
+intended to be.
 -/
 
 structure Writer where
+  /-- The lines of the record being written. Drained by [`Export.stream`] after
+  each record — do not accumulate a file here. -/
   out : Array String := #[]
   names : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity 1024 |>.insert .anonymous 0
   levels : Std.HashMap Level Nat := Std.HashMap.emptyWithCapacity 64 |>.insert .zero 0
@@ -503,11 +516,62 @@ def decl (w : Writer) (d : EDecl) : Writer :=
 
 end Writer
 
-/-- Serialise a whole export. -/
+/-- **Serialise a whole export, one record at a time.**
+
+`emit` is handed the lines of each record — the interned names, levels and
+expressions it introduced, then the record itself — in file order, each without
+its terminating newline. The interning tables live across the whole fold, which
+is what the format requires; the *lines* do not.
+
+Every consumer of the writer goes through here, so there is one definition of
+what the file looks like. -/
+@[specialize] def Export.stream {m : Type → Type} [Monad m] (x : Export)
+    (emit : Array String → m Unit) : m Unit := do
+  unless x.metaLine.isNull do emit #[x.metaLine.compress]
+  let mut w : Writer := {}
+  for d in x.decls do
+    w := w.decl d
+    emit w.out
+    w := { w with out := #[] }
+
+/-- Serialise a whole export into a `String`. Fine for a fixture; on a real
+export use [`Export.writeTo`], which does not hold the file in memory. -/
 def Export.render (x : Export) : String :=
-  let w : Writer := {}
-  let w := if x.metaLine.isNull then w else { w with out := w.out.push x.metaLine.compress }
-  let w := x.decls.foldl Writer.decl w
-  String.intercalate "\n" w.out.toList ++ "\n"
+  let go : StateM String Unit :=
+    x.stream fun ls => modify fun s => ls.foldl (fun s l => s ++ l ++ "\n") s
+  go.run "" |>.2
+
+/-- Serialise a whole export to a stream, in bounded memory.
+
+A `Stream` rather than a `Handle` because `-o -` is stdout, which `modelgen`
+takes first class rather than through `/dev/stdout`.
+
+Lines are gathered into a buffer of at least [`writeChunk`] bytes before each
+write, so the cost is one `putStr` per few thousand lines rather than one per
+line; nothing larger than that buffer plus the interning tables is ever
+live. -/
+def Export.writeTo (x : Export) (h : IO.FS.Stream) : IO Unit := do
+  let buf ← IO.mkRef ""
+  let n ← IO.mkRef 0
+  x.stream fun ls => do
+    let mut b ← buf.get
+    let mut k ← n.get
+    -- Take the buffer out of the ref first, so the append below sees a
+    -- uniquely-referenced string and extends it in place.
+    buf.set ""
+    for l in ls do
+      b := b ++ l ++ "\n"
+      k := k + l.utf8ByteSize + 1
+    if k ≥ writeChunk then
+      h.putStr b
+      b := ""
+      k := 0
+    buf.set b
+    n.set k
+  h.putStr (← buf.get)
+where
+  /-- 4 MiB: large enough that the per-write overhead vanishes, small enough
+  that the buffer is not the thing that runs the machine out of memory. -/
+  writeChunk : Nat := 4 * 1024 * 1024
 
 end Modelgen
