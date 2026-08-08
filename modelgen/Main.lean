@@ -1,19 +1,64 @@
 import Modelgen.Driver
 
 /-!
-`modelgen IN.ndjson [-o OUT.ndjson] [--check-recursors] [--quiet]`
+`modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]`
+
+# The two streams, and why they are two
+
+**The export goes to `-o` and nothing else ever does; the report goes to
+stderr.** A consumer that streams — `mini` execs this binary with `-o -` and
+feeds the bytes straight to its parser (`mini/src/modelgen.rs`) — therefore
+gets the diagnostics *and* an uncorrupted export, without having to silence
+one to get the other.
+
+The report used to be on stdout, which forced `--quiet` on every streaming
+consumer and cost it every decline reason: `mini` could say `no nested model in
+the export` and not *why* there was none. Naming where a value stopped rather
+than why is the defect class this repository has paid for most, and a process
+boundary is not an excuse for it.
+
+`--quiet` still suppresses the report; it is now a preference rather than a
+correctness requirement.
+
+**The export is not moved to stderr instead.** `Environment.addDeclCore`
+`panic!`s to stderr on one corpus file (`MODELGEN.md` §5.5), so stderr is not a
+stream anything may be *parsed* out of.
+
+# The exit statuses
+
+`MODELGEN.md` §1.4 is the contract; these four constants are it in code.
+`mini` keys on them, so they do not move without that section moving.
 -/
 
 open Lean Meta Modelgen
 
+/-- Ran to completion, and the export was written if `-o` asked for one.
+**A decline is this**: the
+input is fine and no model was produced, which the report says and which a
+consumer must not read as an error (`MODELGEN.md` §1.3). -/
+def exitOk : UInt32 := 0
+/-- The command line is not one this tool accepts. Nothing was read. -/
+def exitUsage : UInt32 := 1
+/-- The input is malformed: it could not be read, or it is not an export this
+tool can parse. Nothing was written. -/
+def exitInput : UInt32 := 2
+/-- This tool's own failure: an exception escaped the filter, or a generated
+model did not match the statement its own oracle rebuilt. **Nothing was
+written** — an exit of 3 means there is no output to use. -/
+def exitInternal : UInt32 := 3
+
+def usage : String :=
+  "usage: modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]"
+
 structure Opts where
   input : String := ""
+  /-- `some "-"` is stdout; see [`writeExport`]. -/
   output : Option String := none
   checkRecursors : Bool := false
   quiet : Bool := false
 
 def parseArgs : List String → Except String Opts
-  | [] => .error "usage: modelgen IN.ndjson [-o OUT.ndjson] [--check-recursors] [--quiet]"
+  | [] => .error usage
   | args => go args {}
 where
   go : List String → Opts → Except String Opts
@@ -22,42 +67,76 @@ where
     | "--check-recursors" :: rest, o => go rest { o with checkRecursors := true }
     | "--quiet" :: rest, o => go rest { o with quiet := true }
     | a :: rest, o =>
+      -- `-` alone is only ever the argument of `-o`, which the line above has
+      -- already consumed; a bare `-` is a mistake and not an input named `-`.
       if a.startsWith "-" then .error s!"unknown flag {a}" else go rest { o with input := a }
 
+/-- **The export**, to the `-o` target. `-` is stdout, first class, so a
+streaming consumer does not have to rely on `/dev/stdout` existing. -/
+def writeExport : Option String → String → IO Unit
+  | none, _ => pure ()
+  | some "-", s => do let h ← IO.getStdout; h.putStr s; h.flush
+  | some p, s => IO.FS.writeFile p s
+
+/-- **The report**, to stderr, and never a line of the export. -/
+def report (o : Opts) (rep : Modelgen.Report) : IO Unit := do
+  if o.quiet then return
+  if let some why := rep.unreplayable then
+    IO.eprintln s!"{o.input}: passed through unchanged — {why}"
+  for (n, k) in rep.generated do IO.eprintln s!"{n}: model of {k} declarations"
+  for (n, why) in rep.declined do IO.eprintln s!"{n}: declined — {why}"
+  unless rep.stmtChecked == 0 do
+    IO.eprintln s!"statements: {rep.stmtChecked} compared against the installed recursors' \
+      own rules, {rep.stmtErrors.size} differ"
+    for e in rep.stmtErrors do IO.eprintln s!"  ! {e}"
+  if o.checkRecursors then
+    IO.eprintln s!"recursors: {rep.recChecked} checked against Lean's own, \
+      {rep.recMismatch.size} differ{if rep.recMismatch.isEmpty then "" else s!": {rep.recMismatch}"}"
+
 def run (o : Opts) : IO UInt32 := do
-  let text ← IO.FS.readFile o.input
+  -- An unreadable input is the *input's* problem and exits 2, where it used to
+  -- escape as Lean's own `uncaught exception:` and exit 1 beside a bad flag.
+  let text? ← try pure (some (← IO.FS.readFile o.input))
+              catch e => do IO.eprintln s!"{o.input}: {e}"; pure none
+  let some text := text? | return exitInput
   let x ←
     match Modelgen.parse text with
-    | .error e => IO.eprintln s!"{o.input}: parse error: {e}"; return 1
+    | .error e => IO.eprintln s!"{o.input}: parse error: {e}"; return exitInput
     | .ok x => pure x
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
   let ctx : Core.Context :=
     { fileName := "<modelgen>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((decls, rep), _) ←
-    (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x o.checkRecursors)) ctx { env })
-  unless o.quiet do
-    if let some why := rep.unreplayable then
-      IO.println s!"{o.input}: passed through unchanged — {why}"
-    for (n, k) in rep.generated do IO.println s!"{n}: model of {k} declarations"
-    for (n, why) in rep.declined do IO.println s!"{n}: declined — {why}"
-    unless rep.stmtChecked == 0 do
-      IO.println s!"statements: {rep.stmtChecked} compared against the installed recursors' \
-        own rules, {rep.stmtErrors.size} differ"
-      for e in rep.stmtErrors do IO.println s!"  ! {e}"
-    if o.checkRecursors then
-      IO.println s!"recursors: {rep.recChecked} checked against Lean's own, \
-        {rep.recMismatch.size} differ{if rep.recMismatch.isEmpty then "" else s!": {rep.recMismatch}"}"
-  match o.output with
-  | none => pure ()
-  | some p =>
+  -- An exception out of the filter is **this tool's** failure and says so, in
+  -- place of Lean's bare `uncaught exception:` — which a consumer cannot tell
+  -- from a bad input, since both used to exit 1.
+  let res ← try
+      let ((decls, rep), _) ←
+        (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Modelgen.runFilter x o.checkRecursors)) ctx
+          { env })
+      pure (Except.ok (decls, rep))
+    catch e => pure (Except.error (toString e))
+  match res with
+  | .error m => IO.eprintln s!"{o.input}: internal error: {m}"; return exitInternal
+  | .ok (decls, rep) =>
+    report o rep
+    -- **A model that failed the tool's own statement oracle is not written.**
+    -- It typechecks — axis 2 passed — and states something other than the
+    -- export's own rule, which is precisely the model a consumer must not key
+    -- on. Nothing in the tree reaches this (450 statements, 0 differing); it
+    -- is here so that if anything ever does, the consumer is told rather than
+    -- handed the wrong model with a 0.
+    unless rep.stmtErrors.isEmpty do
+      IO.eprintln s!"{o.input}: internal error: {rep.stmtErrors.size} generated statements \
+        differ from the installed recursors' own rules; no output written"
+      return exitInternal
     -- A file with nothing to splice is copied byte for byte; re-interning is
     -- only forced because `nanoda` requires continuous back-references.
-    if rep.generated.isEmpty || rep.unreplayable.isSome then IO.FS.writeFile p text
-    else IO.FS.writeFile p ({ x with decls }.render)
-  return 0
+    writeExport o.output <|
+      if rep.generated.isEmpty || rep.unreplayable.isSome then text else ({ x with decls }).render
+    return exitOk
 
 def main (args : List String) : IO UInt32 := do
   match parseArgs args with
-  | .error e => IO.eprintln e; return 1
+  | .error e => IO.eprintln e; return exitUsage
   | .ok o => run o

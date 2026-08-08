@@ -5,7 +5,7 @@
 //! ```text
 //! modelgen::Filter::Off | Filter::Run(path)
 //! modelgen::discover(explicit) -> Result<Filter, String>
-//! modelgen::filter(exe, input)  -> Result<Vec<u8>, String>
+//! modelgen::filter(exe, input)  -> Result<(Vec<u8>, String), String>
 //! ```
 //!
 //! `modelgen` (`MODELGEN.md`) reads a Lean `.ndjson` export and writes the same
@@ -19,35 +19,40 @@
 //! happened. `--no-modelgen` turns it off and `--modelgen=<path>` says where
 //! the binary is.
 //!
-//! # It streams, and the reason that mattered
+//! # It streams, and the two streams are separate
 //!
 //! `modelgen IN -o OUT` writes a file, and the obvious implementation is a
 //! temporary one. On this machine `/tmp` is a **tmpfs** and writing a
 //! multi-megabyte export into it has taken a session down twice, so a temp file
-//! is not something to reach for casually. `-o /dev/stdout` is what is used
-//! instead: `IO.FS.writeFile "/dev/stdout"` opens the inherited pipe, mini
-//! reads the bytes into memory and hands them to the parser through
-//! `Config::to_export_file_from`. Nothing is written to disk at all.
+//! is not something to reach for casually. **`-o -` is stdout**, first class
+//! (`MODELGEN.md` §1.4): mini reads the bytes into memory and hands them to the
+//! parser through `Config::to_export_file_from`. Nothing is written to disk at
+//! all.
 //!
-//! Two things that costs, both recorded rather than papered over:
-//!
-//! * **`/dev/stdout` is not portable.** A first-class `-o -` is the right
-//!   spelling and is a request on `modelgen`; this is what works against the
-//!   binary as it stands, on Linux, which is the only platform this repository
-//!   is built on.
-//! * **`--quiet` is forced**, because `modelgen`'s report goes to *stdout* by
-//!   `IO.println` and would be interleaved with the export. The report says
-//!   which declarations were modelled and which were declined and why, which
-//!   is exactly what a user would want to see; routing it to stderr is the
-//!   other half of the same request. Until then a decline is visible where it
-//!   matters anyway — mini's own `nested` counters and `zoneb`'s reason string
-//!   name every nested declaration with no model.
+//! **`--quiet` is not passed, and the reason is the point.** `modelgen`'s
+//! report — which declarations were modelled, and which were declined *and
+//! why* — is on **stderr**, so it does not touch the export and does not have
+//! to be silenced to keep it clean. Both were once true the other way round:
+//! the report went to stdout by `IO.println`, `--quiet` was mandatory, and mini
+//! could say `no nested model in the export` without being able to say why —
+//! `nested model without funext`, say. That is naming where a value stopped
+//! rather than why, reintroduced at a process boundary, and it is the defect
+//! class this project has paid for most. So on success the child's report is
+//! written straight through to mini's own stderr.
 //!
 //! # Failure is loud, and never a silent skip
 //!
 //! A missing binary, one that is not executable, a non-zero exit and output
 //! that does not parse are all **declines that name the subprocess**, with the
 //! child's stderr attached. None of them falls back to the unfiltered input.
+//!
+//! The exit status says *which*, and `MODELGEN.md` §1.4 is the contract mini
+//! keys on: **1** is a usage error (mini built the command line, so this is
+//! mini's bug), **2** is an input the filter could not read or parse, **3** is
+//! the filter's own failure. A decline is **0** with the reason on stderr and
+//! the export on stdout, and is deliberately *not* an error here: the file is
+//! fine and no model was produced, which `MODELGEN.md` §1.3 says a consumer
+//! must not read as a failure.
 //!
 //! That is a deliberate refusal of the convenient behaviour. A silent skip
 //! would present a toolchain problem — `modelgen` not built — as the
@@ -88,7 +93,17 @@
 //! declines `nested model name taken` when they are there, so a second pass
 //! over a filtered file passes it through byte for byte (measured on
 //! `nested_keying`). A user who runs mini on a committed fixture with the
-//! filter on gets the same bytes the suite reads with it off.
+//! filter on gets the same bytes the suite reads with it off — measured over
+//! **all 41** of them, not just `nested_keying`, at `-o -`.
+//!
+//! **One test is exempt and has to be.** `mini/tests/nested.rs`'s
+//! `the_filters_report_reaches_the_user_and_says_why_there_is_no_model` execs
+//! the real binary, because the report/export split is a property of the
+//! process boundary and `--no-modelgen` cannot reach it. It skips when
+//! `modelgen/.lake/build/bin/modelgen` is absent, and **says so on stderr**
+//! rather than passing quietly — the note on
+//! `a_modelgen_that_fails_declines_and_names_it` records a silent skip in this
+//! same file that let a real mutation survive.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -161,25 +176,46 @@ fn usable(p: &Path) -> Option<PathBuf> {
     p.is_file().then(|| p.to_path_buf())
 }
 
-/// **Run the filter over `input` and return the filtered export.**
+/// **Run the filter over `input` and return the filtered export and its
+/// report.**
 ///
-/// `Err` carries the child's own stderr; see the header on why none of these is
-/// a fall-back to the unfiltered file.
-pub fn filter(exe: &Path, input: &Path) -> Result<Vec<u8>, String> {
+/// The two are the child's two streams, kept apart: the export is stdout
+/// (`-o -`) and the report is stderr. The report is returned rather than
+/// dropped because it is the only place a *reason* for a missing model exists
+/// — see the header — and the caller writes it through.
+///
+/// `Err` carries the child's own stderr and what its exit status means; see the
+/// header on why none of these is a fall-back to the unfiltered file.
+pub fn filter(exe: &Path, input: &Path) -> Result<(Vec<u8>, String), String> {
     let out = Command::new(exe)
         .arg(input)
         .arg("-o")
-        .arg("/dev/stdout")
-        .arg("--quiet")
+        .arg("-")
         .output()
         .map_err(|e| format!("{}: {e}", exe.display()))?;
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let err = err.trim();
+        // **The status, and what `MODELGEN.md` §1.4 says it means.** Both: the
+        // number is the fact and the gloss is the reading, and a gloss without
+        // the number would be unfalsifiable against a filter that is not
+        // `modelgen` at all.
+        let (code, gloss) = match out.status.code() {
+            Some(c) => (
+                format!("exited {c}"),
+                match c {
+                    1 => " (a command line it does not accept — mini built it, so mini's bug)",
+                    2 => " (an input it could not read or parse)",
+                    3 => " (its own internal error)",
+                    _ => "",
+                },
+            ),
+            None => ("died on a signal".to_string(), ""),
+        };
         return Err(format!(
-            "{} exited {}{}{}",
+            "{} {}{}{}{}",
             exe.display(),
-            out.status.code().map(|c| c.to_string()).unwrap_or_else(|| "on a signal".into()),
+            code,
+            gloss,
             if err.is_empty() { "" } else { ": " },
             err
         ))
@@ -187,5 +223,5 @@ pub fn filter(exe: &Path, input: &Path) -> Result<Vec<u8>, String> {
     if out.stdout.is_empty() {
         return Err(format!("{} produced no output", exe.display()))
     }
-    Ok(out.stdout)
+    Ok((out.stdout, err))
 }

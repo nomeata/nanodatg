@@ -171,6 +171,12 @@ pub enum Missing {
     /// No `T._model.self` in the environment. `MODELGEN.md` §1.3: the absence
     /// of the carrier is "no model", not an error — the filter declined the
     /// declaration and said which shape stopped it.
+    ///
+    /// This label says **where** the lookup stopped and not **why** the model
+    /// is absent; the why is the filter's, and it is on the filter's stderr,
+    /// which [`crate::convert`] writes through to the user (`nested model
+    /// without funext`, say). Do not reach for a richer label here — this side
+    /// does not know the reason and would have to guess one.
     NoCarrier,
     /// A model constant is declared at or after the declaration it models, so
     /// [`crate::ledger::fill_declaration`] cannot read it when it resolves

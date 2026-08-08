@@ -148,7 +148,9 @@ for src in "${SOURCES[@]}"; do
   # filter writes to a scratch file inside `$WORK` and the result is moved into
   # place, so a failed pass leaves the previous fixture untouched rather than
   # half a file.
-  "$MODELGEN_BIN" "$FIXTURES/$base.ndjson" -o "$WORK/$base.filtered.ndjson" >&2
+  # (`>&2` used to be needed here because the report was on stdout; it is on
+  # stderr now — `MODELGEN.md` §1.4 — so the report arrives there by itself.)
+  "$MODELGEN_BIN" "$FIXTURES/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
   mv "$WORK/$base.filtered.ndjson" "$FIXTURES/$base.ndjson"
   echo "$base.ndjson: $(wc -l < "$FIXTURES/$base.ndjson") lines" >&2
 done

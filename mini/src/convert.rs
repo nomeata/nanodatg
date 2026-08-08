@@ -309,8 +309,16 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
             cfg.to_export_file().map_err(|e| LoadError::Io(format!("parse: {e}")))?
         }
         crate::modelgen::Filter::Run(exe) => {
-            let bytes =
+            let (bytes, report) =
                 crate::modelgen::filter(exe, path).map_err(|e| declined(format!("modelgen: {e}")))?;
+            // **The child's report, written through.** It is on the child's
+            // stderr precisely so that it can be, and it carries the only
+            // statement of *why* a declaration has no model — `nested model
+            // without funext` rather than mini's own `no nested model in the
+            // export`, which says where the lookup stopped and not why.
+            if !report.is_empty() {
+                eprintln!("{report}");
+            }
             cfg.to_export_file_from(std::io::Cursor::new(bytes))
                 .map_err(|e| LoadError::Io(format!("parse (after modelgen): {e}")))?
         }

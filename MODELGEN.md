@@ -7,7 +7,7 @@ recursors, and the ι rules — all as ordinary declarations, all proved, all
 checked by Lean's kernel.
 
 ```bash
-modelgen IN.ndjson -o OUT.ndjson [--check-recursors] [--quiet]
+modelgen IN.ndjson -o OUT.ndjson|- [--check-recursors] [--quiet]
 ```
 
 The input is **trusted and not typechecked**; that is where the speed comes
@@ -142,13 +142,74 @@ The check is a port of `mini/tests/nested.rs`'s `check_recursors` and
 ## 1.3 When there is no model
 
 `modelgen` emits nothing for a declaration it declines, and says which shape
-stopped it on stderr/stdout. **A consumer must therefore treat the absence of
+stopped it **on stderr** (§1.4). **A consumer must therefore treat the absence of
 `T._model.self` as "no model", not as an error**, and the presence of a
 `T._model.*` name it did not generate as an ordinary declaration of the file —
 `mini/tests/fixtures/nested_keying.lean` declares `UTree._model.self := N`
 precisely to make that case exist. `modelgen` will not collide with it: the
 name guard scans **the whole input file**, not the prefix before the
 declaration, and declines `UTree` for `nested model name taken`.
+
+## 1.4 The two streams and the four exit statuses
+
+**This is part of the contract**, and `mini` keys on it: it execs this binary
+with `-o -` and streams the result into its parser
+(`mini/src/modelgen.rs`).
+
+**The export goes to the `-o` target and nothing else ever does.**
+
+* `-o OUT.ndjson` writes a file.
+* **`-o -` is stdout**, first class, so a streaming consumer does not have to
+  rely on `/dev/stdout` existing. The bytes are the same either way.
+* No `-o` at all runs the filter and writes no export, which is what
+  `--check-recursors` alone is for.
+
+**Everything else goes to stderr** — the report, and every error. So the
+report does not have to be silenced to keep the export clean:
+
+```
+FTree: model of 17 declarations
+HTree: declined — nested model without funext
+statements: 21 compared against the installed recursors' own rules, 0 differ
+```
+
+`--quiet` suppresses the report. It is a preference, not a correctness
+requirement; it was the latter while the report was on stdout, and a streaming
+consumer then had to pay for a clean export with every decline *reason* — mini
+could say `no nested model in the export` and not say why. **The export is not
+moved to stderr instead**: `Environment.addDeclCore` `panic!`s to stderr on one
+corpus file (§5.5), so stderr is not a stream anything may be parsed out of.
+That file is the measurement rather than the worry — `grind-ring-5.ndjson` at
+`-o -` exits 0 with a clean 10 MB export on stdout and the panic and its
+backtrace on stderr, and had the export been on stderr they would be one
+stream.
+
+| status | means | wrote an export? |
+| --- | --- | --- |
+| `0` | ran to completion — **including every decline** | yes, if `-o` was given |
+| `1` | usage: the command line is not one this tool accepts | no |
+| `2` | the input could not be read, or is not an export this tool can parse | no |
+| `3` | this tool's own failure | no |
+
+The three failures were one status until they were written down here: a bad
+flag, a missing file and an escaping exception all exited 1, so a consumer
+could not tell a toolchain problem from a bad export. **A decline is not a
+failure** and stays 0 — §1.3 is the reason, and the reason is on stderr.
+
+`3` covers an exception out of the filter *and* a generated model whose
+statement did not match the rule the installed recursor carries (§4, oracle 3).
+The second is the one worth naming: such a model typechecks and states
+something other than the export's own rule, which is exactly the model a
+consumer must not key on, and it used to be reported in a line of the report
+and then written anyway with a 0. Nothing in the tree reaches it — 450
+statements, 0 differing.
+
+A run that **passes the input through unchanged** because Lean's kernel would
+not load one of its declarations is a `0` with `passed through unchanged — …`
+on stderr; the filter did what a filter should when it can do nothing.
+`--check-recursors` finding a mismatch is also a `0`: that is a statement about
+the *input's* recursors, not about anything this tool generated, and §4.2's
+five `bad/` files have ten.
 
 ---
 

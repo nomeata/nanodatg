@@ -267,6 +267,69 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures") :
     a := check a (d2 == p.decls) "nat_char_equations is not passed through unchanged"
   return a
 
+/-- **The two streams and the four exit statuses**, against the built binary.
+
+Axes 1–4 call `runFilter` directly and so cannot see the process boundary at
+all — and the boundary is where the reasons were being lost: `mini` execs this
+binary and, while the report was on stdout, had to pass `--quiet` to keep the
+export clean and lost every decline reason doing it (`Main.lean`'s header).
+
+So this runs the binary and **captures stdout and stderr separately**, which is
+the only way to observe the split. `infinitary` is the input that distinguishes
+them: it has models *and* declines, so the report is non-empty while the export
+is a whole file, and a report leaking into stdout would be a byte difference
+against `-o FILE` rather than a wording difference.
+
+It needs `modelgen/.lake/build/bin/modelgen`, and reports a **failure** rather
+than a skip when it is absent: the suite claims the CLI contract and cannot
+check it from an unbuilt binary. `lake build` first. -/
+def runCli (root : String) (a : TAcc) : IO TAcc := do
+  let bin := s!"{root}/modelgen/.lake/build/bin/modelgen"
+  unless ← System.FilePath.pathExists bin do
+    return check a false s!"{bin} is not built (`lake build`): the CLI contract is unchecked"
+  let input := s!"{root}/modelgen/tests/infinitary.ndjson"
+  let mg := fun (args : List String) => IO.Process.output { cmd := bin, args := args.toArray }
+  let mut a := a
+  -- `-o -` is stdout, first class.
+  let r ← mg [input, "-o", "-"]
+  a := check a (r.exitCode == 0) s!"CLI: `-o -` exited {r.exitCode}"
+  -- The report is on stderr, all of it, and none of it is on stdout.
+  a := check a ((r.stderr.splitOn "declined — nested model without funext").length == 4)
+    s!"CLI: stderr does not carry the three decline reasons: {r.stderr}"
+  a := check a ((r.stderr.splitOn "FTree: model of 17 declarations").length == 2)
+    s!"CLI: stderr does not carry the models: {r.stderr}"
+  a := check a ((r.stdout.splitOn "declined").length == 1)
+    "CLI: a report line reached stdout"
+  -- …and stdout is the export, byte for byte what `-o FILE` writes.
+  let tmp := s!"{root}/modelgen/.lake/build/cli-test.ndjson"
+  let f ← mg [input, "-o", tmp, "--quiet"]
+  a := check a (f.exitCode == 0) s!"CLI: `-o FILE --quiet` exited {f.exitCode}"
+  a := check a f.stderr.isEmpty s!"CLI: `--quiet` still wrote to stderr: {f.stderr}"
+  if ← System.FilePath.pathExists tmp then
+    let onDisk ← IO.FS.readFile tmp
+    a := check a (onDisk == r.stdout) "CLI: `-o -` and `-o FILE` do not agree byte for byte"
+    IO.FS.removeFile tmp
+  else
+    a := check a false "CLI: `-o FILE` wrote no file"
+  -- **The exit statuses a consumer keys on** (`MODELGEN.md` §1.4): a decline
+  -- has to be tellable from a malformed input and both from a usage error, and
+  -- until §1.4 was written all three of the failures were 1.
+  --
+  -- **`3` has no occupant here and cannot have one**: it is this tool failing,
+  -- and no input in the tree reaches it — 450 statements compared with 0
+  -- differing, and no exception escapes the filter. It is checked by
+  -- construction and not by measurement, which is the weakest of the four and
+  -- is said rather than hidden.
+  a := check a (r.exitCode == 0) "CLI: a decline is not exit 0"
+  let u ← mg ["--no-such-flag"]
+  a := check a (u.exitCode == 1) s!"CLI: an unknown flag exited {u.exitCode}, expected 1"
+  let m ← mg [s!"{root}/modelgen/tests/export.sh", "-o", "-"]
+  a := check a (m.exitCode == 2) s!"CLI: an unparsable input exited {m.exitCode}, expected 2"
+  a := check a m.stdout.isEmpty "CLI: an unparsable input still wrote to stdout"
+  let n ← mg [s!"{root}/modelgen/tests/no-such-file.ndjson", "-o", "-"]
+  a := check a (n.exitCode == 2) s!"CLI: a missing input exited {n.exitCode}, expected 2"
+  return a
+
 /-- `Lean.Syntax`: three block members, three recursors, the only case in reach
 that can distinguish an ordering from a permutation of it. -/
 def runSyntax (root : String) (a : TAcc) : IO TAcc := do
@@ -299,6 +362,7 @@ def main (args : List String) : IO UInt32 := do
   for r in expectedOwn do
     a ← runOne root a r (dir := "modelgen/tests")
   a ← runSyntax root a
+  a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"
   return if a.failures.isEmpty then 0 else 1

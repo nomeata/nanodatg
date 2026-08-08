@@ -1281,6 +1281,78 @@ fn a_modelgen_that_fails_declines_and_names_it() {
     );
 }
 
+/// **The filter's report reaches the user, and says *why* there is no model.**
+///
+/// The half of the process boundary the previous test does not reach. `mini`
+/// execs the filter with `-o -` and no `--quiet`, so the export arrives on the
+/// child's stdout and the report on its stderr; `mini/src/convert.rs` writes
+/// the report through. While the report was on *stdout* a streaming consumer
+/// had to pass `--quiet` to keep the export parseable and lost every decline
+/// reason doing it, and mini could only ever say `no nested model in the
+/// export` — where the lookup stopped, not why it stopped.
+///
+/// **The two streams are captured separately and both are asserted on**, which
+/// is the only way to see the split: a report leaking back onto stdout would
+/// corrupt the export, and a test that concatenated them would pass either way.
+///
+/// The input is a committed fixture, which is **already filtered**
+/// (`scripts/export-fixture.sh`), so the filter's idempotence guard fires and
+/// the reason is `nested model name taken`. That the run then reaches a
+/// verdict at all is the other claim: the bytes `-o -` produced parsed.
+///
+/// This is the one test in the file that needs the Lean toolchain, and it says
+/// so out loud when it cannot run rather than passing quietly — the note on
+/// [`a_modelgen_that_fails_declines_and_names_it`] records what a silent skip
+/// cost here once already.
+#[test]
+fn the_filters_report_reaches_the_user_and_says_why_there_is_no_model() {
+    let mg = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("mini/ has a parent")
+        .join("modelgen/.lake/build/bin/modelgen");
+    if !mg.is_file() {
+        eprintln!(
+            "SKIPPING the_filters_report_reaches_the_user_and_says_why_there_is_no_model: \
+             {} is not built — run `lake build` in modelgen/. The report/export split is \
+             UNMEASURED in this run.",
+            mg.display()
+        );
+        return
+    }
+    // Not through [`run`], which prepends `--no-modelgen`: that would make the
+    // filter unreachable and this test vacuous.
+    //
+    // **No `--nested`**, and that is deliberate rather than an oversight: the
+    // claim here is about the process boundary, and the gate stays shut so the
+    // run stops at the model's mutual block in 0.2 s instead of deep-checking
+    // `nested_iota_arm` for minutes in a debug build. The verdict is a decline
+    // and it still witnesses the parse — a decline that names `Tree._model.0`
+    // could only have read it out of the bytes the child streamed.
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg(format!("--modelgen={}", mg.display()))
+        .arg("--acceptance-only")
+        .arg(fixture("nested_iota_arm"))
+        .output()
+        .expect("spawn mini");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let both = format!("--- stdout:\n{stdout}--- stderr:\n{stderr}");
+    // The reason, on stderr, in the filter's own words.
+    assert!(
+        stderr.contains("declined — nested model name taken"),
+        "the filter's reason did not reach the user:\n{both}"
+    );
+    // And not on stdout, which carries the export from the child and the
+    // verdict to the user and must carry nothing else.
+    assert!(!stdout.contains("declined —"), "a report line reached stdout:\n{both}");
+    // The export streamed through `-o -` and parsed: there is a verdict, and
+    // it is about a declaration that is only in the export.
+    assert!(
+        stdout.contains("nested_iota_arm.ndjson\t") && stdout.contains("Tree._model.0"),
+        "the run produced no verdict, so the streamed export did not parse:\n{both}"
+    );
+}
+
 /// Replace a `Def`'s declared type in place — the mutation
 /// [`a_model_whose_iota_theorem_is_about_another_rule_declines`] performs.
 fn retype(env: &mut Environment, n: &Name, ty: E) {
