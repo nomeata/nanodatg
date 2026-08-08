@@ -32,7 +32,10 @@ Let the declaration be a block with **real members** `R₀ … R_{r−1}` — th
 export's own `all`, so `r = 1` unless the block is mutual — `numNested > 0`,
 `m` mimics (one per distinct nested occurrence), `n = r + m` block members, a
 parameter telescope `p⃗` of length `np` and level parameters `ℓ⃗`. Write
-`T = R₀`. The block has no indices (§5).
+`T = R₀`. Write `ι⃗ₖ` for block member `k`'s **index** telescope, which may be
+a different length for each member — `ITree.rec` has one index and its `List
+(ITree N.z)` mimic's motive has none. A **mimic's** index telescope is empty:
+a container with indices is refused (§5.1).
 
 **Block index `k` runs `0 … n−1` in the export's own motive order**: the real
 members first, in `all` order, then the mimics in discovery order. That is
@@ -47,7 +50,7 @@ is elided for readability.
 | name | kind | statement |
 | --- | --- | --- |
 | `T._model.0` … `T._model.{n−1}` | mutual inductive block | member `k < r` is the copy of `R_k`; member `r+i` is the mimic of occurrence `i`. Constructors are `T._model.k.<last component of the original>`. |
-| `R_k._model.self`, `k < r` | `def` | `∀p⃗, Sort u := T._model.k p⃗` — **the carrier of real member `R_k`**. `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying. **One per real member**, so a one-member block has `T._model.self` and nothing has moved. |
+| `R_k._model.self`, `k < r` | `def` | `∀p⃗ ι⃗ₖ, Sort u := T._model.k p⃗` — **the carrier of real member `R_k`**. `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying. **One per real member**, so a one-member block has `T._model.self` and nothing has moved. |
 | `T._model.pack_i` | `def` | `∀p⃗, occᵢ → T._model.{r+i} p⃗` |
 | `T._model.unpack_i` | `def` | `∀p⃗, T._model.{r+i} p⃗ → occᵢ` |
 | `T._model.unpackPack_i` | `theorem` | `∀p⃗ l, Eq (unpack_i p⃗ (pack_i p⃗ l)) l` — the **retraction** |
@@ -55,7 +58,7 @@ is elided for readability.
 | `T._model.ctor_j` | `def` | the **block's** `j`-th constructor's declared type — the real members' constructors concatenated in `all` order — with each `R_k` rewritten to `R_k._model.self` and **nothing else** |
 | `T._model.rec_k` | `def` | the declared type of the export's recursor at block index `k`, with the `R`s, their constructors and their recursors rewritten to their model counterparts and **nothing else** |
 | `T._model.congrPack_i` | `theorem` | `∀p⃗ l₀ l, Eq l₀ l → Eq (pack_i p⃗ l₀) (pack_i p⃗ l)` |
-| `T._model.iota_k_j` | `theorem` | `∀p⃗ M⃗ S⃗ f⃗, Eq (rec_k p⃗ M⃗ S⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)` — the `j`-th rule of `T._model.rec_k` |
+| `T._model.iota_k_j` | `theorem` | `∀p⃗ M⃗ S⃗ f⃗, Eq (rec_k p⃗ M⃗ S⃗ ι⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)` — the `j`-th rule of `T._model.rec_k`. **A rule binds no index of its own**: `ι⃗` is determined by the constructor's result and is written out from it, exactly as the export's own rule does. |
 
 Here `occᵢ` is the `i`-th nested occurrence — `List T._model.self` for
 `inductive Tree | node : List Tree → Tree` — written at `p⃗`.
