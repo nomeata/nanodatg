@@ -12,6 +12,28 @@
      binder. Lean accepts it; `HTree.rec_1`'s minor for `node` binds
      `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)`.
 
+   A field at a mimic under a binder is the one shape here that is still
+   refused, and it has **three** witnesses rather than one, at three different
+   proofs. Each is a `funext` (MODELGEN.md §5.1) and Lean accepts all three:
+
+   * `HTree.node : (N → List HTree) → HTree` — the **root's** field. The
+     recursor's minor has to transport along `(fun n => pack₀ (unpack₀ (f n)))
+     = f`, and so does every ι rule of `HTree.rec`.
+   * `RTree.mk : Rose RTree → RTree`, where `Rose.node : (N → Rose α) → Rose α`
+     — the container's **own recursive** field, under a binder. `pack` and
+     `unpack` need nothing (the induction hypothesis is already the function
+     they want); the two **round trips** need funext, because `unpack₀ (pack₀
+     (Rose.node f))` reduces to `Rose.node (fun n => unpack₀ (pack₀ (f n)))`.
+   * `OTree.mk : Outer OTree → OTree`, where `Outer.mk : (N → Inner α) → Outer
+     α` — a container's field at **another** mimic, under a binder. `Outer` is
+     not recursive at all, so there is no induction hypothesis to lean on and
+     the round trips transport along `funext (fun n => unpackPack₁ (f n))`.
+
+   Three, because the first cannot reach the other two: `HTree`'s binder is at
+   the root and never enters `retractValue` or `sectionValue`, and `RTree`'s
+   sits at a position that *has* an induction hypothesis where `OTree`'s does
+   not.
+
    `Fn3.mk : (N → α) → List α → Fn3 α`, reached as `ZTree.node : Fn3 ZTree →
    ZTree`, is the one that actually *pins* the hypothesis vector. A minor's
    vector has one entry per field that has a hypothesis, in field order, and an
@@ -42,7 +64,7 @@ inductive List (α : Type) : Type where
   | nil : List α
   | cons : α → List α → List α
 
---#export Eq N List Fn Fn3 FTree GTree ZTree HTree
+--#export Eq N List Fn Fn3 Rose Inner Outer FTree GTree ZTree HTree RTree OTree
 
 inductive Fn (α : Type) : Type where
   | mk : (N → α) → Fn α
@@ -50,6 +72,16 @@ inductive Fn (α : Type) : Type where
 
 inductive Fn3 (α : Type) : Type where
   | mk : (N → α) → List α → Fn3 α
+
+inductive Rose (α : Type) : Type where
+  | leaf : α → Rose α
+  | node : (N → Rose α) → Rose α
+
+inductive Inner (α : Type) : Type where
+  | mk : α → Inner α
+
+inductive Outer (α : Type) : Type where
+  | mk : (N → Inner α) → Outer α
 
 inductive FTree : Type where
   | leaf : FTree
@@ -59,6 +91,12 @@ inductive FTree : Type where
 inductive HTree : Type where
   | leaf : HTree
   | node : (N → List HTree) → HTree
+
+inductive RTree : Type where
+  | mk : Rose RTree → RTree
+
+inductive OTree : Type where
+  | mk : Outer OTree → OTree
 
 inductive GTree : Type where
   | leaf : GTree

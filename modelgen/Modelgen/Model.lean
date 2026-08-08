@@ -75,6 +75,13 @@ namespace Modelgen
 inductive Decline where
   | dependentFields
   | noEq
+  /-- A constructor field the block holds at a **mimic** *under a binder* —
+  `HTree.node : (N → List HTree) → HTree`. The obstruction is the proof and not
+  the statement: the round trips and the recursor's minor would transport along
+  `(fun x⃗ => pack (unpack (f x⃗))) = f`, which is **function extensionality**,
+  and this module's whole equality budget is the `Eq` the export declares.
+  MODELGEN.md §5.1 carries the argument and the three witnesses. -/
+  | needsFunext (c : Name)
   | nameTaken (n : Name)
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
@@ -86,6 +93,8 @@ inductive Decline where
 def Decline.label : Decline → String
   | .dependentFields => "nested model with dependent fields"
   | .noEq => "nested model without Eq"
+  | .needsFunext c =>
+    s!"nested model needs funext ({c} has a field at a mimic under a binder)"
   | .nameTaken n => s!"nested model name taken ({n})"
   | .cyclicMimics => "nested model with mutually recursive occurrences"
   | .malformed m => s!"nested model shape: {m}"
@@ -497,8 +506,14 @@ def packMinor (g : Gen) (i member : Nat) (ps : Array Expr) (cn : Name) (mty : Ex
     let recs := (Array.range n).filter fun x => (g.occIdx? i ps ftys[x]!).isSome
     -- The container's *own* recursive positions, and every one of them has
     -- exactly one hypothesis. A container recursive under a binder — `Rose |
-    -- node : (N → Rose) → Rose` used as one — would have a hypothesis this
+    -- node : (N → Rose α) → Rose α` used as one — would have a hypothesis this
     -- count does not name, and the vector would be read off by one.
+    --
+    -- **An arm no declaration reaches**, because `iso`'s funext guard is
+    -- earlier: such a container's mimic has a constructor with a field at a
+    -- mimic under a binder, and `infinitary.lean`'s `RTree` is measured
+    -- declining there. Kept because reading the vector off by one is a wrong
+    -- model rather than a missing one.
     unless recs.size == ihs.size do
       badShape s!"{cn} is recursive under a binder in its own container"
     let mut args : Array Expr := #[]
@@ -1669,11 +1684,19 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
           -- budget is the `Eq` the export declares. A field at the *root*
           -- under a binder needs none of that and is supported;
           -- `infinitary.lean`'s `FTree` is the fixture for it.
+          --
+          -- **Declined here by name and not by a kernel mismatch three steps
+          -- later**, and declined for the same reason wherever the binder
+          -- sits: at the root (`HTree`), at the container's own recursive
+          -- field (`RTree` over `Rose`) or at a container's field into another
+          -- mimic (`OTree` over `Outer`). All three are `infinitary.lean` and
+          -- all three are shapes Lean accepts; MODELGEN.md §5.1 says which
+          -- proof each one needs funext at.
           for x in [0:fs.size] do
             if (g.memberOf tys[x]!).isNone then
               if let some m ← g.ihMemberOf tys[x]! then
                 unless g.isReal m do
-                  badShape s!"{cn} has a field at a mimic under a binder"
+                  declineWith (.needsFunext cn)
 
   -- ── 3. pack, unpack, and the two round trips, group by group ───────────
   --

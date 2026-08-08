@@ -263,7 +263,7 @@ runs the last two on every file.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
 `mini/tests/fixtures` (41) and `modelgen/tests` (14): **212 files, 0 failures,
-43 models, 336 statements compared with 0 differing, 821 recursors of which 10
+43 models, 336 statements compared with 0 differing, 829 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -279,10 +279,19 @@ stops at `assert_def_eq: not definitionally equal`.
 `mutual_one_recursive` and `mutual_prop_even_odd` make `nanoda_bin` panic at
 `checker/src/inductive.rs:30`. There is no model in any of them, so
 `modelgen`'s output is **byte-identical to the input** — measured with `cmp` —
-and the same panic fires on the input. It is upstream's limitation on a mutual
-block whose members differ in index shape, and it is recorded here because the
-sentence above used to say "every one" and, over the whole tree rather than
-the corpus, that is not true.
+and the same panic fires on the input.
+
+The line is `assert_eq!(ind.is_recursive, is_recursive)`, and the reason is now
+measured rather than guessed: upstream recomputes `isRec` **per member**, by
+scanning that member's constructors for a *binder type* mentioning any name in
+the block, while Lean sets it for the **whole block**. Each of the four has
+exactly one member whose constructors mention no block member in a binder type
+— `mutual_one_recursive`'s `OB`, `mutual_prop_even_odd`'s `Ka`,
+`mutual_index_sorts`' `HB`, `mutual_index_telescopes`' `EB` — so the export
+says `true` and the recomputation says `false`. It is `checker/`'s to fix and
+not this tool's, and it is recorded here because the sentence above used to
+say "every one" and, over the whole tree rather than the corpus, that is not
+true.
 
 ## 4.1 Speed
 
@@ -571,23 +580,73 @@ recursors for these shapes are compared against the export's on every test run.
 
 ## 5.1 Gaps — shapes Lean supports and this does not
 
-**One row.** Everything else Lean accepts, `modelgen` writes.
+**One shape.** Everything else Lean accepts, `modelgen` writes.
 
 | decline | fixture | what Lean does |
 | --- | --- | --- |
-| `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
+| `nested model needs funext (C has a field at a mimic under a binder)` | `infinitary.lean`'s `HTree`, `RTree`, `OTree` | accepts all three; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
 
-**A field at a mimic under a binder is the one gap here, and its obstruction is
-the proof rather than the statement.** Lean accepts `HTree.node : (N → List
-HTree) → HTree`. The block types the field `N → B₁`, so `T._model.ctor_j`
-would build `fun n => pack₀ (f n)` and the recursor's minor would have to
-transport along `(fun n => pack₀ (unpack₀ (f n))) = f` — **function
-extensionality**, and this module's entire equality budget is the `Eq` the
-export declares (§5.2's `nested model without Eq` is the same principle: no
-equality is fabricated that Lean did not write). Closing it means requiring a
-`funext` in the export the way `Eq` is required, and a new decline for its
-absence. A field recursive under a binder at the **root** needs none of that
-and is supported.
+**The obstruction is the proof and not the statement, and it is exactly
+function extensionality.** The block types a field at a mimic under a binder as
+`∀ x⃗, Bₘ ι⃗`, so `T._model.ctor_j` builds `fun x⃗ => pack (f x⃗)` and
+something downstream has to transport along `(fun x⃗ => pack (unpack (f x⃗))) =
+f`. **No choice of `ctor_j` avoids it.** §1 fixes `ctor_j`'s type, so its value
+is `B₀.c (h f)` for some `h`, and `h` must satisfy `h (fun x⃗ => unpack (g x⃗))
+≡ g` for the recursor's minor to typecheck at a *variable* `g`; the only
+candidate is `fun k x⃗ => pack (k x⃗)`, and `pack (unpack (g x⃗))` is a
+recursor application stuck on a variable. So the two are propositionally and
+not definitionally equal, and this module's entire equality budget is the `Eq`
+the export declares.
+
+**It has three witnesses at three different proofs**, which is why
+`infinitary.lean` carries three declarations rather than one:
+
+| witness | where the binder sits | which proof needs funext |
+| --- | --- | --- |
+| `HTree.node : (N → List HTree) → HTree` | the **root**'s field | `recValue`'s minor, and every ι rule of `HTree.rec` |
+| `RTree.mk : Rose RTree → RTree`, `Rose.node : (N → Rose α) → Rose α` | the container's **own recursive** field | both **round trips**: `unpack₀ (pack₀ (Rose.node f))` reduces to `Rose.node (fun n => unpack₀ (pack₀ (f n)))`. `pack` and `unpack` need nothing — the induction hypothesis already *is* the function they want |
+| `OTree.mk : Outer OTree → OTree`, `Outer.mk : (N → Inner α) → Outer α` | a container's field at **another** mimic | both round trips again, but `Outer` is not recursive, so there is **no** induction hypothesis and the proof is `funext (fun n => unpackPack₁ (f n))` outright |
+
+The first cannot reach the other two — a root binder never enters
+`retractValue` or `sectionValue` — and the second cannot reach the third,
+because its position has an induction hypothesis where the third's has none.
+
+### The trade, settled
+
+**Requiring `funext` is the right trade and this gap should close.** The
+argument, in the order the objections come:
+
+* **It costs §1 nothing.** `ctor_j`, `rec_k`, `iota_k_j` and the five
+  `pack`/round-trip signatures are unchanged; only *which* declarations get a
+  model changes, and §1.3 already tells a consumer to read the absence of
+  `T._model.self` as "no model". A consumer written against §1 today needs no
+  edit.
+* **It costs no trust.** The input is trusted and not typechecked; `Eq` is
+  already read out of it, and `EqInfo.read` shape-checks the statement it
+  found. A `FunextInfo.read` would do the same against `∀ {α : Sort u} {β : α →
+  Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x) (g x)) → Eq f g`. There is no new
+  axis here.
+* **The requirement must be *conditional*.** Requiring `funext` unconditionally
+  would turn every currently-working file into a decline, since `funext` is in
+  **1 of the 157 corpus files** (`good/perf/grind-ring-5`) and *not* in
+  `init-prelude`. So it is read lazily and only a declaration that has the
+  shape declines for its absence — which is what the decline above becomes.
+* **The one thing that argues the other way, and does not win.** On the tree as
+  it stands, closing the gap would change no decline into a model outside a
+  fixture written for it, because no corpus file has both the shape and
+  `funext`. That is an argument about the corpus, not about Lean, and
+  completeness here is measured against Lean.
+
+**It is not closed in this pass**, and that is a budget statement rather than a
+design one. What it takes, so that the next pass is a specification and not a
+question: a `FunextInfo`, an iterated `funext` over a binder telescope, lambda
+construction in `ctorValue` and `unpackMinor`, funext-carrying proofs at the
+four sites in `recMinor`, `retractValue`, `sectionValue` and
+`retractFamilyValue`, a function-level congruence of `pack` beside
+`congrPack_i` for `Rule.sides`, and `Rule`'s `moving` set widened to the
+positions under a binder. The delicate part is `Rule.sides`, where the
+transports have to ι-reduce back to the base under proof irrelevance. Each of
+the three witnesses above is already exported and already red.
 
 ## 5.2 Boundaries — shapes Lean does not support either
 
@@ -652,11 +711,34 @@ Lean block, which has exactly such a family. It is kept because a group this
 cannot write is a wrong model rather than a missing one, and it is recorded
 here as an *arm nothing reaches* rather than as a covered refusal.
 
+`nested model shape: … is recursive under a binder in its own container` is a
+second such arm, in `packMinor` and `retractValue`. A container recursive under
+a binder has a hypothesis that the count of *recursive positions* does not
+name, and the minor's vector would be read off by one — but the funext guard in
+`iso` is earlier and catches every such container, `infinitary.lean`'s `RTree`
+being the fixture measured declining there. Kept for the same reason: a vector
+read off by one is a wrong model rather than a missing one.
+
 ## 5.4 What `nested model shape: …` means
 
 A shape the generator cannot write, or a proof the kernel did not accept. It
-is the catch-all, so a new occupant of it is a new gap and not a known one;
-`infinitary.lean`'s `HTree` is its only occupant in the tree.
+is the catch-all, so a new occupant of it is a new gap and not a known one.
+§5.1's gap has its own decline now (`nested model needs funext`), so what is
+left occupying it is **one file, and it is a lie rather than a shape**:
+
+> `vendor/arena-tests/bad/nested-unused-param.ndjson`'s `E` declines with
+> `nested model shape: [E._model.pack_0] rejected by the kernel: (kernel)
+> invalid projection`. `E : W → Sort` nests as `E.mk : (w : W) → L (E w)
+> (w.[C/0].[C/0]) → E w`, and the container's second parameter is a projection
+> **at a structure type `C` the file never declares** — the only mention of
+> `C` anywhere in it is that projection's `typeName`. So the occurrence itself
+> mentions an undeclared constant, `pack_0` carries it, and `addDeclCore`
+> refuses it before anything is emitted. That is the catch-all doing its
+> documented job on a `bad/` file; `nanoda_bin` refuses the same input, at
+> `checker/src/tc.rs:702`. Not a gap and not a shape.
+
+The two arms §5.3 names are the only other `nested model shape:` messages a
+*declaration* could reach, and neither is reached.
 
 ## 5.5 One Lean-side wrinkle
 

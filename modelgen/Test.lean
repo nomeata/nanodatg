@@ -148,12 +148,19 @@ def expectedOwn : List Row :=
   , ("indexed_container", [("VTree", 15), ("WTree", 17), ("UTree", 16)], [])
   , ("nest_index_cross", [("ITr", 15), ("CTree", 15), ("PA", 29), ("XT", 21)], [])
   , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
-    -- `HTree` is the one shape in this file that is still open, and the
-    -- obstruction is the proof and not the statement: the block types
-    -- `(N → List HTree)` at `N → B₁`, so the recursor's minor would transport
-    -- along `(fun n => pack₀ (unpack₀ (f n))) = f`, which is **funext**.
+    -- **The three witnesses of the one remaining gap.** The obstruction is
+    -- the proof and not the statement: the block types a field at a mimic
+    -- under a binder as `N → B₁`, so something has to transport along
+    -- `(fun n => pack (unpack (f n))) = f`, which is **funext**. `HTree` is
+    -- the root's field and puts it in the recursor's minor and every ι rule;
+    -- `RTree` over `Rose` is the container's own recursive field and puts it
+    -- in the two round trips; `OTree` over `Outer` is a container's field at
+    -- *another* mimic, where there is no induction hypothesis to lean on at
+    -- all. Lean accepts all three. MODELGEN.md §5.1 carries the argument.
   , ("infinitary", [("FTree", 17), ("GTree", 15), ("ZTree", 22)],
-      [("HTree", "nested model shape: HTree._model.0.node has a field at a mimic under a binder")])
+      [ ("HTree", "nested model needs funext (HTree._model.0.node")
+      , ("RTree", "nested model needs funext (RTree._model.1.node")
+      , ("OTree", "nested model needs funext (OTree._model.1.mk") ])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])
