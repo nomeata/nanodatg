@@ -34,6 +34,9 @@ serde_json = "1.0.111"
 # arena seam is the one place mini has to build one. Mini's own literals stay
 # `u64` — the parser declines anything above ten.
 num-bigint = "0.4.4"
+# `arena`'s level-list memo is keyed on a 32-bit pointer; the standard hasher
+# was measured at 22.6% of a `mutual` run on its own.
+rustc-hash = "1.1"
 
 [[bin]]
 name = "mini"

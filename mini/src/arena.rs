@@ -71,6 +71,7 @@ use nanoda_lib::util::{
     BigUintPtr, Config, ExportFile, ExprPtr, LeanDag, LevelPtr, LevelsPtr, NamePtr, StringPtr,
     TcCtx,
 };
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -80,7 +81,42 @@ use std::rc::Rc;
 pub const STYLE: BinderStyle = BinderStyle::Default;
 
 thread_local! {
-    static CTX: RefCell<Option<TcCtx<'static, 'static>>> = const { RefCell::new(None) };
+    /// **Not an `Option`, and that is a measured decision.** It was
+    /// `Option<TcCtx>` with an `ensure_installed()` check in front of every
+    /// accessor — which meant *two* thread-local accesses and two `RefCell`
+    /// borrows per expression node read, on the hottest path in the crate.
+    /// A lazy initializer gives the same "an absent arena is an empty one"
+    /// behaviour with no branch and no second access.
+    static CTX: RefCell<TcCtx<'static, 'static>> = RefCell::new(mk_ctx(empty_export()).1);
+}
+
+/// Leak an export file and a scratch dag, and pair them into a context.
+///
+/// The leak is what makes the `'static` work: a `TcCtx` borrows its `LeanDag`
+/// mutably for its whole life, so the two cannot be stored together without a
+/// self-reference. See the header on why it is bounded.
+fn mk_ctx(ef: ExportFile<'static>) -> (&'static ExportFile<'static>, TcCtx<'static, 'static>) {
+    let ef: &'static ExportFile<'static> = Box::leak(Box::new(ef));
+    let dag: &'static mut LeanDag<'static> = Box::leak(Box::new(LeanDag::new(&ef.config)));
+    (ef, TcCtx::new(ef, dag))
+}
+
+/// A zero-byte export file. `parse_export_file` reads lines until EOF, so an
+/// empty input is a valid empty environment.
+fn empty_export() -> ExportFile<'static> {
+    let cfg: Config = serde_json::from_str(
+        r#"{"export_file_path": null,
+            "unpermitted_axiom_hard_error": false,
+            "unsafe_permit_all_axioms": true,
+            "nat_extension": true,
+            "string_extension": true,
+            "print_axioms": false,
+            "print_success_message": false}"#,
+    )
+    .expect("mini::arena: the empty-arena config does not deserialise");
+    cfg.to_export_file_from(std::io::Cursor::new(Vec::new()))
+        .expect("mini::arena: the empty export file does not parse")
+        .0
 }
 
 /// Parse `cfg`'s export file and install it as this thread's arena, replacing
@@ -97,9 +133,8 @@ pub fn install(cfg: Config) -> Result<&'static ExportFile<'static>, Box<dyn std:
 /// [`install`], for an [`ExportFile`] already parsed — the `modelgen` path,
 /// which parses from a byte buffer rather than from the path in the config.
 pub fn install_export_file(ef: ExportFile<'static>) -> &'static ExportFile<'static> {
-    let ef: &'static ExportFile<'static> = Box::leak(Box::new(ef));
-    let dag: &'static mut LeanDag<'static> = Box::leak(Box::new(LeanDag::new(&ef.config)));
-    CTX.with(|c| *c.borrow_mut() = Some(TcCtx::new(ef, dag)));
+    let (ef, ctx) = mk_ctx(ef);
+    CTX.with(|c| *c.borrow_mut() = ctx);
     // A pointer from the previous installation indexes a different dag.
     LEVELS.with(|m| m.borrow_mut().clear());
     ef
@@ -120,69 +155,33 @@ pub fn install_export_file(ef: ExportFile<'static>) -> &'static ExportFile<'stat
 /// out ends the borrow — and every public constructor takes its arguments
 /// already built.
 fn read<R>(f: impl FnOnce(&TcCtx<'static, 'static>) -> R) -> R {
-    ensure_installed();
-    CTX.with(|c| f(c.borrow().as_ref().expect("mini::arena: no export file installed")))
+    CTX.with(|c| f(&c.borrow()))
 }
 
 /// Allocate through the arena. Private, for the reason [`read`] gives.
 fn write<R>(f: impl FnOnce(&mut TcCtx<'static, 'static>) -> R) -> R {
-    ensure_installed();
-    CTX.with(|c| f(c.borrow_mut().as_mut().expect("mini::arena: no export file installed")))
+    CTX.with(|c| f(&mut c.borrow_mut()))
 }
 
-/// **An absent arena becomes an empty one, rather than a panic.**
+/// **A fresh empty arena**, discarding whatever this thread had.
 ///
-/// Mini's tests build declarations by hand — `Name::simple("Nat")`,
-/// `konst(…)`, a whole inductive — and none of them has an export file. Before
-/// the migration those constructors were `Rc::new`; now they need a context,
-/// and requiring every test to install one would be boilerplate proportional
-/// to the suite rather than to the change, in a place where forgetting it
-/// gives a panic that reads as unrelated to the test that caused it.
+/// Mini's tests build declarations by hand — `Name::simple("Nat")`, `konst(…)`,
+/// a whole inductive — and none of them has an export file. They do not have to
+/// call this: [`CTX`]'s initializer already gives every thread an empty arena,
+/// so an absent installation is an empty one rather than a panic. That is safe
+/// precisely because it is *empty* — nothing can silently find a name or
+/// expression it should have had to parse for, so a test depending on export
+/// content fails rather than passes — and on mini's own path it never applies,
+/// because `convert::load_inner` installs the export file before anything
+/// builds a term.
 ///
-/// **Not gated on `cfg!(test)`, and that was a bug worth recording.** The
-/// first draft was, on the argument that production would then still panic on
-/// a missing [`install`]. It does not work: `cfg!(test)` is false inside this
-/// library when an *integration* test links it, so `mini/tests/nested.rs` and
-/// `mini/tests/mutual.rs` — which build terms on the test thread, while
-/// `run::check_file_deep_with` installs on a worker thread it spawns — would
-/// have panicked. A conditional that is true for 168 unit tests and false for
-/// the two suites that need it most is worse than no condition.
-///
-/// It is safe because the arena it installs is *empty*: it has no
-/// declarations, so nothing can silently find a name or expression it should
-/// have had to parse for — a test depending on export content fails rather
-/// than passes. And on mini's own path it never fires: the binary reaches
-/// `convert::load_inner`, which installs the export file, before anything
-/// builds a term. The rule in the header still holds — a pointer must not
-/// outlive its installation — and a lazily installed arena is replaced by the
-/// first real one exactly as any other would be.
-fn ensure_installed() {
-    if !CTX.with(|c| c.borrow().is_some()) {
-        install_empty_arena();
-    }
-}
-
-/// An arena over a zero-byte export file. `parse_export_file` reads lines
-/// until EOF, so an empty input is a valid empty environment.
-///
-/// `pub` because `mini`'s *integration* tests need it too, for the same reason
-/// [`ensure_installed`] gives — and there `cfg!(test)` is false, since they
-/// link `mini` as a library.
+/// *(An earlier draft made this a panic outside `cfg!(test)`. That gate is
+/// wrong in both directions: `cfg!(test)` is false inside this library when an
+/// integration test links it, so it held for the unit tests and not for
+/// `mini/tests/{nested,mutual}.rs`, which build terms on the test thread while
+/// `run::check_file_deep_with` installs on a worker thread it spawns.)*
 pub fn install_empty_arena() {
-    let cfg: Config = serde_json::from_str(
-        r#"{"export_file_path": null,
-            "unpermitted_axiom_hard_error": false,
-            "unsafe_permit_all_axioms": true,
-            "nat_extension": true,
-            "string_extension": true,
-            "print_axioms": false,
-            "print_success_message": false}"#,
-    )
-    .expect("mini::arena: the empty-arena config does not deserialise");
-    let (ef, _) = cfg
-        .to_export_file_from(std::io::Cursor::new(Vec::new()))
-        .expect("mini::arena: the empty export file does not parse");
-    install_export_file(ef);
+    install_export_file(empty_export());
 }
 
 // ────────────────────────────────────────────────────────── accessors ──
@@ -352,8 +351,14 @@ pub fn alloc_levels(ls: &[LevelPtr<'static>]) -> LevelsPtr<'static> {
 
 thread_local! {
     /// `LevelsPtr` -> the `Rc<[Level]>` `Expr::Const`'s view hands back.
-    static LEVELS: RefCell<HashMap<LevelsPtr<'static>, Rc<[crate::expr::Level]>>> =
-        RefCell::new(HashMap::new());
+    ///
+    /// **`FxHashMap`, not `HashMap`.** The first draft used the standard
+    /// hasher, and `perf` on a running `mutual` put the lookup plus its
+    /// SipHash at **22.6%** of the whole test — a cache added to avoid an
+    /// allocation, costing more than the allocation. The key is a `u32`;
+    /// hashing it should be a multiply.
+    static LEVELS: RefCell<FxHashMap<LevelsPtr<'static>, Rc<[crate::expr::Level]>>> =
+        RefCell::new(FxHashMap::default());
 }
 
 /// A `Const`'s universe arguments, in mini's `Rc<[Level]>` shape.

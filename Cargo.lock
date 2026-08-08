@@ -118,6 +118,7 @@ dependencies = [
  "kernel",
  "nanoda_lib",
  "num-bigint",
+ "rustc-hash",
  "serde_json",
 ]
 
