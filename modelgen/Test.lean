@@ -257,6 +257,15 @@ def expectedOwn : List Row :=
   , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
   , ("nest_family_edges", [("A1", 34), ("X", 23)], [])
   , ("nest_mutual_index", [("MA", 32)], [])
+    -- **§5.1's one gap**, and its control. `RB α β`'s second parameter is a
+    -- family; `OK` nests in the **first** argument, which is
+    -- `dependent_fields.lean`'s `Ctr KTree (fun _ => N)` at this container and
+    -- is a model, and `JT`/`PT` nest **inside the lambda**, which is
+    -- `Lean.Json` and `Lean.PrefixTreeNode` and is refused. Both halves are in
+    -- one file so that a fix which makes the gap pass cannot do it by breaking
+    -- the shape beside it.
+  , ("nest_fam_arg", [("OK", 13)],
+      [("JT", "nested model shape: "), ("PT", "nested model shape: ")])
   ]
 
 structure TAcc where
@@ -352,6 +361,51 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
       Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter p false)) ctx { env }
     a := check a r2.generated.isEmpty "nat_char_equations should have no model"
     a := check a (d2 == p.decls) "nat_char_equations is not passed through unchanged"
+  return a
+
+/-- **What a replayed export is visible as**, which is `MODELGEN.md` §6.6 and
+§6.7 as two checks rather than two paragraphs.
+
+Both are facts about *Lean* and not about this tool, and both are load-bearing:
+§6.6's hazard analysis and §6.7's "the kernel-level API is not usable" both
+evaporate the day `Environment.find?` gains a fallback to the kernel constant
+map. This is here so that day is a test failure with a name on it.
+
+1. **`T.rec_1` is in the kernel map and not in `Environment.find?`.**
+   `Declaration.getNames` says of itself that it omits *"auxiliary recursors
+   computed by the kernel for nested inductive types"*, and that is the loop
+   `addDeclCore` registers async constants from — so the constant every model
+   in this repository is about is one `MetaM` cannot name. `Tree.rec` is the
+   atom beside it: it **is** registered, so this is not "nothing is visible".
+2. **`ofKernelEnv` after a kernel replay shows nothing.** That is the whole of
+   why this tool is on `Environment.addDeclCore` and pays for §5.5's panic.
+
+`modelgen/EnvProbe.lean` is the same two probes at Mathlib scale. -/
+def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
+  let path := s!"{root}/modelgen/tests/nested_iota.ndjson"
+  let text ← IO.FS.readFile path
+  let .ok x := Modelgen.parse text | return check a false "nested_iota does not parse"
+  let env0 ← importModules #[] {}
+  let mut env := env0
+  for d in x.decls do
+    if let some dcl := toDeclaration env d then
+      if let .ok e := env.addDeclCore 0 dcl none false then env := e
+  let kenv := env.toKernelEnv
+  let mut a := a
+  a := check a ((kenv.find? `Tree.rec_1).isSome && (env.find? `Tree.rec_1).isNone)
+    "Tree.rec_1 is no longer in the kernel map and absent from Environment.find? — \
+     MODELGEN.md §6.6's second half has changed"
+  a := check a ((env.find? `Tree.rec).isSome)
+    "Tree.rec is not visible to Environment.find? either, so §6.6 measures nothing"
+  -- The kernel replay, and what `ofKernelEnv` lets `MetaM` see of it.
+  let mut kenv2 := env0.toKernelEnv
+  for d in x.decls do
+    if let some dcl := toDeclaration (Environment.ofKernelEnv kenv2) d then
+      if let .ok e := kenv2.addDeclWithoutChecking dcl then kenv2 := e
+  let envB := Environment.ofKernelEnv kenv2
+  a := check a ((kenv2.find? `Tree).isSome && (envB.find? `Tree).isNone)
+    "Environment.ofKernelEnv now exposes a kernel-replayed constant to Environment.find? — \
+     MODELGEN.md §6.7's obstacle is gone and this tool can move to lean4checker's model"
   return a
 
 /-- **The two streams and the four exit statuses**, against the built binary.
@@ -455,6 +509,7 @@ def main (args : List String) : IO UInt32 := do
   for r in expectedOwn do
     a ← runOne root a r (dir := "modelgen/tests")
   a ← runSyntax root a
+  a ← runEnvProbe root a
   a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"
