@@ -192,8 +192,19 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
       errs := errs.push s!"{is.recs[k]!} has {mine.size} ι theorems against {ern}'s \
         {rv.rules.length} rules"
       continue
-    let some lp := rv.levelParams[0]? | errs := errs.push s!"{ern} has no motive universe"; continue
-    let v := Level.param lp
+    -- **A block that eliminates only into `Prop` has no motive universe**, and
+    -- then the rule's `Eq` is at `Prop` and the recursor's level list is the
+    -- declaration's own. `S : Prop | mk : PL S → S` is one; `Eq` itself is
+    -- `Prop` and has a motive universe, so this is read off the level list and
+    -- not off the sort.
+    let large := rv.levelParams.length == is.levelParams.length + 1
+    let v ← if large then
+        match rv.levelParams[0]? with
+        | some lp => pure (Level.param lp)
+        | none => pure Level.zero
+      else pure Level.zero
+    let recLs := if large then v :: is.levelParams.map Level.param
+                 else is.levelParams.map Level.param
     let nb := np + rv.numMotives + rv.numMinors
     -- **The indices sit between the minors and the major.** A rule binds no
     -- index of its own — they are determined by the constructor's result — so
@@ -239,8 +250,7 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
           let major := mkAppN (.const headC hls) (hpre ++ fields)
           let mas := (← inferType major).getAppArgs
           let idxs := mas.extract (mas.size - ni) mas.size
-          let lhs := mkAppN (.const is.recs[k]! (v :: is.levelParams.map Level.param))
-            ((pre ++ idxs).push major)
+          let lhs := mkAppN (.const is.recs[k]! recLs) ((pre ++ idxs).push major)
           -- The rule's own right-hand side, at the model's names. Lean states it
           -- as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
           let rhs := (restore tbl rule.rhs).beta (pre ++ fields)

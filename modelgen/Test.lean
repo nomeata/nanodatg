@@ -171,6 +171,24 @@ def expectedOwn : List Row :=
     -- where the fold builds the two congruences differently.
   , ("funext_binder",
       [("HTree", 15), ("RTree", 13), ("OTree", 19), ("H2", 15), ("H3", 15)], [])
+    -- **That shape crossed with the rest**, because nothing about it on its
+    -- own says it survives them — and the cycle in particular does not come
+    -- for free: `packFamMinor`/`retractFamilyValue` are a second copy of the
+    -- one-at-a-time path and were measured refusing `CycB` before they were
+    -- taught the same telescope. `DTel` is a **dependent** two-binder
+    -- telescope, `IdxB` puts the binder at an indexed container, `MutB`/`MutC`
+    -- inside a mutual block, `CycB` inside a cyclic group of mimics.
+  , ("nest_binder_cross",
+      [("Tr", 15), ("DTel", 13), ("IdxB", 13), ("MutB", 24), ("CycB", 21)], [])
+    -- **The sort the block lands in.** `PTree : Prop` eliminates only into
+    -- `Prop`, so `PTree.rec` and the container's `PL.rec` have **no motive
+    -- universe at all**; every recursor's level list is read off the recursor
+    -- for that reason, and before it was this file raised `incorrect number of
+    -- universe levels PL.rec` — an uncaught exception rather than a decline.
+    -- `Eq` is the atom that says the guard is not "the sort is `Prop`": `Eq` is
+    -- `Prop`-valued and *does* have a motive universe. `STree` nests through a
+    -- container polymorphic over `Sort` rather than `Type`.
+  , ("nest_sorts", [("PTree", 13), ("STree", 13)], [])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])

@@ -205,6 +205,13 @@ member (recursors) + m (congruences) + one per ι rule.
 | `funext_binder` / `OTree` | 2 | 3 | 19 |
 | `funext_binder` / `H2` | 1 | 4 | 15 |
 | `funext_binder` / `H3` | 1 | 4 | 15 |
+| `nest_binder_cross` / `Tr` | 1 | 4 | 15 |
+| `nest_binder_cross` / `DTel` | 1 | 3 | 13 |
+| `nest_binder_cross` / `IdxB` | 1 | 3 | 13 |
+| `nest_binder_cross` / **`MutB`/`MutC`** | 2 | 5 | 24 |
+| `nest_binder_cross` / **`CycB`** | 2 | 5 | 21 |
+| `nest_sorts` / `PTree` | 1 | 3 | 13 |
+| `nest_sorts` / `STree.{u}` | 1 | 3 | 13 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -267,8 +274,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (15): **213 files, 0 failures,
-48 models, 365 statements compared with 0 differing, 846 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (17): **215 files, 0 failures,
+55 models, 408 statements compared with 0 differing, 873 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -313,6 +320,7 @@ true.
 | `nest_through_nested` / `nest_cycle_group` | cannot (see §4.2) | **0.12 / 0.13 s** |
 | `indexed_container` / `nest_index_cross` | cannot (see §4.2) | **0.08 / 0.08 s** |
 | `funext_binder` (five declarations) | cannot (see §4.2) | **0.09 s** |
+| `nest_binder_cross` / `nest_sorts` | cannot (see §4.2) | **0.09 / 0.08 s** |
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
@@ -388,7 +396,25 @@ Beyond the Rust path, and new:
   obstruction was the *proof* rather than the statement, and closing it is the
   one place this module reads a constant out of the export that no §1 statement
   mentions. `funext_binder.lean` and §5.2's `nested model without funext`
-  below.
+  below. `nest_binder_cross.lean` crosses it with the rest, and the **cycle**
+  crossing did not come for free: `packFamMinor` and `retractFamilyValue` are a
+  second copy of the one-at-a-time path and were measured refusing `CycB` until
+  they were taught the same telescope. Also there: a *dependent* two-binder
+  telescope (`DTel`), the binder at an indexed container (`IdxB`), and the
+  binder inside a mutual block (`MutB`/`MutC`).
+* **The sort the block lands in.** `nest_sorts.lean`'s `PTree : Prop` nests
+  `PL PTree` at `PL (α : Prop) : Prop`, and a block that eliminates only into
+  `Prop` has **no motive universe at all** — `PTree.rec` carries the
+  declaration's own level parameters and nothing in front of them, and so does
+  `PL.rec`. Every level list this module writes for a recursor is therefore
+  read off the recursor ([`Modelgen.Gen.recLs`], [`Modelgen.Gen.contRecAt`])
+  rather than assumed, and before it was, this shape made the tool raise
+  `incorrect number of universe levels PL.rec` — an *uncaught exception* rather
+  than a decline, which is the worse of the two failures. `Eq` is the atom that
+  says the guard is not "the sort is `Prop`": `Eq` is `Prop`-valued and *does*
+  support large elimination, so it has a motive universe, and the distinction
+  is read off `levelParams`. `STree.{u}` beside it nests through a container
+  polymorphic over `Sort` rather than `Type`.
 * **A declaration with indices.** `ITree : N → Type` nesting `List (ITree
   N.z)`: `ITree.rec` has `numIndices = 1` while the mimic's motive has none, so
   a block recursor here has a **different index arity per member**, and the
@@ -604,11 +630,12 @@ shape this section has ever listed now has a fixture under `modelgen/tests/`,
 exported by Lean's own kernel, generating a model that the kernel accepted,
 whose recursors and ι rules were compared against the installed ones with 0
 differing, and whose filtered export `nanoda_bin` accepts: universe
-polymorphism, universe-polymorphic containers, dependent fields, indices on the
-declaration, indices on the **container**, infinitary constructors at the root,
-a field at a mimic **under a binder**, nesting inside a mutual block, nesting
-through a nested container, cycles of mimics, and the crossings of all of
-those. §4.2 names each with its fixture and its count.
+polymorphism, universe-polymorphic containers, containers polymorphic over
+`Sort`, a block that lands in `Prop` and has no motive universe, dependent
+fields, indices on the declaration, indices on the **container**, infinitary
+constructors at the root, a field at a mimic **under a binder**, nesting inside
+a mutual block, nesting through a nested container, cycles of mimics, and the
+crossings of all of those. §4.2 names each with its fixture and its count.
 
 What `modelgen` still declines is of exactly two other kinds, and neither is a
 shape:
@@ -671,7 +698,11 @@ identifies the two and the rule's sides meet. That is the same mechanism
 
 15, 13, 19, 15 and 15 declarations, 29 statements compared against the
 installed recursors' own rules with 0 differing, `nanoda_bin` accepts the
-filtered export.
+filtered export. `nest_binder_cross.lean` crosses the shape with the
+declaration's indices, a mutual block and a cycle of mimics, and the cycle is
+the one that needed code of its own: `packFamMinor` and `retractFamilyValue`
+are a second copy of the one-at-a-time path and refused `CycB` until they were
+taught the same telescope.
 
 ## 5.2 Boundaries — shapes Lean does not support either
 

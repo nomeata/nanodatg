@@ -227,6 +227,12 @@ structure Gen where
   `none` for every other declaration, and a declaration that needs it and does
   not have it declines `nested model without funext` (§5.1). -/
   fx : Option Name
+  /-- **Do the block's recursors carry a motive universe?** Lean mints one only
+  when the block supports large elimination; `inductive S : Prop | mk : PL S →
+  S` eliminates into `Prop` alone and `S.rec` carries the block's own level
+  parameters and nothing in front of them. Every level list this module writes
+  for a recursor goes through [`Modelgen.Gen.recLs`] for that reason. -/
+  largeElim : Bool
 
 /-- The generator's monad: `MetaM`, with a *shape* decline as its own error so
 that a declaration this module cannot write is never confused with one the
@@ -524,6 +530,26 @@ def ctorPairs (g : Gen) : Array (Nat × Name) :=
 /-- The total number of the block's constructors — the recursors' minor count. -/
 def numMinors (g : Gen) : Nat := g.ctorPairs.size
 
+/-- **A recursor's level list**: the motive universe in front of `ℓ⃗`, or just
+`ℓ⃗` when the block eliminates only into `Prop` and Lean minted no motive
+universe for it. -/
+def recLs (g : Gen) (v : Level) : List Level := if g.largeElim then v :: g.us else g.us
+
+/-- **A *container's* recursor at a motive universe**, or without one. Whether
+the container carries a motive universe is its own affair and not the block's —
+a `Prop`-valued container without large elimination has none — so it is read
+off the recursor rather than assumed. -/
+def contRecAt (n : Name) (v : Level) (cls : List Level) : GenM Expr := do
+  let .recInfo rv ← constInfo n | badShape s!"{n} is not a recursor"
+  if rv.levelParams.length == cls.length + 1 then return .const n (v :: cls)
+  else if rv.levelParams.length == cls.length then return .const n cls
+  else badShape s!"{n} carries {rv.levelParams.length} level parameters, not {cls.length}"
+
+/-- The same list, for `instantiateLevelParams`. -/
+def contRecLs (n : Name) (v : Level) (cls : List Level) : GenM (List Level) := do
+  let .recInfo rv ← constInfo n | badShape s!"{n} is not a recursor"
+  if rv.levelParams.length == cls.length + 1 then return v :: cls else return cls
+
 /-- `Bₖ.rec`, the block's own. -/
 def blockRec (g : Gen) (k : Nat) : Name := .str g.members[k]! "rec"
 
@@ -532,7 +558,7 @@ and the block's own level parameters after it, and it mints the same fresh
 name for `T._model.0.rec` as for `T.rec` because both are generated from the
 same level parameter list. -/
 def blockRecAt (g : Gen) (k : Nat) (v : Level) : Expr :=
-  .const (g.blockRec k) (v :: g.us)
+  .const (g.blockRec k) (g.recLs v)
 
 /-- The container of occurrence `i` at `ps`: its name, level list and **its
 parameters**. An indexed container's index telescope is not here — it rides
@@ -731,6 +757,17 @@ def Family.memberAt? (f : Family) (t : Expr) : Option (Nat × Array Expr) :=
       some (j, as.extract (as.size - m) as.size)
     else none
 
+/-- Which family member `t` is at, and how deep under a binder — the
+[`Modelgen.Gen.mimicUnder?`] of a cyclic group's own recursion. `Tr.node :
+(N → List (Tr α)) → Tr α` is one, and a cycle through it is a binder inside a
+simultaneous recursion. -/
+def Family.memberUnder? (f : Family) (t : Expr) : GenM (Option (Nat × Nat)) := do
+  if let some (j, _) := f.memberAt? t then return some (j, 0)
+  forallTelescope (← whnf t) fun bs res => do
+    if bs.isEmpty then return none
+    let some (j, _) := f.memberAt? (← whnf res) | return none
+    return some (j, bs.size)
+
 /-- Family member `j`'s index telescope, read off its occurrence's type. -/
 def Family.withIndices (f : Family) (j : Nat) (k : Array Expr → GenM α) : GenM α := do
   forallBoundedTelescope (← ityp f.doms[j]!) (some f.fidx[j]!) fun idxs _ => k idxs
@@ -755,7 +792,8 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
     let recs ← familyRecs c
     if recs.size != grp.size then continue
     let .recInfo rv ← constInfo recs[0]! | continue
-    let ty ← instForall (rv.type.instantiateLevelParams rv.levelParams (g.u :: cls)) qs
+    let ty ← instForall
+      (rv.type.instantiateLevelParams rv.levelParams (← contRecLs recs[0]! g.u cls)) qs
     -- **A motive is `∀ ι⃗ x, Sort v`, and the occurrence is `x`'s type with the
     -- index telescope stripped.** For an unindexed family that is the motive's
     -- single binder domain and nothing has moved; for an indexed one — `XT`'s
@@ -790,7 +828,7 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
 the same for every component, so they are read off component 0 once. -/
 def withFamilyMinors (_g : Gen) (f : Family) (v : Level) (motives : Array Expr)
     (k : Array Expr → GenM (Array Expr)) : GenM (Array Expr) := do
-  let head : Expr := .const f.recs[0]! (v :: f.cls)
+  let head : Expr ← contRecAt f.recs[0]! v f.cls
   withMinorTypes (mkAppN head (f.qs ++ motives)) f.rules.size k
 
 /-- One minor of the family's `pack`: a field at **any** member of the family
@@ -804,13 +842,18 @@ def packFamMinor (g : Gen) (f : Family) (ps : Array Expr) (j : Nat) (cn : Name)
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
     let ftys ← fields.mapM ityp
-    let recs := (Array.range n).filter fun x => (f.memberAt? ftys[x]!).isSome
+    let mut recs : Array Nat := #[]
+    for x in [0:n] do
+      if (← f.memberUnder? ftys[x]!).isSome then recs := recs.push x
     let mut args : Array Expr := #[]
     for x in [0:n] do
       if let some t := recs.findIdx? (· == x) then
+        -- Its hypothesis is already `∀ x⃗, B ι⃗` when there is a binder, which
+        -- is what the block's constructor wants: no lambda, no funext.
         args := args.push ihs[t]!
-      else if let some (o, idxs) := g.occOf? ps ftys[x]! then
-        args := args.push (g.call (g.packName o) ps idxs fields[x]!)
+      else if let some (o, nb) ← g.occOfUnder? ps ftys[x]! then
+        args := args.push (← underBinders nb ftys[x]! fields[x]! fun _ res v =>
+          return g.call (g.packName o) ps ((g.occIdx? o ps res).getD #[]) v)
       else
         args := args.push fields[x]!
     mkLambdaFVars bs (g.blockCtorAt (f.mimic[j]! + g.numAll) cn ps args)
@@ -826,7 +869,7 @@ def packFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Ex
   let minors ← g.withFamilyMinors f g.u motives fun mtys =>
     (Array.range f.rules.size).mapM fun t =>
       g.packFamMinor f ps f.rules[t]!.1 f.rules[t]!.2 mtys[t]!
-  return mkAppN (.const f.recs[j]! (g.u :: f.cls)) (f.qs ++ motives ++ minors)
+  return mkAppN (← contRecAt f.recs[j]! g.u f.cls) (f.qs ++ motives ++ minors)
 
 /-- **The retraction for family member `j`**, likewise simultaneous: the same
 recursion at `Prop`, whose `j`-th motive is `unpackⱼ ∘ packⱼ = id`. A field at
@@ -849,17 +892,25 @@ def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
         let ftys ← fields.mapM ityp
-        let recs := (Array.range n).filter fun x => (f.memberAt? ftys[x]!).isSome
+        let mut recs : Array Nat := #[]
+        for x in [0:n] do
+          if (← f.memberUnder? ftys[x]!).isSome then recs := recs.push x
         let mut lhs : Array Expr := #[]
         let mut proofs : Array (Option Expr) := #[]
         for x in [0:n] do
           if let some t' := recs.findIdx? (· == x) then
-            let (d, idxs) := (f.memberAt? ftys[x]!).getD (0, #[])
-            lhs := lhs.push (trip f.mimic[d]! idxs fields[x]!)
-            proofs := proofs.push (some ihs[t']!)
-          else if let some (o, idxs) := g.occOf? ps ftys[x]! then
-            lhs := lhs.push (trip o idxs fields[x]!)
-            proofs := proofs.push (some (g.call (g.retractName o) ps idxs fields[x]!))
+            let (d, nb) := (← f.memberUnder? ftys[x]!).getD (0, 0)
+            let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun xs res v => do
+              let idxs := (f.memberAt? res).map (·.2) |>.getD #[]
+              return (trip f.mimic[d]! idxs v, mkAppN ihs[t']! xs)
+            lhs := lhs.push l
+            proofs := proofs.push (some pf)
+          else if let some (o, nb) ← g.occOfUnder? ps ftys[x]! then
+            let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun _ res v => do
+              let idxs := (g.occIdx? o ps res).getD #[]
+              return (trip o idxs v, g.call (g.retractName o) ps idxs v)
+            lhs := lhs.push l
+            proofs := proofs.push (some pf)
           else
             lhs := lhs.push fields[x]!
             proofs := proofs.push none
@@ -869,7 +920,7 @@ def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM
         -- not a type and the family member's indices come from the result.
         let goalTy ← ityp (rebuild fields)
         mkLambdaFVars bs (← g.foldCongr goalTy ftys lhs fields proofs rebuild)
-  return mkAppN (.const f.recs[j]! (.zero :: f.cls)) (f.qs ++ motives ++ minors)
+  return mkAppN (← contRecAt f.recs[j]! .zero f.cls) (f.qs ++ motives ++ minors)
 
 /-- `packᵢ := C.rec q⃗ (fun _ => Bᵢ p⃗) minors…`, partially applied — its type is
 `∀ _ : occᵢ, Bᵢ p⃗` on the nose, the motive being constant.
@@ -886,7 +937,7 @@ def packValue (g : Gen) (i member : Nat) (ps : Array Expr) : GenM Expr := do
   let motive ← g.withOccIndices i ps fun idxs =>
     withLocalDeclD `x (g.occAtIdx i ps idxs) fun x =>
       mkLambdaFVars (idxs.push x) (mkAppN (g.memAt member ps) idxs)
-  let head : Expr := .const (.str c "rec") (g.u :: cls)
+  let head : Expr ← Gen.contRecAt (.str c "rec") g.u cls
   let cs ← ctorsOf c
   let pre := qs.push motive
   let minors ← withMinorTypes (mkAppN head pre) cs.size fun mtys =>
@@ -966,7 +1017,7 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
     let occ := g.occAtIdx i ps idxs
     withLocalDeclD `l occ fun l =>
       mkLambdaFVars (idxs.push l) (g.eqi.mk' g.u occ (trip idxs l) l)
-  let head : Expr := .const (.str c "rec") (.zero :: cls)
+  let head : Expr ← Gen.contRecAt (.str c "rec") .zero cls
   let cs ← ctorsOf c
   let pre := qs.push motive
   let minors ← withMinorTypes (mkAppN head pre) cs.size fun mtys =>
@@ -1221,11 +1272,20 @@ def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
     badShape s!"{src} has {rv.numIndices} indices where the block member has {g.nidx[k]!}"
   -- The motive universe first, the block's own after it — and the block's own
   -- are the declaration's, because that is what the block was declared with.
-  let lp :: rest := rv.levelParams | badShape s!"{src} has no motive universe"
-  unless rest.map Level.param == g.us do
-    badShape s!"{src} carries the level parameters {rv.levelParams}"
+  -- **A block that eliminates only into `Prop` has no motive universe at all**,
+  -- and then the motive is `Prop`-valued and every level list is just `ℓ⃗`.
+  let v ←
+    if g.largeElim then do
+      let lp :: rest := rv.levelParams | badShape s!"{src} has no motive universe"
+      unless rest.map Level.param == g.us do
+        badShape s!"{src} carries the level parameters {rv.levelParams}"
+      pure (Level.param lp)
+    else do
+      unless rv.levelParams.map Level.param == g.us do
+        badShape s!"{src} carries the level parameters {rv.levelParams}"
+      pure Level.zero
   if rv.numMotives != g.members.size then badShape s!"{src} has {rv.numMotives} motives"
-  return { k, src, v := .param lp, lparams := rv.levelParams
+  return { k, src, v, lparams := rv.levelParams
            nm := rv.numMotives, nmin := rv.numMinors, nidx := rv.numIndices
            ty := restore heads rv.type }
 
@@ -1363,7 +1423,7 @@ def build (r : Rule) (vals : Array Expr) : Expr :=
 the export's side that is `Rₘ._model.self p⃗ idx⃗` — and never rebuilt. -/
 def recCall (r : Rule) (m : Nat) (x : Expr) : GenM Expr := do
   let idxs := r.g.idxOf m (← ityp x)
-  return mkAppN (.const (r.g.recName m) (r.v :: r.g.us))
+  return mkAppN (.const (r.g.recName m) (r.g.recLs r.v))
     (r.ps ++ r.motives ++ r.minors ++ idxs ++ #[x])
 
 /-- `Mₘ` applied to the indices `x`'s type carries, ready for `x` itself. -/
@@ -1887,9 +1947,15 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let toSelf : Std.HashMap Name (Nat × Expr) :=
     (Array.range r).foldl (fun m k => m.insert all[k]! (0, .const selfNames[k]! us)) {}
   let occs := pl.mimics.map fun m => restore toSelf m.occ
+  -- **Does the block support large elimination?** Read off the recursor Lean
+  -- just minted for it rather than inferred from the sort: `Eq` is `Prop` and
+  -- has a motive universe, `S : Prop | mk : PL S → S` is `Prop` and has none.
+  let largeElim ← do
+    let .recInfo rv ← constInfo (.str (b 0) "rec") | badShape "the block has no recursor"
+    pure (rv.levelParams.length == us.length + 1)
   let g0 : Gen := { model, selfNames, numAll := r, np, u, us
                     members := (Array.range pl.types.size).map b
-                    blockCtors, nidx, occs, eqi, fx := none }
+                    blockCtors, nidx, occs, eqi, fx := none, largeElim }
 
   -- **Dependent fields, checked once and only where they bite.** Every
   -- congruence fold in this file moves the *packed* positions of one of the
