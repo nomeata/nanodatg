@@ -27,10 +27,11 @@ Topological sortedness is a property of the exporter and not of the format, so
 [`checkOrder`] **asserts** it rather than assuming it; a file that violates it
 is refused by name and index rather than silently under-instantiated.
 
-The DAG is over declaration **groups**, not declarations: an inductive block,
-its constructors and its recursors mention one another cyclically, and so do
-the members of a mutual `def` block. A group is one node, collects one demand
-set, and is emitted whole.
+The DAG is over declaration **groups**, not declarations, and a group is one
+export **record**: an inductive block, its constructors and its recursors
+mention one another cyclically and arrive as a single `inductive` record, so a
+group is one node, collects one demand set, and is emitted whole. A mutual
+`def` block is *not* a group — see [`buildGroups`].
 -/
 
 open Lean Meta
@@ -110,9 +111,10 @@ structure Info where
 
 /-- One node of the declaration DAG. -/
 structure Group where
-  /-- Indices into `Export.decls`, in file order. -/
-  decls : Array Nat := #[]
-  /-- The level parameters every member of the group shares. -/
+  /-- The record's index into `Export.decls`. **One record, one group** — see
+  [`buildGroups`]. -/
+  decl : Nat := 0
+  /-- The level parameters the record's declarations share. -/
   levelParams : List Name := []
   isInd : Bool := false
   /-- The block's elimination universes, one per recursor that has one. -/
@@ -140,14 +142,36 @@ def introOf (d : EDecl) : Array (Name × Option Name) :=
 
 /-- Partition the file into groups and index every name it introduces.
 
-An inductive record is one group. A `def`/`thm`/`opaque` record joins the group
-of any name in its `all` field that has been seen, and starts a new one
-otherwise. -/
+**One record, one group** — and the `all` field is not read.
+
+A group is a node of the DAG the backward sweep walks, so it has to be a set of
+declarations that genuinely *cannot* be ordered: emitting it whole puts every
+member at the position of its first, and any declaration between them that a
+later member uses becomes a forward reference the pass itself created. An
+`inductive` record is such a set — its types, constructors and recursors mention
+one another cyclically — and it is already a single record, so nothing has to be
+merged to keep it together.
+
+A mutual `def` block is not such a set. Its members share an `all` field, but
+what they share is *provenance*, not a cycle: `lean4export` writes each member
+where its own dependencies are ready, and a file in which one member mentioned a
+later one would not be topologically sorted at all — which [`checkOrder`] would
+then refuse, as it should.
+
+Mathlib is the measurement (`MONOMORPH.md` §9.3). It has 202 records whose `all`
+names more than one declaration, and **97 of those blocks are not contiguous**;
+the widest spans 513,481 records. Grouping by `all` relocated the later members
+of all 97 to the position of the first, and in five of them that carried a
+member in front of a declaration it uses — a forward reference the pass then
+reported as an unsorted input. Leaving each record where it stands costs nothing
+and removes the whole class, not the five that happened to be caught.
+
+The members of a split block are therefore instantiated independently, each at
+the instantiations its own users demand, and the `all` field of a copy names
+only that copy ([`emitOne`]). -/
 def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name Info) := do
   let mut groups : Array Group := #[]
   let mut info : Std.HashMap Name Info := {}
-  -- A name promised by an earlier record's `all` field, and the group it joins.
-  let mut promised : Std.HashMap Name Nat := {}
   for i in [0 : x.decls.size] do
     let d := x.decls[i]!
     let lp := match d with
@@ -174,29 +198,18 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
     -- pass must not launder that, so it refuses the file.
     unless lp.eraseDups.length == lp.length do
       throw s!"{d.names}: a duplicate universe parameter in {lp}"
-    let allF := match d with
-      | .defn _ _ _ _ _ _ a | .thm _ _ _ _ a | .opaq _ _ _ _ _ a => a
-      | _ => []
-    let gi := match allF.findSome? (promised[·]?) with
-      | some g => g
-      | none => groups.size
-    if gi == groups.size then groups := groups.push {}
-    let g := groups[gi]!
-    -- A joined record must agree on the level parameters, for the same reason.
-    unless g.decls.isEmpty || g.levelParams == lp do
-      throw s!"{d.names}: a mutual block whose members differ in their level parameters"
-    let mut elims := g.elims
+    let mut elims : Array Name := #[]
     if let .induct _ _ rs := d then
       for r in rs do
         for p in r.levelParams do
           unless lp.contains p || elims.contains p do elims := elims.push p
-    groups := groups.set! gi
-      { decls := g.decls.push i, levelParams := lp
-        isInd := g.isInd || (match d with | .induct .. => true | _ => false)
+    let gi := groups.size
+    groups := groups.push
+      { decl := i, levelParams := lp
+        isInd := (match d with | .induct .. => true | _ => false)
         elims }
     for (n, elim) in introOf d do
       info := info.insert n { group := gi, elim }
-    for n in allF do promised := promised.insert n gi
   return (groups, info)
 
 /-! ## Levels -/
@@ -628,17 +641,27 @@ eliminating universe folded into the name" true by construction rather than by
 two parallel implementations.
 
 `keepParams` is the carried case: a built-in keeps its name and its level
-parameters, and only its *references* move to the copies they mean. -/
+parameters, and only its *references* move to the copies they mean.
+
+**A copy's `all` field names the copy and nothing else.** `all` is the mutual
+block a record was elaborated with, and [`buildGroups`] does not group by it:
+two members of one block are instantiated independently, so `mono(m₁, σ)` may
+exist where `mono(m₂, σ)` does not, and mapping the whole list through
+[`RwCtx.own`] would write a name no record declares. What survives
+monomorphization is one record per copy, which is what a singleton `all` says —
+the same thing `lean4export` writes for a definition that was never mutual. An
+`inductive` record's `all` lists are *within* the record and are mapped, because
+there the copy at `σ` really is the whole block. -/
 def emitOne (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref RwState)
     (keepParams : Bool) (blockLp : List Name) (d : EDecl) : MetaM EDecl := do
   let E (e : Expr) : MetaM Expr := rw c cache st #[] e
   let lp (orig : List Name) : List Name := if keepParams then orig else []
   match d with
   | .ax n l t u => return .ax (c.own n) (lp l) (← E t) u
-  | .defn n l t v h sf all =>
-    return .defn (c.own n) (lp l) (← E t) (← E v) h sf (all.map c.own)
-  | .thm n l t v all => return .thm (c.own n) (lp l) (← E t) (← E v) (all.map c.own)
-  | .opaq n l t v u all => return .opaq (c.own n) (lp l) (← E t) (← E v) u (all.map c.own)
+  | .defn n l t v h sf _ =>
+    return .defn (c.own n) (lp l) (← E t) (← E v) h sf [c.own n]
+  | .thm n l t v _ => return .thm (c.own n) (lp l) (← E t) (← E v) [c.own n]
+  | .opaq n l t v u _ => return .opaq (c.own n) (lp l) (← E t) (← E v) u [c.own n]
   -- The four `quot` records are carried verbatim: they mention nothing but
   -- `Quot`, `Sort` and themselves, and `Declaration.quotDecl` is a unit.
   | .quot n l t k => return .quot n l t k
@@ -774,6 +797,30 @@ def foldElim (x : Export) (defaults : Array Nat) : Export := Id.run do
           (cs.map fun c => { c with type := fold c.type }) rs'
   return { x with decls := out }
 
+/-- **Topological sortedness, asserted rather than assumed** — the reason the
+sweep can be one backward pass and not a fixpoint.
+
+The property is a claim about `lean4export`, not about the format, so it is
+checked: no group may mention a name a later group declares. The failure it
+catches is silent otherwise — a group read before its user is instantiated at
+too few `σ`, and the output is a well-formed file missing copies — so this is a
+refusal and not a warning.
+
+It is stated over *groups* because groups are what the sweep visits, which is
+what made [`buildGroups`]' old `all`-based grouping visible here: five Mathlib
+blocks were reported as forward references that the grouping had itself created
+(`MONOMORPH.md` §9.3). The check was right and the grouping was wrong — and the
+check is what said so, which is the argument for keeping it. -/
+def checkOrder (n : Nat) (refs : Array (Array (Name × List Level)))
+    (info : Std.HashMap Name Info) : Option String := Id.run do
+  for gi in [0 : n] do
+    for (nm, _) in refs[gi]! do
+      if let some i := info[nm]? then
+        if i.group > gi then
+          return some s!"the file is not topologically sorted: group {gi} \
+            mentions {nm}, which group {i.group} declares"
+  return none
+
 /-- **The pass.** -/
 def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let mut rep : Report :=
@@ -799,10 +846,9 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     let mut seen : Std.HashSet Expr := {}
     let mut out : Array (Name × List Level) := #[]
     let mut p := false
-    for di in groups[gi]!.decls do
-      for r in rootsOf x.decls[di]! do
-        let ((), (s, o, q)) := (collectConsts r).run (seen, out, p)
-        seen := s; out := o; p := q
+    for r in rootsOf x.decls[groups[gi]!.decl]! do
+      let ((), (s, o, q)) := (collectConsts r).run (seen, out, p)
+      seen := s; out := o; p := q
     refs := refs.set! gi out
     if p then anyProj := true
   phase "refs"
@@ -814,33 +860,27 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let projCache ← IO.mkRef ({} : Std.HashMap Expr Bool)
   if anyProj then
     for gi in [0 : groups.size] do
-      for di in groups[gi]!.decls do
-        let d := x.decls[di]!
-        if let some dcl := toDeclaration (← getEnv) d then
-          match (← getEnv).addDeclCore 0 dcl none false with
-          | .ok e => setEnv e
-          | .error ex =>
-            let msg ← (ex.toMessageData {}).toString
-            return (x, { rep with refused := some s!"{d.names} did not replay: {msg}" })
-        let out ← IO.mkRef (#[] : Array (Name × List Level))
-        for r in rootsOf d do projScan projCache out #[] r
-        refs := refs.set! gi (refs[gi]! ++ (← out.get))
+      let d := x.decls[groups[gi]!.decl]!
+      if let some dcl := toDeclaration (← getEnv) d then
+        match (← getEnv).addDeclCore 0 dcl none false with
+        | .ok e => setEnv e
+        | .error ex =>
+          let msg ← (ex.toMessageData {}).toString
+          return (x, { rep with refused := some s!"{d.names} did not replay: {msg}" })
+      let out ← IO.mkRef (#[] : Array (Name × List Level))
+      for r in rootsOf d do projScan projCache out #[] r
+      refs := refs.set! gi (refs[gi]! ++ (← out.get))
 
   phase "proj"
-  -- ── Topological sortedness, asserted rather than assumed.
-  for gi in [0 : groups.size] do
-    for (n, _) in refs[gi]! do
-      if let some i := info[n]? then
-        if i.group > gi then
-          return (x, { rep with refused := some s!"the file is not topologically sorted: group {gi} \
-            mentions {n}, which group {i.group} declares" })
+  if let some why := checkOrder groups.size refs info then
+    return (x, { rep with refused := some why })
 
   -- ── The carried set: the built-ins, closed under "mentioned at a level a
   -- copy could not be chosen for".
   let seed : Std.HashSet Name := builtinSeed.foldl (·.insert ·) {}
   let mut carried : Std.HashSet Nat := {}
   for gi in [0 : groups.size] do
-    let d := x.decls[groups[gi]!.decls[0]!]!
+    let d := x.decls[groups[gi]!.decl]!
     match d with
     | .quot .. => carried := carried.insert gi
     | _ => if (introOf d).any (fun (n, _) => seed.contains n) then carried := carried.insert gi
@@ -934,23 +974,22 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
       -- The polymorphic half of the memo is this copy's; the pure half is the
       -- file's.
       st.modify fun t => { t with poly := {}, pure := if monoNoMemo then {} else t.pure }
-      for di in g.decls do
-        let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[di]!
-        -- Replay, so that a block's recursors are the kernel's own and so that
-        -- the next block can be elaborated against this one.
-        if let some dcl := toDeclaration monoEnv e then
-          match monoEnv.addDeclCore 0 dcl none opts.check with
-          | .ok m =>
-            monoEnv := m
-            if let .induct ts cs rs := e then
-              let (rs', d) := kernelRecs monoEnv rs
-              recRegen := recRegen + d
-              e := .induct ts cs rs'
-          | .error ex =>
-            addFailed := addFailed.push s!"{e.names}: {← (ex.toMessageData {}).toString}"
-        if let .induct _ _ rs := e then
-          for r in rs do recArity := recArity.insert r.name r.levelParams.length
-        out := out.push e
+      let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[g.decl]!
+      -- Replay, so that a block's recursors are the kernel's own and so that
+      -- the next block can be elaborated against this one.
+      if let some dcl := toDeclaration monoEnv e then
+        match monoEnv.addDeclCore 0 dcl none opts.check with
+        | .ok m =>
+          monoEnv := m
+          if let .induct ts cs rs := e then
+            let (rs', d) := kernelRecs monoEnv rs
+            recRegen := recRegen + d
+            e := .induct ts cs rs'
+        | .error ex =>
+          addFailed := addFailed.push s!"{e.names}: {← (ex.toMessageData {}).toString}"
+      if let .induct _ _ rs := e then
+        for r in rs do recArity := recArity.insert r.name r.levelParams.length
+      out := out.push e
       -- Drained, not copied: the memo is shared across groups now, so the error
       -- array in it is too.
       let es ← st.modifyGet fun t => (t.errs, { t with errs := #[] })
@@ -968,7 +1007,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let mut carriedNames : Array Name := #[]
   for gi in [0 : groups.size] do
     if carried.contains gi then
-      carriedNames := carriedNames.push (x.decls[groups[gi]!.decls[0]!]!.names[0]!)
+      carriedNames := carriedNames.push (x.decls[groups[gi]!.decl]!.names[0]!)
   -- Every output name is a distinct one. The marker guard is what makes the
   -- scheme *invertible*; this is what makes it collision-free, and it is a
   -- check rather than an argument.

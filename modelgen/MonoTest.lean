@@ -45,6 +45,14 @@ def expected : List Row :=
   , { file := "mono_proj",  declsIn := 12, outA := 19, outB := 19, regen := 0 }
   , { file := "mono_prop",  declsIn := 17, outA := 23, outB := 23, regen := 2 }
   , { file := "mono_mutual",declsIn := 14, outA := 21, outB := 21, regen := 0 }
+  -- **The `all` field is not a group.** The two members of this mutual
+  -- `partial def` block are 73 records apart with a user of the first and an
+  -- inductive the *second* needs in between, so a grouping that emitted the
+  -- block at its first member would carry the second in front of `Box` and
+  -- refuse the file for a forward reference it had just created. It is also
+  -- the count: the members are demanded at `[0]` and at `[1]`, one copy each,
+  -- and a shared instantiation set would make it two each — 24 out, not 22.
+  , { file := "mono_split", declsIn := 18, outA := 22, outB := 22, regen := 0 }
   , { file := "mono_offname", declsIn := 13, outA := 19, outB := 19, regen := 0 }
   , { file := "marker_taken"
       refused := some "the file already declares foo._at.bar, which spells a marker" } ]
