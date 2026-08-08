@@ -626,6 +626,32 @@ pass is *nearly* sound on real input and not quite: `checker/src/instantiations.
 worklist fixpoint, which §2 presents as the thing file order lets you avoid,
 handles these five and the backward pass does not.
 
+**The export is not what is unsorted — §2.1's grouping is.** Checked on the
+delaborator row, by line number in `mathlib.ndjson`:
+
+| line | record |
+| ---: | --- |
+| 21,815,870 | `opaque …TopDownAnalyze.analyze`, `all` = a 12-member mutual block |
+| 73,297,786 | `def …TopDownAnalyze.AnalyzeAppM` |
+| 73,297,787 | the first reference to it anywhere in the file |
+| 73,297,801 | `opaque …TopDownAnalyze.〈another member〉`, **the same `all` list** |
+
+Nothing mentions `AnalyzeAppM` before it is declared, so the file *is*
+topologically sorted in record order. What is not sorted is the group: §2.1
+makes a mutual block one node, `buildGroups` opens it at its **first** member's
+position, and this block's members are 51 million lines apart. Emitting the node
+whole therefore moves the member at line 73,297,801 back to line 21,815,870, in
+front of a declaration it uses — and the pass then reports the forward reference
+it just created. `lean4export` is not implicated: it dumps each `opaque` where
+its dependencies are ready, and a mutual `partial def` block need not be
+contiguous for that.
+
+Only this row was traced to line numbers; the other four are the same shape
+(`Mathlib.Tactic.Ring`'s mutual machinery) but were not checked. The consequence
+for §9.6's `MONO_UNSORTED` is unchanged in size and different in kind: the right
+fix is not a fixpoint over the file but a grouping that emits a mutual `def`
+block's members where they stand.
+
 ## 9.4 Duplication — the answer
 
 Measured with §9.6's `MONO_UNSORTED` on the Mathlib row, and re-measured after
@@ -831,13 +857,15 @@ A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
   Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM
   ```
 
-  That name is §9.3's, and this is the `MONO_UNSORTED` undercount made visible
-  rather than a defect in the output: the pass was told to ignore the forward
-  reference, so the group that mentions `AnalyzeAppM` is emitted before the
-  group that declares it, and `nanoda` reads the file strictly in order. It is
-  the same thing the unpatched binary refuses the file for. Nothing about the
-  naming or the writer is implicated — the file parses to its last line, and
-  `nanoda` had already accepted 5.8 GB of it.
+  That name is §9.3's, and it is the `MONO_UNSORTED` undercount made visible
+  rather than a defect in the naming or the writer: the pass was told to ignore
+  the forward reference, so the group that mentions `AnalyzeAppM` is emitted
+  before the group that declares it, and `nanoda` reads a file strictly in
+  order. It is the same thing the unpatched binary refuses the file for. What
+  it does **not** yet distinguish is whether the export is unsorted in *record*
+  order or only under §2.1's group model — a mutual member that joins an earlier
+  group is emitted at that group's position — and the control for that is
+  `nanoda` on the unmodified input, which is not reported here.
 * **Mode B's output, at any Mathlib scale.** Counted, never written or checked —
   and §4.2 says no checker accepts it anyway.
 * **The maximal sorted prefix.** §9.3 puts the first violation at group 135,365
