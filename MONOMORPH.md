@@ -1479,22 +1479,12 @@ byte-identical on `init-prelude`, on 20 MB, and on the 1 M and 10 M prefixes;
 8.5 GB**. The parsed `Export` for the whole of Mathlib is 5,504,076 KB against
 an input of 5,504,208 KB: **1.00× the file's bytes**, to four figures.
 
-The rest of that run is not yet a number. Under `ulimit -v 24000000` it reached
-
-| phase | RSS |
-| --- | ---: |
-| parse | 5,504,076 KB |
-| reference sets | 6,492,696 KB |
-| **the `proj` replay** | **11,939,612 KB** |
-| backward sweep | 12,013,400 KB |
-| shared-node scan | 12,013,400 KB (free — it fits in what is already released) |
-| **carriers** | **15,607,540 KB** |
-
-and then `std::bad_alloc` in emission. `-v` bounds *address space*, not resident
-set, and Lean's allocator reserves well beyond what it touches — the 36.2 GB run
-of §9.5 needed `-v 40000000` — so this bounds nothing except the run. What it
-does show is where the remaining memory now is, and it is **not** the parse: the
-`proj` replay is **5.4 GB** and §9.8's gate tables are **3.6 GB**.
+The rest of that run is measured in §9.11; the trace it reached under
+`ulimit -v 24000000` before `std::bad_alloc` reproduced there to four figures.
+`-v` bounds *address space*, not resident set, and Lean's allocator reserves
+well beyond what it touches — the 36.2 GB run of §9.5 needed `-v 40000000` — so
+that cap bounded nothing except the run. Raised to 42 GB the same pass finishes,
+and §9.11 is what it says.
 
 This does not make task **#119** — `monomorph` on `nanoda`'s Rust parser —
 unnecessary; it removes the part of the case for it that was an accident of
@@ -1591,3 +1581,199 @@ is out of reach for the reason §9.7 gives, so it is run on the 20-million-line
 prefix put through *both* tools: `modelgen` (51.32 s, 4,747,800 KB, 35 models)
 then `monomorph --check` (210.66 s, 5,981,644 KB), **0 rejected of 146,525**,
 and 0 of that prefix's 64 model owners split.
+
+## 9.11 The full file, end to end — and the table that was 99 % `false`
+
+**The headline first, because two improvements had landed since anyone measured
+one.** The full 5,636,308,621-byte Mathlib export, mode A, `-o`, on the commit
+that carried both §9.8's memo and §9.9's chunked reader:
+
+| run | memo | chunked reader | peak RSS |
+| --- | :-: | :-: | ---: |
+| §9.5's streaming writer | no | no | 36,203,968 KB |
+| the amortization triangle | no | no | 35,292,700 KB |
+| §4.1's marker validation | yes | no | 32,659,224 KB |
+| **both, measured here** | yes | yes | **23,778,612 KB** (791.02 s) |
+| **… and after this section** | yes | yes | **20,409,996 KB** (690.78 s) |
+
+So the figure in circulation was **two improvements and 8.9 GB stale**, and this
+section takes another 3.4 GB off it. Against the arena's references on the same
+file — `parse-only` 8.5 GB, `nanoda` 7.9 GB, `official` 9.2 GB — `monomorph` now
+costs **2.4× a bare parse of its input**, holding the input DAG, an output DAG
+3 % larger, a replay environment over both, and the tables that keep the output
+from becoming a tree.
+
+### Where it went, with the phases
+
+`MONO_PHASES=1`, full file, mode A, before and after this section:
+
+| phase | RSS before | RSS after | added, after |
+| --- | ---: | ---: | ---: |
+| parse | 5,502,824 KB | 5,525,408 KB | — |
+| reference sets | 6,491,688 KB | 6,536,656 KB | +0.99 GB |
+| **the `proj` phase** | **11,939,276 KB** | **7,523,892 KB** | **+0.99 GB** (was +5.45) |
+| backward sweep | 12,007,708 KB | 7,537,436 KB | +0.01 GB |
+| shared-node scan | 12,007,708 KB † | 10,177,012 KB (hwm 11,943,540) | +2.64 GB |
+| carriers | 15,603,168 KB | 10,344,932 KB | +0.17 GB |
+| emission | 23,778,612 KB | 19,027,596 KB | **+8.68 GB** |
+| the write | — | **20,409,996 KB** | +1.00 GB |
+
+† the "before" figure for the shared-node scan is not a measurement; see *A
+marker that measured nothing*, below.
+
+The parse costs **+22 MB** for `projNodes` and nothing else changes shape. What
+moved is the `proj` phase, from +5.45 GB to +0.99 GB.
+
+**And the peak is now set by the writer, not by emission** — 20,409,996 KB at
+the write against 19,399,116 KB at the end of emission. The next GB is there.
+
+### The `proj` phase was not the replay
+
+The obvious reading of that +5.45 GB — and the one this section was commissioned
+to test — is that it is the input replayed into an `Environment`, the replay
+that exists only because `Expr.proj` carries the structure's name and not its
+level arguments (§6.3). It is not, and it is not close.
+
+**What the phase actually held was `hasProj`'s memo.** `hasProj` answers "is
+there an `Expr.proj` in this subterm", and it answered it by walking the DAG and
+memoising, because a shared subterm would otherwise be walked once per parent.
+That memo needs an entry for **every distinct node in the file**. Counted on the
+10-million-line prefix:
+
+| | |
+| --- | ---: |
+| distinct `Expr` nodes in the input | 9,465,382 |
+| entries the memo held | 9,264,612 |
+| entries whose value was `true` | **90,765 (1.0 %)** |
+| `Expr.proj` nodes | 4,720 |
+| groups bearing a projection | 4,149 of 69,040 (6.0 %) |
+
+**A table over every node in the file, kept to answer 90,765 questions.** It is
+§9.8's own trap — *do not build what you gate away* — in the one pre-pass §9.8
+did not look at.
+
+The fix is that the answer is **an arena property, and the arena is only in
+scope during the read**. `lean4export`'s format admits back-references only, so
+a child's record always precedes its parent's, and one forward pass over the
+arena in index order settles every node with **no visited set at all**. What is
+kept is the 1 %: [`Export.projNodes`], a set of the nodes that *do* have a
+projection. [`Mono.hasProj`] is now a membership test in it — not a memo, with
+nothing to fill in.
+
+The 10-million-line prefix, prune-gate, everything else equal:
+
+| | before | after |
+| --- | ---: | ---: |
+| the `proj` phase's cost | +581,672 KB | **+88,380 KB** (−85 %) |
+| **the whole pass's peak** | 2,168,780 KB | **1,796,272 KB** (−17.2 %) |
+| **instructions** | 398.32 G | **384.37 G** (−3.5 %) |
+
+`init-prelude`'s output is byte-identical; `monotest` 109 and
+`ci/check-modelgen.sh` 343 pass.
+
+**Two guards, because an empty set is also what "not computed" looks like.**
+`Export.projNodes` is filled by `analyse`, which **defaults to on** — a consumer
+that read a file without it would see `hasProj` answer `false` everywhere,
+memoise every projection through the level-free path, and write a wrong file
+with no error. And `monomorphize` refuses outright when [`collectConsts`] has
+seen a projection and `projNodes` is empty, so the two cannot disagree
+unnoticed. `modelgen` never reads the field and opts out.
+
+### Can the replay itself be narrowed? Measured: barely
+
+The replay adds *every* group to an `Environment` because a later `projHead`
+may infer a type mentioning any earlier constant. The sound narrowing is the
+groups a projection-bearing group depends on, transitively — and it was
+measured under `MONO_STATS=1` rather than argued:
+
+| | groups | bearing a projection | in the dependency closure |
+| --- | ---: | ---: | ---: |
+| `init-prelude` | 1,777 | 198 (11 %) | **600 (34 %)** |
+| 10 M prefix | 69,040 | 4,149 (6.0 %) | **54,378 (78.8 %)** |
+
+**The closure grows with the file and swallows it.** At Mathlib scale a
+dependency-narrowed replay would skip a fifth of the declarations, and those are
+the leaves — theorems nothing else mentions — whose `ConstantInfo`s reference
+`Expr`s that are live anyway. It is not where the memory was, and now that
+`hasProj` is out of that phase there is not much left in it to narrow. **The
+`AsyncConsts` hazard is therefore unchanged**: the replay still loads the whole
+file, still panics 1,028 times over 418 name pairs, and §9.7's obstacle stands
+exactly as written.
+
+### Three things that looked droppable and were not
+
+Each was written, measured, and removed or kept on the measurement.
+
+* **The replay `Environment`, after the `proj` phase.** It looks dead —
+  emission threads `monoEnv`, which is `base`. It is not: [`rw`] calls
+  [`projHead`] again at *every* projection it rewrites, so `inferType` needs
+  the ambient environment until the last copy is emitted.
+* **`MetaM`'s `inferType`/`whnf`/`defEq` caches.** Clearing them is always safe
+  and buys **nothing**: all five are at **0 entries** after 117,138 `projHead`
+  calls on the 10 M prefix, and 0 after 211 on `init-prelude`. Lean does not
+  populate them for a query made under a `withLocalDecl` context.
+* **Atoms, dropped from the shared-node gate.** `.bvar`/`.fvar`/`.mvar`/`.lit`
+  are returned unchanged by `rwPure` and are correctly excluded. `.sort` and
+  `.const` are *not* atoms for this purpose — each rewrite builds a fresh node,
+  and a constant used ten thousand times is **one** node in the arena, so
+  dropping it from the memo rebuilds it ten thousand times. Excluding all six
+  cut the gate tables 17 % on `init-prelude` and cost **+9.7 % peak** at 10 M
+  (2,168,780 → 2,379,508 KB).
+
+### `pure` against `prune-gate` at Mathlib scale: the default stands
+
+§9.8 chose `prune-gate` on a ladder that stopped at ten million lines, and left
+open whether it survives the full file: the gate tables are a fixed cost that
+grows with the file, and the duplication they remove is a share of emission, so
+the two could cross. **They do not.** One binary, one input, the whole export,
+`MONO_MEMO` the only variable:
+
+| full Mathlib, mode A | instructions | peak RSS |
+| --- | ---: | ---: |
+| **`prune-gate`** *(default)* | **5,075.61 G** | **20,409,996 KB** |
+| `pure` | 5,251.38 G | 22,961,764 KB |
+| | **−3.3 %** | **−11.1 %** |
+
+**Better on both axes, and by more than at ten million lines**, where the same
+binary gives `off` 392.76 G / 1,897,280 KB, `pure` 388.99 G / 1,825,180 KB,
+`prune-gate` 384.37 G / 1,796,272 KB. The margin grows with the file in the
+direction §9.8 predicted and the crossing does not happen: at 10 M `prune-gate`
+is 1.6 % under `pure` on peak, at 246 M it is 11.1 % under. **The default is
+unchanged, and it is now measured where it is used.**
+
+One thing worth naming because it would mislead a stopwatch: `pure` finishes the
+full file in **630.34 s against `prune-gate`'s 690.78 s** while executing 3.3 %
+*more* instructions. Counters decide, clocks comment (`47b262b`).
+
+### What the peak is made of now, and what is left
+
+| | full file | share |
+| --- | ---: | ---: |
+| the input `Export` | 5.53 GB | 27 % |
+| the reference sets | 0.99 GB | 5 % |
+| the `proj` replay `Environment` | 0.99 GB | 5 % |
+| the gate tables | 2.81 GB | 14 % |
+| **emission: the output DAG + `monoEnv`** | **8.68 GB** | **43 %** |
+| the writer's interning | 1.00 GB | 5 % |
+
+The input `Export` is 1.00× the file's bytes (§9.9) and is not compressible
+without changing the representation. The gate tables are measured above to pay
+for themselves. **Emission is 43 % and it is the next thing to look at — but not
+by streaming the writer**, which is the obvious idea and does not work: mode A
+replays every emitted declaration into `monoEnv` so that the kernel mints its
+recursors (§4.1), and `monoEnv` holds the whole output DAG alive whether or not
+`out` also does. Dropping records as they are written frees nothing that
+`monoEnv` and the writer's intern table do not both still hold.
+
+### A marker that measured nothing
+
+`phase "shared"` reported **232 ms** for the shared-node scan on the full file,
+and 0 KB. Both are wrong, and not by a little: `sharedNodes` is pure, so
+`let shared := sharedNodes roots` was floated to its first use and the marker
+landed *before* the work it claimed to bound. `Mono.phase` now takes the count
+the phase produced, which forces it — Lean is call-by-value, so an argument is
+evaluated whether or not the trace is switched on. Measured honestly the scan
+takes **70.3 s** and its `seen` set is a **1.77 GB transient** above the live
+tables it leaves behind (hwm 11,943,540 KB against 10,177,012 KB resident), over
+**14,773,359 shared nodes**. That transient does not set the peak — emission is
+8.5 GB above it — which is the only reason it is a footnote and not a fix.

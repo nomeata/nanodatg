@@ -382,13 +382,21 @@ initialize monoPhases : Bool ← do return (← IO.getEnv "MONO_PHASES").isSome
 initialize monoStats : Bool ← do return (← IO.getEnv "MONO_STATS").isSome
 initialize monoT0 : IO.Ref Nat ← IO.mkRef 0
 
-def phase (name : String) : IO Unit := do
+/-- A phase boundary. `n` is a count the phase produced; it is reported, but it
+is also there to be **forced** — Lean floats a pure `let` to its first use, so a
+marker placed after one measures nothing unless something strict mentions it. -/
+def phase (name : String) (n : Option Nat := none) : IO Unit := do
   if monoPhases then
     let (rss, hwm) ← rssKB
     let now ← IO.monoMsNow
     let t0 ← monoT0.get
     if t0 == 0 then monoT0.set now
-    IO.eprintln s!"[mono] {name}: t={now - (if t0 == 0 then now else t0)}ms rss={rss}KB hwm={hwm}KB"
+    IO.eprintln s!"[mono] {name}: t={now - (if t0 == 0 then now else t0)}ms \
+      rss={rss}KB hwm={hwm}KB{match n with | some k => s!" n={k}" | none => ""}"
+  else if n.isSome then
+    -- Forced even when the trace is off, so that the phase's cost does not move
+    -- with the flag.
+    pure ()
 
 /-- **Distinct nodes by pointer, distinct nodes by structure.**
 
@@ -417,24 +425,26 @@ unsafe def shareStatsUnsafe (roots : Array Expr) : Nat × Nat := Id.run do
 @[implemented_by shareStatsUnsafe]
 opaque shareStats (roots : Array Expr) : Nat × Nat
 
-/-- Whether `e` contains a projection. Memoised on the DAG: the answer does not
-depend on the binder context, which is exactly why the *rewrite* can be cached
-below the projection-free subterms and nowhere else. -/
-partial def hasProj (cache : IO.Ref (Std.HashMap Expr Bool)) (e : Expr) : IO Bool := do
-  match (← cache.get)[e]? with
-  | some b => return b
-  | none =>
-    let b ←
-      match e with
-      | .proj .. => pure true
-      | .app f a => pure ((← hasProj cache f) || (← hasProj cache a))
-      | .lam _ t b _ | .forallE _ t b _ => pure ((← hasProj cache t) || (← hasProj cache b))
-      | .letE _ t v b _ =>
-        pure ((← hasProj cache t) || (← hasProj cache v) || (← hasProj cache b))
-      | .mdata _ b => hasProj cache b
-      | _ => pure false
-    cache.modify (·.insert e b)
-    return b
+/-- Whether `e` contains a projection: **a lookup in a set the reader built, not
+a memo this fills in.**
+
+The answer does not depend on the binder context, which is why the *rewrite* can
+be cached below the projection-free subterms and nowhere else — that part is
+unchanged. What changed is where the answer comes from. Walking the `Expr` DAG
+and memoising as it went needed a table over **every distinct node in the file**,
+because a shared subterm would otherwise be walked once per parent; at ten
+million lines of Mathlib that table reached 9,264,612 entries and **90,765 of
+them (1.0 %) were `true`**. It was the largest single object the `proj` phase
+built, and it was 99 % `false`.
+
+[`Export.projNodes`] is the 1 %. The reader computes it in one forward pass over
+the arena, where back-references make a visited set unnecessary, and a `.proj`
+node is in the set by construction. So: not in the set, no projection. -/
+@[inline] def hasProj (s : Std.HashSet Expr) (e : Expr) : Bool :=
+  match e with
+  | .proj .. => true
+  | .bvar .. | .fvar .. | .mvar .. | .sort .. | .const .. | .lit .. => false
+  | _ => s.contains e
 
 /-! ## The memo's key
 
@@ -519,7 +529,24 @@ partial def carrierOf (idx : Std.HashMap Name Nat) (keep : Option (Std.HashSet E
 over the whole file. A node with one parent is rebuilt once per rebuild of that
 parent, so memoising it buys nothing that memoising the parent does not already
 buy — and an entry costs about what the node costs. This is the set that decides
-whether a memo pays for itself. -/
+whether a memo pays for itself.
+
+**A node `rwPure` returns unchanged is not recorded.** `.bvar`/`.fvar`/`.mvar`/
+`.lit` fall through `rwPure`'s last arm to `e` itself, so a memo entry for one
+buys a hash and a probe in place of nothing at all, and costs the `seen` set,
+the `shared` set and a `sharedPure` entry. Skipping them is sound because they
+have no children: they are never pushed back on the stack, so `seen` never
+needed them.
+
+**`.sort` and `.const` are emphatically not in that list, and measuring said
+so.** They *look* like atoms and they are not: `rwPure` builds a fresh node for
+each — a level rewrite for `.sort`, a name-and-levels rewrite for `.const` —
+and a constant used ten thousand times is *one* node in the arena, so dropping
+it from the memo rebuilds it ten thousand times. Excluding all six atom
+constructors here cut the gate tables 17 % on `init-prelude` and cost **+9.7 %
+peak RSS at ten million lines** (2,168,780 → 2,379,508 KB), which is the whole
+of §9.8's arithmetic running backwards: the entry is worth it exactly when the
+node it saves costs more than the entry. -/
 def sharedNodes (roots : Array Expr) : Std.HashSet Expr := Id.run do
   let mut seen : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
   let mut shared : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
@@ -527,6 +554,9 @@ def sharedNodes (roots : Array Expr) : Std.HashSet Expr := Id.run do
   while stack.size > 0 do
     let e := stack[stack.size - 1]!
     stack := stack.pop
+    match e with
+    | .bvar .. | .fvar .. | .mvar .. | .lit .. => continue
+    | _ => pure ()
     if seen.contains e then
       shared := shared.insert e
       continue
@@ -790,9 +820,9 @@ def projHead (fvars : Array Expr) (s : Expr) : MetaM (Option (Name × List Level
 
 /-- Collect the `(structure, levels)` of every projection in `e`. Descends only
 into subterms that have one. -/
-partial def projScan (cache : IO.Ref (Std.HashMap Expr Bool)) (out : IO.Ref (Array (Name × List Level)))
+partial def projScan (cache : Std.HashSet Expr) (out : IO.Ref (Array (Name × List Level)))
     (fvars : Array Expr) (e : Expr) : MetaM Unit := do
-  unless ← hasProj cache e do return
+  unless hasProj cache e do return
   match e with
   | .proj _ _ s =>
     if let some r ← projHead fvars s then out.modify (·.push r)
@@ -815,9 +845,9 @@ partial def projScan (cache : IO.Ref (Std.HashMap Expr Bool)) (out : IO.Ref (Arr
 memoised; the rest is walked in `MetaM` so that [`projHead`] has a local
 context. `e` is the **original** expression throughout, so the fvars carry the
 original types and inference sees the environment the export describes. -/
-partial def rw (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref RwState)
+partial def rw (c : RwCtx) (cache : Std.HashSet Expr) (st : IO.Ref RwState)
     (fvars : Array Expr) (e : Expr) : MetaM Expr := do
-  unless ← hasProj cache e do
+  unless hasProj cache e do
     -- **`modifyGet`, not `get`-then-`set`.** The memo outlives the declaration
     -- now, so a second reference to it is not free: `get` leaves the ref
     -- holding the map as well, the first `insert` sees a refcount of two and
@@ -937,7 +967,7 @@ monomorphization is one record per copy, which is what a singleton `all` says �
 the same thing `lean4export` writes for a definition that was never mutual. An
 `inductive` record's `all` lists are *within* the record and are mapped, because
 there the copy at `σ` really is the whole block. -/
-def emitOne (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref RwState)
+def emitOne (c : RwCtx) (cache : Std.HashSet Expr) (st : IO.Ref RwState)
     (keepParams : Bool) (blockLp : List Name) (d : EDecl) : MetaM EDecl := do
   let E (e : Expr) : MetaM Expr := rw c cache st #[] e
   -- **What survives is what `σ` does not bind**, which is the eliminating
@@ -1170,7 +1200,19 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   -- arguments, so they are inferred — which needs the input replayed. A file
   -- with no projection never pays for this, and a file the kernel will not
   -- replay at all is refused whole rather than half done.
-  let projCache ← IO.mkRef ({} : Std.HashMap Expr Bool)
+  -- **Refused rather than trusted.** [`Export.projNodes`] is empty both when
+  -- the file has no projection and when the reader was not asked to compute it,
+  -- and the second reading would make [`hasProj`] answer `false` everywhere:
+  -- every projection would take the memoised path, keep its input structure
+  -- name, and the file would come out wrong with no error. `anyProj` is
+  -- computed here, from the input, by [`collectConsts`] — so the two disagree
+  -- exactly when the reader was not asked, and that is caught.
+  let projCache := x.projNodes
+  if anyProj && projCache.isEmpty then
+    return (x, { rep with refused := some "the file has projections but was read \
+      without `analyse`, so `Export.projNodes` is empty" })
+  let mut projGroups := 0
+  let mut projSites := 0
   if anyProj then
     for gi in [0 : groups.size] do
       let d := x.decls[groups[gi]!.decl]!
@@ -1182,9 +1224,59 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
           return (x, { rep with refused := some s!"{d.names} did not replay: {msg}" })
       let out ← IO.mkRef (#[] : Array (Name × List Level))
       for r in rootsOf d do projScan projCache out #[] r
-      refs := refs.set! gi (refs[gi]! ++ (← out.get))
+      let got ← out.get
+      unless got.isEmpty do projGroups := projGroups + 1; projSites := projSites + got.size
+      refs := refs.set! gi (refs[gi]! ++ got)
 
   phase "proj"
+  if monoStats && anyProj then
+    -- **How much of the replay a projection actually reaches.** The loop above
+    -- replays every group because a later `projHead` may infer a type that
+    -- mentions any earlier constant; the closure below is the *sound
+    -- over-approximation* of what it could reach — the groups a
+    -- projection-bearing group depends on, transitively. If that is most of
+    -- the file the replay cannot be narrowed by dependency, and this is the
+    -- measurement that says so rather than an argument about it.
+    let mut need : Array Bool := Array.replicate groups.size false
+    let mut hasP : Array Bool := Array.replicate groups.size false
+    for gi in [0 : groups.size] do
+      for r in rootsOf x.decls[groups[gi]!.decl]! do
+        if hasProj projCache r then hasP := hasP.set! gi true
+    -- Backward: a group is needed if it bears a projection or a needed group
+    -- mentions it. One pass suffices — the file is topologically sorted.
+    for k in [0 : groups.size] do
+      let gi := groups.size - 1 - k
+      if hasP[gi]! then need := need.set! gi true
+      if need[gi]! then
+        for (nm, _) in refs[gi]! do
+          if let some i := info[nm]? then need := need.set! i.group true
+    let needed := need.foldl (fun a b => if b then a + 1 else a) 0
+    let bearing := hasP.foldl (fun a b => if b then a + 1 else a) 0
+    let ms ← getThe Meta.State
+    let pn {α β} [BEq α] [Hashable α] (m : Lean.PersistentHashMap α β) : Nat :=
+      m.foldl (fun a _ _ => a + 1) 0
+    IO.eprintln s!"[mono] proj: groups={groups.size} bearing={bearing} \
+      needClosure={needed} sitesFound={projSites} inGroups={projGroups} \
+      projNodes={projCache.size} \
+      metaCache=infer:{pn ms.cache.inferType} whnf:{pn ms.cache.whnf} \
+      defEqP:{pn ms.cache.defEqPerm} defEqT:{pn ms.cache.defEqTrans} \
+      funInfo:{pn ms.cache.funInfo} \
+      envConsts={(← getEnv).constants.fold (fun a _ _ => a + 1) 0}"
+  -- **Two things that look droppable here and are not, both measured.**
+  --
+  -- *The replay environment.* Emission threads `monoEnv`, which is `base`, so
+  -- nothing after this line reads `getEnv` by name — but [`rw`] calls
+  -- [`projHead`] again at every projection it rewrites, and `projHead` is
+  -- `inferType` in the ambient environment. Drop it and every
+  -- projection-bearing declaration fails with an unknown constant. The replay
+  -- is live until the last copy is emitted.
+  --
+  -- *`MetaM`'s `inferType`/`whnf`/`defEq` caches.* Clearing them is always safe
+  -- — they are pure memos — and it buys **nothing**, because they are empty:
+  -- `0` entries in all five after 117,138 `projHead` calls on the ten-million
+  -- line prefix, and `0` after 211 on `init-prelude`. Lean does not populate
+  -- them for a query made under a `withLocalDecl` context. The clear was
+  -- written, measured at zero, and removed rather than left in looking useful.
   if let some why := checkOrder groups.size refs info then
     return (x, { rep with refused := some why })
 
@@ -1257,6 +1349,11 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                 errors := errors.push s!"{n}: the group demands itself at a new eliminating universe"
             else elimD := elimD.set! i.group (addNat elimD[i.group]! wk)
   rep := { rep with defaulted }
+  -- The sweep is the last reader of `refs` — the carriers and emission below
+  -- ask `info` and `demand`, never this — and releasing it here explicitly was
+  -- tried and **measured at nothing**: 1,797,792 KB against 1,796,272 KB on the
+  -- 10 M prefix. The compiler already drops it at its last use, and the pages
+  -- go to the carriers either way.
   phase "sweep"
 
   -- ── Emission, forward, so the output keeps the input's order, and so that
@@ -1288,8 +1385,13 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     if gating then
       -- The `seen` set this needs is over every node, and it is dropped here —
       -- before the carriers, so the two working sets never coexist.
+      -- **The size is passed to `phase` because that is what forces it.**
+      -- `sharedNodes` is pure, so `let shared := …` alone is floated to its
+      -- first use and the marker below landed *before* the work it claims to
+      -- bound — a 232 ms "shared" phase on the full file, measuring nothing.
+      -- Lean is call-by-value, so an argument mentioning `shared` is not.
       let shared := sharedNodes roots
-      phase "shared"
+      phase "shared" (n := shared.size)
       for e in shared do unless e.hasLevelParam do sharedPure := sharedPure.insert e
       keep := some shared
     let cc ← IO.mkRef ({} : Std.HashMap Expr UInt64)

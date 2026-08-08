@@ -110,6 +110,23 @@ end EDecl
 structure Export where
   metaLine : Json
   decls : Array EDecl
+  /-- **The nodes with an `Expr.proj` somewhere in their subtree**, when the
+  reader was asked for them (`analyse`), and empty when it was not.
+
+  This is here rather than in the consumer because it is **an arena property and
+  the arena is only in scope during the read**. Computed afterwards, over
+  `Expr`s, it needs a visited set spanning every distinct node in the file so
+  that a shared subterm is not walked once per parent — and that set is enormous
+  and almost entirely `false`: at ten million lines of Mathlib, 9,264,612
+  entries of which **90,765 (1.0 %) are `true`**. Computed here it needs no
+  visited set at all, because the format guarantees a child's record precedes
+  its parent's, so one forward pass over the arena in index order sees every
+  child's answer already settled. What is kept is the 1 %.
+
+  A consumer reads it as a **set membership and not a memo**: `e ∈ projNodes`
+  is the whole query, there is nothing to fill in, and a node that is not in it
+  is not in it. -/
+  projNodes : Std.HashSet Expr := {}
   deriving Inhabited
 
 /-! ## Reading -/
@@ -281,8 +298,34 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← (← jArr o "recs").toList.mapM (readRec c)))
   .error s!"unrecognised record: {j.compress}"
 
-/-- Parse a whole export. -/
-def parse (text : String) : Except String Export := do
+/-- [`Export.projNodes`], in one forward pass over the arena.
+
+Sound because the format admits **back-references only** — `RCtx.expr!` refuses
+an index it has not filled yet — so every child of the node at index `i` sits at
+an index below `i` and its answer is already in `s`. Nothing is ever revisited
+and nothing false is stored. -/
+def projNodesOf (exprs : Array Expr) : Std.HashSet Expr := Id.run do
+  let mut s : Std.HashSet Expr := {}
+  for e in exprs do
+    let t :=
+      match e with
+      | .proj .. => true
+      | .app f a => s.contains f || s.contains a
+      | .lam _ t b _ | .forallE _ t b _ => s.contains t || s.contains b
+      | .letE _ t v b _ => s.contains t || s.contains v || s.contains b
+      | .mdata _ b => s.contains b
+      | _ => false
+    if t then s := s.insert e
+  return s
+
+/-- Parse a whole export.
+
+`analyse` fills [`Export.projNodes`] and **defaults to on**, because an empty
+`projNodes` reads as "no declaration contains a projection" and a consumer that
+believed it would emit wrong output silently. A caller that does not look at the
+field can turn it off; `monomorphize` refuses a file whose projections it can
+see but whose `projNodes` is empty, so the two cannot disagree unnoticed. -/
+def parse (text : String) (analyse : Bool := true) : Except String Export := do
   let mut c : RCtx := {}
   let mut decls : Array EDecl := #[]
   let mut metaLine : Json := .null
@@ -298,7 +341,7 @@ def parse (text : String) : Except String Export := do
     let (c', d?) ← readLine c j
     c := c'
     if let some d := d? then decls := decls.push d
-  return { metaLine, decls }
+  return { metaLine, decls, projNodes := if analyse then projNodesOf c.exprs else {} }
 
 /-- **The same parse, off a handle, a chunk at a time.**
 
@@ -321,7 +364,7 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
-def parseHandle (h : IO.FS.Handle) : IO (Except String Export) := do
+def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String Export) := do
   -- **One ref per growing array, and `modifyGet`.** `RCtx` holds three arrays
   -- that grow by `push`, and a `push` is in-place only while the array is
   -- uniquely referenced. Two shapes lose that and both were measured on a 20 MB
@@ -384,7 +427,13 @@ def parseHandle (h : IO.FS.Handle) : IO (Except String Export) := do
           | .ok d? => if let some d := d? then declsRef.modify (·.push d)
   match err with
   | some e => return .error e
-  | none => return .ok { metaLine, decls := ← declsRef.get }
+  | none =>
+    -- The arena is taken out of the ref rather than read out of it, so that the
+    -- pass below sees the only reference to it and it is released as soon as it
+    -- has been walked.
+    let exprs ← if analyse then cRef.modifyGet fun c => (c.exprs, {}) else pure #[]
+    return .ok { metaLine, decls := ← declsRef.get,
+                 projNodes := if analyse then projNodesOf exprs else {} }
 
 /-! ## Writing
 

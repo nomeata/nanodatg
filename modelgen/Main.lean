@@ -117,7 +117,9 @@ def run (o : Opts) : IO UInt32 := do
               catch e => do IO.eprintln s!"{o.input}: {e}"; pure none
   let some text := text? | return exitInput
   let x ←
-    match Modelgen.parse text with
+    -- `analyse := false`: `modelgen` never reads `Export.projNodes`, and the
+    -- pass that fills it is a walk of the whole arena.
+    match Modelgen.parse text (analyse := false) with
     | .error e => IO.eprintln s!"{o.input}: parse error: {e}"; return exitInput
     | .ok x => pure x
   initSearchPath (← findSysroot)

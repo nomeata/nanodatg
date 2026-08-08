@@ -62,7 +62,7 @@ def probeB (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := d
 def main (args : List String) : IO UInt32 := do
   let path :: rest := args | do IO.eprintln "usage: envprobe IN.ndjson [P|A|B]"; return 1
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text | do IO.eprintln s!"{path}: parse error"; return 2
+  let .ok x := Modelgen.parse text (analyse := false) | do IO.eprintln s!"{path}: parse error"; return 2
   initSearchPath (← findSysroot)
   let env0 ← importModules #[] {}
   let mut names : Array Name := #[]
