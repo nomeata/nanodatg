@@ -5,11 +5,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 fails=0
+declare -a skipped=()
+# Exit 77 is SKIP — the autotools convention — and it is **not** PASS. A step
+# that needs something the machine may not have (today: a Lean toolchain, for
+# `check-modelgen.sh`) must be able to say "I did not run" in a way the summary
+# repeats, because a step that reports success without running is the one
+# failure mode a check script cannot recover from. `ci/check-modelgen.sh` exists
+# because `modelgen` had no step at all and was 10 checks red for weeks.
 step() {
+  local name="$1"; shift
   echo
-  echo "───── $1 ─────"
-  shift
-  if "$@"; then echo "  PASS"; else echo "  FAIL" >&2; fails=$((fails+1)); fi
+  echo "───── $name ─────"
+  "$@"; local rc=$?
+  case $rc in
+    0)  echo "  PASS" ;;
+    77) echo "  SKIP — this step did not run"; skipped+=("$name") ;;
+    *)  echo "  FAIL" >&2; fails=$((fails+1)) ;;
+  esac
 }
 
 # The trusted boundary, and the self-test proving the boundary check can fail.
@@ -38,6 +50,16 @@ step "derived clippy"            cargo clippy -p derived --all-targets -- -D war
 # a fork and carries upstream's lints.
 step "mini clippy"               cargo clippy -p mini --all-targets --no-deps -- -D warnings
 
+# `modelgen` is a Lean package `mini` **execs** at runtime, and it had no step
+# here at all until one was added — its own suite was 10 checks red on master
+# and nothing said so. The only step that wants a Lean toolchain; it SKIPs
+# loudly rather than passing when there is none, and counts what it ran.
+# ~1.5 s warm, ~80 s from a cold `lake build`.
+step "modelgen suites"           ./ci/check-modelgen.sh
+# …and the self-test proving the count guard can fail, which needs no
+# toolchain and so runs even where the step above SKIPs.
+step "modelgen count self-test"  ./ci/check-modelgen.sh --self-test
+
 step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace
 # The step-counting probe must not change behaviour, only observe it.
@@ -47,5 +69,9 @@ step "tests (stepcount)"         cargo test --workspace --features stepcount
 step "tests (tg backend)"        cargo test --workspace --features tg
 
 echo
+if (( ${#skipped[@]} )); then
+  echo "${#skipped[@]} step(s) SKIPPED and did not run: ${skipped[*]}" >&2
+fi
 if (( fails )); then echo "$fails step(s) failed" >&2; exit 1; fi
+if (( ${#skipped[@]} )); then echo "all checks that ran passed"; exit 0; fi
 echo "all checks passed"
