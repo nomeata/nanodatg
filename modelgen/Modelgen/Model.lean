@@ -75,13 +75,14 @@ namespace Modelgen
 inductive Decline where
   | dependentFields
   | noEq
-  /-- A constructor field the block holds at a **mimic** *under a binder* —
-  `HTree.node : (N → List HTree) → HTree`. The obstruction is the proof and not
-  the statement: the round trips and the recursor's minor would transport along
-  `(fun x⃗ => pack (unpack (f x⃗))) = f`, which is **function extensionality**,
-  and this module's whole equality budget is the `Eq` the export declares.
-  MODELGEN.md §5.1 carries the argument and the three witnesses. -/
-  | needsFunext (c : Name)
+  /-- The declaration has a constructor field the block holds at a **mimic**
+  *under a binder* — `HTree.node : (N → List HTree) → HTree` — and the export
+  declares no usable `funext`. That shape's proofs transport along
+  `(fun x⃗ => pack (unpack (f x⃗))) = f`, which is function extensionality, and
+  this module fabricates no equality Lean did not write. Read **lazily**: no
+  other shape asks for `funext`, and `funext` is in 1 of the 157 corpus
+  files, so requiring it of every export would decline all of them. -/
+  | noFunext
   | nameTaken (n : Name)
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
@@ -93,8 +94,7 @@ inductive Decline where
 def Decline.label : Decline → String
   | .dependentFields => "nested model with dependent fields"
   | .noEq => "nested model without Eq"
-  | .needsFunext c =>
-    s!"nested model needs funext ({c} has a field at a mimic under a binder)"
+  | .noFunext => "nested model without funext"
   | .nameTaken n => s!"nested model name taken ({n})"
   | .cyclicMimics => "nested model with mutually recursive occurrences"
   | .malformed m => s!"nested model shape: {m}"
@@ -220,6 +220,13 @@ structure Gen where
   container's index telescope is applied. -/
   occs : Array Expr
   eqi : EqInfo
+  /-- **`funext`, if the export declares one.** Read lazily and only asked for
+  by a declaration with a field at a mimic *under a binder*, because that is
+  the one shape whose proofs need it: the block types such a field `∀ x⃗, Bₘ ι⃗`
+  and something has to transport along `(fun x⃗ => pack (unpack (f x⃗))) = f`.
+  `none` for every other declaration, and a declaration that needs it and does
+  not have it declines `nested model without funext` (§5.1). -/
+  fx : Option Name
 
 /-- The generator's monad: `MetaM`, with a *shape* decline as its own error so
 that a declaration this module cannot write is never confused with one the
@@ -231,6 +238,36 @@ def badShape (msg : String) : GenM α := declineWith (.malformed msg)
 
 /-- `Meta.inferType`, at the generator's monad. -/
 def ityp (e : Expr) : GenM Expr := inferType e
+
+/-- The sort a type lives at. -/
+def ilevel (e : Expr) : GenM Level := getLevel e
+
+/-- **`funext` as the export declares it**, checked against the statement Lean's
+own carries — `∀ {α : Sort u} {β : α → Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x)
+(g x)) → Eq f g` — by building that type at the found declaration's own two
+level parameters and asking `isDefEq`, which is indifferent to binder names and
+binder info where a syntactic comparison would not be.
+
+This is read **lazily**: it is not part of any statement in §1, only of the
+proofs one shape needs, so requiring it of every export would decline
+everything that works today. `funext` is in 1 of the 157 corpus files. -/
+def readFunext (eqi : EqInfo) : GenM Name := do
+  let n := `funext
+  let some ci := (← getEnv).constants.find? n | declineWith .noFunext
+  let [u, v] := ci.levelParams | declineWith .noFunext
+  let lu := Level.param u
+  let lv := Level.param v
+  let want ← withLocalDeclD `α (.sort lu) fun α => do
+    let βty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (.sort lv)
+    withLocalDeclD `β βty fun β => do
+      let fty ← withLocalDeclD `x α fun x => mkForallFVars #[x] (mkApp β x)
+      withLocalDeclD `f fty fun f => withLocalDeclD `g fty fun g => do
+        let hyp ← withLocalDeclD `x α fun x =>
+          mkForallFVars #[x] (eqi.mk' lv (mkApp β x) (mkApp f x) (mkApp g x))
+        withLocalDeclD `h hyp fun h =>
+          mkForallFVars #[α, β, f, g, h] (eqi.mk' (.imax lu lv) fty f g)
+  unless ← isDefEq ci.type want do declineWith .noFunext
+  return n
 
 def constInfo (n : Name) : GenM ConstantInfo := do
   let some ci := (← getEnv).constants.find? n | badShape s!"{n} is not declared"
@@ -403,6 +440,82 @@ def ihVector (g : Gen) (ftys : Array Expr) : GenM (Array (Option Nat) × Array (
     if m.isSome then pos := pos.push (some k); k := k + 1 else pos := pos.push none
   return (ihm, pos)
 
+/-! ### fields at a mimic under a binder, and the funext they cost
+
+Lean supports `HTree.node : (N → List HTree) → HTree`, and the block types the
+field `∀ x⃗, Bₘ ι⃗`. Everything below is the machinery for a *packed position
+under a binder*: which fields are one, how to rebuild a value under the
+telescope, and how to close a pointwise equation with `funext`. `nb = 0` is
+every field in the corpus and every one of those paths writes no lambda and
+asks for no `funext`. -/
+
+/-- **`funext` for a whole binder telescope**, innermost first: from `p : Eq a
+b` in the scope of `x⃗`, `Eq (fun x⃗ => a) (fun x⃗ => b)`. Each step η-reduces
+its two sides, so closing over `f x⃗` gives `f` back rather than its
+η-expansion and the fold downstream compares equal to the field. -/
+def funextFor (g : Gen) (xs : Array Expr) (a b p : Expr) : GenM Expr := do
+  let some fx := g.fx | declineWith .noFunext
+  let mut a := a; let mut b := b; let mut p := p
+  for i in [0:xs.size] do
+    let x := xs[xs.size - 1 - i]!
+    let α ← ityp x
+    let lu ← ilevel α
+    let lv ← ilevel (← ityp a)
+    let β ← mkLambdaFVars #[x] (← ityp a)
+    let la := (← mkLambdaFVars #[x] a).eta
+    let lb := (← mkLambdaFVars #[x] b).eta
+    p := mkAppN (.const fx [lu, lv]) #[α, β, la, lb, ← mkLambdaFVars #[x] p]
+    a := la; b := lb
+  return p
+
+/-- Is `t` a field the block holds at a **mimic**, possibly under a binder
+telescope? Returns the member and the telescope's length; `0` is the ordinary
+case. `∀ x⃗, Bₘ ι⃗` on the block's side. -/
+def mimicUnder? (g : Gen) (t : Expr) : GenM (Option (Nat × Nat)) := do
+  if let some m := g.memberOf t then
+    return if g.isReal m then none else some (m, 0)
+  forallTelescope (← whnf t) fun bs res => do
+    if bs.isEmpty then return none
+    let some m := g.memberOf (← whnf res) | return none
+    return if g.isReal m then none else some (m, bs.size)
+
+
+/-- Is `t` occurrence `i` at some index vector, possibly under a binder
+telescope? Returns the telescope's length. -/
+def occUnder? (g : Gen) (i : Nat) (ps : Array Expr) (t : Expr) : GenM (Option Nat) := do
+  if (g.occIdx? i ps t).isSome then return some 0
+  forallTelescope (← whnf t) fun bs res => do
+    if bs.isEmpty then return none
+    if (g.occIdx? i ps (← whnf res)).isSome then return some bs.size else return none
+
+/-- Which occurrence `t` is at, possibly under a binder telescope, and how deep. -/
+def occOfUnder? (g : Gen) (ps : Array Expr) (t : Expr) : GenM (Option (Nat × Nat)) := do
+  for i in [0:g.occs.size] do
+    if let some nb ← g.occUnder? i ps t then return some (i, nb)
+  return none
+
+/-- **Rebuild a field under its binder telescope**: `fun x⃗ => k resTy (f x⃗)`.
+`nb = 0` applies `k` to the field itself and writes no lambda, which is every
+field in the corpus. -/
+def underBinders (nb : Nat) (ty f : Expr)
+    (k : Array Expr → Expr → Expr → GenM Expr) : GenM Expr := do
+  if nb == 0 then k #[] ty f
+  else forallBoundedTelescope ty (some nb) fun xs res => do
+    mkLambdaFVars xs (← k xs res (f.beta xs))
+
+/-- **A moved position and its proof, under the binder telescope.** `k` returns
+the moved value and a *pointwise* proof of `Eq (that value) (f x⃗)`; this
+abstracts both over `x⃗` and closes the equation with [`Modelgen.Gen.funextFor`],
+which is the only place in this module an equality Lean did not write is used —
+and it is read from the export, never fabricated. -/
+def underEq (g : Gen) (nb : Nat) (ty f : Expr)
+    (k : Array Expr → Expr → Expr → GenM (Expr × Expr)) : GenM (Expr × Expr) := do
+  if nb == 0 then k #[] ty f
+  else forallBoundedTelescope ty (some nb) fun xs res => do
+    let fx := f.beta xs
+    let (l, p) ← k xs res fx
+    return ((← mkLambdaFVars xs l).eta, ← g.funextFor xs l fx p)
+
 /-- `(member, constructor)` for every constructor of the block, in the order
 `Bₖ.rec` binds its minors. -/
 def ctorPairs (g : Gen) : Array (Nat × Name) :=
@@ -453,17 +566,22 @@ def foldCongr (g : Gen) (goalTy : Expr) (fieldTys lhs rhs : Array Expr)
     (proofs : Array (Option Expr)) (rebuild : Array Expr → Expr) : GenM Expr := do
   let n := lhs.size
   let start := rebuild lhs
-  let mut acc := g.eqi.refl' g.u goalTy start
+  let ug ← ilevel goalTy
+  let mut acc := g.eqi.refl' ug goalTy start
   for j in [0:n] do
     let some p := proofs[j]! | continue
     if lhs[j]! == rhs[j]! then continue
     let α := fieldTys[j]!
+    -- **The moved position's own sort, not the block's.** A packed field under
+    -- a binder lands at `imax` of the binder's sort and the block's, and the
+    -- two coincide only when there is no binder.
+    let uα ← ilevel α
     let mot ← withLocalDeclD `x α fun x => do
-      withLocalDeclD `hx (g.eqi.mk' g.u α lhs[j]! x) fun hx => do
+      withLocalDeclD `hx (g.eqi.mk' uα α lhs[j]! x) fun hx => do
         let mix := (Array.range n).map fun k =>
           if k < j then rhs[k]! else if k == j then x else lhs[k]!
-        mkLambdaFVars #[x, hx] (g.eqi.mk' g.u goalTy start (rebuild mix))
-    acc := g.eqi.recAt .zero g.u α lhs[j]! mot acc rhs[j]! p
+        mkLambdaFVars #[x, hx] (g.eqi.mk' ug goalTy start (rebuild mix))
+    acc := g.eqi.recAt .zero uα α lhs[j]! mot acc rhs[j]! p
   return acc
 
 /-- The value-transport counterpart of [`Modelgen.Gen.foldCongr`]: from
@@ -479,13 +597,49 @@ def foldValue (g : Gen) (v : Level) (m0 : Expr) (fieldTys lhs rhs : Array Expr)
     let some p := proofs[j]! | continue
     if lhs[j]! == rhs[j]! then continue
     let α := fieldTys[j]!
+    let uα ← ilevel α
     let mot ← withLocalDeclD `x α fun x => do
-      withLocalDeclD `hx (g.eqi.mk' g.u α lhs[j]! x) fun hx => do
+      withLocalDeclD `hx (g.eqi.mk' uα α lhs[j]! x) fun hx => do
         let mix := (Array.range n).map fun k =>
           if k < j then rhs[k]! else if k == j then x else lhs[k]!
         mkLambdaFVars #[x, hx] (mkApp m0 (rebuild mix))
-    acc := g.eqi.recAt v g.u α lhs[j]! mot acc rhs[j]! p
+    acc := g.eqi.recAt v uα α lhs[j]! mot acc rhs[j]! p
   return acc
+
+/-- **`Eq (f x⃗) (g x⃗)` from `h : Eq f g`** — `congrFun`, iterated, and built
+from `Eq.rec` alone rather than read from the export.
+
+It is what makes a packed position *under a binder* work at all. The fold
+carries one equation for the whole function, closed with `funext`; the
+induction hypothesis on the other side is **pointwise**, `fun x⃗ => rec_m (f
+x⃗)`, and each of its points transports along `Eq (y x⃗) (f x⃗)`. Instantiated,
+that is the same proposition as the retraction at `f x⃗`, so **proof
+irrelevance** identifies the two and the rule's two sides meet. Abstracting the
+function and transporting it whole does not: `Eq.rec` on the funext'd equation
+is not the pointwise transport `T._model.rec_m` δ-unfolds to. -/
+def congrFunFor (g : Gen) (α y target h : Expr) (xs : Array Expr) : GenM Expr := do
+  let uα ← ilevel α
+  let yx := y.beta xs
+  let β ← ityp yx
+  let uβ ← ilevel β
+  let mot ← withLocalDeclD `z α fun z =>
+    withLocalDeclD `hz (g.eqi.mk' uα α y z) fun hz => do
+      mkLambdaFVars #[z, hz] (g.eqi.mk' uβ β yx (z.beta xs))
+  return g.eqi.recAt .zero uα α y mot (g.eqi.refl' uβ β yx) target h
+
+/-- **`Eq (m l₀) (m l)` from `h : Eq l₀ l`, inline.** `congrPack_i` is this at a
+position that needs no binder, as a declaration; a position *under* a binder
+abstracts a whole function and no one lemma covers it, so it is built here the
+way [`Modelgen.Gen.foldCongr`] builds its steps. `β` is the type of `m l₀`. -/
+def congrOne (g : Gen) (α β : Expr) (m : Expr → GenM Expr) (l0 l h : Expr) :
+    GenM Expr := do
+  let uα ← ilevel α
+  let uβ ← ilevel β
+  let m0 ← m l0
+  let mot ← withLocalDeclD `x α fun x =>
+    withLocalDeclD `hx (g.eqi.mk' uα α l0 x) fun hx => do
+      mkLambdaFVars #[x, hx] (g.eqi.mk' uβ β m0 (← m x))
+  return g.eqi.recAt .zero uα α l0 mot (g.eqi.refl' uβ β m0) l h
 
 /-! ### pack -/
 
@@ -502,26 +656,25 @@ def packMinor (g : Gen) (i member : Nat) (ps : Array Expr) (cn : Name) (mty : Ex
     let ftys ← fields.mapM ityp
     -- The container's own recursive positions: occurrence `i` at **any** index
     -- vector, because `Vec.vcons`' recursive field sits at `n` and its result
-    -- at `N.s n`.
-    let recs := (Array.range n).filter fun x => (g.occIdx? i ps ftys[x]!).isSome
-    -- The container's *own* recursive positions, and every one of them has
-    -- exactly one hypothesis. A container recursive under a binder — `Rose |
-    -- node : (N → Rose α) → Rose α` used as one — would have a hypothesis this
-    -- count does not name, and the vector would be read off by one.
-    --
-    -- **An arm no declaration reaches**, because `iso`'s funext guard is
-    -- earlier: such a container's mimic has a constructor with a field at a
-    -- mimic under a binder, and `infinitary.lean`'s `RTree` is measured
-    -- declining there. Kept because reading the vector off by one is a wrong
-    -- model rather than a missing one.
+    -- at `N.s n` — and **under any binder telescope**, because `Rose.node :
+    -- (N → Rose α) → Rose α` is recursive under one and Lean gives it a
+    -- hypothesis all the same.
+    let mut recs : Array Nat := #[]
+    for x in [0:n] do
+      if (← g.occUnder? i ps ftys[x]!).isSome then recs := recs.push x
+    -- Every recursive position, infinitary or not, has exactly one hypothesis,
+    -- so the two vectors line up. An infinitary one's hypothesis is already
+    -- `∀ x⃗, B_{r+i} ι⃗`, which is what the block's constructor wants: no
+    -- lambda is written here and no funext is needed.
     unless recs.size == ihs.size do
-      badShape s!"{cn} is recursive under a binder in its own container"
+      badShape s!"{cn}'s recursive positions and hypotheses do not line up"
     let mut args : Array Expr := #[]
     for x in [0:n] do
       if let some t := recs.findIdx? (· == x) then
         args := args.push ihs[t]!
-      else if let some (o, idxs) := g.occOf? ps ftys[x]! then
-        args := args.push (g.call (g.packName o) ps idxs fields[x]!)
+      else if let some (o, nb) ← g.occOfUnder? ps ftys[x]! then
+        args := args.push (← underBinders nb ftys[x]! fields[x]! fun _ res v =>
+          return g.call (g.packName o) ps ((g.occIdx? o ps res).getD #[]) v)
       else
         args := args.push fields[x]!
     mkLambdaFVars bs (g.blockCtorAt member cn ps args)
@@ -752,14 +905,17 @@ def unpackMinor (g : Gen) (k : Nat) (ps : Array Expr) (cn : Name) (mty : Expr) :
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
     let ftys ← fields.mapM ityp
-    let (_, ihPos) ← g.ihVector ftys
+    let (ihm, ihPos) ← g.ihVector ftys
     let mut args : Array Expr := #[]
     for x in [0:n] do
-      match g.memberOf ftys[x]! with
+      match ihm[x]! with
       | some m =>
         if !g.isReal m then
           -- A field at a *mimic* is unpacked, and its unpacked value is exactly
-          -- this recursor's induction hypothesis for it.
+          -- this recursor's induction hypothesis for it. **Including under a
+          -- binder**: the hypothesis for `∀ x⃗, Bₘ ι⃗` is `∀ x⃗, occₘ ι⃗`,
+          -- because a mimic's motive is the occurrence, so no lambda is
+          -- written here either.
           let some t := ihPos[x]! | badShape "no hypothesis for a mimic field"
           args := args.push ihs[t]!
         else
@@ -821,19 +977,31 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
         let ftys ← fields.mapM ityp
-        let recs := (Array.range n).filter fun x => (g.occIdx? i ps ftys[x]!).isSome
+        let mut recs : Array Nat := #[]
+        for x in [0:n] do
+          if (← g.occUnder? i ps ftys[x]!).isSome then recs := recs.push x
         unless recs.size == ihs.size do
-          badShape s!"{cn} is recursive under a binder in its own container"
+          badShape s!"{cn}'s recursive positions and hypotheses do not line up"
         let mut lhs : Array Expr := #[]
         let mut proofs : Array (Option Expr) := #[]
         for x in [0:n] do
           if let some t := recs.findIdx? (· == x) then
-            lhs := lhs.push (trip ((g.occIdx? i ps ftys[x]!).getD #[]) fields[x]!)
-            proofs := proofs.push (some ihs[t]!)
-          else if let some (o, idxs) := g.occOf? ps ftys[x]! then
-            lhs := lhs.push
-              (g.call (g.unpackName o) ps idxs (g.call (g.packName o) ps idxs fields[x]!))
-            proofs := proofs.push (some (g.call (g.retractName o) ps idxs fields[x]!))
+            -- **Under a binder the induction hypothesis is pointwise**, so it
+            -- is closed with funext; with no binder it is the equation itself
+            -- and `underEq` writes neither a lambda nor a `funext`.
+            let nb := (← g.occUnder? i ps ftys[x]!).getD 0
+            let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun xs res v => do
+              let idxs := (g.occIdx? i ps res).getD #[]
+              return (trip idxs v, mkAppN ihs[t]! xs)
+            lhs := lhs.push l
+            proofs := proofs.push (some pf)
+          else if let some (o, nb) ← g.occOfUnder? ps ftys[x]! then
+            let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun _ res v => do
+              let idxs := (g.occIdx? o ps res).getD #[]
+              return (g.call (g.unpackName o) ps idxs (g.call (g.packName o) ps idxs v),
+                      g.call (g.retractName o) ps idxs v)
+            lhs := lhs.push l
+            proofs := proofs.push (some pf)
           else
             lhs := lhs.push fields[x]!
             proofs := proofs.push none
@@ -893,15 +1061,19 @@ def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool
           let mut lhs : Array Expr := #[]
           let mut proofs : Array (Option Expr) := #[]
           for x in [0:n] do
-            match g.memberOf ftys[x]! with
-            | some m =>
+            match ← g.mimicUnder? ftys[x]! with
+            | some (m, nb) =>
               if live m then
                 let some t := ihPos[x]! | badShape "no hypothesis for a member field"
                 let o := g.mimicOf m
-                let fidx := g.idxOf m ftys[x]!
-                lhs := lhs.push
-                  (g.call (g.packName o) ps fidx (g.call (g.unpackName o) ps fidx fields[x]!))
-                proofs := proofs.push (some ihs[t]!)
+                -- Under a binder the hypothesis is pointwise and funext closes
+                -- it; with none, `underEq` writes neither.
+                let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun xs res v => do
+                  let fidx := g.idxOf m res
+                  return (g.call (g.packName o) ps fidx (g.call (g.unpackName o) ps fidx v),
+                          mkAppN ihs[t]! xs)
+                lhs := lhs.push l
+                proofs := proofs.push (some pf)
               else
                 lhs := lhs.push fields[x]!
                 proofs := proofs.push none
@@ -925,15 +1097,16 @@ def ctorValue (g : Gen) (k j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Exp
       badShape s!"{cn}: the export declares {fields.size} fields, the block {blkTys.size}"
     let mut args : Array Expr := #[]
     for x in [0:fields.size] do
-      match g.memberOf blkTys[x]! with
-      | some m =>
-        -- The index vector comes from the **export-side** field's own type,
-        -- which is the occurrence at those indices; the block's copy is at
-        -- the block's own binders and would not name them.
-        if !g.isReal m then
-          let idxs := g.idxOf m (← ityp fields[x]!)
-          args := args.push (g.call (g.packName (g.mimicOf m)) ps idxs fields[x]!)
-        else args := args.push fields[x]!
+      match ← g.mimicUnder? blkTys[x]! with
+      -- The index vector comes from the **export-side** field's own type,
+      -- which is the occurrence at those indices; the block's copy is at
+      -- the block's own binders and would not name them. Under a binder the
+      -- packing happens pointwise — `fun x⃗ => pack (f x⃗)` — which needs a
+      -- lambda but no funext: no equation is being moved here.
+      | some (m, nb) =>
+        let fty ← ityp fields[x]!
+        args := args.push (← underBinders nb fty fields[x]! fun _ res v =>
+          return g.call (g.packName (g.mimicOf m)) ps (g.idxOf m res) v)
       | none => args := args.push fields[x]!
     mkLambdaFVars fields (g.blockCtorAt k cn ps args)
 
@@ -965,12 +1138,10 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
     let ftys ← fields.mapM ityp
     let mut real : Array Expr := #[]
     for x in [0:n] do
-      match g.memberOf ftys[x]! with
-      | some m =>
-        if !g.isReal m then
-          real := real.push
-            (g.call (g.unpackName (g.mimicOf m)) ps (g.idxOf m ftys[x]!) fields[x]!)
-        else real := real.push fields[x]!
+      match ← g.mimicUnder? ftys[x]! with
+      | some (m, nb) =>
+        real := real.push (← underBinders nb ftys[x]! fields[x]! fun _ res v =>
+          return g.call (g.unpackName (g.mimicOf m)) ps (g.idxOf m res) v)
       | none => real := real.push fields[x]!
     let body := mkAppN sT (real ++ ihs)
     if !g.isReal j then
@@ -981,17 +1152,15 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
       let mut lhs : Array Expr := #[]
       let mut proofs : Array (Option Expr) := #[]
       for x in [0:n] do
-        match g.memberOf ftys[x]! with
-        | some m =>
-          if !g.isReal m then
-            let o := g.mimicOf m
-            let fidx := g.idxOf m ftys[x]!
-            lhs := lhs.push
-              (g.call (g.packName o) ps fidx (g.call (g.unpackName o) ps fidx fields[x]!))
-            proofs := proofs.push (some (g.call (g.sectionName o) ps fidx fields[x]!))
-          else
-            lhs := lhs.push fields[x]!
-            proofs := proofs.push none
+        match ← g.mimicUnder? ftys[x]! with
+        | some (m, nb) =>
+          let o := g.mimicOf m
+          let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun _ res v => do
+            let fidx := g.idxOf m res
+            return (g.call (g.packName o) ps fidx (g.call (g.unpackName o) ps fidx v),
+                    g.call (g.sectionName o) ps fidx v)
+          lhs := lhs.push l
+          proofs := proofs.push (some pf)
         | none =>
           lhs := lhs.push fields[x]!
           proofs := proofs.push none
@@ -1166,6 +1335,12 @@ structure Rule where
   blkTys : Array Expr
   /-- Which block member each field sits at, if any. -/
   mem : Array (Option Nat)
+  /-- **Which fields the block holds at a mimic, and how deep under a binder.**
+  Wider than `mem`, which sees only a field at a member *directly*: `HTree`'s
+  `(N → List HTree)` is at mimic 1 under one binder and `mem` calls it nothing.
+  These are the positions the fold moves, and the ones a binder makes cost a
+  `funext`. -/
+  packed : Array (Option (Nat × Nat))
   /-- Which member each field's **induction hypothesis** is at. Wider than
   `mem`: a field of type `∀ x⃗, B₀ …` has one and sits at no member. -/
   ihAt : Array (Option Nat)
@@ -1223,6 +1398,39 @@ own *export-side* type — `Vec T._model.self ι⃗` — because the block's cop
 that type is at the block's own binders and would not name them. -/
 def fieldIdx (r : Rule) (m x : Nat) : Array Expr := r.g.idxOf m r.extTys[x]!
 
+/-- **A packed position's three terms**, under its binder telescope if it has
+one: the round trip `fun x⃗ => unpackₒ (packₒ (f x⃗))`, the block recursor's
+hypothesis at the packed field, and the retraction — closed with `funext` when
+there is a binder and the bare retraction when there is not. -/
+def packedAt (r : Rule) (x m nb : Nat) (blk : Array Expr) :
+    GenM (Expr × Expr × Expr) := do
+  let g := r.g
+  let o := g.mimicOf m
+  let at' := fun (res v : Expr) => do
+    let idxs := g.idxOf m res
+    let pk := g.call (g.packName o) r.ps idxs v
+    return (g.call (g.unpackName o) r.ps idxs pk,
+            mkAppN (g.blockRecAt m r.v) (blk ++ idxs ++ #[pk]),
+            g.call (g.retractName o) r.ps idxs v)
+  if nb == 0 then at' r.extTys[x]! r.fields[x]!
+  else forallBoundedTelescope r.extTys[x]! (some nb) fun xs res => do
+    let fx := r.fields[x]!.beta xs
+    let (y, w, h) ← at' res fx
+    return ((← mkLambdaFVars xs y).eta, ← mkLambdaFVars xs w, ← g.funextFor xs y fx h)
+
+/-- `fun x⃗ => packₒ (val x⃗)` — a value at the *block's* side of a packed
+position, which is where `T._model.ctor_j` holds it. -/
+def packAt (r : Rule) (x m nb : Nat) (val : Expr) : GenM Expr :=
+  Gen.underBinders nb r.extTys[x]! val fun _ res v =>
+    return r.g.call (r.g.packName (r.g.mimicOf m)) r.ps (r.g.idxOf m res) v
+
+/-- The hypothesis type a packed position's `Eq.rec` abstracts: `Mₘ ι⃗ xv` with
+no binder, `∀ x⃗, Mₘ ι⃗ (xv x⃗)` with one. -/
+def ihTypeAt (r : Rule) (x m nb : Nat) (xv : Expr) : GenM Expr := do
+  if nb == 0 then return mkAppN r.motives[m]! ((r.g.idxOf m r.extTys[x]!).push xv)
+  forallBoundedTelescope r.extTys[x]! (some nb) fun xs res =>
+    mkForallFVars xs (mkAppN r.motives[m]! ((r.g.idxOf m res).push (xv.beta xs)))
+
 /-- **The two sides at one stage of the fold** — the type they live at, the
 left, and the right.
 
@@ -1240,47 +1448,62 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
   let mut ihs : Array Expr := #[]
   for x in [0:r.n] do
     let f := r.fields[x]!
-    match r.mem[x]! with
+    match r.packed[x]! with
+    -- **A packed position, with or without a binder.** `nb = 0` is every field
+    -- in the corpus and everything below writes no lambda for it.
+    | some (m, nb) =>
+      let (y, w, h) ← r.packedAt x m nb blk
+      srcVals := srcVals.push y; srcIhs := srcIhs.push w
+      match mv[x]! with
+      | .source =>
+        vals := vals.push y; ihs := ihs.push w
+      -- Already moved: the value is the field and the hypothesis is
+      -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
+      -- step below produced.
+      | .target =>
+        vals := vals.push f
+        let some ih ← r.ihFor x | badShape "a packed position with no hypothesis"
+        ihs := ihs.push ih
+      -- Being moved: the value is the motive's own variable and the transport
+      -- is along its equation. At `x := y` and `hx := Eq.refl` this ι-reduces
+      -- back to `w`, which is what makes the previous stage this step's base.
+      | .abstract xv hv =>
+        let α := r.extTys[x]!
+        if nb == 0 then
+          let mot ← mkLambdaFVars #[xv, hv] (← r.ihTypeAt x m nb xv)
+          ihs := ihs.push (g.eqi.recAt r.v (← ilevel α) α y mot w xv hv)
+        else
+          -- **Pointwise, because the other side is.** See
+          -- [`Modelgen.Gen.congrFunFor`].
+          ihs := ihs.push (← forallBoundedTelescope α (some nb) fun xs res => do
+            let ures ← ilevel res
+            let yx := y.beta xs
+            let idxs := g.idxOf m res
+            let mot ← withLocalDeclD `z res fun z =>
+              withLocalDeclD `hz (g.eqi.mk' ures res yx z) fun hz => do
+                mkLambdaFVars #[z, hz] (mkAppN r.motives[m]! (idxs.push z))
+            mkLambdaFVars xs (g.eqi.recAt r.v ures res yx mot (w.beta xs) (xv.beta xs)
+              (← g.congrFunFor α y xv hv xs)))
+        vals := vals.push xv
+      -- `h` is unused here; the folds below take it from `packedAt` again.
+      let _ := h
     | none =>
-      srcVals := srcVals.push f
-      vals := vals.push f
-      -- **Infinitary, and so it does not move.** `pack` passes a field of type
-      -- `∀ x⃗, Bₘ …` through untouched — the block types it at `Bₘ` where the
-      -- export types it at the carrier, which is that by δ — so both sides
-      -- hold it at `f` and the hypothesis is the same on both.
-      if let some ih ← r.ihFor x then
-        srcIhs := srcIhs.push ih; ihs := ihs.push ih
-    -- A field at a **real** member does not move: `pack` passes it through, so
-    -- both sides hold it at `f` and its hypothesis is `T._model.rec_m` on the
-    -- nose.
-    | some m =>
-      if g.isReal m then
+      match r.mem[x]! with
+      | none =>
+        srcVals := srcVals.push f
+        vals := vals.push f
+        -- **Infinitary at a *real* member, and so it does not move.** `pack`
+        -- passes a field of type `∀ x⃗, Bₘ …` through untouched — the block
+        -- types it at `Bₘ` where the export types it at the carrier, which is
+        -- that by δ — so both sides hold it at `f` and the hypothesis is the
+        -- same on both.
+        if let some ih ← r.ihFor x then
+          srcIhs := srcIhs.push ih; ihs := ihs.push ih
+      -- A field at a **real** member does not move either.
+      | some m =>
         let ih ← r.recCall m f
         srcVals := srcVals.push f; srcIhs := srcIhs.push ih
         vals := vals.push f; ihs := ihs.push ih
-      else
-        let o := g.mimicOf m
-        let fidx := r.fieldIdx m x
-        let pk := g.call (g.packName o) r.ps fidx f
-        let y := g.call (g.unpackName o) r.ps fidx pk
-        let w := mkAppN (g.blockRecAt m r.v) (blk ++ fidx ++ #[pk])
-        srcVals := srcVals.push y; srcIhs := srcIhs.push w
-        match mv[x]! with
-        | .source =>
-          vals := vals.push y; ihs := ihs.push w
-        -- Already moved: the value is the field and the hypothesis is
-        -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
-        -- step below produced.
-        | .target =>
-          vals := vals.push f; ihs := ihs.push (← r.recCall m f)
-        -- Being moved: the value is the motive's own variable and the transport
-        -- is along its equation. At `x := y` and `hx := Eq.refl` this ι-reduces
-        -- back to `w`, which is what makes the previous stage this step's base.
-        | .abstract xv hv =>
-          let occ := g.occAtIdx o r.ps fidx
-          let mot ← mkLambdaFVars #[xv, hv] (mkAppN r.motives[m]! (fidx.push xv))
-          ihs := ihs.push (g.eqi.recAt r.v g.u occ y mot w xv hv)
-          vals := vals.push xv
   let apply := fun (vs is : Array Expr) => mkAppN r.minors[r.minorIx]! (vs ++ is)
   let base := apply srcVals srcIhs
   let rhs := apply vals ihs
@@ -1295,24 +1518,29 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
       let mut blRhs : Array Expr := #[]
       let mut proofs : Array (Option Expr) := #[]
       for x in [0:r.n] do
-        match r.mem[x]! with
-        | some m =>
-          if !g.isReal m then
-            let o := g.mimicOf m
-            let fidx := r.fieldIdx m x
-            blLhs := blLhs.push (g.call (g.packName o) r.ps fidx srcVals[x]!)
-            blRhs := blRhs.push (g.call (g.packName o) r.ps fidx vals[x]!)
-            proofs := proofs.push <|
-              match mv[x]! with
-              | .source => none
-              | .target =>
-                some (r.congrPack o fidx srcVals[x]! vals[x]!
-                  (g.call (g.retractName o) r.ps fidx r.fields[x]!))
-              | .abstract xv hv => some (r.congrPack o fidx srcVals[x]! xv hv)
-          else
-            blLhs := blLhs.push vals[x]!
-            blRhs := blRhs.push vals[x]!
-            proofs := proofs.push none
+        match r.packed[x]! with
+        | some (m, nb) =>
+          let o := g.mimicOf m
+          let bl ← r.packAt x m nb srcVals[x]!
+          let br ← r.packAt x m nb vals[x]!
+          blLhs := blLhs.push bl
+          blRhs := blRhs.push br
+          -- **The congruence of `pack` at this position.** With no binder that
+          -- is `congrPack_o`, a declaration; under one it abstracts the whole
+          -- function and `congrOne` builds it inline.
+          let cg := fun (l0 l h : Expr) => do
+            if nb == 0 then
+              return r.congrPack o (r.fieldIdx m x) l0 l h
+            else
+              g.congrOne r.extTys[x]! (← ityp bl) (r.packAt x m nb) l0 l h
+          let pf : Option Expr ←
+            match mv[x]! with
+            | .source => pure none
+            | .target => do
+              let (_, _, h) ← r.packedAt x m nb blk
+              pure (some (← cg srcVals[x]! vals[x]! h))
+            | .abstract xv hv => do pure (some (← cg srcVals[x]! xv hv))
+          proofs := proofs.push pf
         | none =>
           blLhs := blLhs.push vals[x]!
           blRhs := blRhs.push vals[x]!
@@ -1330,22 +1558,24 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
       -- read off `a0`'s type; the mimic's index telescope is the container's.
       let occ ← ityp a0
       let ridx := g.idxOf r.k occ
-      let proofs := (Array.range r.n).map fun x =>
-        match r.mem[x]! with
-        | some m =>
-          if !g.isReal m then
+      let mut proofs : Array (Option Expr) := #[]
+      for x in [0:r.n] do
+        match r.packed[x]! with
+        | some (m, nb) =>
+          proofs := proofs.push <| ←
             match mv[x]! with
-            | .source => none
-            | .target =>
-              some (g.call (g.retractName (g.mimicOf m)) r.ps (r.fieldIdx m x) r.fields[x]!)
-            | .abstract _ hv => some hv
-          else none
-        | none => none
+            | .source => pure none
+            | .target => do
+              let (_, _, h) ← r.packedAt x m nb blk
+              pure (some h)
+            | .abstract _ hv => pure (some hv)
+        | none => proofs := proofs.push none
+      let uocc ← ilevel occ
       let p ← g.foldCongr occ r.extTys srcVals vals proofs r.build
       let mot ← withLocalDeclD `x occ fun xv =>
-        withLocalDeclD `hx (g.eqi.mk' g.u occ a0 xv) fun hv =>
+        withLocalDeclD `hx (g.eqi.mk' uocc occ a0 xv) fun hv =>
           mkLambdaFVars #[xv, hv] (mkAppN r.motives[r.k]! (ridx.push xv))
-      pure (g.eqi.recAt r.v g.u occ a0 mot base b0 p)
+      pure (g.eqi.recAt r.v uocc occ a0 mot base b0 p)
   return (ty, lhs, rhs)
 
 /-- **The equation**: `Eq (recₖ p⃗ M⃗ S⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)`, at the recursor's own
@@ -1369,22 +1599,24 @@ def value (r : Rule) : GenM Expr := do
   let mut mv := Array.replicate r.n Move.source
   let (ty0, _, rhs0) ← r.sides mv
   let mut acc := g.eqi.refl' r.v ty0 rhs0
+  let blk ← if r.moving.isEmpty then pure #[] else r.blkPrefix
   for x in r.moving do
-    let some m := r.mem[x]! | badShape "a moving position with no member"
-    let o := g.mimicOf m
+    let some (m, nb) := r.packed[x]! | badShape "a moving position with no member"
     let f := r.fields[x]!
-    let fidx := r.fieldIdx m x
-    let y := g.call (g.unpackName o) r.ps fidx (g.call (g.packName o) r.ps fidx f)
-    let h := g.call (g.retractName o) r.ps fidx f
-    let occ := g.occAtIdx o r.ps fidx
+    let (y, _, h) ← r.packedAt x m nb blk
+    -- **The occurrence, or the function into it.** `extTys` is the export's own
+    -- field type, which is `occₒ ι⃗` with no binder and `∀ x⃗, occₒ ι⃗` with one,
+    -- and either way it is what this step abstracts.
+    let occ := r.extTys[x]!
+    let uocc ← ilevel occ
     -- The motive is the whole equation with this position abstracted; at
     -- `x := unpackᵢ (packᵢ f)` and `hx := Eq.refl` every transport it
     -- introduced ι-reduces away and what is left is the accumulator's own type.
     let mot ← withLocalDeclD `x occ fun xv =>
-      withLocalDeclD `hx (g.eqi.mk' g.u occ y xv) fun hv => do
+      withLocalDeclD `hx (g.eqi.mk' uocc occ y xv) fun hv => do
         let (ty2, l2, r2) ← r.sides (mv.set! x (.abstract xv hv))
         mkLambdaFVars #[xv, hv] (g.eqi.mk' r.v ty2 l2 r2)
-    acc := g.eqi.recAt .zero g.u occ y mot acc f h
+    acc := g.eqi.recAt .zero uocc occ y mot acc f h
     mv := mv.set! x Move.target
   return acc
 
@@ -1449,6 +1681,7 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       let bcn := cs[j]!
       let blkTys ← withFields (← instCtor bcn g.us ps) fun _ tys => pure tys
       let mem := blkTys.map g.memberOf
+      let packed ← blkTys.mapM g.mimicUnder?
       -- **The hypothesis vector, in the minor's own order.** `Bₖ.rec` gives a
       -- field of type `∀ x⃗, Bₘ …` an induction hypothesis too — Lean supports
       -- infinitary constructors and `FTree.branch : (N → FTree) → FTree` is
@@ -1467,8 +1700,7 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       withFields ectorTy fun fields extTys => do
         if fields.size != blkTys.size then
           badShape s!"{bcn}: the export binds {fields.size} fields, the block {blkTys.size}"
-        let moving := (Array.range blkTys.size).filter fun x =>
-          match mem[x]! with | some m => !g.isReal m | none => false
+        let moving := (Array.range blkTys.size).filter fun x => packed[x]!.isSome
         -- **The hypothesis types, read off the minor and not rebuilt.** The
         -- minor binds the export-side fields, so instantiating it at `fields`
         -- leaves the hypothesis telescope in their terms; taking the binder
@@ -1487,7 +1719,7 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
         let r : Rule :=
           { g, k := sh.k, v := sh.v, ps, motives, minors, minorIx
             head, headLevels := hls, headPrefix := hpre
-            fields, extTys, bcn, blkTys, mem, ihAt, ihTys, moving }
+            fields, extTys, bcn, blkTys, mem, packed, ihAt, ihTys, moving }
         let tel := pre ++ fields
         let ty ← mkForallFVars tel (← r.statement)
         let val ← mkLambdaFVars tel (← r.value)
@@ -1655,48 +1887,46 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let toSelf : Std.HashMap Name (Nat × Expr) :=
     (Array.range r).foldl (fun m k => m.insert all[k]! (0, .const selfNames[k]! us)) {}
   let occs := pl.mimics.map fun m => restore toSelf m.occ
-  let g : Gen := { model, selfNames, numAll := r, np, u, us
-                   members := (Array.range pl.types.size).map b
-                   blockCtors, nidx, occs, eqi }
+  let g0 : Gen := { model, selfNames, numAll := r, np, u, us
+                    members := (Array.range pl.types.size).map b
+                    blockCtors, nidx, occs, eqi, fx := none }
 
   -- **Dependent fields, checked once and only where they bite.** Every
   -- congruence fold in this file moves the *packed* positions of one of the
   -- block's constructors, so the condition is the same for all of them and is
   -- settled here rather than at each telescope: no field's type may mention an
   -- earlier field the block holds at a mimic. See [`Modelgen.noDepOnPacked`].
-  discard <| withParams fun ps => do
+  --
+  -- **And whether any packed position sits under a binder**, which is the one
+  -- shape whose proofs need `funext`: the block types such a field `∀ x⃗, Bₘ ι⃗`
+  -- and the round trips, the recursor's minor and the ι rules all transport
+  -- along `(fun x⃗ => pack (unpack (f x⃗))) = f`. `funext` is read from the
+  -- export **only when a declaration has such a field** — it is in no §1
+  -- statement, only in these proofs, so requiring it of every export would
+  -- decline everything that works today (§5.1). Lean accepts all three places
+  -- the binder can sit: the root (`HTree`), the container's own recursive
+  -- field (`RTree` over `Rose`) and a container's field into another mimic
+  -- (`OTree` over `Outer`), and `infinitary.lean` has all three.
+  let anyUnderBinder ← withParams fun ps => do
+    let mut any := false
     for k in [0:pl.types.size] do
       for cn in blockCtors[k]! do
-        forallTelescope (← instCtor cn us ps) fun fs _ => do
+        any := any || (← forallTelescope (← instCtor cn us ps) fun fs _ => do
           let tys ← fs.mapM ityp
           let packed := (Array.range fs.size).filterMap fun x =>
-            match g.memberOf tys[x]! with
-            | some m => if g.isReal m then none else some fs[x]!
+            match g0.memberOf tys[x]! with
+            | some m => if g0.isReal m then none else some fs[x]!
             | none => none
           noDepOnPacked packed fs tys
-          -- **A field at a mimic *under a binder*.** Lean accepts
-          -- `HTree.node : (N → List HTree) → HTree`; this does not, and the
-          -- obstruction is not the statement but the proof. The block types
-          -- the field `N → B₁`, so `T._model.ctor_j` would have to build
-          -- `fun n => pack₀ (f n)` and the recursor's minor would have to
-          -- transport along `(fun n => pack₀ (unpack₀ (f n))) = f` — which is
-          -- **function extensionality**, and this module's whole equality
-          -- budget is the `Eq` the export declares. A field at the *root*
-          -- under a binder needs none of that and is supported;
-          -- `infinitary.lean`'s `FTree` is the fixture for it.
-          --
-          -- **Declined here by name and not by a kernel mismatch three steps
-          -- later**, and declined for the same reason wherever the binder
-          -- sits: at the root (`HTree`), at the container's own recursive
-          -- field (`RTree` over `Rose`) or at a container's field into another
-          -- mimic (`OTree` over `Outer`). All three are `infinitary.lean` and
-          -- all three are shapes Lean accepts; MODELGEN.md §5.1 says which
-          -- proof each one needs funext at.
+          let mut here := false
           for x in [0:fs.size] do
-            if (g.memberOf tys[x]!).isNone then
-              if let some m ← g.ihMemberOf tys[x]! then
-                unless g.isReal m do
-                  declineWith (.needsFunext cn)
+            if (g0.memberOf tys[x]!).isNone then
+              if let some m ← g0.ihMemberOf tys[x]! then
+                unless g0.isReal m do here := true
+          return here)
+    return any
+  let g : Gen ←
+    if anyUnderBinder then do pure { g0 with fx := some (← readFunext eqi) } else pure g0
 
   -- ── 3. pack, unpack, and the two round trips, group by group ───────────
   --

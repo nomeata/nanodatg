@@ -67,34 +67,37 @@ that hole, under `modelgen/tests/` rather than in `mini/tests/fixtures`, and
 stopped the generator without pinning the wording of a kernel diagnostic
 quoted inside it.
 
-Most of these are shapes **Lean accepts and this does not** — every `.lean`
-here is one Lean's own kernel loaded, and `--check-recursors` compares the
-recursors it minted against the export's on every run. The five axis files are
-named for the shape rather than for the refusal, because the refusal is what
-is meant to go away. `poly_nested`, `dependent_fields`, `indexed_decl`,
-`indexed_container` and `nest_index_cross` no longer decline at all, so what
-remains is **one**:
+These files were written as shapes **Lean accepts and this did not** — every
+`.lean` here is one Lean's own kernel loaded, and `--check-recursors` compares
+the recursors it minted against the export's on every run. They are named for
+the shape rather than for the refusal, because the refusal is what is meant to
+go away, and **every one of them has**: `poly_nested`, `dependent_fields`,
+`indexed_decl`, `indexed_container`, `nest_index_cross` and `funext_binder`
+are all models now.
 
-* `infinitary` — only its `HTree`, a field at a *mimic* under a binder.
+**`indexed_container` and `nest_index_cross` are the indexed-container axis.**
+`VTree` is the shape; `WTree` says one mimic serves two index values, because
+the occurrence is the container at its *parameters*; `UTree` is the
+non-degenerate one, since a single index at a constant value cannot distinguish
+a telescope that is threaded from one that is dropped — `Tab α : N → N → Type`
+has two, `UTree.node` sits at two differing values, and `Tab`'s own recursion
+moves them one at a time. `nest_index_cross` is that shape crossed with the
+*declaration's* own indices (`CTree`), with a mutual block (`PA`/`PB`), and
+with a cycle of mimics whose family recursors are themselves indexed (`XT` over
+`ITr`).
 
-**`indexed_container` and `nest_index_cross` are the axis that just closed**,
-and they are here rather than in the passing list above because they are what
-says it closed. `VTree` is the shape; `WTree` says one mimic serves two index
-values, because the occurrence is the container at its *parameters*; `UTree` is
-the non-degenerate one, since a single index at a constant value cannot
-distinguish a telescope that is threaded from one that is dropped — `Tab α :
-N → N → Type` has two, `UTree.node` sits at two differing values, and `Tab`'s
-own recursion moves them one at a time. `nest_index_cross` is that shape
-crossed with the *declaration's* own indices (`CTree`), with a mutual block
-(`PA`/`PB`), and with a cycle of mimics whose family recursors are themselves
-indexed (`XT` over `ITr`).
-
-Two refusals are not of that kind:
+**`funext_binder` is a field at a mimic under a binder**, and `infinitary`'s
+`HTree`/`RTree`/`OTree` are the same three shapes in a file with no `funext` in
+it. What is left declining is therefore not a *shape* but a **missing constant
+in the input**, and there are two of those:
 
 * `decline_no_eq` — the export declares no `Eq`. The round trips are
-  equations; this tool does not fabricate an equality Lean never wrote, and
-  there is nothing here to fix.
-* `nest_through_nested`, below.
+  equations, and this tool does not fabricate an equality Lean never wrote.
+* `infinitary` — the export declares no `funext`. Same principle at the other
+  constant: the proofs for a binder position transport along
+  `(fun x⃗ => pack (unpack (f x⃗))) = f`, and that equality is read from the
+  export or the declaration declines. It is read **lazily**, so no other file
+  in the tree is asked for it.
 
 **`nest_through_mutual` and `nest_mutual_both` are no longer refusals at all.**
 A mutual block whose members nest is a shape Lean has and nothing in the
@@ -148,19 +151,26 @@ def expectedOwn : List Row :=
   , ("indexed_container", [("VTree", 15), ("WTree", 17), ("UTree", 16)], [])
   , ("nest_index_cross", [("ITr", 15), ("CTree", 15), ("PA", 29), ("XT", 21)], [])
   , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
-    -- **The three witnesses of the one remaining gap.** The obstruction is
-    -- the proof and not the statement: the block types a field at a mimic
-    -- under a binder as `N → B₁`, so something has to transport along
-    -- `(fun n => pack (unpack (f n))) = f`, which is **funext**. `HTree` is
-    -- the root's field and puts it in the recursor's minor and every ι rule;
-    -- `RTree` over `Rose` is the container's own recursive field and puts it
-    -- in the two round trips; `OTree` over `Outer` is a container's field at
-    -- *another* mimic, where there is no induction hypothesis to lean on at
-    -- all. Lean accepts all three. MODELGEN.md §5.1 carries the argument.
+    -- **The three places a binder can sit relative to the nesting, without a
+    -- `funext` in the export.** All three are shapes Lean accepts and all
+    -- three are models in `funext_binder.lean`, which is the same three with
+    -- one; here the export declares none and the decline says exactly that,
+    -- which is `decline_no_eq`'s principle at the other constant this module
+    -- reads rather than fabricates.
   , ("infinitary", [("FTree", 17), ("GTree", 15), ("ZTree", 22)],
-      [ ("HTree", "nested model needs funext (HTree._model.0.node")
-      , ("RTree", "nested model needs funext (RTree._model.1.node")
-      , ("OTree", "nested model needs funext (OTree._model.1.mk") ])
+      [ ("HTree", "nested model without funext")
+      , ("RTree", "nested model without funext")
+      , ("OTree", "nested model without funext") ])
+    -- **A field at a mimic under a binder, with a `funext` to prove it with.**
+    -- The three positions again — the root (`HTree`), the container's own
+    -- recursive field (`RTree`), a container's field at another mimic
+    -- (`OTree`) — plus the two that say the treatment is not a one-off: `H2`
+    -- has a **two-binder** telescope, so closing only the innermost `funext`
+    -- is caught, and `H3.node : List H3 → (N → List H3) → H3` puts a moving
+    -- position with a binder beside one without in the *same* constructor,
+    -- where the fold builds the two congruences differently.
+  , ("funext_binder",
+      [("HTree", 15), ("RTree", 13), ("OTree", 19), ("H2", 15), ("H3", 15)], [])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])

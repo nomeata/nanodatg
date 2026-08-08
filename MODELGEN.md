@@ -200,6 +200,11 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_family_edges` / **`A1`/`A2`/`A3`** | 2 | 9 | 34 |
 | `nest_family_edges` / **`X`** | 2 | 6 | 23 |
 | `nest_mutual_index` / **`MA`/`MB`** | 2 | 9 | 32 |
+| `funext_binder` / `HTree` | 1 | 4 | 15 |
+| `funext_binder` / `RTree` | 1 | 3 | 13 |
+| `funext_binder` / `OTree` | 2 | 3 | 19 |
+| `funext_binder` / `H2` | 1 | 4 | 15 |
+| `funext_binder` / `H3` | 1 | 4 | 15 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -262,8 +267,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (14): **212 files, 0 failures,
-43 models, 336 statements compared with 0 differing, 829 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (15): **213 files, 0 failures,
+48 models, 365 statements compared with 0 differing, 846 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -307,6 +312,7 @@ true.
 | `nest_through_mutual` / `nest_mutual_both` | cannot (see §4.2) | **0.11 / 0.12 s** |
 | `nest_through_nested` / `nest_cycle_group` | cannot (see §4.2) | **0.12 / 0.13 s** |
 | `indexed_container` / `nest_index_cross` | cannot (see §4.2) | **0.08 / 0.08 s** |
+| `funext_binder` (five declarations) | cannot (see §4.2) | **0.09 s** |
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
@@ -377,6 +383,12 @@ Beyond the Rust path, and new:
   hypothesis vector has an entry for a field that sits at no member;
   `infinitary.lean`'s `ZTree` is the fixture that pins the vector's indexing,
   and it was measured to decline under the indexing that came before.
+* **A constructor field the block holds at a *mimic*, under a binder** —
+  `HTree.node : (N → List HTree) → HTree`. This is the one shape whose
+  obstruction was the *proof* rather than the statement, and closing it is the
+  one place this module reads a constant out of the export that no §1 statement
+  mentions. `funext_binder.lean` and §5.2's `nested model without funext`
+  below.
 * **A declaration with indices.** `ITree : N → Type` nesting `List (ITree
   N.z)`: `ITree.rec` has `numIndices = 1` while the mimic's motive has none, so
   a block recursor here has a **different index arity per member**, and the
@@ -565,88 +577,101 @@ rules with 0 differing.
 
 ---
 
-# 5. What it declines, each a shape
+# 5. What it declines
 
 Every entry names the shape, **what Lean does with it**, and what this does.
 Completeness is measured against Lean and not against the fixture set, so a
 shape Lean accepts and this refuses is a *gap* and is marked one; a shape Lean
 refuses too is a boundary and is marked that.
 
+**There are no gaps.** §5.1 is empty: there is no shape Lean accepts and this
+refuses. What is left is a shape Lean refuses too, or a constant the input does
+not declare.
+
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
 toolchain and `--#export` convention — except the five §5.2 and §5.3 name as
-having none, and each says why. `--check-recursors` runs on each, so Lean's own
+having none, and each says why. §5.1 is **empty**, and §4.2 lists the fixture
+that closed each row it used to have. `--check-recursors` runs on each, so Lean's own
 recursors for these shapes are compared against the export's on every test run.
 
 ## 5.1 Gaps — shapes Lean supports and this does not
 
-**One shape.** Everything else Lean accepts, `modelgen` writes.
+**Empty.** There is no shape Lean accepts and `modelgen` refuses.
 
-| decline | fixture | what Lean does |
-| --- | --- | --- |
-| `nested model needs funext (C has a field at a mimic under a binder)` | `infinitary.lean`'s `HTree`, `RTree`, `OTree` | accepts all three; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
+That sentence has been wrong before, so here is what stands behind it. Every
+shape this section has ever listed now has a fixture under `modelgen/tests/`,
+exported by Lean's own kernel, generating a model that the kernel accepted,
+whose recursors and ι rules were compared against the installed ones with 0
+differing, and whose filtered export `nanoda_bin` accepts: universe
+polymorphism, universe-polymorphic containers, dependent fields, indices on the
+declaration, indices on the **container**, infinitary constructors at the root,
+a field at a mimic **under a binder**, nesting inside a mutual block, nesting
+through a nested container, cycles of mimics, and the crossings of all of
+those. §4.2 names each with its fixture and its count.
 
-**The obstruction is the proof and not the statement, and it is exactly
-function extensionality.** The block types a field at a mimic under a binder as
-`∀ x⃗, Bₘ ι⃗`, so `T._model.ctor_j` builds `fun x⃗ => pack (f x⃗)` and
-something downstream has to transport along `(fun x⃗ => pack (unpack (f x⃗))) =
-f`. **No choice of `ctor_j` avoids it.** §1 fixes `ctor_j`'s type, so its value
-is `B₀.c (h f)` for some `h`, and `h` must satisfy `h (fun x⃗ => unpack (g x⃗))
-≡ g` for the recursor's minor to typecheck at a *variable* `g`; the only
-candidate is `fun k x⃗ => pack (k x⃗)`, and `pack (unpack (g x⃗))` is a
-recursor application stuck on a variable. So the two are propositionally and
-not definitionally equal, and this module's entire equality budget is the `Eq`
-the export declares.
+What `modelgen` still declines is of exactly two other kinds, and neither is a
+shape:
 
-**It has three witnesses at three different proofs**, which is why
-`infinitary.lean` carries three declarations rather than one:
+* **A constant the input does not declare** — §5.2's `nested model without Eq`
+  and `nested model without funext`, and `nested model name taken`.
+* **Shapes Lean rejects too** — the rest of §5.2.
+
+### The one shape that was here last, and what closing it cost
+
+`HTree.node : (N → List HTree) → HTree`: a constructor field the block holds at
+a mimic *under a binder*. The obstruction was the proof and not the statement.
+The block types the field `∀ x⃗, Bₘ ι⃗`, so `T._model.ctor_j` builds `fun x⃗ =>
+pack (f x⃗)` and something downstream transports along `(fun x⃗ => pack (unpack
+(f x⃗))) = f`. **No choice of `ctor_j` avoids it**: §1 fixes `ctor_j`'s type, so
+its value is `B₀.c (h f)` for some `h`, and `h` must satisfy `h (fun x⃗ =>
+unpack (g x⃗)) ≡ g` for the recursor's minor to typecheck at a *variable* `g`;
+the only candidate is `fun k x⃗ => pack (k x⃗)`, and `pack (unpack (g x⃗))` is a
+recursor application stuck on a variable.
+
+So `funext` is read from the export, the way `Eq` is — **never fabricated** —
+and **lazily**: only a declaration with such a field asks for it, because
+`funext` is in 1 of the 157 corpus files and *not* in `init-prelude`, and an
+unconditional requirement would decline everything that works today. A
+declaration that has the shape and finds no `funext` declines `nested model
+without funext` (§5.2). **§1 does not move**: no signature changes and no new
+name is emitted; only *which* declarations get a model does, and §1.3 already
+tells a consumer to read a missing `T._model.self` as "no model".
+
+The binder can sit in three places and they reach three different proofs, which
+is why `funext_binder.lean` carries five declarations and not one:
 
 | witness | where the binder sits | which proof needs funext |
 | --- | --- | --- |
-| `HTree.node : (N → List HTree) → HTree` | the **root**'s field | `recValue`'s minor, and every ι rule of `HTree.rec` |
-| `RTree.mk : Rose RTree → RTree`, `Rose.node : (N → Rose α) → Rose α` | the container's **own recursive** field | both **round trips**: `unpack₀ (pack₀ (Rose.node f))` reduces to `Rose.node (fun n => unpack₀ (pack₀ (f n)))`. `pack` and `unpack` need nothing — the induction hypothesis already *is* the function they want |
-| `OTree.mk : Outer OTree → OTree`, `Outer.mk : (N → Inner α) → Outer α` | a container's field at **another** mimic | both round trips again, but `Outer` is not recursive, so there is **no** induction hypothesis and the proof is `funext (fun n => unpackPack₁ (f n))` outright |
+| `HTree.node : (N → List HTree) → HTree` | the **root**'s field | `recValue`'s minor, and every ι rule of `HTree.rec`. `pack` and `unpack` need only a lambda |
+| `RTree.mk : Rose RTree → RTree`, `Rose.node : (N → Rose α) → Rose α` | the container's **own recursive** field | both **round trips**: `unpack₀ (pack₀ (Rose.node f))` reduces to `Rose.node (fun n => unpack₀ (pack₀ (f n)))`. `pack` and `unpack` need *nothing* — the induction hypothesis already **is** the function they want |
+| `OTree.mk : Outer OTree → OTree`, `Outer.mk : (N → Inner α) → Outer α` | a container's field at **another** mimic | both round trips again, but `Outer` is not recursive, so there is no hypothesis to lean on and the proof is `funext (fun n => unpackPack₁ (f n))` outright |
 
 The first cannot reach the other two — a root binder never enters
 `retractValue` or `sectionValue` — and the second cannot reach the third,
 because its position has an induction hypothesis where the third's has none.
+`H2.node : (N → N → List H2) → H2` is a **two**-binder telescope, so closing
+only the innermost `funext` is caught, and `H3.node : List H3 → (N → List H3) →
+H3` puts a moving position with a binder beside one without in the *same*
+constructor, where the congruence fold builds the two steps differently.
+`infinitary.lean` is the same three shapes in a file with **no** `funext`, and
+is the fixture for the decline.
 
-### The trade, settled
+**The part that is not `funext`, and is the reason this looked harder than it
+was.** A single funext'd equation `Eq (fun x⃗ => unpack (pack (f x⃗))) f` is not
+enough: the ι rule's other side holds the hypothesis *pointwise*, as
+`fun x⃗ => T._model.rec_m (f x⃗)`, and `T._model.rec_m` δ-unfolds to a transport
+**at each point**. Abstracting the whole function and transporting it once is a
+different term and the kernel says so. What closes it is `congrFun` —
+[`Modelgen.Gen.congrFunFor`], built from `Eq.rec` alone and read from nothing —
+which recovers `Eq (y x⃗) (f x⃗)` from the funext'd equation; instantiated, that
+is the *same proposition* as the retraction at `f x⃗`, so proof irrelevance
+identifies the two and the rule's sides meet. That is the same mechanism
+`congrPack_i` already used for a position without a binder.
 
-**Requiring `funext` is the right trade and this gap should close.** The
-argument, in the order the objections come:
-
-* **It costs §1 nothing.** `ctor_j`, `rec_k`, `iota_k_j` and the five
-  `pack`/round-trip signatures are unchanged; only *which* declarations get a
-  model changes, and §1.3 already tells a consumer to read the absence of
-  `T._model.self` as "no model". A consumer written against §1 today needs no
-  edit.
-* **It costs no trust.** The input is trusted and not typechecked; `Eq` is
-  already read out of it, and `EqInfo.read` shape-checks the statement it
-  found. A `FunextInfo.read` would do the same against `∀ {α : Sort u} {β : α →
-  Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x) (g x)) → Eq f g`. There is no new
-  axis here.
-* **The requirement must be *conditional*.** Requiring `funext` unconditionally
-  would turn every currently-working file into a decline, since `funext` is in
-  **1 of the 157 corpus files** (`good/perf/grind-ring-5`) and *not* in
-  `init-prelude`. So it is read lazily and only a declaration that has the
-  shape declines for its absence — which is what the decline above becomes.
-* **The one thing that argues the other way, and does not win.** On the tree as
-  it stands, closing the gap would change no decline into a model outside a
-  fixture written for it, because no corpus file has both the shape and
-  `funext`. That is an argument about the corpus, not about Lean, and
-  completeness here is measured against Lean.
-
-**It is not closed in this pass**, and that is a budget statement rather than a
-design one. What it takes, so that the next pass is a specification and not a
-question: a `FunextInfo`, an iterated `funext` over a binder telescope, lambda
-construction in `ctorValue` and `unpackMinor`, funext-carrying proofs at the
-four sites in `recMinor`, `retractValue`, `sectionValue` and
-`retractFamilyValue`, a function-level congruence of `pack` beside
-`congrPack_i` for `Rule.sides`, and `Rule`'s `moving` set widened to the
-positions under a binder. The delicate part is `Rule.sides`, where the
-transports have to ι-reduce back to the base under proof irrelevance. Each of
-the three witnesses above is already exported and already red.
+15, 13, 19, 15 and 15 declarations, 29 statements compared against the
+installed recursors' own rules with 0 differing, `nanoda_bin` accepts the
+filtered export.
 
 ## 5.2 Boundaries — shapes Lean does not support either
 
@@ -679,6 +704,16 @@ the three witnesses above is already exported and already red.
 * `nested model without Eq` — the export declares no `Eq`, or one whose
   recursor is not Lean's shape. The round trips are equations and this tool
   does not fabricate an equality Lean never wrote. `decline_no_eq.lean`.
+* `nested model without funext` — the declaration has a field at a mimic
+  **under a binder** and the export declares no `funext`, or one whose
+  statement is not Lean's. The same principle at the other constant, and
+  checked the same way: the expected statement is built at the found
+  declaration's own two level parameters and compared with `isDefEq`, so binder
+  names and binder info do not matter. Read **lazily** — no other shape asks
+  for it, and `funext` is in 1 of the 157 corpus files, so an unconditional
+  requirement would decline all of them. `infinitary.lean`'s `HTree`, `RTree`
+  and `OTree`; `funext_binder.lean` is the same three with a `funext` and they
+  are models.
 * `nested model name taken (N)` — `N` is declared somewhere in the input. Not a
   shape at all: a collision with the file's own names.
   `mini/tests/fixtures/nested_keying.lean`.
@@ -711,20 +746,21 @@ Lean block, which has exactly such a family. It is kept because a group this
 cannot write is a wrong model rather than a missing one, and it is recorded
 here as an *arm nothing reaches* rather than as a covered refusal.
 
-`nested model shape: … is recursive under a binder in its own container` is a
-second such arm, in `packMinor` and `retractValue`. A container recursive under
-a binder has a hypothesis that the count of *recursive positions* does not
-name, and the minor's vector would be read off by one — but the funext guard in
-`iso` is earlier and catches every such container, `infinitary.lean`'s `RTree`
-being the fixture measured declining there. Kept for the same reason: a vector
-read off by one is a wrong model rather than a missing one.
+`nested model shape: …'s recursive positions and hypotheses do not line up` is
+a second such arm, in `packMinor` and `retractValue`. It counts the container's
+recursive positions — occurrence `i` at any index vector and **under any binder
+telescope**, which is `Gen.occUnder?` — and asserts that count is the number of
+induction hypotheses Lean bound. Those are the same set: Lean gives exactly the
+recursive positions a hypothesis, infinitary ones included, which is what
+`funext_binder.lean`'s `RTree` over `Rose` measures. Kept because a vector read
+off by one is a wrong model rather than a missing one.
 
 ## 5.4 What `nested model shape: …` means
 
 A shape the generator cannot write, or a proof the kernel did not accept. It
 is the catch-all, so a new occupant of it is a new gap and not a known one.
-§5.1's gap has its own decline now (`nested model needs funext`), so what is
-left occupying it is **one file, and it is a lie rather than a shape**:
+§5.1 is empty, so what is left occupying it is **one file in the whole tree,
+and it is a lie rather than a shape**:
 
 > `vendor/arena-tests/bad/nested-unused-param.ndjson`'s `E` declines with
 > `nested model shape: [E._model.pack_0] rejected by the kernel: (kernel)
