@@ -115,7 +115,14 @@ emitted first.
 they compose. `P`/`Q` is a mutual block that nests through a nested container:
 five block members, five recursors over one shared vector, a cyclic pair of
 mimics beside an ordinary one, and a carrier family. `R`/`S` crosses the mutual
-axis with a level parameter of the declaration's own. -/
+axis with a level parameter of the declaration's own.
+
+**`nest_family_edges` is the pair of edges two members cannot reach.** A mutual
+block of **three** — with two, `A.rec_1` is equally "the first member's
+namespace" and "the previous member's", and only three say which. And a cycle
+whose family is a **mutually recursive pair of containers** rather than a
+nested one, which is the other arm of the family lookup: `C`'s block has two
+real members and no nesting where `Tree`'s has one and one. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [],
@@ -137,6 +144,7 @@ def expectedOwn : List Row :=
   , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
   , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
   , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
+  , ("nest_family_edges", [("A1", 34), ("X", 23)], [])
   ]
 
 structure TAcc where

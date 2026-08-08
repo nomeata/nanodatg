@@ -170,6 +170,8 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_cycle_group` / **`V`** | 3 | 7 | 30 |
 | `nest_mutual_cycle` / **`P`/`Q`** | 3 | 10 | 37 |
 | `nest_mutual_cycle` / **`R.{w}`/`S.{w}`** | 1 | 6 | 21 |
+| `nest_family_edges` / **`A1`/`A2`/`A3`** | 2 | 9 | 34 |
+| `nest_family_edges` / **`X`** | 2 | 6 | 23 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -232,8 +234,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (11): **209 files, 0 failures,
-27 models, 209 statements compared with 0 differing, 779 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (12): **210 files, 0 failures,
+29 models, 232 statements compared with 0 differing, 793 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -432,6 +434,21 @@ special-cased one would pass both fixtures above and fail this.
 
 Both `nanoda`-accepted, both compared against the installed recursors' own
 rules with 0 differing.
+
+`nest_family_edges.lean` is the pair of edges a two-member fixture cannot
+reach, and each is a claim in this section that would otherwise be untested:
+
+* **A mutual block of three.** With two members, `A.rec_1` is equally "the
+  first member's namespace" and "the previous member's". Here the mimic of
+  `List A2` and the mimic of `Box A3` are named `A1.rec_1` and `A1.rec_2` —
+  **always the first member**, whichever member the occurrence came from. Five
+  block members, five recursors, nine minors, 34 declarations.
+* **A cycle whose family is a mutually recursive *pair of containers*.**
+  `X.mk : C X → X` with `mutual inductive C | c : D α → C α; inductive D | d :
+  C α → D α end` cycles `C X` against `D X`, and the family that answers it has
+  two real members and **no** nesting, where `Tree`'s has one real member and
+  one nested occurrence. Both arms of `familyRecs` are therefore reached. 23
+  declarations.
 
 ---
 
