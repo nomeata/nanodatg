@@ -1,5 +1,5 @@
 name = "modelgen"
-defaultTargets = ["modelgen"]
+defaultTargets = ["modelgen", "envprobe"]
 testDriver = "test"
 
 [[lean_lib]]
@@ -24,4 +24,9 @@ supportInterpreter = true
 [[lean_exe]]
 name = "monotest"
 root = "MonoTest"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "envprobe"
+root = "EnvProbe"
 supportInterpreter = true
