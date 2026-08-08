@@ -435,7 +435,12 @@ kernel would recognise any more.
 **Mode B needs a checker that does not regenerate recursors by name.** `nanoda`
 does regenerate them, so it refuses mode B's output with
 `Expected (Declar::Recursor, Declar::Recursor)` — it minted `T._at.σ.rec` and
-looked for the export's declaration of that name, which mode B renamed. Lean is
+looked for the export's declaration of that name, which mode B renamed. Run on
+`init-prelude`'s mode B output it panics at `checker/src/inductive.rs:1269`,
+exit 101, having retired **371,105,688 instructions** against the
+**1,532,217,667** a full check of the same export costs — it dies about a
+quarter of the way in, so **no check cost for mode B can be derived from it at
+any scale**, and the amortization in §9.5 is measurable for mode A only. Lean is
 the same: run `modelgen --check-recursors` over mode B's `mono_elim` output and
 it reports **3 of the 4 recursors as differing from Lean's own**
 (`N.rec._elim.0`, `._elim.1`, `._elim.2`; the fourth is the carried `Eq.rec`),
@@ -486,9 +491,14 @@ is within 25% of `modelgen` on the same file while doing strictly more: the
 replay `modelgen` needs anyway, plus a rewrite of every expression, plus a
 second replay of the output.
 
-**The monomorphized file also checks faster.** `nanoda` on `init-prelude` takes
-0.152 s; on mode A's output, 2244 declarations rather than 2059, it takes
-**0.109 s**. Levels are not free even in a kernel that keeps them.
+**The monomorphized file also checks faster**, and this is a counter rather than
+a stopwatch: `nanoda` on `init-prelude` retires **1,532,217,667 instructions**;
+on mode A's output, 2244 declarations rather than 2059, it retires
+**987,231,746** — **1.55× fewer, for 9 % more declarations**. Levels are not
+free even in a kernel that keeps them. (The 0.152 s and 0.109 s this used to
+quote were a 43 ms difference between two tenth-of-a-second runs on a shared
+machine, which is not a measurement; the instruction counts agree with their
+direction and are why the sentence survives.)
 
 ## 5.3 Acceptance
 
@@ -1020,22 +1030,43 @@ would have *under*-predicted it by three quarters.
 accepts the mode A output file. That is §4.1's oracle, run at 70× the size of
 `init-prelude` rather than argued.
 
-**The monomorphized file still checks faster, and by more.** `nanoda_bin` handles
-Mathlib-scale input comfortably — it is far more frugal than the pass that
-produced it — and since §2.1's grouping fix the **whole** mode A output is a file
-it will read, so this is now measured at both scales:
+**The monomorphized file still checks faster, and the pass pays for itself on a
+single check.** Re-taken 2026-08-08 with **`perf stat -e instructions`**, one
+pinned `nanoda_bin` for both checks and one pinned `monomorph` for the pass, all
+three back to back — because a ratio of two wall clocks on this machine is not
+evidence, and the three numbers this claim used to rest on were separate runs
+hours apart (`MEASUREMENTS.md`, "Which recorded numbers carry weight").
 
-| | declarations | wall | peak RSS |
-| --- | ---: | ---: | ---: |
-| 20 M prefix, input | 132,184 | **331.36 s** | 1,681,672 KB |
-| 20 M prefix, mode A output | 144,404 | **163.42 s** | 1,625,104 KB |
-| **full Mathlib, input** | **670,630** | **3011.42 s** | 10,711,008 KB |
-| **full Mathlib, mode A output** | **776,723** | **1188.76 s** | 10,761,796 KB |
+| | declarations | **instructions** | wall | peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| **full Mathlib, input** | **670,630** | **22.823 T** | 2758.08 s | 10,715,200 KB |
+| **mode A pass, `-o`** | — | **5.306 T** | 757.45 s | 35,292,700 KB |
+| **full Mathlib, mode A output** | **776,723** | **9.760 T** | 1211.37 s | 10,759,940 KB |
+| `init-prelude`, input | 2,059 | 1.532 G | 0.12 s | 11,600 KB |
+| `init-prelude`, mode A output | 2,244 | 0.987 G | 0.08 s | 10,832 KB |
 
-**2.53× faster on 15.8 % more declarations** at full scale, against 2.03× on the
-20 M prefix and 1.6× on `init-prelude` (0.13 s → 0.08 s, re-measured here). The
-saving grows with the input, and the memory does not: the output costs 0.5 %
-more peak RSS than the input it replaces.
+**The checker alone is 2.34× on 15.8 % more declarations**, and — the claim that
+actually matters — **pass plus check is 1.51× the direct check**, so
+monomorphizing Mathlib is cheaper than not doing it *on the very first check*,
+not only on the second. Break-even is **0.41 of a check**: the pass costs
+5.306 T and every check thereafter saves 13.063 T. On `init-prelude` the checker
+ratio is **1.55×**, so the saving does grow with the input (1.55× → 2.34×), and
+the memory does not: the output costs **0.42 %** more peak RSS than the input it
+replaces.
+
+**The wall clock had the direction right and the magnitude wrong.** The
+superseded figures were 2.53× and, by implication, 1.56×; instructions say 2.34×
+and 1.51×, so the clock overstated the checker ratio by **8 %**. The wall times
+of these same three runs give 2.28× and 1.40× — understating it — so three
+wall-derived answers to one question span **2.28–2.53×** while the instruction
+count sits at 2.34× and does not move. **Peak RSS, by contrast, is
+reproducible**: 10,715,200 KB here against 10,711,008 KB recorded for the same
+work on a different day is **0.04 %**, the pass reproduces its own peak to
+**0.005 %**, and it wrote a **byte-identical** 5,816,542,757-byte output.
+
+The 20 M-prefix row that stood here (331.36 s / 163.42 s, "2.03×") is wall-only
+and has not been re-taken; it is not evidence for anything and should be
+re-measured with `perf` before it is cited.
 
 ## 9.6 The built-ins, and the two patches that are gone
 
@@ -1096,14 +1127,18 @@ A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
   was wrong rather than the export.
 
   **After §2.1's grouping fix it accepts the whole file**: *"Checked 776,723
-  declarations with no typechecker errors"*, **1188.76 s at 10,761,796 KB**,
-  exit 0. (The same one pretty-printer complaint, `Unable to print axioms`.)
+  declarations with no typechecker errors"*, exit 0, and §9.5 has since re-taken
+  it as **9.760 T instructions at 10,759,940 KB** (the 1188.76 s once recorded
+  here was a wall clock, and re-running the same work gave 1211.37 s). (The same one pretty-printer complaint, `Unable to print axioms`.)
   Nothing else changed — same naming scheme, same writer, same mode A — so this
   is the undercount and the reordering, gone. It is also the first time an
   external checker has read a **whole** monomorphized Mathlib.
 * **`nanoda` on the unmodified Mathlib input** — the control for the row above,
   and not run before either. **It accepts the whole file**: *"Checked 670630
-  declarations with no typechecker errors"*, **3011.42 s at 10,711,008 KB**.
+  declarations with no typechecker errors"*, re-taken in §9.5 as **22.823 T
+  instructions at 10,715,200 KB**. (The 3011.42 s once recorded here was a wall
+  clock; the same work re-run took 2758.08 s, while the peak RSS reproduced to
+  0.04 %.)
   (One pretty-printer complaint, `Unable to print axioms`, which is not a
   checking result.) So the export really is in dependency order and the
   reordering above is `monomorph`'s — §9.3 traces it to the grouping, by line

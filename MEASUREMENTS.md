@@ -5410,3 +5410,89 @@ wall delta because *"the two runs were made hours apart on a machine with other
 seats on it"*; §6.6's *"only the peak column is stable"*; `CACHING-DESIGN.md`'s
 byte-identical `INFER_ENTRIES`; and `MONOMORPH.md`'s variant B rejected on
 duplication and RSS rather than on its wall column.
+
+## The monomorph amortization triangle, re-taken with `perf` — 2026-08-08
+
+The claim under test: monomorphizing a Lean export before checking it **pays for
+itself on a single check**. It rested on three wall clocks taken hours apart —
+3011.42 s direct, 741.14 s for the pass, 1188.76 s for the check of the output —
+which is exactly the shape the section above classifies as suspect. Re-taken
+with `perf stat -e instructions,cycles,task-clock,page-faults`.
+
+**Method.** Both binaries were **copied into the measuring worktree and used
+from there**, so that another seat rebuilding mid-series could not change them:
+`nanoda_pinned` (sha256 `bba36086…`, the shared `target/release/nanoda_bin`) for
+both checks, `monomorph_pinned` (sha256 `7fc99d17…`, `mono-group`'s binary at
+`1463750`, the one §9.5's row was taken with) for the pass. Every run is
+`perf stat` around `/run/current-system/sw/bin/time -f` around the binary, in a
+subshell with `ulimit -v`. **Nothing waited for a quiet machine**: instruction
+counts are near-immune to contention, which is the entire reason for using them.
+The only gate was the session memory ceiling — `monomorph` peaks at 35 GB and
+this user's processes together may not pass ~50 GB without the machine killing
+every seat at once.
+
+| run | declarations | **instructions** | cycles | IPC | wall | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `nanoda` on `mathlib.ndjson` | 670,630 | **22,822,856,168,440** | 12,107,394,522,045 | 1.885 | 2758.08 s | 10,715,200 KB |
+| `monomorph` mode A, `-o` | — | **5,305,931,509,798** | 3,346,397,993,873 | 1.586 | 757.45 s | 35,292,700 KB |
+| `nanoda` on that output | 776,723 | **9,759,549,740,309** | 5,375,258,774,159 | 1.816 | 1211.37 s | 10,759,940 KB |
+
+### It still amortizes, and the figure is smaller
+
+**Pass plus check is 15.066 T against 22.823 T direct: 1.51×.** The pass costs
+5.306 T; each check saves 13.063 T; **break-even is 0.41 of a check.** So the
+conclusion survives — it pays for itself the *first* time, with room to spare —
+and the number that was being quoted for it does not. **The checker alone is
+2.34×, not 2.53×.**
+
+### Wall against instructions: they agree on direction, not on magnitude
+
+Three wall-derived answers to one question — 2.53× recorded, 2.28× from the very
+runs above, against **2.34×** in instructions — span **11 %**, and the two
+bracket the instruction count from opposite sides. The recorded clock overstated
+the checker ratio by 8 %; these runs' own clocks understate it by 3 %. **This is
+the useful calibration: the corpus of recorded wall ratios is not worthless, it
+is accurate to roughly ±10 %.** A claim that survives a 10 % swing is safe to
+keep; the several claims in this repo that turn on 1–5 % differences are not.
+
+**Peak RSS came out better than "probably sound".** 10,715,200 KB here against
+10,711,008 KB recorded on a different day for the same work — **0.04 %**. The
+pass reproduced its own recorded peak to **0.005 %** (35,292,700 against
+35,294,528 KB) and wrote a **byte-identical** output, 5,816,542,757 bytes, the
+same count to the digit. Where a decision here rests on RSS, it stands.
+
+**IPC is the load meter, and it moved.** 1.885 / 1.586 / 1.816 across the three.
+The check of the monomorphized file ran at *lower* IPC than the check of the
+input, which is why its wall ratio understates its instruction saving: the
+monomorphized file is a smaller amount of work per unit of memory traffic.
+
+### Mode B: the pass is measurable, the check is not, and that is structural
+
+Mode B — `--mono-recursors`, what `mini` actually wants — cannot complete this
+triangle, and not for want of a quiet machine. On `init-prelude`'s mode B output
+`nanoda` panics at `checker/src/inductive.rs:1269`, `Expected (Declar::Recursor,
+Declar::Recursor)`, exit 101, after **371,105,688 instructions** against the
+**1,532,217,667** a full check of that export costs — it dies roughly a quarter
+of the way in, because it mints `T._at.σ.rec` and mode B renamed it. Same
+pinned binary, same export, mode A of which checks clean in **987,231,746**
+instructions for 2,244 declarations against the input's 2,059: **1.55×**, the
+counter that replaces §5.2's 43 ms stopwatch.
+
+So **the amortization figure is measured on the mode we are not adopting.**
+Whether it carries to mode B is an argument, not a measurement: mode B is
++0.63 % declarations over mode A (781,601 against 776,723) and is *by
+construction* a pure post-pass over mode A's output, so its check would very
+likely land within a percent of mode A's 9.760 T — **if a checker existed that
+did not regenerate recursors by name.** None does. That is a checker change,
+not a measurement, and it should be booked as one.
+
+### What the machine was doing
+
+Deliberately not controlled, and recorded only so the wall column can be read.
+Run 1 began at loadavg 5.61 with 4.0 GB anon and ran **concurrently with another
+seat's `monomorph` prefix ladder** throughout, finishing with 21.7 GB anon on the
+box; run 2 began at loadavg 5.03 / 2.3 GB; run 3 at loadavg 3.40 / 0.9 GB. Run 1
+was therefore the most contended of the three and still came in **8.4 % faster
+than the uncontended figure on record** — which is the clearest single
+demonstration in this file that a wall clock on this machine is not measuring
+what it is being asked to measure.
