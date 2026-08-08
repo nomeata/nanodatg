@@ -347,13 +347,23 @@ tower.
 generated-recursor comparison — still passing. It runs three times per CI run,
 so that is ~9 minutes.
 
-**The build profile is not part of the story, and `opt-level = 3` now builds.**
-`CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_BUILD_JOBS=1 cargo build -p mini` **succeeds**
-in 3 m 27 s with a peak `rustc` RSS of **1.25 GB** — nowhere near the ceiling
-the `Cargo.toml` comment records. The likeliest explanation is in that comment
-itself: the SIGKILL it records was at `debuginfo = 2`, which `70409b7` has
-since dropped to line tables. The speed it buys is small — `DTree` 91.86 →
-87.53 s (−4.7%) at baseline, 7.25 → 6.33 s (−12.7%) at A+G.
+**The build profile is not part of the story, and `opt-level = 3` builds when
+there is room for it.** `CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_BUILD_JOBS=1
+cargo build -p mini` **succeeds** in 3 m 27 s with a peak `rustc` RSS of
+**1.25 GB**. The speed it buys is small — `DTree` 91.86 → 87.53 s (−4.7%) at
+baseline, 7.25 → 6.33 s (−12.7%) at A+G.
+
+*(This read "nowhere near the ceiling the `Cargo.toml` comment records", and
+explained the comment away: "the SIGKILL it records was at `debuginfo = 2`,
+which `70409b7` has since dropped to line tables". **The commit order refutes
+that.** `70409b7` is 2026-08-07 01:00 and `9902ef1` — the SIGKILL — is 01:14,
+fourteen minutes later and already at line tables. What `9902ef1`'s own message
+records is not debuginfo but **headroom**: `user-1001.slice` caps at 50.2 GiB
+and 48.25 GiB of it was tmpfs pinned in a mount namespace outside the sandbox,
+leaving well under 1 GiB. A 1.25 GB peak does not fit in under 1 GiB, so both
+measurements are right and neither is stale. `opt-level = 3` is a **headroom
+condition**, not a settled question: check free memory before raising it, and
+the `Cargo.toml` comment stays as written.)*
 
 ## 6. Asymptotics, and the empirical exponent
 
