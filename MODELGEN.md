@@ -178,6 +178,7 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_mutual_cycle` / **`R.{w}`/`S.{w}`** | 1 | 6 | 21 |
 | `nest_family_edges` / **`A1`/`A2`/`A3`** | 2 | 9 | 34 |
 | `nest_family_edges` / **`X`** | 2 | 6 | 23 |
+| `nest_mutual_index` / **`MA`/`MB`** | 2 | 9 | 32 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -240,8 +241,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (12): **210 files, 0 failures,
-35 models, 271 statements compared with 0 differing, 795 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (14): **212 files, 0 failures,
+36 models, 284 statements compared with 0 differing, 807 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -478,6 +479,16 @@ reach, and each is a claim in this section that would otherwise be untested:
   one nested occurrence. Both arms of `familyRecs` are therefore reached. 23
   declarations.
 
+`nest_mutual_index.lean` crosses the mutual axis with the **declaration's own
+indices**, which neither family fixture reaches — `nest_mutual_both` has no
+index anywhere and `indexed_decl` is not mutual, so a treatment that read the
+first member's index count for every member passes both. `MA : N → Type` and
+`MB : N → N → Type` have index telescopes of *different lengths* and their two
+mimics have none, so one motive vector carries three distinct arities; each
+member has a recursive field whose index differs from its result's, and both
+members nest. **32 declarations, and it needed no code**: the composition was
+measured, not built.
+
 ---
 
 # 5. What it declines, each a shape
@@ -497,7 +508,7 @@ recursors for these shapes are compared against the export's on every test run.
 
 | decline | fixture | what Lean does |
 | --- | --- | --- |
-| `nested model with indices` | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a **mimic** is indexed even when the declaration is not. A declaration with indices is supported; only a container's are refused |
+| `nested model with indices` | `indexed_container.lean`, `nest_index_cross.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a **mimic** is indexed even when the declaration is not. A declaration with indices is supported; only a container's are refused |
 | `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
 
 **An indexed container is a change to the interface contract and not only to
@@ -508,6 +519,17 @@ between `p⃗` and their argument, and §1's table would say so. That is why it 
 not folded in here: a consumer will be written against §1, and widening those
 five signatures is a decision about the contract. The generator side is the
 same `Gen.idxOf` treatment the declaration's indices already get.
+
+The fixtures are arranged so that the telescope has to be *threaded* and not
+merely admitted. `indexed_container.lean`'s `UTree` nests into `Tab α : N → N →
+Type` at `Tab UTree N.z (N.s N.z)` — **two** indices at differing values, and
+`Tab`'s own recursion moves them one at a time — because a single index at a
+constant value cannot distinguish a telescope that is threaded from one that is
+dropped, nor an order preserved from one reversed. `nest_index_cross.lean`
+crosses the shape with everything else that is closed: `CTree` has the
+declaration's indices *and* the container's, `PA`/`PB` is a mutual block whose
+members carry indices and nest through indexed containers, and `XT` makes the
+cycle of mimics itself run over an indexed container's recursor family.
 
 **A field at a mimic under a binder is the one gap here whose obstruction is
 the proof rather than the statement.** Lean accepts `HTree.node : (N → List

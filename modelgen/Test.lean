@@ -75,7 +75,17 @@ is meant to go away. `poly_nested`, `dependent_fields` and `indexed_decl` no
 longer decline at all and `infinitary` declines one of its four, so what
 remains is:
 
-* `indexed_container` — a container it nests into has indices.
+* `indexed_container` — a container it nests into has indices. `VTree` is the
+  axis; `WTree` says one mimic serves two index values because the occurrence
+  is the container at its *parameters*; and `UTree` is the non-degenerate one,
+  because a single index at a constant value cannot distinguish a telescope
+  that is threaded from one that is dropped. `Tab α : N → N → Type` has two,
+  `UTree.node` sits at two differing values, and `Tab`'s own recursion moves
+  them one at a time.
+* `nest_index_cross` — that same shape crossed with the *declaration's* own
+  indices (`CTree`), with a mutual block (`PA`/`PB`), and with a cycle of
+  mimics whose family recursors are themselves indexed (`XT` over `ITr`).
+  Nothing about the axis on its own says it survives any of the three.
 * `infinitary` — only its `HTree`, a field at a *mimic* under a binder.
 
 Two refusals are not of that kind:
@@ -122,13 +132,27 @@ block of **three** — with two, `A.rec_1` is equally "the first member's
 namespace" and "the previous member's", and only three say which. And a cycle
 whose family is a **mutually recursive pair of containers** rather than a
 nested one, which is the other arm of the family lookup: `C`'s block has two
-real members and no nesting where `Tree`'s has one and one. -/
+real members and no nesting where `Tree`'s has one and one.
+
+**`nest_mutual_index` is the mutual axis crossed with the declaration's own
+indices**, which nothing tested: `nest_mutual_both` has no index anywhere and
+`indexed_decl` is not mutual, so a treatment that read the first member's index
+count for every member passes both. `MA : N → Type` and `MB : N → N → Type`
+have index telescopes of **different lengths** and the two mimics have none, so
+one motive vector carries three distinct arities; each member has a recursive
+field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [("ITree", 15), ("I2", 15), ("I3", 15)], [])
   , ("indexed_container", [],
       [ ("VTree", "nested model with indices")
-      , ("WTree", "nested model with indices") ])
+      , ("WTree", "nested model with indices")
+      , ("UTree", "nested model with indices") ])
+  , ("nest_index_cross", [],
+      [ ("ITr", "nested model with indices")
+      , ("CTree", "nested model with indices")
+      , ("PA", "nested model with indices")
+      , ("XT", "nested model with indices") ])
   , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
     -- `HTree` is the one shape in this file that is still open, and the
     -- obstruction is the proof and not the statement: the block types
@@ -143,6 +167,7 @@ def expectedOwn : List Row :=
   , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
   , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
   , ("nest_family_edges", [("A1", 34), ("X", 23)], [])
+  , ("nest_mutual_index", [("MA", 32)], [])
   ]
 
 structure TAcc where
