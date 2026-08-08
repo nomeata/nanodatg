@@ -306,9 +306,11 @@ there is not predicted by this.
 | `init-prelude`, mode B | **0.306 s** |
 | the five `monotests` fixtures, `--check`, end to end (five processes) | 0.688 s |
 | `monotest` — all 99 `good/` files, `--check`, one process | **0.367 s** |
-| *for reference:* `modelgen` on `init-prelude` | 0.238 s |
+| *for reference:* `modelgen` on `init-prelude`, re-measured here | 0.238 s |
 
-Whole-file figures, best of three, including ~0.1 s of process start. The pass
+Whole-file figures, best of three, including ~0.1 s of process start.
+`MODELGEN.md` §4.1 records 0.28 s for its own row; the 0.238 s above is that
+same binary on this machine, so the two columns are comparable. The pass
 is within 25% of `modelgen` on the same file while doing strictly more: the
 replay `modelgen` needs anyway, plus a rewrite of every expression, plus a
 second replay of the output.
@@ -390,8 +392,9 @@ needs an environment, and it is why the input is replayed at all — a file with
 no projection never pays for it.
 
 On `init-prelude` this is not decorative: of 101 distinct projected structures,
-**five** (`Hashable`, `Inhabited`, `PProd`, `PULift`, `Subtype`) have more than
-one copy, so a pass that guessed "the only copy" would be wrong on them.
+**four** have more than one copy — `Subtype` and `Inhabited` and `PProd` at
+three each, `PULift` at two — so a pass that guessed "the only copy" would be
+wrong on them.
 `modelgen/monotests/mono_proj.ndjson` is the fixture, with `P.{u,v}` projected
 at `(1,1)`, `(1,2)` and `(2,1)` — three copies, two of them the same two atoms
 in opposite orders.
@@ -426,7 +429,7 @@ pipeline that wants both should typecheck the original.
 
 In `mini` and `checker`, if the input were mode B's output:
 
-* **`checker::instantiations` in its entirety.** The 512-line pre-pass, the
+* **`checker::instantiations` in its entirety.** The 511-line pre-pass, the
   worklist fixpoint, `Inst`, `Stats`, the published `SCHEDULE`, the
   `was_predicted` audit, and `DEFAULT_LEVELS` all exist to answer "which ground
   instantiations must this declaration be checked at". The answer is in the file.
