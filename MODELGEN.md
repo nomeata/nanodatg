@@ -243,12 +243,24 @@ would have a spare.
 
 Beyond the Rust path, and new:
 
-* **Universe-polymorphic containers** (§5), which is what `Lean.Syntax` needs.
+* **Universe-polymorphic containers**, which is what `Lean.Syntax` needs.
+  `nested_ev.rs`'s `rec_levels` puts the container's *declared* level parameter
+  on `C.rec`, as `Level::Param`; the occurrence's own instantiation is what
+  belongs there. For every fixture the Rust covers the containers are
+  monomorphic and the two coincide, so that guard had no witness in the tree —
+  but `Lean.Syntax` nests into `Array.{0} Syntax` over `List.{0} Syntax`, and
+  there the declared parameter is a free universe variable in a declaration
+  with no level parameters. Measured on a scratch fixture with a polymorphic
+  `List`: `nested_ev::iso` returns `Err(nested model shape)`, and `modelgen`
+  writes the 15 declarations and `nanoda` accepts them. `modelgen` uses
+  `u :: cls` — the occurrence's levels. A polymorphic **declaration** is a
+  different matter and is §5.1's first row.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
 
-Two shapes Lean supports and this does **not**, each now with a fixture under
-`modelgen/tests/` that says so out loud rather than passing over in silence:
+§5 lists every shape Lean supports that this refuses, each with a fixture. Two
+of them are family-shaped rather than per-declaration and are written out
+here:
 
 * **Nesting inside a mutual block.** Lean accepts and exports it: `mutual
   inductive A | mk : List B → A; inductive B | mk : A → B end` comes back with
@@ -294,43 +306,71 @@ Two shapes Lean supports and this does **not**, each now with a fixture under
 
 # 5. What it declines, each a shape
 
-* `nested model with universe parameters` — the declaration has level
-  parameters of its own. No fixture has one.
-
-  A **container** with level parameters is fine, and this is where `modelgen`
-  reaches something the Rust does not. `nested_ev.rs`'s `rec_levels` puts the
-  container's *declared* level parameter on `C.rec`, as `Level::Param`; the
-  occurrence's own instantiation is what belongs there. For every committed
-  fixture the containers are monomorphic and the two coincide, so the guard has
-  no witness in the tree — but `Lean.Syntax` nests into `Array.{0} Syntax` over
-  `List.{0} Syntax`, and there the declared parameter is a free universe
-  variable in a declaration with no level parameters. Measured on a scratch
-  fixture with a polymorphic `List`: `nested_ev::iso` returns
-  `Err(nested model shape)`, and `modelgen` writes the 15 declarations and
-  `nanoda` accepts them. `modelgen` uses `u :: cls` — the occurrence's levels.
-* `nested model with indices` — the declaration or a container has indices.
-* `nested model with dependent fields` — a constructor field's type mentions an
-  earlier field; the congruence fold replaces one argument of a constructor
-  application, which is only well-typed when the rest do not depend on it.
-* `nested model without Eq` — the export declares no `Eq`, or one whose
-  recursor is not Lean's shape.
-* `nested model name taken (N)` — `N` is declared somewhere in the input.
-* `nested model with mutually recursive occurrences` — see §4.2.
-* `nested model in a mutual block` — see §4.2.
-* `nested model shape: …` — a shape the generator cannot write, or a proof the
-  kernel did not accept. Its named occupant is **a constructor field recursive
-  under a binder**: a container whose constructor has a functional field gives
-  the mimic a field `N → B₀`, `Bₖ.rec`'s rule gives that an induction
-  hypothesis, and the ι statement writes none — a decline rather than a wrong
-  theorem.
+Every entry names the shape, **what Lean does with it**, and what this does.
+Completeness is measured against Lean and not against the fixture set, so a
+shape Lean accepts and this refuses is a *gap* and is marked one; a shape Lean
+refuses too is a boundary and is marked that.
 
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
-toolchain and `--#export` convention. That was a hole worth closing: the
-generator seat reported that `nested_ev::Reason`'s guards "keep their arguments
-and gain no occupant", so five of the six were known only by inspection.
+toolchain and `--#export` convention. `--check-recursors` runs on each, so
+Lean's own recursors for these shapes are compared against the export's on
+every test run.
 
-## 5.1 One Lean-side wrinkle
+## 5.1 Gaps — shapes Lean supports and this does not
+
+| decline | fixture | what Lean does |
+| --- | --- | --- |
+| `nested model with universe parameters` | `poly_nested.lean` | accepts `PTree.{u}` and `QTree.{u,v}` and exports `PTree.rec.{w,u}` |
+| `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
+| `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
+| `nested model with dependent fields` | `dependent_fields.lean` | accepts `node : (n : N) → Vec N n → List DTree → DTree` and the same with the moved field first |
+| `nested model shape: … has a recursive field under a binder` | `infinitary.lean` | accepts infinitary constructors at the root (`(N → FTree) → FTree`), at a mimic (`Fn.mk : (N → α) → Fn α`) and **through** a mimic (`(N → List HTree) → HTree`) |
+| `nested model in a mutual block` | `nest_through_mutual.lean` | accepts it; see §4.2 |
+| `nested model with mutually recursive occurrences` | `nest_through_nested.lean` | accepts it; see §4.2 |
+
+Two of the guards are narrower than the words suggest, and the fixtures say
+where the line is:
+
+* **Dependent fields.** The congruence fold replaces one argument of a
+  constructor application at a time, so what it needs is that no field's type
+  mentions a **moved** — that is, packed — field. A dependency on a plain field
+  is harmless. `dependent_fields.lean` carries both orders, `(n : N) → Vec N n
+  → List DTree` and `List ETree → (n : N) → Vec N n`, because a guard phrased
+  as "nothing after the last moved field" would pass one and fail the other.
+  A dependency **on** a moved field is out of reach for a different reason:
+  Lean does not support it either. `node : (l : List GTree) → Len l N.z →
+  GTree` fails Lean's own nested compilation with `unknown constant 'GTree'`,
+  because the auxiliary block replaces `List GTree` with a fresh member and
+  `Len l` is then about a constant that does not yet exist.
+* **A recursive field under a binder.** The guard in `Gen.iotaDecls` catches a
+  field whose type is a telescope ending in a block member; a field at a
+  *mimic* under a binder (`(N → List HTree) → HTree`) slips past it and is
+  caught later, by the kernel rejecting `HTree._model.ctor_1`. Both are shape
+  declines; only the first is named.
+
+## 5.2 Boundaries — shapes Lean does not support either
+
+* `nested model without Eq` — the export declares no `Eq`, or one whose
+  recursor is not Lean's shape. The round trips are equations and this tool
+  does not fabricate an equality Lean never wrote. `decline_no_eq.lean`.
+* `nested model name taken (N)` — `N` is declared somewhere in the input. Not a
+  shape at all: a collision with the file's own names.
+  `mini/tests/fixtures/nested_keying.lean`.
+* **A nested occurrence whose container parameter mentions a constructor
+  field** — `node : (n : N) → List (ITree n) → ITree (N.s n)` — reaches
+  `a nested occurrence in ITree depends on a constructor field`. **Lean rejects
+  it too**, at the kernel: "nested inductive datatypes parameters cannot
+  contain local variables". So this is a boundary and not a gap, and there is
+  deliberately no fixture: the source would not compile.
+
+## 5.3 What `nested model shape: …` means
+
+A shape the generator cannot write, or a proof the kernel did not accept. It
+is the catch-all, so a new occupant of it is a new gap and not a known one;
+`infinitary.lean` currently holds two.
+
+## 5.4 One Lean-side wrinkle
 
 `Environment.addDeclCore` maintains an elaborator-side index keyed by
 *normalised* names, and `panic!`s when two distinct private names collide

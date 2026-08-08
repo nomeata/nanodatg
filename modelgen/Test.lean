@@ -63,9 +63,28 @@ so five guards were known only by inspection. These are written for exactly
 that hole, under `modelgen/tests/` rather than in `mini/tests/fixtures`, and
 `export.sh` builds them with the repository's own exporter.
 
-Two of them are not refusals of *this* tool's making and are the more
-interesting half:
+**A decline is compared by prefix**, so that a fixture may pin *which shape*
+stopped the generator without pinning the wording of a kernel diagnostic
+quoted inside it.
 
+Most of these are shapes **Lean accepts and this does not** — every `.lean`
+here is one Lean's own kernel loaded, and `--check-recursors` compares the
+recursors it minted against the export's on every run. The five axis files are
+named for the shape rather than for the refusal, because the refusal is what
+is meant to go away:
+
+* `poly_nested` — the declaration has level parameters of its own.
+* `indexed_decl` — the declaration has indices.
+* `indexed_container` — a container it nests into has indices.
+* `dependent_fields` — a constructor field's type mentions an earlier field.
+* `infinitary` — a constructor field recursive under a binder, in all three
+  places one can sit relative to the nesting.
+
+Three refusals are not of that kind:
+
+* `decline_no_eq` — the export declares no `Eq`. The round trips are
+  equations; this tool does not fabricate an equality Lean never wrote, and
+  there is nothing here to fix.
 * `nest_through_mutual` — a mutual block one of whose members nests. **Lean
   supports it and exports it**: `A`/`B` come back with `numNested = 1` and
   three recursors, `A.rec`, `B.rec` and `A.rec_1`. Nothing in the 205-file
@@ -84,11 +103,26 @@ interesting half:
   exists. `Tree` in the same file still gets its model, so the fixture
   distinguishes the cycle check from a refusal to do anything. -/
 def expectedOwn : List Row :=
-  [ ("decline_polymorphic", [], [("PTree", "nested model with universe parameters")])
-  , ("decline_indexed", [], [("ITree", "nested model with indices")])
+  [ ("poly_nested", [],
+      [ ("PTree", "nested model with universe parameters")
+      , ("QTree", "nested model with universe parameters") ])
+  , ("indexed_decl", [],
+      [ ("ITree", "nested model with indices")
+      , ("I2", "nested model with indices") ])
+  , ("indexed_container", [],
+      [ ("VTree", "nested model with indices")
+      , ("WTree", "nested model with indices") ])
+  , ("dependent_fields", [],
+      [ ("DTree", "nested model with dependent fields")
+      , ("ETree", "nested model with dependent fields") ])
+  , ("infinitary", [],
+      [ ("FTree", "nested model shape: FTree._model.0.branch has a recursive field under a binder")
+        -- A field at a **mimic** under a binder is not caught by that guard —
+        -- it is `HTree._model.ctor_1` that the kernel then rejects, because the
+        -- constructor wants `N → HTree._model.1` and the export's type says
+        -- `N → HTree._model.self`. A shape decline all the same, but a late one.
+      , ("HTree", "nested model shape: [HTree._model.ctor_1] rejected by the kernel:") ])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
-  , ("decline_under_binder", [],
-      [("Tree", "nested model shape: Tree._model.1.mk has a recursive field under a binder")])
   , ("nest_through_mutual", [], [("A", "nested model in a mutual block")])
   , ("nest_mutual_both", [], [("A", "nested model in a mutual block")])
   , ("nest_through_nested", [("Tree", 15)],
@@ -118,7 +152,12 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures") :
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
   a := check a (got == want) s!"{name}: models are {got}, expected {want}"
   let gotD := rep.declined.toList.map fun (n, w) => (n.toString, w)
-  a := check a (gotD == wantDeclined) s!"{name}: declines are {gotD}, expected {wantDeclined}"
+  -- By **prefix**: which shape stopped the generator is the claim, and a
+  -- kernel diagnostic quoted inside the message is not.
+  let declinesMatch :=
+    gotD.length == wantDeclined.length &&
+    (gotD.zip wantDeclined).all fun ((gn, gw), (wn, ww)) => gn == wn && ww.isPrefixOf gw
+  a := check a declinesMatch s!"{name}: declines are {gotD}, expected {wantDeclined}"
   -- axis 3: the statements, against the installed recursors' own rules
   a := check a rep.stmtErrors.isEmpty s!"{name}: {rep.stmtErrors}"
   -- A fixture whose only declarations are refusals has nothing to compare;
