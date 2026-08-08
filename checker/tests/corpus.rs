@@ -9,8 +9,10 @@
 //! * `tests/fixtures/{good,bad}` — small, hand-written, committed to the repo,
 //!   so `cargo test` always has negative coverage with no external download.
 //! * `vendor/arena-tests/{good,bad}` — the full Lean Kernel Arena corpus (102
-//!   good, 55 bad). Large, so it is gitignored; when absent these tests report a
-//!   skip rather than silently passing.
+//!   good, 55 bad). Large, so it is gitignored; when absent these tests skip —
+//!   which cargo reports as `ok`, so the skip goes through `ci/skip-guard.rs`
+//!   and becomes a failure under `NANODATG_REQUIRE_CORPUS`, which `ci/check.sh`
+//!   sets whenever the corpus is in fact there.
 //!
 //! Each file is checked in a subprocess. That is deliberate: the checker signals
 //! rejection by panicking (`assert!`), and catching that in-process would be
@@ -19,6 +21,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+// SKIP is not PASS: `arena_corpus` below returns early when `vendor/arena-tests`
+// is absent and cargo reports it `ok`. See ci/skip-guard.rs.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
 
 fn repo_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf() }
 
@@ -94,8 +101,7 @@ fn committed_fixtures_bad_are_rejected() {
 #[test]
 fn arena_corpus() {
     let corpus = repo_root().join("vendor/arena-tests");
-    if !corpus.is_dir() {
-        eprintln!("skipping: no arena corpus at {} (see scripts/arena.sh)", corpus.display());
+    if skip_guard::absent(&corpus) {
         return
     }
 

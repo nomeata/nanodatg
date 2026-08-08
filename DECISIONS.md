@@ -2712,3 +2712,44 @@ runs on machines where the step itself SKIPs. The cells were also driven against
 the *real* release checker, by copying a well-typed `good/` file into a shadow
 `bad/`: unlisted-and-accepted failed, listed-and-accepted waived,
 listed-and-rejected failed as stale.
+
+---
+
+## 2026-08-08 — SKIP is not PASS in the Rust suites: a guard at every site
+
+**Chosen.** One predicate, `ci/skip-guard.rs`, that every corpus-dependent test
+calls where it used to hand-roll `if !dir.is_dir() { return }`. It skips as
+before when `NANODATG_REQUIRE_CORPUS` is unset, and **panics** when it is set;
+`ci/check.sh` exports the variable only when `vendor/arena-tests` is genuinely
+present, and reports a SKIP step when it is not. `ci/check-test-guards.sh` is
+the ratchet that stops the shape from coming back.
+
+**Rejected — a single global assertion**, one test that fails when the corpus
+directory is missing. It is a tenth of the code and catches the common case,
+but five of the 41 sites are gated on an *individual* export
+(`good/init-prelude.ndjson`, `073_boolRecEqns`, `116_rtreeRecReduction`,
+`042_rbTreeDef`, …), so a corpus that unpacked short would still skip those in
+silence with the directory in place. A guard with a known blind spot is the
+thing that got us here.
+
+**Rejected — per-suite counting**, each suite reporting how many files it
+visited with the harness checking for zero. That is the faithful shape and it
+is what the shell steps do, but in Rust it is per-suite code to write and keep
+in step with 41 sites. `skip_guard::no_inputs(dir, n)` takes the useful half of
+it — it is the counted form, used by the twelve `mini/tests/tutorial.rs` sites
+that gate on an empty file list, and it fires on a present-but-empty directory
+too.
+
+**Why.** Measured, not assumed: with the corpus out of reach, **41 `#[test]`
+functions** across four files reported `ok` having executed nothing — twelve of
+them in 0.00 s, two of them printing no message at all. Under the guard and the
+variable, exactly those 41 fail. The cost with the corpus present is nil (the
+sites already did the same `stat`), and a fresh clone with no corpus still gets
+its committed-fixture coverage, which `README.md` promises.
+
+**A third shape, and it is not a skip.** `checker/tests/tg_tutorial.rs` opens
+`#![cfg(feature = "tg")]`: without the feature its 28 tests are not skipped but
+*absent*, and cargo prints `running 0 tests … ok`. Nothing but the
+`--features tg` step in `ci/check.sh` stands between them and a silent zero, so
+`ci/check-test-inputs.sh` now greps for that step — the same rule
+`ci/check-boundary.sh` already applies to its own delegation.

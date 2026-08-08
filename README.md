@@ -65,7 +65,13 @@ is the guarantee, not acceptance fidelity — is in `scripts/arena.sh`'s header.
 The list is empty today.
 
 Without it, `cargo test` still runs the committed fixtures in
-`checker/tests/fixtures/{good,bad}`, so there is always negative coverage.
+`checker/tests/fixtures/{good,bad}`, so there is always negative coverage — and
+the **41** corpus-dependent tests across `checker/tests/{corpus,tg_tutorial}.rs`
+and `mini/tests/{tutorial,dump}.rs` skip. A skip is reported by cargo as `ok`,
+which is fine for a developer and not fine for CI, so every one of them goes
+through `ci/skip-guard.rs`: set `NANODATG_REQUIRE_CORPUS=1` and a skip becomes a
+failure naming the missing path. `ci/check.sh` exports it whenever the corpus is
+in fact present, and reports a SKIP step when it is not.
 
 ## Where the project is
 

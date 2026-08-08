@@ -83,6 +83,42 @@ step "mini vs nanoda"            ./ci/check-mini-vs-nanoda.sh
 step "mini-vs-nanoda self-test"  ./ci/check-mini-vs-nanoda.sh --self-test
 
 step "workspace builds"          cargo build --workspace --all-targets
+
+# ── SKIP is not PASS, one layer down ────────────────────────────────────────
+# Everything above is the shell half of that rule. The Rust suites had the same
+# hole and it is the larger surface: measured with `vendor/arena-tests` out of
+# reach, **41 `#[test]` functions** across `checker/tests/{corpus,tg_tutorial}.rs`
+# and `mini/tests/{tutorial,dump}.rs` returned early and `cargo test` reported
+# every one of them `ok` — `mini/tests/tutorial.rs` managed 12 passes in 0.00 s,
+# and two of the 41 printed no message at all. `ci/skip-guard.rs` routes every
+# such skip through one predicate that *panics* under the variables exported
+# below; `ci/check-test-guards.sh` is the ratchet that stops the next
+# `if !dir.is_dir() { return }` from being written.
+#
+# The variables are set only when the input is genuinely there. A machine that
+# has not fetched the 17 MB gitignored corpus is unequipped, not broken, and
+# `README.md` promises it a useful `cargo test` off the committed fixtures — so
+# `check-test-inputs.sh` reports that case as a SKIP instead, and the summary
+# ends "all checks that ran passed".
+if [[ -d vendor/arena-tests ]]; then export NANODATG_REQUIRE_CORPUS=1; fi
+if [[ -x modelgen/.lake/build/bin/modelgen ]]; then export NANODATG_REQUIRE_MODELGEN=1; fi
+step "corpus-dependent tests"    ./ci/check-test-inputs.sh
+# …and its self-test, which needs no inputs and so runs where it SKIPs. It also
+# covers the third shape of this defect, which is neither a skip nor a shell
+# step: `checker/tests/tg_tutorial.rs` opens `#![cfg(feature = "tg")]`, so
+# without the feature its 28 tests are not skipped but *absent* —
+# `running 0 tests … ok`. Dropping `--features tg` from the step below would
+# retire them in silence, so that step's existence is now grepped for.
+step "test-input self-test"      ./ci/check-test-inputs.sh --self-test
+# The ratchet, and the self-test proving it can fail — eight planted violations
+# and the two clean cases that must still pass, one of them a comment that
+# *describes* the banned shape. Neither needs the corpus nor a toolchain,
+# so both run where the step above SKIPs. The guard's *own* panic path is
+# watched firing on every run too: `ci/skip-guard.rs` carries three `#[test]`s
+# that are compiled into each suite that includes it.
+step "skip guards"               ./ci/check-test-guards.sh
+step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
+
 step "tests"                     cargo test --workspace
 # The step-counting probe must not change behaviour, only observe it.
 step "tests (stepcount)"         cargo test --workspace --features stepcount

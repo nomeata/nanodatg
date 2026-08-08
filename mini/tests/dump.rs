@@ -2,7 +2,9 @@
 //! make it worth reading.
 //!
 //! The corpus lives in `vendor/arena-tests`, which is gitignored, so each test
-//! skips rather than fails when it is absent — the idiom `tutorial.rs` uses.
+//! skips rather than fails when it is absent — the idiom `tutorial.rs` uses,
+//! routed through `ci/skip-guard.rs` so that the skip is a *failure* under
+//! `NANODATG_REQUIRE_CORPUS` and cannot be mistaken for a pass in CI.
 //!
 //! # What is asserted, and why these and not "the dump is non-empty"
 //!
@@ -18,11 +20,21 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// SKIP is not PASS: eight of the nine tests below return early when
+// `vendor/arena-tests` is absent, and cargo reports them `ok`. See
+// ci/skip-guard.rs.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
+
 fn repo_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf() }
 
+/// A corpus export, or `None` when the gitignored corpus is absent — in which
+/// case the caller returns and cargo reports the test `ok`. That is the hole
+/// `skip_guard::absent` closes: under `NANODATG_REQUIRE_CORPUS` it panics here
+/// instead, so the seven tests below cannot be green having read nothing.
 fn export(name: &str) -> Option<PathBuf> {
     let p = repo_root().join("vendor/arena-tests/good/tutorial").join(name);
-    p.exists().then_some(p)
+    (!skip_guard::absent(&p)).then_some(p)
 }
 
 /// A checked-in fixture, which is **not** gitignored and therefore never skips.
@@ -51,7 +63,6 @@ fn run(path: &Path, flags: &[&str]) -> String {
 #[test]
 fn the_dump_is_byte_identical_across_two_processes() {
     let Some(p) = export("042_rbTreeDef.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let a = run(&p, &["--dump-theorems"]);
@@ -74,7 +85,6 @@ fn the_dump_is_byte_identical_across_two_processes() {
 #[test]
 fn a_filtered_dump_is_deterministic_too() {
     let Some(p) = export("042_rbTreeDef.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let a = run(&p, &["--dump-only=RBTree"]);
@@ -330,10 +340,10 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 #[test]
 fn tutorial_has_no_untranslated_records() {
     let dir = repo_root().join("vendor/arena-tests/good/tutorial");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        eprintln!("SKIP: gitignored corpus absent");
+    if skip_guard::absent(&dir) {
         return
-    };
+    }
+    let entries = std::fs::read_dir(&dir).expect("the corpus directory is there");
     let mut files: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -450,7 +460,6 @@ fn tutorial_has_no_untranslated_records() {
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     let Some(p) = export("116_rtreeRecReduction.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--block", "--dump-theorems"]);
@@ -496,7 +505,6 @@ fn an_unreached_pair_is_named_as_unreached_not_omitted() {
 #[test]
 fn every_absence_carries_a_reason() {
     let Some(p) = export("117_accRecType.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--dump-theorems"]);
@@ -522,7 +530,6 @@ fn every_absence_carries_a_reason() {
 #[test]
 fn the_dump_does_not_build_the_apparatus_it_reports() {
     let Some(p) = export("001_basicDef.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--dump-theorems"]);
@@ -542,7 +549,6 @@ fn the_dump_does_not_build_the_apparatus_it_reports() {
 #[test]
 fn a_constants_typing_and_defining_equation_are_the_real_ones() {
     let Some(p) = export("001_basicDef.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--dump-theorems"]);
@@ -572,7 +578,6 @@ fn a_constants_typing_and_defining_equation_are_the_real_ones() {
 #[test]
 fn a_store_that_gained_a_theorem_is_no_longer_printed_as_absent() {
     let Some(p) = export("077_RBTree.id_spec.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--dump-theorems", "--dump-only=RBTree"]);

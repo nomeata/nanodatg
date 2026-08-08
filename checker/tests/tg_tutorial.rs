@@ -14,6 +14,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// SKIP is not PASS: 20 of the tests below return early when `vendor/arena-tests`
+// is absent, and cargo reports every one of them `ok`. See ci/skip-guard.rs.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
+
 fn corpus() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("vendor/arena-tests") }
 
 /// A temp path no other test can collide with.
@@ -350,8 +355,7 @@ const PROOF_IRRELEVANCE_DERIVED: &[&str] = &["101_proofIrrelevanceWhnf"];
 #[test]
 fn proof_irrelevance_files_are_fully_derived() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     for name in PROOF_IRRELEVANCE_DERIVED {
@@ -375,8 +379,7 @@ fn proof_irrelevance_files_are_fully_derived() {
 #[test]
 fn the_bool_recursor_file_is_fully_derived() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     for name in RECURSOR_DERIVED {
@@ -393,8 +396,7 @@ fn the_bool_recursor_file_is_fully_derived() {
 #[test]
 fn tutorial_files_are_fully_derived() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     for name in FULLY_DERIVED {
@@ -427,7 +429,7 @@ fn beta_over_a_sort_argument_is_fully_derived() {
 #[test]
 fn files_with_known_gaps_are_still_accepted() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
+    if skip_guard::absent(&dir) {
         return
     }
     for name in HAS_GAPS {
@@ -451,7 +453,7 @@ fn files_with_known_gaps_are_still_accepted() {
 #[test]
 fn partially_derived_files_stay_within_their_budget() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
+    if skip_guard::absent(&dir) {
         return
     }
     for (name, budget) in GAP_BUDGET {
@@ -531,8 +533,7 @@ fn zeta_with_a_free_variable_expansion() {
 #[test]
 fn escaped_assumptions_are_reported_as_gaps() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&dir) {
         return
     }
     for name in ["028_peano2", "029_peano3", "075_nRecReduction"] {
@@ -641,8 +642,7 @@ fn rows_totalling(text: &str, label: &str) -> u64 {
 #[test]
 fn the_two_clauses_of_the_interpretation_never_disagree() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =
@@ -749,8 +749,7 @@ fn the_two_clauses_of_the_interpretation_never_disagree() {
 #[test]
 fn the_pre_pass_predicts_every_instantiation_the_backend_interprets() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =
@@ -834,8 +833,7 @@ fn report_row(export: &Path, label: &str) -> Option<u64> {
 #[test]
 fn a_parameterised_declaration_reaches_the_general_path() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     let f = dir.join("074_prodRecEqns.ndjson");
@@ -971,8 +969,7 @@ fn gap_reasons(export: &Path) -> Vec<String> {
 #[test]
 fn the_projection_typing_rule_fires() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus at {}", dir.display());
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =
@@ -1114,8 +1111,7 @@ fn tutorial(name: &str) -> PathBuf { corpus().join("good/tutorial").join(format!
 /// consulting `gen_const`: both rows go to zero.
 #[test]
 fn the_general_inductive_path_translates_shapes_no_recogniser_covers() {
-    if !corpus().join("good/tutorial").is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&corpus().join("good/tutorial")) {
         return
     }
     let mut translated = 0u64;
@@ -1151,8 +1147,7 @@ fn the_general_inductive_path_translates_shapes_no_recogniser_covers() {
 /// and `042`/`077` move.
 #[test]
 fn an_indexed_family_is_declined_as_indexed() {
-    if !corpus().join("good/tutorial").is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&corpus().join("good/tutorial")) {
         return
     }
     for name in ["042_rbTreeDef", "068_rbTreeRef", "077_RBTree.id_spec"] {
@@ -1179,8 +1174,7 @@ fn an_indexed_family_is_declined_as_indexed() {
 #[test]
 fn a_function_typed_recursive_argument_is_declined() {
     let f = tutorial("116_rtreeRecReduction");
-    if !f.is_file() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&f) {
         return
     }
     let n = gen_row(&f, GEN_FUNREC);
@@ -1210,8 +1204,7 @@ fn a_function_typed_recursive_argument_is_declined() {
 #[test]
 fn a_sort_ambiguous_declaration_is_declined() {
     let f = tutorial("073_boolRecEqns");
-    if !f.is_file() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&f) {
         return
     }
     let n = gen_row(&f, GEN_SORT);
@@ -1243,8 +1236,7 @@ fn a_sort_ambiguous_declaration_is_declined() {
 #[test]
 fn a_cached_general_translation_is_re_derived_before_it_is_used() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =
@@ -1334,8 +1326,7 @@ const CONST_REMINT: &str = "shared symbols declined: body not canonical";
 #[test]
 fn no_tutorial_export_builds_a_general_recursor_nest() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =
@@ -1399,8 +1390,7 @@ fn no_tutorial_export_builds_a_general_recursor_nest() {
 #[test]
 fn the_general_iota_rule_computes_on_the_prelude() {
     let f = corpus().join("good/init-prelude.ndjson");
-    if !f.is_file() {
-        eprintln!("skipping: no init-prelude export");
+    if skip_guard::absent(&f) {
         return
     }
     let text = report(&f);
@@ -1661,8 +1651,7 @@ fn the_general_iota_rule_computes_on_the_prelude() {
 #[test]
 fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     let f = corpus().join("good/init-prelude.ndjson");
-    if !f.is_file() {
-        eprintln!("skipping: no init-prelude export");
+    if skip_guard::absent(&f) {
         return
     }
     let text = report(&f);
@@ -1780,8 +1769,7 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
 #[test]
 fn projection_reduction_is_a_rule_fed_by_inference() {
     let f = corpus().join("good/init-prelude.ndjson");
-    if !f.is_file() {
-        eprintln!("skipping: no init-prelude export");
+    if skip_guard::absent(&f) {
         return
     }
     let text = report(&f);
@@ -1832,8 +1820,7 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
 #[test]
 fn no_tutorial_export_reaches_the_general_iota_rule() {
     let dir = corpus().join("good/tutorial");
-    if !dir.is_dir() {
-        eprintln!("skipping: no arena corpus");
+    if skip_guard::absent(&dir) {
         return
     }
     let mut files: Vec<PathBuf> =

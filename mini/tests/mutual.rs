@@ -84,6 +84,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// SKIP is not PASS. See ci/skip-guard.rs.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
+
 use mini::convert::{load_with, LoadOptions};
 use mini::env::{instantiate_lparams, ConstantInfo, Declaration, Environment, IndType};
 use mini::expr::{arrow, konst, sort, Expr, Level, Name, E};
@@ -745,8 +749,14 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
 
     // `vendor/arena-tests` is gitignored, so the corpus half is a bonus and
     // never a requirement. When it is there it more than triples the sample.
+    //
+    // It used to drop out **silently** when it was not: the sample went from 99
+    // files to 8 and the test still reported `ok`, which is the same
+    // SKIP-is-not-PASS hole the whole-test skips in `tutorial.rs` had, one
+    // degree quieter because this one is a partial. `skip_guard::absent` says so
+    // on stderr, and fails under `NANODATG_REQUIRE_CORPUS`.
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/arena-tests/good/tutorial");
-    if corpus.is_dir() {
+    if !skip_guard::absent(&corpus) {
         let mut c: Vec<PathBuf> = std::fs::read_dir(&corpus)
             .expect("corpus directory")
             .filter_map(Result::ok)

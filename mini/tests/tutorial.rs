@@ -20,10 +20,19 @@
 //! everything that is not the corpus.
 //!
 //! The corpus lives in `vendor/arena-tests`, which is gitignored, so every test
-//! reports a skip rather than passing vacuously when it is absent.
+//! here skips when it is absent. A skip *is* a vacuous pass as far as cargo is
+//! concerned, so each one goes through `ci/skip-guard.rs`, which turns it into a
+//! failure under `NANODATG_REQUIRE_CORPUS` — the variable `ci/check.sh` exports
+//! whenever the corpus is in fact present.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+// SKIP is not PASS: all 12 tests below return early when `vendor/arena-tests` is
+// absent, and cargo reports every one of them `ok` — 12 passes in 0.00 s. See
+// ci/skip-guard.rs.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
 
 fn repo_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf() }
 
@@ -155,8 +164,7 @@ fn bad_dir() -> PathBuf { repo_root().join("vendor/arena-tests/bad/tutorial") }
 #[test]
 fn tutorial_good_all_accepted() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     assert_eq!(files.len(), 91, "the tutorial corpus is 91 exports");
@@ -270,8 +278,7 @@ const UNTRANSLATED_ON_THE_CORPUS: &[(&str, &str)] = &[];
 #[test]
 fn tutorial_the_whole_corpus_certifies() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut owed: Vec<(String, String)> = Vec::new();
@@ -322,8 +329,7 @@ fn tutorial_the_whole_corpus_certifies() {
 #[test]
 fn tutorial_bad_fixtures_with_a_declared_axiom_are_still_rejected() {
     let files = ndjson_files(&bad_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", bad_dir().display());
+    if skip_guard::no_inputs(&bad_dir(), files.len()) {
         return
     }
     let with_axiom = [
@@ -345,8 +351,7 @@ fn tutorial_bad_fixtures_with_a_declared_axiom_are_still_rejected() {
 #[test]
 fn tutorial_bad_none_accepted() {
     let files = ndjson_files(&bad_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", bad_dir().display());
+    if skip_guard::no_inputs(&bad_dir(), files.len()) {
         return
     }
     let mut wrong = Vec::new();
@@ -367,8 +372,7 @@ fn tutorial_bad_none_accepted() {
 #[test]
 fn tutorial_bad_declines_are_exactly_the_recorded_ones() {
     let files = ndjson_files(&bad_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", bad_dir().display());
+    if skip_guard::no_inputs(&bad_dir(), files.len()) {
         return
     }
     let declined: Vec<String> =
@@ -383,8 +387,7 @@ fn tutorial_bad_declines_are_exactly_the_recorded_ones() {
 #[test]
 fn tutorial_every_export_is_scheduled() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut unscheduled = Vec::new();
@@ -408,8 +411,7 @@ fn tutorial_every_export_is_scheduled() {
 #[test]
 fn tutorial_corpus_facts() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let (mut nat_lits, mut max_nat, mut str_lits, mut pairs) = (0u64, 0u64, 0u64, 0u64);
@@ -494,8 +496,7 @@ fn tutorial_corpus_facts() {
 #[test]
 fn tutorial_clause_census() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut counts: std::collections::BTreeMap<String, u64> = Default::default();
@@ -1254,8 +1255,7 @@ fn tutorial_clause_census() {
 #[test]
 fn tutorial_evidence_ledger() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
@@ -2148,8 +2148,7 @@ fn tutorial_evidence_ledger() {
 #[test]
 fn tutorial_eliminator_class_matches_the_export_recursor() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut seen: std::collections::BTreeMap<String, (String, String)> = Default::default();
@@ -2424,8 +2423,7 @@ const FIRST_BLOCKER: (&str, &str, &str) =
 #[test]
 fn tutorial_first_blocker() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut blocked = 0usize;
@@ -2741,8 +2739,7 @@ fn tutorial_first_blocker() {
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
-    if files.is_empty() {
-        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+    if skip_guard::no_inputs(&good_dir(), files.len()) {
         return
     }
     let mut t: std::collections::BTreeMap<String, u64> = Default::default();

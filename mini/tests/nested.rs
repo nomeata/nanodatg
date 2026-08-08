@@ -118,6 +118,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
+// SKIP is not PASS. See ci/skip-guard.rs. The one test here that needs the
+// Lean-built `modelgen` binary skips without it, and cargo calls that `ok`.
+#[path = "../../ci/skip-guard.rs"]
+mod skip_guard;
+
 use mini::convert::{load_with, LoadOptions};
 use mini::env::{ConstantInfo, DefKind, Declaration, Environment};
 use mini::expr::{app, app_n, bvar, forall, konst, lam, Level, Name, E};
@@ -1310,13 +1315,7 @@ fn the_filters_report_reaches_the_user_and_says_why_there_is_no_model() {
         .parent()
         .expect("mini/ has a parent")
         .join("modelgen/.lake/build/bin/modelgen");
-    if !mg.is_file() {
-        eprintln!(
-            "SKIPPING the_filters_report_reaches_the_user_and_says_why_there_is_no_model: \
-             {} is not built — run `lake build` in modelgen/. The report/export split is \
-             UNMEASURED in this run.",
-            mg.display()
-        );
+    if skip_guard::tool_absent(&mg, "run `lake build` in modelgen/; the report/export split is UNMEASURED in this run") {
         return
     }
     // Not through [`run`], which prepends `--no-modelgen`: that would make the
