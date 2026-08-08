@@ -159,6 +159,9 @@ member (recursors) + m (congruences) + one per ι rule.
 | `dependent_fields` / `DTree` | 1 | 4 | 15 |
 | `dependent_fields` / `ETree` | 1 | 4 | 15 |
 | `dependent_fields` / `KTree` | 1 | 4 | 15 |
+| `infinitary` / `FTree` | 1 | 5 | 17 |
+| `infinitary` / `GTree` | 1 | 5 | 15 |
+| `infinitary` / `ZTree` | 2 | 7 | 22 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 | `nest_through_mutual` / **`A`/`B`** | 1 | 5 | 19 |
 | `nest_mutual_both` / **`A`/`B`** | 2 | 7 | 28 |
@@ -300,6 +303,16 @@ Beyond the Rust path, and new:
   `List`: `nested_ev::iso` returns `Err(nested model shape)`, and `modelgen`
   writes the 15 declarations and `nanoda` accepts them. `modelgen` uses
   `u :: cls` — the occurrence's levels.
+* **Dependent constructor fields**, where the dependency is on a field the
+  fold does not move — which is every dependency Lean supports (§5.2).
+  `dependent_fields.lean`: both orders, and `KTree` for a dependency inside
+  the *container's* constructor.
+* **Infinitary constructors at the root**, `FTree.branch : (N → FTree) →
+  FTree` and `Fn.mk : (N → α) → Fn α` reached through a mimic. Lean gives such
+  a field an induction hypothesis `∀ x⃗, motiveₘ (f x⃗)`, so a minor's
+  hypothesis vector has an entry for a field that sits at no member;
+  `infinitary.lean`'s `ZTree` is the fixture that pins the vector's indexing,
+  and it was measured to decline under the indexing that came before.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
 * **Nesting inside a mutual block**, below.
@@ -380,14 +393,20 @@ every test run.
 | --- | --- | --- |
 | `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
 | `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
-| `nested model shape: … has a recursive field under a binder` | `infinitary.lean` | accepts infinitary constructors at the root (`(N → FTree) → FTree`), at a mimic (`Fn.mk : (N → α) → Fn α`) and **through** a mimic (`(N → List HTree) → HTree`) |
+| `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
 | `nested model with mutually recursive occurrences` | `nest_through_nested.lean` | accepts it; see §4.2 |
 
-**A recursive field under a binder** is narrower than the words suggest. The
-guard in `Gen.iotaDecls` catches a field whose type is a telescope ending in a
-block member; a field at a *mimic* under a binder (`(N → List HTree) →
-HTree`) slips past it and is caught later, by the kernel rejecting
-`HTree._model.ctor_1`. Both are shape declines; only the first is named.
+**A field at a mimic under a binder is the one gap here whose obstruction is
+the proof rather than the statement.** Lean accepts `HTree.node : (N → List
+HTree) → HTree`. The block types the field `N → B₁`, so `T._model.ctor_j`
+would build `fun n => pack₀ (f n)` and the recursor's minor would have to
+transport along `(fun n => pack₀ (unpack₀ (f n))) = f` — **function
+extensionality**, and this module's entire equality budget is the `Eq` the
+export declares (§5.2's `nested model without Eq` is the same principle: no
+equality is fabricated that Lean did not write). Closing it means requiring a
+`funext` in the export the way `Eq` is required, and a new decline for its
+absence. A field recursive under a binder at the **root** needs none of that
+and is supported.
 
 ## 5.2 Boundaries — shapes Lean does not support either
 

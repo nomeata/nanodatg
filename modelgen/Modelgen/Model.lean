@@ -273,6 +273,33 @@ def memberOf (g : Gen) (t : Expr) : Option Nat :=
   | .const n _ => g.members.findIdx? (· == n)
   | _ => none
 
+/-- **Which member a field's induction hypothesis is at**, which is not the
+same question as [`Modelgen.Gen.memberOf`]. Lean gives a field of type
+`∀ x⃗, Bₘ …` an induction hypothesis `∀ x⃗, motiveₘ (f x⃗)` — infinitary
+constructors are supported and `FTree.branch : (N → FTree) → FTree` is one — so
+a minor's hypothesis vector has an entry for it and a treatment that counted
+only the fields *at* a member loses its place in that vector.
+
+Read the way Lean reads it, after `whnf` and through the telescope: `(fun x : B₀
+=> N) x`, which is `Ctr.mk`'s second field at `Ctr KTree (fun _ => N)`, mentions
+a member but is not recursive and gets no hypothesis. -/
+def ihMemberOf (g : Gen) (t : Expr) : GenM (Option Nat) := do
+  if let some m := g.memberOf t then return some m
+  forallTelescope (← whnf t) fun bs res => do
+    if bs.isEmpty then return none
+    return g.memberOf (← whnf res)
+
+/-- Each field's induction-hypothesis member, and its **position in the
+minor's hypothesis vector** — which counts every field that has one, in field
+order, and is what `Bₖ.rec` binds. -/
+def ihVector (g : Gen) (ftys : Array Expr) : GenM (Array (Option Nat) × Array (Option Nat)) := do
+  let ihm ← ftys.mapM g.ihMemberOf
+  let mut pos : Array (Option Nat) := #[]
+  let mut k := 0
+  for m in ihm do
+    if m.isSome then pos := pos.push (some k); k := k + 1 else pos := pos.push none
+  return (ihm, pos)
+
 /-- `(member, constructor)` for every constructor of the block, in the order
 `Bₖ.rec` binds its minors. -/
 def ctorPairs (g : Gen) : Array (Nat × Name) :=
@@ -372,6 +399,12 @@ def packMinor (g : Gen) (i member : Nat) (ps : Array Expr) (cn : Name) (mty : Ex
     let ihs := bs.extract n bs.size
     let ftys ← fields.mapM ityp
     let recs := (Array.range n).filter fun x => ftys[x]! == occ
+    -- The container's *own* recursive positions, and every one of them has
+    -- exactly one hypothesis. A container recursive under a binder — `Rose |
+    -- node : (N → Rose) → Rose` used as one — would have a hypothesis this
+    -- count does not name, and the vector would be read off by one.
+    unless recs.size == ihs.size do
+      badShape s!"{cn} is recursive under a binder in its own container"
     let mut args : Array Expr := #[]
     for x in [0:n] do
       if let some t := recs.findIdx? (· == x) then
@@ -412,7 +445,7 @@ def unpackMinor (g : Gen) (k : Nat) (ps : Array Expr) (cn : Name) (mty : Expr) :
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
     let ftys ← fields.mapM ityp
-    let recs := (Array.range n).filter fun x => (g.memberOf ftys[x]!).isSome
+    let (_, ihPos) ← g.ihVector ftys
     let mut args : Array Expr := #[]
     for x in [0:n] do
       match g.memberOf ftys[x]! with
@@ -420,7 +453,7 @@ def unpackMinor (g : Gen) (k : Nat) (ps : Array Expr) (cn : Name) (mty : Expr) :
         if !g.isReal m then
           -- A field at a *mimic* is unpacked, and its unpacked value is exactly
           -- this recursor's induction hypothesis for it.
-          let some t := recs.findIdx? (· == x) | badShape "no hypothesis for a mimic field"
+          let some t := ihPos[x]! | badShape "no hypothesis for a mimic field"
           args := args.push ihs[t]!
         else
           -- A field at a **real** member passes through: the block types it at
@@ -477,6 +510,8 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
         let ihs := bs.extract n bs.size
         let ftys ← fields.mapM ityp
         let recs := (Array.range n).filter fun x => ftys[x]! == occ
+        unless recs.size == ihs.size do
+          badShape s!"{cn} is recursive under a binder in its own container"
         let mut lhs : Array Expr := #[]
         let mut proofs : Array (Option Expr) := #[]
         for x in [0:n] do
@@ -527,7 +562,7 @@ def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
         let ftys ← fields.mapM ityp
-        let recs := (Array.range n).filter fun x => (g.memberOf ftys[x]!).isSome
+        let (_, ihPos) ← g.ihVector ftys
         let ty := g.memAt k ps
         let rebuild := fun (a : Array Expr) => g.blockCtorAt k cn ps a
         if !live k then
@@ -539,7 +574,7 @@ def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool
             match g.memberOf ftys[x]! with
             | some m =>
               if live m then
-                let some t := recs.findIdx? (· == x) | badShape "no hypothesis for a member field"
+                let some t := ihPos[x]! | badShape "no hypothesis for a member field"
                 let o := g.mimicOf m
                 lhs := lhs.push
                   (g.call (g.packName o) ps (g.call (g.unpackName o) ps fields[x]!))
@@ -775,6 +810,13 @@ structure Rule where
   blkTys : Array Expr
   /-- Which block member each field sits at, if any. -/
   mem : Array (Option Nat)
+  /-- Which member each field's **induction hypothesis** is at. Wider than
+  `mem`: a field of type `∀ x⃗, B₀ …` has one and sits at no member. -/
+  ihAt : Array (Option Nat)
+  /-- The type the minor declares for each field's induction hypothesis. Read
+  off the minor rather than rebuilt, so the binder names the model writes are
+  the recursor's own and the statement compares equal to the export's rule. -/
+  ihTys : Array (Option Expr)
   /-- The fields at a **mimic**, in order — the positions the fold moves. -/
   moving : Array Nat
 
@@ -795,6 +837,18 @@ def blkPrefix (r : Rule) : GenM (Array Expr) := do
   let bm ← r.g.blockMotives r.ps r.motives
   let bmin ← r.g.blockMinors r.ps r.motives r.minors r.v
   return r.ps ++ bm ++ bmin
+
+/-- **A field's induction hypothesis, as the export's rule writes it.** At a
+field sitting on a member it is `T._model.rec_m` at that field; at an
+infinitary one — `FTree.branch : (N → FTree) → FTree` — it is
+`fun x⃗ => T._model.rec_m … (f x⃗)`, and the binders come from the minor's own
+declared hypothesis type so the names are the recursor's. -/
+def ihFor (r : Rule) (x : Nat) : GenM (Option Expr) := do
+  let some m := r.ihAt[x]! | return none
+  let f := r.fields[x]!
+  if (r.mem[x]!).isSome then return some (r.recCall m f)
+  let some ty := r.ihTys[x]! | badShape "an induction hypothesis with no declared type"
+  forallTelescope ty fun xs _ => return some (← mkLambdaFVars xs (r.recCall m (mkAppN f xs)))
 
 /-- `congrPack_o p⃗ l₀ l h`. -/
 def congrPack (r : Rule) (o : Nat) (l0 l h : Expr) : Expr :=
@@ -821,6 +875,12 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
     | none =>
       srcVals := srcVals.push f
       vals := vals.push f
+      -- **Infinitary, and so it does not move.** `pack` passes a field of type
+      -- `∀ x⃗, Bₘ …` through untouched — the block types it at `Bₘ` where the
+      -- export types it at the carrier, which is that by δ — so both sides
+      -- hold it at `f` and the hypothesis is the same on both.
+      if let some ih ← r.ihFor x then
+        srcIhs := srcIhs.push ih; ihs := ihs.push ih
     -- A field at a **real** member does not move: `pack` passes it through, so
     -- both sides hold it at `f` and its hypothesis is `T._model.rec_m` on the
     -- nose.
@@ -916,13 +976,14 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
 motive universe. Free of the fold: each induction hypothesis is the model's
 **constant** `T._model.rec_m` rather than its unfolding, because that is what
 the export's own rule says and what the keying will read. -/
-def statement (r : Rule) : Expr :=
+def statement (r : Rule) : GenM Expr := do
   let all := r.fields
-  let ihs := (Array.range r.n).filterMap fun x =>
-    (r.mem[x]!).map fun m => r.recCall m all[x]!
+  let mut ihs : Array Expr := #[]
+  for x in [0:r.n] do
+    if let some ih ← r.ihFor x then ihs := ihs.push ih
   let major := r.build all
   let ty := mkApp r.motives[r.k]! major
-  r.g.eqi.mk' r.v ty (r.recCall r.k major) (mkAppN r.minors[r.minorIx]! (all ++ ihs))
+  return r.g.eqi.mk' r.v ty (r.recCall r.k major) (mkAppN r.minors[r.minorIx]! (all ++ ihs))
 
 /-- The proof: `Eq.refl` with nothing to move, and otherwise one `Eq.rec` on
 `unpackPackᵢ f` per packed position, from a base where every one of them is
@@ -1011,23 +1072,12 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       let bcn := cs[j]!
       let blkTys ← withFields (← instCtor bcn g.us ps) fun _ tys => pure tys
       let mem := blkTys.map g.memberOf
-      -- **A recursive field the head of whose type is not a member is one this
-      -- module cannot write.** `Bₖ.rec`'s rule gives an induction hypothesis to
-      -- a field of type `∀ …, Bₘ …` as well, and the right-hand side below has
-      -- none for it, so the statement would be a different equation from the
-      -- one the recursor obeys. A decline rather than a wrong theorem.
-      --
-      -- Recursiveness is read the way Lean reads it — after `whnf`, through
-      -- the `∀` telescope — and not by asking whether a member is *mentioned*.
-      -- `Ctr.mk : (x : α) → P x → Ctr α P` at `Ctr KTree (fun _ => N)` gives
-      -- the block a field `(fun x : B₀ => N) x`, which mentions `B₀` in a
-      -- binder it discards and gets no induction hypothesis;
-      -- `dependent_fields.lean`'s `KTree` is that fixture.
-      for x in [0:blkTys.size] do
-        if (mem[x]!).isNone then
-          let isRec ← forallTelescope (← whnf blkTys[x]!) fun _ res => do
-            return (g.memberOf (← whnf res)).isSome
-          if isRec then badShape s!"{bcn} has a recursive field under a binder"
+      -- **The hypothesis vector, in the minor's own order.** `Bₖ.rec` gives a
+      -- field of type `∀ x⃗, Bₘ …` an induction hypothesis too — Lean supports
+      -- infinitary constructors and `FTree.branch : (N → FTree) → FTree` is
+      -- one — so the vector has an entry for it and the right-hand side below
+      -- writes `fun x⃗ => T._model.rec_m … (f x⃗)` there.
+      let (ihAt, _) ← g.ihVector blkTys
       let key : Name × Name × List Level × Array Expr × Expr ←
         if g.isReal sh.k then do
           let (exportC, modelC, mty) := ctorTys[ctorBase + j]!
@@ -1042,12 +1092,27 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
           badShape s!"{bcn}: the export binds {fields.size} fields, the block {blkTys.size}"
         let moving := (Array.range blkTys.size).filter fun x =>
           match mem[x]! with | some m => !g.isReal m | none => false
+        -- **The hypothesis types, read off the minor and not rebuilt.** The
+        -- minor binds the export-side fields, so instantiating it at `fields`
+        -- leaves the hypothesis telescope in their terms; taking the binder
+        -- names from there is what makes `fun (a_1 : N) => rec_0 … (a a_1)`
+        -- compare equal to the rule the export carries.
+        let minorIx := minorBase + j
+        let nIh := (ihAt.filter (·.isSome)).size
+        let ihTyVec ← forallBoundedTelescope
+          (← instantiateForall (← ityp minors[minorIx]!) fields) (some nIh)
+          fun vs _ => vs.mapM ityp
+        let mut ihTys : Array (Option Expr) := #[]
+        let mut t := 0
+        for a in ihAt do
+          if a.isSome then ihTys := ihTys.push ihTyVec[t]?; t := t + 1
+          else ihTys := ihTys.push none
         let r : Rule :=
-          { g, k := sh.k, v := sh.v, ps, motives, minors, minorIx := minorBase + j
+          { g, k := sh.k, v := sh.v, ps, motives, minors, minorIx
             head, headLevels := hls, headPrefix := hpre
-            fields, extTys, bcn, blkTys, mem, moving }
+            fields, extTys, bcn, blkTys, mem, ihAt, ihTys, moving }
         let tel := pre ++ fields
-        let ty ← mkForallFVars tel r.statement
+        let ty ← mkForallFVars tel (← r.statement)
         let val ← mkLambdaFVars tel (← r.value)
         let nm := g.iotaName sh.k j
         return (exportKey, nm,
@@ -1171,9 +1236,24 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
           let tys ← fs.mapM ityp
           let packed := (Array.range fs.size).filterMap fun x =>
             match g.memberOf tys[x]! with
-            | some m => if m > 0 then some fs[x]! else none
+            | some m => if g.isReal m then none else some fs[x]!
             | none => none
           noDepOnPacked packed fs tys
+          -- **A field at a mimic *under a binder*.** Lean accepts
+          -- `HTree.node : (N → List HTree) → HTree`; this does not, and the
+          -- obstruction is not the statement but the proof. The block types
+          -- the field `N → B₁`, so `T._model.ctor_j` would have to build
+          -- `fun n => pack₀ (f n)` and the recursor's minor would have to
+          -- transport along `(fun n => pack₀ (unpack₀ (f n))) = f` — which is
+          -- **function extensionality**, and this module's whole equality
+          -- budget is the `Eq` the export declares. A field at the *root*
+          -- under a binder needs none of that and is supported;
+          -- `infinitary.lean`'s `FTree` is the fixture for it.
+          for x in [0:fs.size] do
+            if (g.memberOf tys[x]!).isNone then
+              if let some m ← g.ihMemberOf tys[x]! then
+                unless g.isReal m do
+                  badShape s!"{cn} has a field at a mimic under a binder"
 
   -- ── 3. pack, unpack, and the two round trips, per mimic ────────────────
   --

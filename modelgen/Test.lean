@@ -71,20 +71,19 @@ Most of these are shapes **Lean accepts and this does not** — every `.lean`
 here is one Lean's own kernel loaded, and `--check-recursors` compares the
 recursors it minted against the export's on every run. The five axis files are
 named for the shape rather than for the refusal, because the refusal is what
-is meant to go away. `poly_nested` and `dependent_fields` no longer decline —
-their models are `expectedOwn`'s first two rows — and the three that remain
-are:
+is meant to go away. `poly_nested` and `dependent_fields` no longer decline at
+all and `infinitary` declines one of its four, so what remains is:
 
 * `indexed_decl` — the declaration has indices.
 * `indexed_container` — a container it nests into has indices.
-* `infinitary` — a constructor field recursive under a binder, in all three
-  places one can sit relative to the nesting.
+* `infinitary` — only its `HTree`, a field at a *mimic* under a binder.
 
-Three refusals are not of that kind:
+Two refusals are not of that kind:
 
 * `decline_no_eq` — the export declares no `Eq`. The round trips are
   equations; this tool does not fabricate an equality Lean never wrote, and
   there is nothing here to fix.
+* `nest_through_nested`, below.
 
 **`nest_through_mutual` and `nest_mutual_both` are no longer refusals at all.**
 A mutual block whose members nest is a shape Lean has and nothing in the
@@ -111,13 +110,12 @@ def expectedOwn : List Row :=
       [ ("VTree", "nested model with indices")
       , ("WTree", "nested model with indices") ])
   , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
-  , ("infinitary", [],
-      [ ("FTree", "nested model shape: FTree._model.0.branch has a recursive field under a binder")
-        -- A field at a **mimic** under a binder is not caught by that guard —
-        -- it is `HTree._model.ctor_1` that the kernel then rejects, because the
-        -- constructor wants `N → HTree._model.1` and the export's type says
-        -- `N → HTree._model.self`. A shape decline all the same, but a late one.
-      , ("HTree", "nested model shape: [HTree._model.ctor_1] rejected by the kernel:") ])
+    -- `HTree` is the one shape in this file that is still open, and the
+    -- obstruction is the proof and not the statement: the block types
+    -- `(N → List HTree)` at `N → B₁`, so the recursor's minor would transport
+    -- along `(fun n => pack₀ (unpack₀ (f n))) = f`, which is **funext**.
+  , ("infinitary", [("FTree", 17), ("GTree", 15), ("ZTree", 22)],
+      [("HTree", "nested model shape: HTree._model.0.node has a field at a mimic under a binder")])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])
