@@ -189,6 +189,19 @@ def expectedOwn : List Row :=
     -- `Prop`-valued and *does* have a motive universe. `STree` nests through a
     -- container polymorphic over `Sort` rather than `Type`.
   , ("nest_sorts", [("PTree", 13), ("STree", 13)], [])
+    -- **The sweep.** A claim that there is no shape Lean accepts and this
+    -- refuses is worth what was swept for it, so these were written by asking
+    -- what else `inductive` allows rather than by a failure arriving. A
+    -- container with **no constructors** (`EmpT`), one with an **implicit**
+    -- binder (`ImpT`), one with a **`let` in a constructor field's type**
+    -- (`LetT` — measured refusing twice before `Gen.zetaHead`), a declaration
+    -- **parameter that is a function type** (`FunP`), **depth three** with the
+    -- binder deepest (`Deep3`), and `EvT`/`EvU`: a mutual block with a
+    -- parameter and an index nesting through an indexed container and through
+    -- `List`, one of them under a binder — every axis at once.
+  , ("nest_odd_shapes",
+      [("EmpT", 11), ("ImpT", 12), ("LetT", 20), ("FunP", 13), ("Deep3", 29),
+       ("EvT", 29)], [])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])

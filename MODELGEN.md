@@ -212,6 +212,12 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_binder_cross` / **`CycB`** | 2 | 5 | 21 |
 | `nest_sorts` / `PTree` | 1 | 3 | 13 |
 | `nest_sorts` / `STree.{u}` | 1 | 3 | 13 |
+| `nest_odd_shapes` / `EmpT` | 1 | 1 | 11 |
+| `nest_odd_shapes` / `ImpT` | 1 | 2 | 12 |
+| `nest_odd_shapes` / `LetT` | 2 | 5 | 20 |
+| `nest_odd_shapes` / `FunP f` | 1 | 4 | 13 |
+| `nest_odd_shapes` / `Deep3` | 3 | 7 | 29 |
+| `nest_odd_shapes` / **`EvT`/`EvU`** | 2 | 8 | 29 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -274,8 +280,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (17): **215 files, 0 failures,
-55 models, 408 statements compared with 0 differing, 873 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (18): **216 files, 0 failures,
+61 models, 450 statements compared with 0 differing, 897 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -286,24 +292,37 @@ export. It accepts every file this tool wrote a model into, and the negative
 control fires: give `Tree._model.iota_0_1` the *statement* of `iota_0_0` and it
 stops at `assert_def_eq: not definitionally equal`.
 
-**Four files it does not accept, and none of them is this tool's doing.**
-`mini/tests/fixtures`' `mutual_index_sorts`, `mutual_index_telescopes`,
-`mutual_one_recursive` and `mutual_prop_even_odd` make `nanoda_bin` panic at
-`checker/src/inductive.rs:30`. There is no model in any of them, so
-`modelgen`'s output is **byte-identical to the input** — measured with `cmp` —
-and the same panic fires on the input.
+**Five files it does not accept, and all five are the same upstream
+limitation.** `mini/tests/fixtures`' `mutual_index_sorts`,
+`mutual_index_telescopes`, `mutual_one_recursive` and `mutual_prop_even_odd`
+make `nanoda_bin` panic at `checker/src/inductive.rs:30`. There is no model in
+any of them, so `modelgen`'s output is **byte-identical to the input** —
+measured with `cmp` — and the same panic fires on the input.
 
-The line is `assert_eq!(ind.is_recursive, is_recursive)`, and the reason is now
+The line is `assert_eq!(ind.is_recursive, is_recursive)`, and the reason is
 measured rather than guessed: upstream recomputes `isRec` **per member**, by
 scanning that member's constructors for a *binder type* mentioning any name in
 the block, while Lean sets it for the **whole block**. Each of the four has
 exactly one member whose constructors mention no block member in a binder type
 — `mutual_one_recursive`'s `OB`, `mutual_prop_even_odd`'s `Ka`,
 `mutual_index_sorts`' `HB`, `mutual_index_telescopes`' `EB` — so the export
-says `true` and the recomputation says `false`. It is `checker/`'s to fix and
-not this tool's, and it is recorded here because the sentence above used to
-say "every one" and, over the whole tree rather than the corpus, that is not
-true.
+says `true` and the recomputation says `false`.
+
+> **The fifth is this tool's output**, and a consumer needs to know it.
+> `nest_odd_shapes.lean`'s `EmpT.mk : Emp EmpT → EmpT` nests into a container
+> with **no constructors**, so the generated block has a member with no
+> constructors, and upstream's recomputation calls that member non-recursive
+> where Lean calls the block recursive — the *same* assert. Lean's own kernel
+> accepts the model (that is oracle 1, and it ran), and `--check-recursors`
+> compares its recursors against Lean's with 0 differing; it is only
+> `nanoda_bin` that refuses to load it. So `modelgen` **can** emit a block that
+> the upstream parser will not take, for a reason that is upstream's and not
+> the model's. Every other file this tool writes a model into is accepted, and
+> that was measured file by file over `modelgen/tests`.
+
+It is `checker/`'s to fix and not this tool's, and it is recorded here because
+the sentence above used to say "every one" and, over the whole tree rather than
+the corpus, that is not true.
 
 ## 4.1 Speed
 
@@ -321,6 +340,7 @@ true.
 | `indexed_container` / `nest_index_cross` | cannot (see §4.2) | **0.08 / 0.08 s** |
 | `funext_binder` (five declarations) | cannot (see §4.2) | **0.09 s** |
 | `nest_binder_cross` / `nest_sorts` | cannot (see §4.2) | **0.09 / 0.08 s** |
+| `nest_odd_shapes` (six declarations) | cannot (see §4.2) | **0.10 s** |
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
@@ -402,6 +422,19 @@ Beyond the Rust path, and new:
   they were taught the same telescope. Also there: a *dependent* two-binder
   telescope (`DTel`), the binder at an indexed container (`IdxB`), and the
   binder inside a mutual block (`MutB`/`MutC`).
+* **The odd corners, swept for rather than waited on.**
+  `nest_odd_shapes.lean` is what the "no gaps" claim is worth: a container with
+  **no constructors** (`EmpT`), one with an **implicit** binder (`ImpT`), one
+  with a **`let` in a constructor field's type** (`LetT` — Lean accepts it, and
+  the member a field sits at is then not the head of the expression as written,
+  which is why every such test reads through `Gen.zetaHead`; it was measured
+  refusing twice before that), a declaration **parameter that is a function
+  type** (`FunP f`), **depth three** with the binder at the deepest level
+  (`Deep3`), and `EvT`/`EvU` — a mutual block with a parameter *and* an index
+  nesting through an indexed container *and* through `List`, one of them under
+  a binder, which is every axis this tool has at once. 11, 12, 20, 13, 29 and
+  29 declarations. `EmpT`'s output is the one `nanoda_bin` will not load, for
+  upstream's reason and not the model's (§4).
 * **The sort the block lands in.** `nest_sorts.lean`'s `PTree : Prop` nests
   `PL PTree` at `PL (α : Prop) : Prop`, and a block that eliminates only into
   `Prop` has **no motive universe at all** — `PTree.rec` carries the
@@ -634,8 +667,15 @@ polymorphism, universe-polymorphic containers, containers polymorphic over
 `Sort`, a block that lands in `Prop` and has no motive universe, dependent
 fields, indices on the declaration, indices on the **container**, infinitary
 constructors at the root, a field at a mimic **under a binder**, nesting inside
-a mutual block, nesting through a nested container, cycles of mimics, and the
-crossings of all of those. §4.2 names each with its fixture and its count.
+a mutual block, nesting through a nested container, cycles of mimics, a
+container with no constructors, a container with implicit binders, a `let` in a
+constructor field's type, a parameter that is a function type, depth three, and
+the crossings of all of those. §4.2 names each with its fixture and its count.
+
+The claim is only worth what was swept for it, and `nest_odd_shapes.lean` is
+that sweep written down: each of its six was found by asking what else Lean's
+`inductive` allows rather than by a failure arriving, and **two of them were
+refusals when they were first written**.
 
 What `modelgen` still declines is of exactly two other kinds, and neither is a
 shape:

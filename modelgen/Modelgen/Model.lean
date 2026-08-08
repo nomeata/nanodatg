@@ -248,6 +248,18 @@ def ityp (e : Expr) : GenM Expr := inferType e
 /-- The sort a type lives at. -/
 def ilevel (e : Expr) : GenM Level := getLevel e
 
+/-- Zeta-reduce the head of a type. Lean accepts a constructor field whose type
+is a `let` — `(n : N) → (let m := n; Vec α m) → Let α` is one — and then the
+member the field sits at is not the head of the expression as written. Only
+`let` is unfolded and no definition is, so nothing else about the type moves. -/
+partial def zetaHead : Expr → Expr
+  | .letE _ _ v b _ => zetaHead (b.instantiate1 v)
+  | e => e
+
+/-- **A constructor field's type**, with any leading `let` gone. Every place in
+this module that asks which member a field sits at reads it through here. -/
+def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)
+
 /-- **`funext` as the export declares it**, checked against the statement Lean's
 own carries — `∀ {α : Sort u} {β : α → Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x)
 (g x)) → Eq f g` — by building that type at the found declaration's own two
@@ -306,7 +318,7 @@ def instCtor (cn : Name) (ls : List Level) (qs : Array Expr) : GenM Expr := do
 
 /-- Open a type's telescope, with the binder types. -/
 def withFields (ty : Expr) (k : Array Expr → Array Expr → GenM α) : GenM α := do
-  forallTelescope ty fun fs _ => do k fs (← fs.mapM ityp)
+  forallTelescope ty fun fs _ => do k fs (← fs.mapM ftyp)
 
 /-- **The dependency the congruence fold cannot survive, and only that one.**
 
@@ -481,7 +493,6 @@ def mimicUnder? (g : Gen) (t : Expr) : GenM (Option (Nat × Nat)) := do
   if let some m := g.memberOf t then
     return if g.isReal m then none else some (m, 0)
   forallTelescope (← whnf t) fun bs res => do
-    if bs.isEmpty then return none
     let some m := g.memberOf (← whnf res) | return none
     return if g.isReal m then none else some (m, bs.size)
 
@@ -491,7 +502,6 @@ telescope? Returns the telescope's length. -/
 def occUnder? (g : Gen) (i : Nat) (ps : Array Expr) (t : Expr) : GenM (Option Nat) := do
   if (g.occIdx? i ps t).isSome then return some 0
   forallTelescope (← whnf t) fun bs res => do
-    if bs.isEmpty then return none
     if (g.occIdx? i ps (← whnf res)).isSome then return some bs.size else return none
 
 /-- Which occurrence `t` is at, possibly under a binder telescope, and how deep. -/
@@ -679,7 +689,7 @@ def packMinor (g : Gen) (i member : Nat) (ps : Array Expr) (cn : Name) (mty : Ex
     let n ← numFieldsOf cn
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
-    let ftys ← fields.mapM ityp
+    let ftys ← fields.mapM ftyp
     -- The container's own recursive positions: occurrence `i` at **any** index
     -- vector, because `Vec.vcons`' recursive field sits at `n` and its result
     -- at `N.s n` — and **under any binder telescope**, because `Rose.node :
@@ -841,7 +851,7 @@ def packFamMinor (g : Gen) (f : Family) (ps : Array Expr) (j : Nat) (cn : Name)
     let n ← numFieldsOf cn
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
-    let ftys ← fields.mapM ityp
+    let ftys ← fields.mapM ftyp
     let mut recs : Array Nat := #[]
     for x in [0:n] do
       if (← f.memberUnder? ftys[x]!).isSome then recs := recs.push x
@@ -891,7 +901,7 @@ def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM
         let n ← numFieldsOf cn
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
-        let ftys ← fields.mapM ityp
+        let ftys ← fields.mapM ftyp
         let mut recs : Array Nat := #[]
         for x in [0:n] do
           if (← f.memberUnder? ftys[x]!).isSome then recs := recs.push x
@@ -918,7 +928,7 @@ def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM
         let rebuild := fun (a : Array Expr) => mkAppN (.const cn ccls) (cqs ++ a)
         -- The constructor application's own type, indices and all: `∀ ι⃗` is
         -- not a type and the family member's indices come from the result.
-        let goalTy ← ityp (rebuild fields)
+        let goalTy ← ftyp (rebuild fields)
         mkLambdaFVars bs (← g.foldCongr goalTy ftys lhs fields proofs rebuild)
   return mkAppN (← contRecAt f.recs[j]! .zero f.cls) (f.qs ++ motives ++ minors)
 
@@ -955,7 +965,7 @@ def unpackMinor (g : Gen) (k : Nat) (ps : Array Expr) (cn : Name) (mty : Expr) :
     let n ← numFieldsOf cn
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
-    let ftys ← fields.mapM ityp
+    let ftys ← fields.mapM ftyp
     let (ihm, ihPos) ← g.ihVector ftys
     let mut args : Array Expr := #[]
     for x in [0:n] do
@@ -1027,7 +1037,7 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
         let n ← numFieldsOf cn
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
-        let ftys ← fields.mapM ityp
+        let ftys ← fields.mapM ftyp
         let mut recs : Array Nat := #[]
         for x in [0:n] do
           if (← g.occUnder? i ps ftys[x]!).isSome then recs := recs.push x
@@ -1059,7 +1069,7 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
         let rebuild := fun (a : Array Expr) => mkAppN (.const cn cls) (qs ++ a)
         -- The application's own type, indices and all: the occurrence is the
         -- container at its *parameters* and is not a type on its own.
-        let goalTy ← ityp (rebuild fields)
+        let goalTy ← ftyp (rebuild fields)
         mkLambdaFVars bs (← g.foldCongr goalTy ftys lhs fields proofs rebuild)
   return mkAppN head (pre ++ minors)
 
@@ -1100,12 +1110,12 @@ def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool
         let n ← numFieldsOf cn
         let fields := bs.extract 0 n
         let ihs := bs.extract n bs.size
-        let ftys ← fields.mapM ityp
+        let ftys ← fields.mapM ftyp
         let (_, ihPos) ← g.ihVector ftys
         let rebuild := fun (a : Array Expr) => g.blockCtorAt k cn ps a
         -- The constructor application's own type, indices and all, rather than
         -- `Bₖ p⃗` — which is not a type when member `k` is indexed.
-        let ty ← ityp (rebuild fields)
+        let ty ← ftyp (rebuild fields)
         if !live k then
           mkLambdaFVars bs (g.eqi.refl' g.u ty (rebuild fields))
         else
@@ -1155,7 +1165,7 @@ def ctorValue (g : Gen) (k j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Exp
       -- packing happens pointwise — `fun x⃗ => pack (f x⃗)` — which needs a
       -- lambda but no funext: no equation is being moved here.
       | some (m, nb) =>
-        let fty ← ityp fields[x]!
+        let fty ← ftyp fields[x]!
         args := args.push (← underBinders nb fty fields[x]! fun _ res v =>
           return g.call (g.packName (g.mimicOf m)) ps (g.idxOf m res) v)
       | none => args := args.push fields[x]!
@@ -1186,7 +1196,7 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
     let n ← numFieldsOf cn
     let fields := bs.extract 0 n
     let ihs := bs.extract n bs.size
-    let ftys ← fields.mapM ityp
+    let ftys ← fields.mapM ftyp
     let mut real : Array Expr := #[]
     for x in [0:n] do
       match ← g.mimicUnder? ftys[x]! with
@@ -1222,7 +1232,7 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
       -- same reason: `C α (llen l)` with `l : Lst α` nested fails Lean's own
       -- compilation with `application type mismatch: llen TT l ... has type
       -- _nested.Lst_2`. So they are constant across every fold in this file.
-      let m0 := mkAppN motives[j]! (g.idxOf j (← ityp (rebuild fields)))
+      let m0 := mkAppN motives[j]! (g.idxOf j (← ftyp (rebuild fields)))
       mkLambdaFVars bs (← g.foldValue v m0 ftys lhs fields proofs rebuild body)
 
 /-- **The block's minor vector**, in the block's own order — every member's
@@ -1422,13 +1432,13 @@ def build (r : Rule) (vals : Array Expr) : Expr :=
 /-- `T._model.rec_m p⃗ M⃗ S⃗ idx⃗ x`. The indices are read off `x`'s own type — at
 the export's side that is `Rₘ._model.self p⃗ idx⃗` — and never rebuilt. -/
 def recCall (r : Rule) (m : Nat) (x : Expr) : GenM Expr := do
-  let idxs := r.g.idxOf m (← ityp x)
+  let idxs := r.g.idxOf m (← ftyp x)
   return mkAppN (.const (r.g.recName m) (r.g.recLs r.v))
     (r.ps ++ r.motives ++ r.minors ++ idxs ++ #[x])
 
 /-- `Mₘ` applied to the indices `x`'s type carries, ready for `x` itself. -/
 def motiveOf (r : Rule) (m : Nat) (x : Expr) : GenM Expr := do
-  return mkAppN r.motives[m]! (r.g.idxOf m (← ityp x))
+  return mkAppN r.motives[m]! (r.g.idxOf m (← ftyp x))
 
 /-- `p⃗ M''⃗ S''⃗` — everything a block recursor takes before its major. -/
 def blkPrefix (r : Rule) : GenM (Array Expr) := do
@@ -1606,7 +1616,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
           blRhs := blRhs.push vals[x]!
           proofs := proofs.push none
       let rebuild := fun (a : Array Expr) => g.blockCtorAt r.k r.bcn r.ps a
-      let m0 := mkAppN r.motives[r.k]! (g.idxOf r.k (← ityp (rebuild blRhs)))
+      let m0 := mkAppN r.motives[r.k]! (g.idxOf r.k (← ftyp (rebuild blRhs)))
       g.foldValue r.v m0 r.blkTys blLhs blRhs proofs rebuild base
     else do
       -- A mimic's rule transports the **whole** constructor application: `recₖ`
@@ -1616,7 +1626,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
       let b0 := r.build vals
       -- The occurrence **at the indices the constructor's own result carries**,
       -- read off `a0`'s type; the mimic's index telescope is the container's.
-      let occ ← ityp a0
+      let occ ← ftyp a0
       let ridx := g.idxOf r.k occ
       let mut proofs : Array (Option Expr) := #[]
       for x in [0:r.n] do
@@ -1978,7 +1988,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     for k in [0:pl.types.size] do
       for cn in blockCtors[k]! do
         any := any || (← forallTelescope (← instCtor cn us ps) fun fs _ => do
-          let tys ← fs.mapM ityp
+          let tys ← fs.mapM ftyp
           let packed := (Array.range fs.size).filterMap fun x =>
             match g0.memberOf tys[x]! with
             | some m => if g0.isReal m then none else some fs[x]!
