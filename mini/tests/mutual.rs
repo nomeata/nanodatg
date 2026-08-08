@@ -118,6 +118,9 @@ fn fixture(name: &str) -> PathBuf {
 /// in-process harness cannot contain. Returns `(exit code, stdout)`.
 fn run(name: &str, gate: bool) -> (Option<i32>, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mini"));
+    // The suite is hermetic — see `mini/src/modelgen.rs`; the fixtures are
+    // committed already filtered, so the pass would only cost a toolchain.
+    cmd.arg("--no-modelgen");
     cmd.arg("--verbose");
     if gate {
         cmd.arg("--mutual");
@@ -387,6 +390,7 @@ fn the_mutual_iota_rules_reduce_and_the_rfl_proofs_check() {
 #[test]
 fn the_aux_encoding_makes_every_recursor_rule_reflexivity_and_all_of_it_certifies() {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
         .arg("--verbose")
         .arg(fixture("mutual_aux_encoding"))
         .output()
@@ -585,7 +589,7 @@ fn compare_recursors(
     declined: &mut Vec<String>,
 ) -> (usize, Vec<String>) {
     let stem = path.file_name().unwrap().to_string_lossy().to_string();
-    let opts = LoadOptions { mutual: true, nested: true, keep_export_recursors: true };
+    let opts = LoadOptions { mutual: true, nested: true, keep_export_recursors: true, ..Default::default() };
     let loaded = match load_with(path, opts) {
         Ok(l) => l,
         // **A fixture the frontend refuses has no recursors to compare, and
@@ -833,7 +837,7 @@ fn a_members_recursor_binds_the_whole_blocks_motives_and_minors() {
         ("mutual_universe_polymorphic", "UC.rec", (2, 3, 4, 0, 3)),
     ];
     for (file, rec, shape) in want {
-        let opts = LoadOptions { mutual: true, nested: false, keep_export_recursors: false };
+        let opts = LoadOptions { mutual: true, nested: false, keep_export_recursors: false, ..Default::default() };
         let loaded = load_with(&fixture(file), opts).expect("load");
         let mut env = Environment::empty();
         for d in &loaded.decls {

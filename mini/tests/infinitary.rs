@@ -99,7 +99,7 @@ fn fixture(name: &str) -> PathBuf {
 /// are discharged.
 fn run(name: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
-        .args(["--verbose", "--acceptance-only"])
+        .args(["--no-modelgen", "--verbose", "--acceptance-only"])
         .arg(fixture(name))
         .output()
         .expect("spawn mini");

@@ -268,7 +268,7 @@ fn nested_seen(c: &mut Checker<'_, '_>, ind_name: &Name) -> Option<Option<&'stat
 /// `⟦c.{σ}⟧ := ⟦model.{σ}⟧` — the keying, as one store entry.
 ///
 /// The two constants have the **same statement about different constants**:
-/// `crate::nested_ev` writes every generated type as the export's with `T`
+/// `modelgen` writes every model type as the export's with `T`
 /// rewritten to the model's carrier, so once `⟦T⟧` is `⟦T._model.self⟧` the
 /// interpretations of the two declared types are the same term, and the typing
 /// the model proved is a proof of the one the export owes. Nothing is

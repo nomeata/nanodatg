@@ -1,155 +1,136 @@
-//! **Step 3 of the nested arc: the generated model, put into the run, and the
-//! keying that makes it the declaration's interpretation.**
+//! **Step 3 of the nested arc: the model the *export* already carries,
+//! recognised, and the keying that makes it the declaration's interpretation.**
 //!
 //! # Interface
 //!
 //! ```text
-//! nested_splice::splice(env, decls, schedule) -> Spliced
+//! nested_splice::recognise(env, decls, schedule) -> Recognised
 //! ```
 //!
-//! [`Spliced`] is the file's declaration list with each nested declaration's
-//! model — [`crate::nested_ev::iso`]'s output — inserted **immediately before
-//! the declaration it models**, the environment those constants were checked
-//! into, the σ they have to be interpreted at, and [`Spliced::model_of`]: the
-//! side table that says which model constant carries `⟦T⟧`, `⟦T.ctorᵢ⟧` and
-//! `⟦T.rec_k⟧`.
+//! [`Recognised`] is the schedule with the σ each model constant needs added,
+//! and [`Recognised::model_of`]: the side table that says which model constant
+//! carries `⟦T⟧`, `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧`, together with
+//! [`Recognised::model_iota`], which says which theorem is `T.rec_k`'s rule on
+//! a given constructor.
 //!
-//! It is [`crate::mutual_aux::expand`]'s shape and it runs at the same point in
-//! [`crate::run::check_file`], immediately before it — a nested model contains
-//! a `mutual … end` block of its own, and `expand` is what turns that into
-//! declarations the interpretation pass can take.
+//! # What changed, and why the module no longer splices
 //!
-//! # Why this is a *substitution* there and an *alias* here
+//! *This module used to **generate** the model — `mini/src/nested_ev.rs`,
+//! 2117 lines of Rust that built the specialised block, `pack`/`unpack`, the
+//! round trips, the recursors and every ι rule as Lean terms and handed each to
+//! [`crate::kernel::add`] — and then inserted the accepted declarations into
+//! the run. `modelgen/` does that now, as an **export filter**: it reads the
+//! `.ndjson`, splices the model in before each nested inductive, and writes the
+//! `.ndjson` back out. `MODELGEN.md` §1 is the contract. Three things follow,
+//! and each is a deletion here:*
 //!
-//! `mutual_aux::expand` needs no side table: its encoding defines `Tᵢ`,
-//! `Tᵢ.ctorⱼ` and `Tᵢ.rec` **under the block's own names**, so `⟦Tᵢ.{σ}⟧` lands
-//! in the store at exactly the key every use site reads and there is nothing to
-//! key afterwards.
+//! 1. *the model is **in the file**, so nothing is inserted;*
+//! 2. *its declarations are the file's own, so they are scheduled, checked and
+//!    interpreted by the ordinary pass — no seeding, no demand fixpoint, no
+//!    dependency-order check;*
+//! 3. *`⟦Eq.rec.{0,1}⟧` and the other constants the generated proofs reached
+//!    for are named by declarations the pre-pass can see, so the foreign-demand
+//!    walk that used to add them goes too.*
 //!
-//! A nested declaration cannot be substituted that way, and the reason is on
-//! the *acceptance* axis. `T` is installed by [`crate::nested::add`] as a
-//! primitive `ConstantInfo::Inductive` and `T.rec_k` as a primitive
-//! `ConstantInfo::Recursor` whose rules the kernel fires; the model's `rec_k` is
-//! a `def` whose rules are **theorems**. Replacing the primitives by the model
-//! would take away the ι reductions the file's own declarations are checked
-//! with — `nested_iota.lean` is fourteen of them — and turn an accepted file
-//! into a rejected one. So the primitives stay, the model is a parallel
-//! development beside them, and the two are joined by
-//! [`Spliced::model_of`] rather than by a name.
+//! What is left is the part that was always the point: **deciding whether a
+//! model is there, and keying the export's names onto it.**
 //!
-//! # The keying is a table and not a convention, and that is the whole point
+//! # Why this is a *table* and not a name rule, still
 //!
 //! `⟦T⟧ := ⟦T._model.self⟧` could be spelled as a name rule: take the
-//! declaration's name, append `_model.self`, look it up. **It must not be.**
-//! A name rule answers for a constant that exists for some other reason —
-//! a file that declares its own `Tree._model.self` gets its interpretation
-//! silently substituted for the model's — and the counters would report a
-//! working model. This project has paid for that once already, at
+//! declaration's name, append `_model.self`, look it up. **It must not be**, and
+//! the argument is *stronger* now that the model arrives in the file rather
+//! than being built here. A name rule answers for a constant that exists for
+//! some other reason — a file that declares its own `Tree._model.self` gets its
+//! interpretation silently substituted for the model's — and the counters would
+//! report a working model. This project has paid for that once already, at
 //! `_auxCarrier`, and `mini/tests/fixtures/nested_keying.lean`'s `UTree` is the
 //! same input at this site: two nested declarations of one shape, and the file
-//! itself has taken the name one of their models wants.
+//! itself has taken the name one of their models wants. `modelgen` declines
+//! `UTree` for exactly that reason (`MODELGEN.md` §1.3) and this module must
+//! reach the same verdict from the other side.
 //!
-//! So the table is filled **only** from a model this module built, checked and
-//! spliced in, and it is keyed on the constant's own [`ModelKey`] — the σ
-//! included, because a recursor's motive level is part of what is being keyed.
-//! A constant with no entry **declines**, by name, in
-//! [`crate::zoneb::ensure`]; it never falls through to the class-(T) walk and
-//! never falls back to a name.
+//! So the table is filled only from declarations whose **statements** were
+//! checked against the export's own, by [`shape`] below, and it is keyed on the
+//! constant's own [`ModelKey`] — the σ included, because a recursor's motive
+//! level is part of what is being keyed. A constant with no entry **declines**,
+//! by name, in [`crate::zoneb::ensure`]; it never falls through to the class-(T)
+//! walk and never falls back to a name.
 //!
-//! # Where the model goes, and the one shape that decides it
+//! # The shape check is a **diagnostic**, and saying so is the point
 //!
-//! Immediately **before** the nested declaration. The model mentions no part of
-//! `T` — [`crate::nested_ev`]'s header says why its carrier has to be fresh —
-//! so nothing stops it going first, and going first is what makes the alias
-//! possible at all: [`crate::ledger::fill_declaration`] resolves `⟦T⟧` when it
-//! reaches `T`, and it can only read `⟦T._model.self⟧` out of the store if the
-//! model's own declarations have already been interpreted.
+//! [`shape`] rebuilds each model declaration's statement from the export's own
+//! — `MODELGEN.md` §1.1's property 1, read from the consumer's side — and
+//! declines by name when it does not match. That is **not** what makes a
+//! conclusion trustworthy. What makes it trustworthy is the certificate: every
+//! model declaration is an ordinary declaration of the file, checked by mini's
+//! kernel on the acceptance axis and carrying a derived typing on the evidence
+//! axis, and a rule that fires does so through [`crate::eq_cash`] against a
+//! theorem the file proved. A `_model` tower with the wrong statements produces
+//! no certificate whatever this module does.
 //!
-//! That is a constraint on the *file*, not on this module, and it is checked
-//! rather than assumed: every constant the model mentions must be declared
-//! before `T`. The one that can fail is `Eq` — the round trips and the ι rules
-//! are equations, and the exporter puts `Eq` wherever the file needed it, which
-//! for a `mutual` block is routinely *after*
-//! ([`crate::mutual_aux::expand`]'s header records three such files). A file
-//! that declares its `Eq` after its nested type gets no model and a named
-//! decline, which is the honest answer: the model would be unreadable at the
-//! moment the alias needs it.
+//! What the check buys is the **reason string**. Without it a file whose
+//! `Tree._model.rec_0` is not `Tree.rec`'s statement stops somewhere downstream
+//! — `eq-cash-retarget`, or `iota: the model rule is not about the redex this
+//! run is reducing` — naming where a value stopped rather than why. With it the
+//! decline says `nested model recursor 0 does not state T.rec`, at the
+//! declaration that owns the problem. This project has spent a great deal on
+//! that distinction; the check is here to pay it back and for nothing else.
 //!
-//! # What the ι dispatch arm turned on, and what it cost
+//! It also fails **closed**, which is a second-order property and not the
+//! argument: a mismatch declines rather than keying, so a wrong tower is
+//! reported as "no model" rather than as a model whose conclusions never
+//! arrive.
 //!
-//! Three things, and they were all measured from here rather than guessed. All
-//! three are built now; the list is kept because the *third* is still the
-//! argument for why the arm is a sibling of `iota_dep::fire` and not a repair
-//! of it.
+//! # The instantiations, and the trap in them
 //!
-//! 1. **The seed.** The ι theorems were the one part of the model this module
-//!    did not splice, and they are spliced now — all of them, at 13× the
-//!    conversions on a file that applies a nested recursor. The site below
-//!    carries both columns and the guard that used to stand there.
-//! 2. **A second table beside [`Spliced::model_of`]**, and it should be built
-//!    at the same moment from the same source: [`crate::nested_ev::Iso::iotas`]
-//!    is `(member k, the export's constructor, the theorem)`, so
-//!    `((T.rec_k, σ), ctor) -> theorem` is the key a dispatch site holds — it
-//!    has the recursor and the major's head constructor and nothing else. It is
-//!    not built here because a table pointing at declarations this module did
-//!    not splice would be a key with nothing behind it.
-//! 3. **Where the arm attaches.** `iota_dep::fire`'s *first* check is
-//!    `args.len() != np + 1 + n + 1`, and a nested recursor fails it before
-//!    anything else: `Tree.rec` binds **two** motives and **four** minors, so a
-//!    redex has seven arguments where that arity expects four.
-//!    `recursor(T.rec_k: iota: the recursor's arity or its declaration
-//!    disagree)` was what every one of `nested_iota`'s fourteen waited on
-//!    before the arm existed. So
-//!    the arm is a *sibling* of `iota_dep::fire`, chosen on the same
-//!    `model_of` membership this module fills, and its body is
-//!    [`crate::eq_cash::cash`] applied to the rule theorem at the redex's own
-//!    arguments — not a repair of the arity check.
+//! **Any instantiation of a modelled declaration is an instantiation of the
+//! model.** If the file applies `T.rec.{3}` then `⟦T.rec.{3}⟧` is
+//! `⟦T._model.rec_0.{3}⟧`, and nothing in `checker::instantiations` knows that
+//! — it sees `T._model.rec_0` mentioned only by `T._model.iota_0_j`, which
+//! nothing mentions at all. So the propagation is made here, at
+//! [`Recognised::schedule`], from the σ the pre-pass gave the **export**
+//! constant onto the model constant.
 //!
-//! # What the tests kill, measured
+//! The trap, paid for once on this arc and recorded so it is not paid again:
+//! `checker::instantiations` closes its demand and then **defaults** — "a
+//! declaration nothing demands is still checked, once per entry of
+//! `DEFAULT_LEVELS`" — so `T.rec` is scheduled at `[0]` and `[1]` in every file
+//! that declares a nested type, whether or not anything eliminates one. When
+//! the model was *spliced* by this module, propagating off that padded schedule
+//! pulled in `pack`, `unpack`, both round trips, both recursors, the
+//! congruences and every ι theorem, twice: measured on `nested_keying`, 68 000
+//! conversions in nine seconds became past 950 000 and out of 4 GB after nine
+//! minutes.
 //!
-//! Eight mutations of this module and of [`crate::zoneb::ensure`]'s keying
-//! site, against the two fast tests in `mini/tests/nested.rs`
-//! (`nested_keying` at 9 s and `nested_shapes` at 1m40; the executed test count
-//! is read out of the harness's own summary, because `cargo test` prints
-//! `error: test failed` at line start and a `^error:` classifier would read
-//! every kill as a compile error):
+//! **That trap is not reachable in this design, and it is worth writing down
+//! why rather than repeating the guard that used to avoid it.** The model's
+//! declarations are the file's own, so the pre-pass has already scheduled every
+//! one of them on its own account; a σ added here can only be one the export
+//! constant was already going to be interpreted at. The old
+//! `applied_at` sweep — "read the σ off the file's own declarations rather than
+//! off the padded schedule" — existed because seeding a model *the file did not
+//! contain* at a σ nothing applies is pure cost. Seeding one it does contain at
+//! a σ it is already checked at is free.
 //!
-//! ```text
-//! KILLED   a missing `model_of` entry falls through to the class-(T) walk
-//! KILLED   key on the name `T._model.self` instead of on the table
-//! KILLED   never recognise a nested declaration, so nothing is keyed
-//! KILLED   splice the model *after* the declaration it models
-//! KILLED   let `fill_declaration` use its own name list, losing `T.rec_1`
-//! KILLED   drop the σ from a recursor's key
-//! SURVIVED carry the model's defining equation onto the export's constant
-//! SURVIVED drop the dependency-order check
-//! ```
-//!
-//! The first is the one that matters: a discriminator whose missing case falls
-//! back is decorative, and this says it does not.
-//!
-//! **Both survivors are reported rather than excused.** Carrying `defeq` is
-//! unreachable by construction — `T` is a primitive inductive and `T.rec_k` a
-//! primitive recursor, so the Lean checker never takes a δ step on either and
-//! the equation is never consulted; `None` is kept because handing it on would
-//! be *claiming* a reduction that does not exist, which is a statement about
-//! the code and not about any run. The order check has no occupant in the
-//! fixture set — every nested fixture declares its `Eq` first — and dropping it
-//! costs correctness nothing (the alias would decline with
-//! `nested model not interpreted`) but would leave the foreign-demand loop's
-//! safety argument below claiming something nothing checks.
+//! What is **not** free, and is reported rather than fixed here, is that the
+//! defaulting now applies to the model's own declarations: `T._model.rec_k` and
+//! every `T._model.iota_k_j` are mentioned by nothing, so each is checked at
+//! `[0]` **and** `[1]`. Suppressing that needs `checker::instantiations` to
+//! learn the convention, which is a change in the other crate; the measurement
+//! is in the module's own tests.
 //!
 //! # The boundary
 //!
-//! This module names no `Term`, `Thm`, `Ev` or `Interp`. It moves
-//! `mini::Expr`s, calls [`crate::nested::plan`] and [`crate::nested_ev::iso`],
-//! and produces a table of `(Name, σ)` pairs. Everything that reads a
-//! certificate is on the other side of [`Spliced::model_of`].
+//! This module names no `Term`, `Thm`, `Ev` or `Interp`. It reads
+//! `mini::Expr`s out of an [`Environment`], calls [`crate::nested::plan`], and
+//! produces a table of `(Name, σ) -> Name` pairs of syntax. Everything that
+//! reads a certificate is on the other side of [`Recognised::model_of`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::env::{Declaration, Environment, IndType};
-use crate::expr::{Expr, Name, E};
+use crate::env::{ConstantInfo, Declaration, Environment, IndType};
+use crate::expr::{get_app, Expr, Name, E};
 
 /// A constant at a ground instantiation — the pair `crate::interp`'s `ConstKey`
 /// is, spelled out rather than imported.
@@ -161,11 +142,11 @@ use crate::expr::{Expr, Name, E};
 /// boundary is a `(Name, Vec<u32>) -> Name` map of syntax.
 pub type ModelKey = (Name, Vec<u32>);
 
-/// One nested declaration's outcome, whether or not it got a model.
+/// One nested declaration's outcome, whether or not a model was found for it.
 #[derive(Clone, Debug)]
 pub struct NestedRecord {
-    /// The shape that stopped the model, as [`crate::nested_ev::Reason::label`]
-    /// spells it, or `None` when one was built and keyed.
+    /// The shape that stopped the model, as [`Missing::label`] spells it, or
+    /// `None` when one was recognised and keyed.
     ///
     /// A `Some` here is what [`crate::zoneb::ensure`] reports instead of
     /// walking the declaration's constructor spec — which would answer
@@ -183,53 +164,103 @@ pub struct NestedRecord {
     pub constants: Vec<Name>,
 }
 
-/// A declaration list with every nested declaration's model spliced in.
-pub struct Spliced {
-    /// The environment the pass must run against: the caller's, with each
-    /// model's constants added.
-    pub env: Environment,
-    /// The declaration list, in file order, each model before the declaration
-    /// it models.
-    pub decls: Vec<Declaration>,
-    /// The schedule, with the σ each model needs added.
+/// Why a nested declaration got no model. Every variant is a **diagnostic**:
+/// see the module header on what the check is and is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Missing {
+    /// No `T._model.self` in the environment. `MODELGEN.md` §1.3: the absence
+    /// of the carrier is "no model", not an error — the filter declined the
+    /// declaration and said which shape stopped it.
+    NoCarrier,
+    /// A model constant is declared at or after the declaration it models, so
+    /// [`crate::ledger::fill_declaration`] cannot read it when it resolves
+    /// `⟦T⟧`.
+    Later,
+    /// `T._model.self` is not a `def`, or is not `T`'s own type.
+    Carrier,
+    /// A `T._model.ctor_j` is absent or is not the `j`-th constructor's
+    /// statement.
+    Ctor,
+    /// A `T._model.rec_k` is absent or is not `T.rec_k`'s statement.
+    Rec,
+    /// A `T._model.iota_k_j` is absent, or its statement is not an equation
+    /// about `T._model.rec_k` applied to a constructor.
+    Iota,
+    /// The export declares a recursor rule on a constructor no ι theorem is
+    /// about. Distinct from [`Missing::Iota`]: the theorem is there and states
+    /// something, and it is not this rule.
+    IotaRule,
+}
+
+impl Missing {
+    pub fn label(self) -> &'static str {
+        match self {
+            Missing::NoCarrier => "no nested model in the export",
+            Missing::Later => "nested model over a later declaration",
+            Missing::Carrier => "nested model carrier does not state the declaration's type",
+            Missing::Ctor => "nested model constructor does not state the export's",
+            Missing::Rec => "nested model recursor does not state the export's",
+            Missing::Iota => "nested model iota rule is not an equation about the model recursor",
+            Missing::IotaRule => "nested model has no iota rule for a constructor the export's recursor reduces on",
+        }
+    }
+}
+
+/// The keying of a file's nested declarations onto the models the export
+/// carries.
+pub struct Recognised {
+    /// The caller's schedule, with the σ each model constant needs added — see
+    /// the module header's "the instantiations, and the trap in them".
     pub schedule: HashMap<Name, Vec<Vec<u32>>>,
     /// **The keying.** `⟦export constant.{σ}⟧` is `⟦model constant.{σ}⟧`, for
-    /// exactly the pairs a model was built and spliced for.
+    /// exactly the pairs a model was recognised for.
     pub model_of: HashMap<ModelKey, Name>,
     /// **The rules.** `((T.rec_k, σ), the export's constructor) ↦ the model's ι
-    /// theorem`, for exactly the rules this pass seeded.
+    /// theorem`, for exactly the rules this pass recognised.
     ///
     /// The key is what a dispatch site holds: [`crate::iota_model::fire`] has
     /// the recursor it is reducing, the σ it is reducing at, and the major's
     /// head constructor, and nothing else. A rule with no entry **declines**
     /// there, by name; there is no name rule and no fall-through, for
-    /// [`Spliced::model_of`]'s reason.
-    ///
-    /// Populated for **every** rule of every recursor the file applies — see
-    /// the seeding site, which carries what that costs and what a `refl_proved`
-    /// guard used to leave out and why.
+    /// [`Recognised::model_of`]'s reason.
     pub model_iota: HashMap<(ModelKey, Name), Name>,
     /// Every nested declaration this pass saw, by its own name.
     pub nested: HashMap<Name, NestedRecord>,
-    /// Nested declarations seen, and models built. `modelled ≤ seen`, and the
-    /// difference is the [`NestedRecord::why`] population.
+    /// Nested declarations seen, and models recognised. `modelled ≤ seen`, and
+    /// the difference is the [`NestedRecord::why`] population.
     pub seen: usize,
     pub modelled: usize,
 }
 
-/// **Splice each nested declaration's model into the run, and key it.**
+/// `T._model` — the prefix every name in `MODELGEN.md` §1 hangs off.
+fn model_prefix(t: &Name) -> Name { Name::str(t, "_model") }
+
+/// `T._model.self`, the carrier.
+pub fn carrier_name(t: &Name) -> Name { Name::str(&model_prefix(t), "self") }
+
+/// `T._model.ctor_j`.
+fn ctor_name(t: &Name, j: usize) -> Name { Name::str(&model_prefix(t), &format!("ctor_{j}")) }
+
+/// `T._model.rec_k`. **The model's index is the member index uniformly**, so
+/// the export's `T.rec` is `T._model.rec_0` — `MODELGEN.md` §1.
+fn rec_name(t: &Name, k: usize) -> Name { Name::str(&model_prefix(t), &format!("rec_{k}")) }
+
+/// `T._model.iota_k_j`.
+fn iota_name(t: &Name, k: usize, j: usize) -> Name {
+    Name::str(&model_prefix(t), &format!("iota_{k}_{j}"))
+}
+
+/// **Recognise each nested declaration's model, and key it.**
 ///
-/// A declaration that is not nested is passed through untouched, and so is one
-/// whose model could not be built — with its reason recorded in
-/// [`Spliced::nested`] so that the decline downstream names a shape.
-pub fn splice(
+/// A declaration that is not nested is ignored, and so is one whose model is
+/// absent or does not state what the export states — with its reason recorded
+/// in [`Recognised::nested`] so that the decline downstream names a shape.
+pub fn recognise(
     env: &Environment,
     decls: &[Declaration],
     schedule: &HashMap<Name, Vec<Vec<u32>>>,
-) -> Spliced {
-    let mut out = Spliced {
-        env: env.clone(),
-        decls: Vec::with_capacity(decls.len()),
+) -> Recognised {
+    let mut out = Recognised {
         schedule: schedule.clone(),
         model_of: HashMap::new(),
         model_iota: HashMap::new(),
@@ -237,19 +268,16 @@ pub fn splice(
         seen: 0,
         modelled: 0,
     };
-    // Which declaration in the list owns each name, by position. Read to check
-    // that a model's dependencies are all *behind* the declaration it models —
-    // see the header.
+    // Which declaration in the list settles each name, by position. Read to
+    // check that the model is *behind* the declaration it models — see the
+    // header, and [`Missing::Later`].
     let pos = positions(env, decls);
-    // What the file's own declarations name, and at which ground σ — the
-    // pre-pass's demand walk without its default padding. See the recursor
-    // seeding below, which is the only reader.
+    // What the file's own declarations name, and at which ground σ. The
+    // pre-pass's schedule is the other half; a recursor is keyed at the union,
+    // for the reason the header gives.
     let applied = applied_at(decls, schedule);
     for (i, d) in decls.iter().enumerate() {
-        let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else {
-            out.decls.push(d.clone());
-            continue
-        };
+        let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else { continue };
         let types =
             vec![IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }];
         // **`nested::plan` answers "is this nested", and nothing else does.**
@@ -257,257 +285,21 @@ pub fn splice(
         // consumed at the parser gate, and not a name: the question here is
         // whether a constructor field mentions the declaration under a foreign
         // inductive, which is the same question the specialisation asks.
-        let plan = match crate::nested::plan(&out.env, lparams, *num_params, &types) {
-            Ok(Some(p)) => p,
+        match crate::nested::plan(env, lparams, *num_params, &types) {
+            Ok(Some(_)) => {}
             // `Ok(None)` is an ordinary declaration. `Err` is a nested one the
             // specialiser cannot express — the file would not have been
-            // accepted, so it cannot arise here, and passing it through leaves
-            // the existing decline exactly where it was.
-            _ => {
-                out.decls.push(d.clone());
-                continue
-            }
-        };
+            // accepted, so it cannot arise here.
+            _ => continue,
+        }
         out.seen += 1;
-        let iso = match crate::nested_ev::iso(&out.env, lparams, *num_params, &types, &plan) {
-            Ok(iso) => iso,
-            Err(r) => {
-                out.decline(name, d, r.label(), ctors, &plan);
-                continue
+        match shape(env, name, ctors, &pos, i) {
+            Ok(m) => {
+                out.modelled += 1;
+                out.key(env, name, &m, &applied);
             }
-        };
-        // Every name the development brought into being, by difference against
-        // the environment it was checked over. Read off the environment rather
-        // than rebuilt from the declaration list, because a block's recursors
-        // are minted by `kernel::add` and are not in it.
-        let mine: HashSet<Name> =
-            iso.env.consts.keys().filter(|k| out.env.get(k).is_none()).cloned().collect();
-        // **The model has to be readable where the alias reads it.** See the
-        // header: `fill_declaration` resolves `⟦T⟧` at `T`'s own position, so
-        // everything the model mentions must be declared before it.
-        if mentioned_after(&iso, &mine, &pos, i).is_some() {
-            out.decline(name, d, "nested model over a later declaration", ctors, &plan);
-            continue
+            Err(why) => out.decline(env, name, ctors, why),
         }
-        out.modelled += 1;
-        // ── the keying ───────────────────────────────────────────────────
-        //
-        // One entry per `(export constant, σ)`, and the σ are the export's own:
-        // the model's counterpart carries the same universe parameters, because
-        // its statement is the export's with the names rewritten
-        // (`nested_ev::Gen::rec_decl`). A σ the export's pre-pass did not
-        // schedule gets no entry and declines, which is the direction that
-        // fails closed.
-        let mut seeds: HashMap<Name, Vec<Vec<u32>>> = out.schedule.clone();
-        // The type former and the constructors have no universe parameters of
-        // their own — `nested_ev::Reason::Polymorphic` refuses a declaration
-        // that has any — so `σ = []` is the whole population and is keyed
-        // whether or not the file's pre-pass happened to mention them.
-        let mut pairs: Vec<(Name, Name)> = vec![(name.clone(), iso.self_name.clone())];
-        pairs.extend(iso.ctors.iter().cloned());
-        for (export, model) in &pairs {
-            out.model_of.insert((export.clone(), Vec::new()), model.clone());
-            seeds.entry(model.clone()).or_default().push(Vec::new());
-        }
-        // **A recursor is keyed at the σ the file *applies* it at, and at no
-        // other** — `applied`, not the schedule.
-        //
-        // The two differ, and the difference is the whole cost of this module.
-        // `checker::instantiations` closes its demand and then **defaults**:
-        // "a declaration nothing demands is still checked, once per entry of
-        // `DEFAULT_LEVELS`". So `T.rec` is scheduled at `[0]` and `[1]` in
-        // every file that declares a nested type, whether or not anything
-        // eliminates one — and seeding the model from that pulls in `pack`,
-        // `unpack`, both round trips, both recursors, the congruences and every
-        // ι theorem, twice. Measured on `nested_keying`, whose two `def`s never
-        // mention a recursor: the whole file is **68 000** conversions in nine
-        // seconds with the recursor half unkeyed, and with it keyed off the
-        // padded schedule it was past 950 000 and out of 4 GB after nine
-        // minutes.
-        //
-        // The padding is right for the pre-pass and wrong here. It exists so
-        // that a declaration nothing reaches is still *checked*; a model exists
-        // so that a use site can read it, and a σ no use site names is a model
-        // nobody will read. So the σ are read off the file's own declarations,
-        // which is the same walk the pre-pass does before it pads.
-        for (k, r) in iso.recs.iter().enumerate() {
-            let export = crate::nested::Plan::rec_name(name, k);
-            let sigmas = applied.get(&export).cloned().unwrap_or_default();
-            for s in &sigmas {
-                out.model_of.insert((export.clone(), s.clone()), r.clone());
-            }
-            seeds.entry(r.clone()).or_default().extend(sigmas);
-            pairs.push((export, r.clone()));
-        }
-        // **Every ι theorem, seeded and keyed — all of them, and that is a
-        // measurement and not a taste.**
-        //
-        // [`crate::nested_ev::Iso::iotas`] is `(member, the export's
-        // constructor, the theorem)` for every rule of every `rec_k`, and
-        // nothing in the *file* mentions one — a rule theorem is used by
-        // nothing, exactly as `mutual_aux::expand`'s are, so the fixpoint below
-        // cannot reach them and only this seed does.
-        //
-        // # What used to be here, and why it was right until it was not
-        //
-        // A `refl_proved` guard, which seeded only the rules whose model proof
-        // is `Eq.refl` and left out the ones that **transport**. Its argument
-        // was that the expensive conversions are the ones that fail: a
-        // transporting rule's own constant typing was `no-endpoint`, so
-        // [`crate::eq_cash::cash`] had nothing to read and
-        // [`crate::iota_model::fire`] could not have fired it however much was
-        // paid. Two rounds of `nested_iota_arm`, both reverted, both real:
-        //
-        // ```text
-        //                                conversions   time   uncertified
-        // seeded, before #90(b)           13 441 025   3m35   4, all no-endpoint
-        // seeded, after  #90(b)            5 906 744   2m41   4, all no-endpoint
-        // not seeded                         469 765    20s   2, both "no rule"
-        // ```
-        //
-        // The residual behind those four was neither `#90(b)` nor anything in
-        // this module: it is [`crate::kernel::Checker::proof_point_leg`],
-        // `whnf` on a proof-valued spine, whose small witness is
-        // `mini/tests/fixtures/whnf_of_a_proof.lean` at 8 393 conversions. With
-        // it closed the guard buys the rules it used to cost nothing to omit.
-        //
-        // # What seeding costs now, measured both ways
-        //
-        // ```text
-        //                    conversions      time    peak     pairs / constEv
-        // nested_iota_arm       469 765 →       20s →           36 /  34
-        //                     6 031 316        5m0             39 /  39   gapped 0
-        // nested_iota         3 878 982 →     2m27 →           124 / 117
-        //                    51 830 194       25m52   >7.5 G   134 / 134  gapped 0
-        // ```
-        //
-        // **13× the conversions, and it is the whole of nested inductives.**
-        // Every rule of every recursor of every shape the arc has now carries a
-        // certificate: `numNested = 2` at two different containers, a container
-        // at an unrelated type in the same constructor list, and a nested type
-        // with parameters of its own. The pair count moves 124 → 134 because
-        // the seven extra ι theorems are `Def`s the ledger opens a pair for,
-        // and all ten of the new pairs certify.
-        //
-        // The cost is real and is **not** paid by anything that does not apply
-        // a nested recursor: a file that never eliminates one seeds no
-        // recursor, so the fixpoint below never reaches a rule, and the
-        // tutorial corpus is bit-identical at 829 661 conversions. Where it is
-        // paid it is paid in `mini/tests/nested.rs`, which says so at the two
-        // tests that pay it.
-        //
-        // A rule that cannot be seeded — one at a σ the recursor has no
-        // interpretation at — still has **no `model_iota` entry**, and
-        // [`crate::iota_model::fire`] declines by name for it. That is not a
-        // fall-back: a wrong model would be reported as success by the counters
-        // and that is the error this whole table exists to refuse.
-        for (k, ctor, thm) in &iso.iotas {
-            let export = crate::nested::Plan::rec_name(name, *k);
-            // The σ the recursor itself was keyed at, and no other: a rule at a
-            // σ the recursor has no interpretation at is a rule about a redex
-            // this run cannot name.
-            let Some(sigmas) = applied.get(&export) else { continue };
-            for s in sigmas {
-                out.model_iota
-                    .insert(((export.clone(), s.clone()), ctor.clone()), thm.clone());
-            }
-            seeds.entry(thm.clone()).or_default().extend(sigmas.iter().cloned());
-        }
-
-        let demanded = crate::mutual_aux::demand_over(&iso.env, &mine, &seeds);
-        // **The model is spliced as far as it is demanded and no further**, and
-        // that is a cost decision with a measurement behind it.
-        //
-        // `Ledger::run` opens a pair for **every** `Def` in the list, schedule
-        // entry or not, so a declaration that is spliced is a declaration that
-        // is interpreted. The whole model of one `Tree` is 950 000 conversions
-        // and does not fit in 4 GB; the part a file that never applies a nested
-        // recursor actually uses — the block, the carrier and the constructors
-        // — is 27 000. The two round trips alone are 190 000 of the difference,
-        // and they are reachable only through `rec_k`.
-        //
-        // The set is [`crate::mutual_aux::demand_over`]'s own fixpoint, which is
-        // dependency-closed by construction, so what is kept is still in
-        // dependency order and still complete. A file that *does* apply the
-        // recursor seeds it above and gets the whole tower.
-        let first_new = out.decls.len();
-        for d in iso.decls {
-            if declares(&d).iter().any(|n| demanded.contains_key(n)) {
-                for n in declares(&d) {
-                    if let Some(v) = iso.env.consts.get(&n) {
-                        out.env.consts.insert(n.clone(), v.clone());
-                    }
-                    if let Some(o) = iso.env.owners.get(&n) {
-                        out.env.owners.insert(n.clone(), o.clone());
-                    }
-                }
-                out.decls.push(d);
-            }
-        }
-        for (n, ss) in demanded {
-            out.schedule.entry(n).or_default().extend(ss);
-        }
-        // **Everything spliced is scheduled, including what nothing demands.**
-        //
-        // `Ledger::run` interprets a `Def` with no schedule entry at the
-        // all-zero σ anyway, so an unscheduled spliced declaration is not an
-        // uninterpreted one — it is an interpretation at a key nothing
-        // predicted, which is a `lazyFills` and is the counter this project
-        // pins at zero. The occupants are the block's own recursors: the
-        // walk above reaches them only through `rec_k`, and
-        // `mutual_aux::expand` emits a `def` for each whether or not it does.
-        // Measured before this loop existed as two lazy fills per model, both
-        // inside the block's encoding — `_auxTag.rec` and `_auxCarrier.rec`, at
-        // the σ `Tree._model.k.rec`'s own default reaches them at.
-        for d in &out.decls[first_new..] {
-            for n in declares(d) {
-                let nl = iso.env.get(&n).map(|ci| ci.lparams().len()).unwrap_or(0);
-                out.schedule.entry(n).or_insert_with(|| vec![vec![0; nl]]);
-            }
-        }
-        // **…and so is what the model demands of the *file*.**
-        //
-        // `mutual_aux::demand`'s rule is that a constant from the surrounding
-        // file "is already scheduled by the file's own pre-pass", so following
-        // it would be that module deciding something the pre-pass owns. The
-        // rule does not survive here, and the witness is one lazy fill on
-        // `nested_iota`: `Eq.rec.{0,1}`. `Gen::rec_decl`'s transport is an
-        // `Eq.rec` at the *motive* level over the *occurrence's* level, and no
-        // declaration of the file uses that pair — the pre-pass could not have
-        // predicted it, because the term that needs it did not exist when the
-        // pre-pass ran.
-        //
-        // Safe because of the check above: `mentioned_after` has already
-        // established that every constant the model names is settled strictly
-        // before the declaration it models, so a σ added here is discharged at
-        // that constant's own declaration, ahead of the model. That is the
-        // *timing* half of `mutual_aux`'s own residue, and it is the half a
-        // schedule entry alone does not buy.
-        let mut foreign: Vec<(Name, Vec<u32>)> = Vec::new();
-        for d in &out.decls[first_new..] {
-            let Some((lparams, bodies)) = interpretable(d) else { continue };
-            let Some(sigmas) = out.schedule.get(&d.name()) else { continue };
-            for sigma in sigmas {
-                let map = crate::ground::ground_env(lparams, sigma);
-                for b in &bodies {
-                    consts_at(b, &map, &mut foreign);
-                }
-            }
-        }
-        for (n, s) in foreign {
-            if mine.contains(&n) {
-                continue
-            }
-            let e = out.schedule.entry(n).or_default();
-            if !e.contains(&s) {
-                e.push(s);
-            }
-        }
-        out.nested.insert(
-            name.clone(),
-            NestedRecord { why: None, constants: pairs.into_iter().map(|(e, _)| e).collect() },
-        );
-        out.decls.push(d.clone());
     }
     for v in out.schedule.values_mut() {
         v.sort();
@@ -516,25 +308,339 @@ pub fn splice(
     out
 }
 
-impl Spliced {
-    /// Record a nested declaration with no model: the declaration itself
-    /// unchanged, and the shape that stopped it under every constant the model
-    /// would have keyed.
-    fn decline(
+/// A recognised model: the export constant beside the model constant that
+/// carries its interpretation, and the rules.
+struct Model {
+    /// `(export constant, model constant)` for the type former and each
+    /// constructor, keyed at `σ = []`.
+    ///
+    /// **The declaration's own level parameters are compared but not keyed
+    /// over**, and that is a limitation rather than a claim: `modelgen` grew
+    /// universe-polymorphic support after this was written, so the statements
+    /// are checked at the export's own `ℓ⃗` (see [`at_export_levels`]) while
+    /// the store key here is the empty σ. Every nested fixture mini has is
+    /// monomorphic, so the two coincide; a polymorphic one would need the σ
+    /// the pre-pass scheduled `T` at, exactly as a recursor does below.
+    mono: Vec<(Name, Name)>,
+    /// `(export recursor, model recursor)`, in member order.
+    recs: Vec<(Name, Name)>,
+    /// `(export recursor, the rule's constructor, the model's ι theorem)`.
+    iotas: Vec<(Name, Name, Name)>,
+}
+
+impl Recognised {
+    /// Fill the tables for one recognised model, and propagate its σ.
+    fn key(
         &mut self,
+        env: &Environment,
         name: &Name,
-        d: &Declaration,
-        why: &'static str,
-        ctors: &[(Name, E)],
-        plan: &crate::nested::Plan,
+        m: &Model,
+        applied: &HashMap<Name, Vec<Vec<u32>>>,
     ) {
+        let mut constants: Vec<Name> = Vec::new();
+        // The type former and the constructors have no universe parameters of
+        // their own, so `σ = []` is the whole population.
+        for (export, model) in &m.mono {
+            self.model_of.insert((export.clone(), Vec::new()), model.clone());
+            self.demand(model, &[Vec::new()]);
+            constants.push(export.clone());
+        }
+        // **A recursor is keyed at every σ the run will ask for it at**, and
+        // the same σ are propagated onto the model — the header's "any
+        // instantiation of a modelled declaration is an instantiation of the
+        // model". The union of the pre-pass's schedule and the file's own
+        // applications: the first is what `Ledger::run` will interpret the
+        // export's recursor at, the second is what a use site inside an
+        // already-scheduled declaration reaches for.
+        let mut sigmas_of: HashMap<Name, Vec<Vec<u32>>> = HashMap::new();
+        for (export, model) in &m.recs {
+            let mut sigmas: Vec<Vec<u32>> = self.schedule.get(export).cloned().unwrap_or_default();
+            for s in applied.get(export).into_iter().flatten() {
+                if !sigmas.contains(s) {
+                    sigmas.push(s.clone());
+                }
+            }
+            for s in &sigmas {
+                self.model_of.insert((export.clone(), s.clone()), model.clone());
+            }
+            self.demand(model, &sigmas);
+            sigmas_of.insert(export.clone(), sigmas);
+            constants.push(export.clone());
+        }
+        // A rule is keyed at the σ its recursor was keyed at, and at no other:
+        // a rule at a σ the recursor has no interpretation at is a rule about a
+        // redex this run cannot name.
+        for (export, ctor, thm) in &m.iotas {
+            let Some(sigmas) = sigmas_of.get(export) else { continue };
+            for s in sigmas {
+                self.model_iota.insert(((export.clone(), s.clone()), ctor.clone()), thm.clone());
+            }
+            self.demand(thm, sigmas);
+        }
+        let _ = env;
+        self.nested.insert(name.clone(), NestedRecord { why: None, constants });
+    }
+
+    /// Add σ to a model constant's schedule entry. **Never a default**: a
+    /// constant reached with an empty σ list keeps whatever the pre-pass gave
+    /// it, and a σ that is not propagated is a σ the keying above did not
+    /// record either, so the two cannot disagree.
+    fn demand(&mut self, n: &Name, sigmas: &[Vec<u32>]) {
+        if sigmas.is_empty() {
+            return
+        }
+        let e = self.schedule.entry(n.clone()).or_default();
+        for s in sigmas {
+            if !e.contains(s) {
+                e.push(s.clone());
+            }
+        }
+    }
+
+    /// Record a nested declaration with no model: the shape that stopped it,
+    /// filed under every constant the model would have keyed.
+    fn decline(&mut self, env: &Environment, name: &Name, ctors: &[(Name, E)], why: Missing) {
         let mut constants = vec![name.clone()];
         constants.extend(ctors.iter().map(|(c, _)| c.clone()));
-        constants.extend(
-            (0..plan.types.len()).map(|k| crate::nested::Plan::rec_name(name, k)),
+        constants.extend(export_recs(env, name).into_iter().map(|(n, _)| n));
+        self.nested
+            .insert(name.clone(), NestedRecord { why: Some(why.label()), constants });
+    }
+}
+
+/// **Every recursor the export declares for `T`, in member order** — `T.rec`,
+/// `T.rec_1`, `T.rec_2`, … — with its [`ConstantInfo`].
+///
+/// Read off the environment and not off a [`crate::nested::Plan`]: the plan's
+/// member count is a *prediction* of how many recursors the declaration owns,
+/// and the environment is what it actually owns. `env.owner` is checked as well
+/// as the name, so a file's own `T.rec_1` that belongs to something else stops
+/// the walk instead of being taken for a member.
+fn export_recs<'e>(env: &'e Environment, t: &Name) -> Vec<(Name, &'e ConstantInfo)> {
+    let mut out = Vec::new();
+    for k in 0.. {
+        let n = crate::nested::Plan::rec_name(t, k);
+        let Some(ci @ ConstantInfo::Recursor { .. }) = env.get(&n) else { break };
+        if env.owner(&n) != Some(t) {
+            break
+        }
+        out.push((n, ci));
+    }
+    out
+}
+
+/// **The model, read out of the environment and checked against the export's
+/// own statements.**
+///
+/// `MODELGEN.md` §1.1's property 1 from the consumer's side: take the export's
+/// declared type, rewrite `T ↦ T._model.self`, `T.ctorⱼ ↦ T._model.ctor_j`,
+/// `T.rec_m ↦ T._model.rec_m`, and the result must be the model declaration's
+/// declared type **on the nose**. Property 2 is read the other way round: the
+/// ι theorem's own left-hand side says which constructor it is about, and that
+/// is compared against the rule the export's recursor carries at that index.
+///
+/// See the module header: this is a diagnostic. It fails closed, and it is not
+/// what makes a conclusion trustworthy.
+fn shape(
+    env: &Environment,
+    t: &Name,
+    ctors: &[(Name, E)],
+    pos: &HashMap<Name, usize>,
+    i: usize,
+) -> Result<Model, Missing> {
+    let self_n = carrier_name(t);
+    let recs = export_recs(env, t);
+
+    // The rewriting, built before anything is compared. Its *keys* are the
+    // export's names and its values the model's; a value that does not exist
+    // is caught at the lookup that needs it, with the reason that names which
+    // part of the tower is missing, rather than in one sweep that would report
+    // every absence as the same thing.
+    let mut rho: HashMap<Name, Name> = HashMap::new();
+    rho.insert(t.clone(), self_n.clone());
+    for (j, (c, _)) in ctors.iter().enumerate() {
+        rho.insert(c.clone(), ctor_name(t, j));
+    }
+    for (k, (r, _)) in recs.iter().enumerate() {
+        rho.insert(r.clone(), rec_name(t, k));
+    }
+
+    // ── the carrier ─────────────────────────────────────────────────────────
+    //
+    // `∀p⃗, Sort u`, which is `T`'s own type: `modelgen` declines a declaration
+    // with indices (`MODELGEN.md` §5), so there is nothing else it could be.
+    //
+    // **The absence of the carrier is `NoCarrier` and not an error**
+    // (`MODELGEN.md` §1.3): the filter declined the declaration and said which
+    // shape stopped it, and a consumer that treated that as a failure would
+    // turn every unsupported nested shape into a broken file.
+    let Some(carrier) = env.get(&self_n) else { return Err(Missing::NoCarrier) };
+    settled(pos, &self_n, i)?;
+    let ConstantInfo::Def { .. } = carrier else { return Err(Missing::Carrier) };
+    let Some(t_ci @ ConstantInfo::Inductive { .. }) = env.get(t) else {
+        return Err(Missing::Carrier)
+    };
+    if at_export_levels(carrier, t_ci).ok_or(Missing::Carrier)? != *t_ci.ty() {
+        return Err(Missing::Carrier)
+    }
+
+    let mut mono: Vec<(Name, Name)> = vec![(t.clone(), self_n)];
+    for (j, (c, c_ty)) in ctors.iter().enumerate() {
+        let m = ctor_name(t, j);
+        let Some(ci) = env.get(&m) else { return Err(Missing::Ctor) };
+        settled(pos, &m, i)?;
+        // At the *declaration's* level parameters, for [`at_export_levels`]'s
+        // reason: `MODELGEN.md` §1 says every generated constant carries `ℓ⃗`,
+        // and the export's constructor carries the declaration's own.
+        let at = crate::env::instantiate_lparams(
+            ci.ty(),
+            ci.lparams(),
+            &t_ci.lparams().iter().map(|n| crate::expr::Level::Param(n.clone())).collect::<Vec<_>>(),
         );
-        self.nested.insert(name.clone(), NestedRecord { why: Some(why), constants });
-        self.decls.push(d.clone());
+        if ci.lparams().len() != t_ci.lparams().len()
+            || at.ok().as_ref() != Some(&rename(&rho, c_ty))
+        {
+            return Err(Missing::Ctor)
+        }
+        mono.push((c.clone(), m));
+    }
+
+    // ρ read backwards, for [`iota_key`]: an ι theorem's major is written in
+    // the *model's* names at the root — `T._model.ctor_j`, because
+    // `MODELGEN.md` §1.1's rewriting reaches into the rule's own statement —
+    // and in the container's at a mimic, where `List.cons` is nobody's model
+    // and is left alone. So the head read off the statement is mapped back
+    // through ρ when it is a model constant and taken as it stands when it is
+    // not.
+    let back: HashMap<Name, Name> =
+        rho.iter().map(|(e, m)| (m.clone(), e.clone())).collect();
+
+    let mut out_recs: Vec<(Name, Name)> = Vec::new();
+    let mut iotas: Vec<(Name, Name, Name)> = Vec::new();
+    for (k, (r, r_ci)) in recs.iter().enumerate() {
+        let m = rec_name(t, k);
+        let Some(ci) = env.get(&m) else { return Err(Missing::Rec) };
+        settled(pos, &m, i)?;
+        if at_export_levels(ci, r_ci).ok_or(Missing::Rec)? != rename(&rho, r_ci.ty()) {
+            return Err(Missing::Rec)
+        }
+        // The rules, by index. `MODELGEN.md` §1.1's property 2 says a consumer
+        // may line ι theorems up with rules by index and check the key by name
+        // — so that is what this does, and the key it checks is read off the
+        // theorem's **own left-hand side** rather than trusted from the index.
+        let ConstantInfo::Recursor { rules, .. } = r_ci else { return Err(Missing::Rec) };
+        for (j, (rule_ctor, _)) in rules.iter().enumerate() {
+            let thm = iota_name(t, k, j);
+            let Some(thm_ci) = env.get(&thm) else { return Err(Missing::Iota) };
+            settled(pos, &thm, i)?;
+            if thm_ci.lparams().len() != r_ci.lparams().len() {
+                return Err(Missing::Iota)
+            }
+            let Some(about) = iota_key(thm_ci.ty(), &m, &back) else { return Err(Missing::Iota) };
+            if about != *rule_ctor {
+                return Err(Missing::IotaRule)
+            }
+            iotas.push((r.clone(), rule_ctor.clone(), thm));
+        }
+        out_recs.push((r.clone(), m));
+    }
+    Ok(Model { mono, recs: out_recs, iotas })
+}
+
+/// The model constant is settled strictly before position `i`, where
+/// [`crate::ledger::fill_declaration`] will read it.
+///
+/// `⟦T⟧` is resolved at `T`'s own position out of `⟦T._model.self⟧`, so a
+/// model declared level with — or after — the declaration it models is one the
+/// alias cannot look up. `modelgen` splices the model *before* the nested
+/// inductive, so this holds for anything it wrote; it is checked because a
+/// `_model` name in the file is not necessarily one it wrote.
+fn settled(pos: &HashMap<Name, usize>, n: &Name, i: usize) -> Result<(), Missing> {
+    match pos.get(n) {
+        Some(j) if *j < i => Ok(()),
+        _ => Err(Missing::Later),
+    }
+}
+
+/// **The model recursor's declared type, at the export recursor's own universe
+/// parameters** — `None` when the two do not bind the same number of them.
+///
+/// Positional and not by name, and that is a **correction to `MODELGEN.md`
+/// §1.1's property 3**, which says the model "carries `T.rec_k`'s single
+/// motive-universe parameter, under the same name". It carries the name the
+/// *export file* wrote, and mini does not use the export's recursor: it
+/// generates its own in `kernel::add_block`, whose motive parameter is
+/// `fresh_level_name`'s `v` where every export in the corpus writes `u`. The
+/// names are an artefact of two generators and the *position* is the contract,
+/// which is also what every consumer of the table needs — `zoneb`'s
+/// `model_alias` and [`crate::iota_model::fire`] both carry the redex's σ
+/// across positionally and neither has a name to carry.
+fn at_export_levels(model: &ConstantInfo, export: &ConstantInfo) -> Option<E> {
+    if model.lparams().len() != export.lparams().len() {
+        return None
+    }
+    let us: Vec<crate::expr::Level> =
+        export.lparams().iter().map(|n| crate::expr::Level::Param(n.clone())).collect();
+    crate::env::instantiate_lparams(model.ty(), model.lparams(), &us).ok()
+}
+
+/// **Which constructor an ι theorem is about, read off its own statement.**
+///
+/// The statement is `∀p⃗ M⃗ S⃗ f⃗, Eq α (rec_k p⃗ M⃗ S⃗ (c f⃗)) rhs`. This peels the
+/// ∀-nest, checks the body is an `Eq` of three arguments whose left-hand side
+/// is an application of `rec` — the model recursor the caller is asking about,
+/// by name, because that is the identity the whole table turns on — and returns
+/// the head constant of that application's **last** argument, which is the
+/// major premise.
+///
+/// `None` is "this is not an equation about that recursor at a constructor",
+/// which is [`Missing::Iota`]. It is deliberately not "the theorem is about
+/// some other recursor": a theorem naming a *different* model recursor on its
+/// left is exactly as unusable here, and splitting the two would be a reason
+/// string with no input behind it.
+fn iota_key(ty: &E, rec: &Name, back: &HashMap<Name, Name>) -> Option<Name> {
+    let mut body = ty;
+    while let Expr::Forall { body: b, .. } = &**body {
+        body = b;
+    }
+    let (head, args) = get_app(body);
+    let Expr::Const(eq, _) = &*head else { return None };
+    if *eq != Name::simple("Eq") || args.len() != 3 {
+        return None
+    }
+    let (lhs_head, lhs_args) = get_app(&args[1]);
+    let Expr::Const(r, _) = &*lhs_head else { return None };
+    if r != rec {
+        return None
+    }
+    let major = lhs_args.last()?;
+    match &*get_app(major).0 {
+        Expr::Const(c, _) => Some(back.get(c).unwrap_or(c).clone()),
+        _ => None,
+    }
+}
+
+/// Rewrite every `Const` head named in `rho`, keeping its level list.
+fn rename(rho: &HashMap<Name, Name>, e: &E) -> E {
+    match &**e {
+        Expr::Const(n, ls) => match rho.get(n) {
+            Some(m) => crate::expr::konst(m.clone(), ls.clone()),
+            None => e.clone(),
+        },
+        Expr::App(f, x) => crate::expr::app(rename(rho, f), rename(rho, x)),
+        Expr::Forall { ty, body } => crate::expr::forall(rename(rho, ty), rename(rho, body)),
+        Expr::Lam { ty, body } => crate::expr::lam(rename(rho, ty), rename(rho, body)),
+        Expr::Let { ty, val, body } => std::rc::Rc::new(Expr::Let {
+            ty: rename(rho, ty),
+            val: rename(rho, val),
+            body: rename(rho, body),
+        }),
+        Expr::Proj { ind, idx, s } => std::rc::Rc::new(Expr::Proj {
+            ind: ind.clone(),
+            idx: *idx,
+            s: rename(rho, s),
+        }),
+        _ => e.clone(),
     }
 }
 
@@ -542,16 +648,11 @@ impl Spliced {
 /// name it at** — one sweep, not a fixpoint.
 ///
 /// `checker::instantiations::compute` runs the same sweep and then closes it
-/// and pads it, and both of those are wrong for the question here. *Closing* it
-/// would follow a mention through a declaration that is itself only there
-/// because of the padding; *padding* it invents a σ for a constant nothing
-/// mentions. What this asks is narrower and is the honest reading of "the file
-/// applies `T.rec_k`": some declaration of the file has `T.rec_k.{ℓ⃗}` in its
-/// type or its value, and `ℓ⃗` evaluates under a σ that declaration is
-/// interpreted at.
-///
-/// An occurrence whose levels do not evaluate — a symbolic one — is skipped,
-/// exactly as the pre-pass skips it.
+/// and pads it. What this asks is narrower and is the honest reading of "the
+/// file applies `T.rec_k`": some declaration of the file has `T.rec_k.{ℓ⃗}` in
+/// its type or its value, and `ℓ⃗` evaluates under a σ that declaration is
+/// interpreted at. An occurrence whose levels do not evaluate — a symbolic one
+/// — is skipped, exactly as the pre-pass skips it.
 fn applied_at(
     decls: &[Declaration],
     schedule: &HashMap<Name, Vec<Vec<u32>>>,
@@ -580,10 +681,6 @@ fn applied_at(
 
 /// A declaration's universe parameters and the expressions the interpretation
 /// pass will walk — its type, its value, and an inductive's constructor types.
-///
-/// The one place this file decides what "the body of a declaration" is. Both
-/// [`applied_at`] and the foreign-demand walk in [`splice`] read it, and the
-/// two must agree or a σ predicted by one would be missed by the other.
 fn interpretable(d: &Declaration) -> Option<(&[Name], Vec<&E>)> {
     Some(match d {
         Declaration::Axiom { lparams, ty, .. } => (&lparams[..], vec![ty]),
@@ -628,33 +725,6 @@ fn consts_at(e: &E, map: &HashMap<Name, u32>, out: &mut Vec<(Name, Vec<u32>)>) {
     }
 }
 
-/// Every name a generated declaration brings into being — its own, and, for an
-/// inductive or a block, each constructor and the recursor `kernel::add` mints
-/// beside it.
-///
-/// [`crate::mutual_aux::Encoding::declares`] over one declaration rather than a
-/// list, and it is written here for the same reason that one is written there:
-/// a block's recursors are not in the declaration and are exactly what a
-/// consumer reading the environment needs.
-fn declares(d: &Declaration) -> Vec<Name> {
-    let mut out = vec![d.name()];
-    match d {
-        Declaration::Inductive { name, ctors, .. } => {
-            out.extend(ctors.iter().map(|(c, _)| c.clone()));
-            out.push(Name::str(name, "rec"));
-        }
-        Declaration::Mutual { types, .. } => {
-            for t in types {
-                out.push(t.name.clone());
-                out.extend(t.ctors.iter().map(|(c, _)| c.clone()));
-                out.push(Name::str(&t.name, "rec"));
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
 /// Which position in the declaration list each name is settled by: a
 /// declaration's own name, and — for an inductive or a block — every
 /// constructor and recursor the environment says it owns.
@@ -675,66 +745,4 @@ fn positions(env: &Environment, decls: &[Declaration]) -> HashMap<Name, usize> {
         }
     }
     out
-}
-
-/// The first constant a model mentions that is **not** its own and is not
-/// settled strictly before position `i`.
-///
-/// `None` is what lets the model be spliced in; a `Some` is a file whose
-/// declaration order the alias cannot be read in, and the caller turns it into
-/// a named decline rather than into a model nobody can look up.
-fn mentioned_after(
-    iso: &crate::nested_ev::Iso,
-    mine: &HashSet<Name>,
-    pos: &HashMap<Name, usize>,
-    i: usize,
-) -> Option<Name> {
-    let mut found: Vec<Name> = Vec::new();
-    for d in &iso.decls {
-        match d {
-            Declaration::Axiom { ty, .. } => names_in(ty, &mut found),
-            Declaration::Def { ty, value, .. } => {
-                names_in(ty, &mut found);
-                names_in(value, &mut found);
-            }
-            Declaration::Inductive { ty, ctors, .. } => {
-                names_in(ty, &mut found);
-                for (_, c) in ctors {
-                    names_in(c, &mut found);
-                }
-            }
-            Declaration::Mutual { types, .. } => {
-                for t in types {
-                    names_in(&t.ty, &mut found);
-                    for (_, c) in &t.ctors {
-                        names_in(c, &mut found);
-                    }
-                }
-            }
-            Declaration::Quot => {}
-        }
-    }
-    found.into_iter().find(|n| !mine.contains(n) && pos.get(n).is_none_or(|j| *j >= i))
-}
-
-/// Every `Const` name occurring in `e`.
-fn names_in(e: &E, out: &mut Vec<Name>) {
-    match &**e {
-        Expr::Const(n, _) => out.push(n.clone()),
-        Expr::App(f, x) => {
-            names_in(f, out);
-            names_in(x, out);
-        }
-        Expr::Forall { ty, body } | Expr::Lam { ty, body } => {
-            names_in(ty, out);
-            names_in(body, out);
-        }
-        Expr::Let { ty, val, body } => {
-            names_in(ty, out);
-            names_in(val, out);
-            names_in(body, out);
-        }
-        Expr::Proj { s, .. } => names_in(s, out),
-        _ => {}
-    }
 }

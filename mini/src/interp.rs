@@ -617,7 +617,8 @@ pub struct IndApparatus {
     /// **A nested declaration's interpretation is its model's** — the export
     /// constant's own key ↦ the model constant that carries `⟦·⟧`.
     ///
-    /// Filled by [`crate::nested_splice::splice`], from a model it built,
+    /// Filled by [`crate::nested_splice::recognise`], from a model the export
+    /// carries,
     /// checked and put into the declaration list, and by nothing else. A
     /// constant with no entry **declines** in [`crate::zoneb::ensure`]; there
     /// is no name rule and no fall-through, and
@@ -631,7 +632,7 @@ pub struct IndApparatus {
     /// **A nested recursor's ι rule is its model's theorem** — `((T.rec_k, σ),
     /// the major's head constructor) ↦ the model theorem that states the rule`.
     ///
-    /// Filled by [`crate::nested_splice::splice`] beside
+    /// Filled by [`crate::nested_splice::recognise`] beside
     /// [`IndApparatus::model_of`] and from the same source, and read by
     /// [`crate::iota_model::fire`] and by nothing else. The key is what a
     /// dispatch site holds and all it holds.

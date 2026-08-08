@@ -87,7 +87,7 @@ pub struct Facts {
     pub mutual_encoded: usize,
     pub mutual_rules: usize,
     /// Nested declarations seen, and the ones whose model
-    /// [`crate::nested_splice::splice`] built, checked and keyed. Filled at the
+    /// [`crate::nested_splice::recognise`] found in the export and keyed. Filled at the
     /// same place and for the same reason as the three above.
     pub nested_seen: usize,
     pub nested_models: usize,
@@ -144,8 +144,19 @@ pub struct ExportRec {
 /// file carrying one would be *accepted* and wholly untranslated. Lifting the
 /// decline is therefore deliberate and separate: it is off here, the fixture
 /// tests turn it on, and the corpus never sees it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadOptions {
+    /// **Run the export through the `modelgen` filter first** —
+    /// [`crate::modelgen`], which says where the binary is looked for, why the
+    /// pass streams rather than writing a temporary file, and why every failure
+    /// is a named decline rather than a silent skip.
+    ///
+    /// [`crate::modelgen::Filter::Off`] here and **on** in `mini`'s command
+    /// line, and the asymmetry is deliberate: the library entry point is what
+    /// the test suites call, and they read committed fixtures that are already
+    /// filtered, so a suite that ran the pass would acquire a dependency on a
+    /// Lean toolchain for no change in what it reads.
+    pub modelgen: crate::modelgen::Filter,
     /// Take a `mutual … end` block instead of declining the file.
     pub mutual: bool,
     /// Take a **nested** inductive instead of declining the file.
@@ -290,7 +301,20 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
     );
     let cfg: Config =
         serde_json::from_str(&cfg_json).map_err(|e| LoadError::Io(format!("config: {e}")))?;
-    let (ef, _skipped) = cfg.to_export_file().map_err(|e| LoadError::Io(format!("parse: {e}")))?;
+    // **The `modelgen` pass, and a failure here is a decline that names it.**
+    // `crate::modelgen`'s header says why: falling back to the unfiltered input
+    // would report a toolchain problem as the declaration's.
+    let (ef, _skipped) = match &opts.modelgen {
+        crate::modelgen::Filter::Off => {
+            cfg.to_export_file().map_err(|e| LoadError::Io(format!("parse: {e}")))?
+        }
+        crate::modelgen::Filter::Run(exe) => {
+            let bytes =
+                crate::modelgen::filter(exe, path).map_err(|e| declined(format!("modelgen: {e}")))?;
+            cfg.to_export_file_from(std::io::Cursor::new(bytes))
+                .map_err(|e| LoadError::Io(format!("parse (after modelgen): {e}")))?
+        }
+    };
 
     let insts = Instantiations::compute(&ef);
 
@@ -429,7 +453,23 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
                     // `parseInductInfo`'s declines, in its order. (`isUnsafe`
                     // is absent because `checker`'s parser already asserts it.)
                     let all = ind.all_ind_names();
-                    if all.len() > 1 && !opts.mutual {
+                    // **`--nested` opens the mutual gate too**, and that is a
+                    // consequence of the model arriving in the file rather
+                    // than a softening of the contract. `modelgen` splices
+                    // `T._model.0 … T._model.{n−1}` — a `mutual … end` block —
+                    // in front of every nested inductive it models
+                    // (`MODELGEN.md` §1), so a filtered export with a nested
+                    // declaration *always* has a mutual block in it. A nested
+                    // gate that did not open the mutual one could therefore
+                    // never take a nested declaration at all: every one of
+                    // `mini/tests/fixtures/nested_*.ndjson` declines at this
+                    // line before reaching the next.
+                    //
+                    // `--mutual` on its own is unchanged, and so is the corpus:
+                    // no `good/tutorial` export declares either shape, and the
+                    // exit-2 population MINI-DESIGN.md §0 pins is read off that
+                    // corpus.
+                    if all.len() > 1 && !(opts.mutual || opts.nested) {
                         return Err(declined(format!("Mutual inductive {name} not supported")))
                     }
                     if ind.is_nested() && !opts.nested {

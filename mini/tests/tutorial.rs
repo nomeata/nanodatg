@@ -84,6 +84,9 @@ fn run(export: &Path) -> Run { run_with(export, &[]) }
 /// The same, with extra flags — `--block` is the one that matters.
 fn run_with(export: &Path, flags: &[&str]) -> Run {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        // Hermetic — `mini/src/modelgen.rs`. No corpus export has a nested
+        // inductive, so the pass would be the identity and cost an exec.
+        .arg("--no-modelgen")
         .arg("--verbose")
         .args(flags)
         .arg(export)

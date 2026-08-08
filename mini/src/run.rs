@@ -87,6 +87,11 @@ pub struct Options {
     /// *restoring* the result, and the restoration is a rewrite along an
     /// isomorphism the acceptance axis does not check.
     pub nested: bool,
+    /// **Run the export through the `modelgen` filter before parsing it** —
+    /// [`crate::modelgen`]. `Off` here and on in `mini`'s command line; the
+    /// module header says why the two differ and what happens on a machine
+    /// with no Lean toolchain.
+    pub modelgen: crate::modelgen::Filter,
 }
 
 pub struct Outcome {
@@ -152,7 +157,12 @@ pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::defau
 pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     let loaded = match convert::load_with(
         path,
-        convert::LoadOptions { mutual: opts.mutual, nested: opts.nested, ..Default::default() },
+        convert::LoadOptions {
+            mutual: opts.mutual,
+            nested: opts.nested,
+            modelgen: opts.modelgen.clone(),
+            ..Default::default()
+        },
     ) {
         Ok(l) => l,
         Err(e) => {
@@ -223,18 +233,19 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // records its reason. `mini/src/mutual_aux.rs` is the whole of it, and that
     // module never names a `Term` or a `Thm`.
     //
-    // **Step 3 of the nested arc runs first, and it is an *insertion* rather
-    // than a substitution.** A nested declaration's primitives stay exactly
-    // where they are — the file's own theorems are checked by the ι rules they
-    // carry — and its *model* goes in beside them, immediately before the
-    // declaration, with a side table saying which model constant carries
-    // `⟦T⟧`, `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧`. `mini/src/nested_splice.rs` says why
-    // that cannot be a substitution and why the table cannot be a name rule.
+    // **Step 3 of the nested arc runs first, and it is a *recognition* rather
+    // than a substitution or an insertion.** A nested declaration's primitives
+    // stay exactly where they are — the file's own theorems are checked by the ι
+    // rules they carry — and its *model* is already in the file, put there by
+    // the `modelgen` filter (`MODELGEN.md` §1), so all that is built here is the
+    // side table saying which model constant carries `⟦T⟧`, `⟦T.ctorᵢ⟧` and
+    // `⟦T.rec_k⟧`, and the σ those constants have to be interpreted at.
+    // `mini/src/nested_splice.rs` says why the table cannot be a name rule.
     //
-    // Before `expand` and not after: a model contains a `mutual … end` block of
-    // its own, and `expand` is what turns that into declarations the pass can
-    // interpret.
-    let sp = crate::nested_splice::splice(&env, &loaded.decls, &loaded.schedule);
+    // Before `expand` and not after: the model contains a `mutual … end` block
+    // of its own, and the σ this pass propagates onto its members have to be in
+    // the schedule `expand` reads.
+    let sp = crate::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
     facts.nested_models = sp.modelled;
     facts.nested_seen = sp.seen;
     // The tables go on the apparatus, which means building it — so only when
@@ -247,7 +258,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
             app.nested = sp.nested;
         }
     }
-    let ex = crate::mutual_aux::expand(&sp.env, &sp.decls, &sp.schedule);
+    let ex = crate::mutual_aux::expand(&env, &loaded.decls, &sp.schedule);
     facts.mutual_blocks = ex.blocks;
     facts.mutual_encoded = ex.encoded;
     facts.mutual_rules = ex.rules;

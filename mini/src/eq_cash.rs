@@ -10,7 +10,8 @@
 //!
 //! `proof_expr` is a **fully applied** proof term whose type is an equation:
 //! for a nested inductive's ι rule that is `iotaNode m1 m2 lf nd nl cs a`, the
-//! rule theorem [`crate::nested_ev`] emits applied to the site's own arguments.
+//! rule theorem `modelgen` splices into the export, applied to the site's own
+//! arguments.
 //! What comes back is one kernel theorem about the two sides' interpretations,
 //! together with those two terms, so that a caller can compare its own
 //! endpoints against what the equation actually says instead of trusting a
@@ -122,8 +123,8 @@
 //! # The generated population, and why no test enumerates it
 //!
 //! `nested_model.lean` is hand-written and has four rules;
-//! [`crate::nested_ev`] now *generates* them, and
-//! [`Iso::iotas`](crate::nested_ev::Iso::iotas) is
+//! `modelgen` now generates them into the export, and
+//! [`crate::nested_splice::Recognised::model_iota`] is
 //! `(member, the export's constructor, the theorem)` for **36** rules over the
 //! eight nested declarations in the fixture directory — `Tree` 4, `PT α` 4,
 //! `BTree` 6, `DTree` 6, and the `nested_shapes` set. That is the real
@@ -225,7 +226,7 @@
 //!
 //! # This module is **not** a black box, and the allowlist does not move
 //!
-//! [`crate::nested_ev`] generates the model of a nested declaration's
+//! `modelgen` generates the model of a nested declaration's
 //! primitives — carrier, `pack`/`unpack`, round trips, recursors, and the ι
 //! rules — as ordinary Lean declarations, and names no [`Thm`]: it is on
 //! `ci/check-mutual-blackbox.sh`'s three-file allowlist and belongs there,

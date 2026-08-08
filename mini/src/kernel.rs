@@ -1232,7 +1232,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // `IndexedDepRecursor::iota` exists for it and
                                 // both arms below would decline. Its `⟦T.rec_k⟧`
                                 // is a model's, keyed by
-                                // `crate::nested_splice::splice`, and its rules
+                                // `crate::nested_splice::recognise`, and its rules
                                 // are that model's proved theorems — cashed by
                                 // [`crate::iota_model`], whose header says why
                                 // widening `iota_dep`'s arity check instead

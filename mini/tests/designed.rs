@@ -93,6 +93,7 @@ fn fixture(name: &str) -> PathBuf {
 fn run(name: &str) -> String {
     let path = fixture(name);
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
         .arg("--verbose")
         .arg("--acceptance-only")
         .arg(&path)
@@ -190,6 +191,7 @@ fn elim(stdout: &str) -> BTreeMap<String, (bool, bool)> {
 fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
     let path = fixture(file);
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
         .arg("--dump-theorems")
         // `--acceptance-only` for [`run`]'s reason: the status asserted below
         // is that the file was taken, and `empty_parameterised` legitimately
@@ -1216,6 +1218,7 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
     /// is under test here.
     fn raw(name: &str, flags: &[&str]) -> (Option<i32>, String) {
         let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+            .arg("--no-modelgen")
             .args(flags)
             .arg(fixture(name))
             .output()

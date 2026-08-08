@@ -82,6 +82,22 @@ fn main() {
     let val = |k: &str| {
         flags.iter().find_map(|f| f.strip_prefix(k).and_then(|r| r.strip_prefix('=')))
     };
+    // **The `modelgen` pass is on unless it is turned off** — `mini::modelgen`
+    // says why the default is that way round and what the two flags do. A
+    // binary that cannot be found is a usage error (exit 2) and not a run with
+    // no filter; the module header says why a silent skip would be a
+    // misattribution rather than a convenience.
+    let modelgen = if flags.iter().any(|f| f == mini::modelgen::NO_FLAG) {
+        mini::modelgen::Filter::Off
+    } else {
+        match mini::modelgen::discover(val(mini::modelgen::PATH_FLAG)) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
+    };
     let only = val("--dump-only").map(str::to_string);
     let sigma = val("--dump-sigma").map(|s| {
         s.split(',').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect::<Vec<u32>>()
@@ -91,12 +107,13 @@ fn main() {
     if paths.len() != 1 {
         eprintln!(
             "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] [--nested] \
+             [--no-modelgen] [--modelgen=<path>] \
              [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual, nested });
+    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual, nested, modelgen });
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     // The certification axis, both halves, computed once: they decide the
     // verdict line's certification columns *and* the exit code, and the two

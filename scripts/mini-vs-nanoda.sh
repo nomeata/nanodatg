@@ -64,7 +64,15 @@ mini_verdict() {
   # axis it may read is whether the file was accepted. mini otherwise exits 4
   # when it accepted a file and left an obligation underived, which is not a
   # judgement about the file and would show up here as a spurious divergence.
-  out="$("$MINI" --acceptance-only "$1" 2>/dev/null)"; rc=$?
+  # `--no-modelgen`: the two columns have to be about the **same file**. mini
+  # runs the `modelgen` filter by default (`mini/src/modelgen.rs`), which for a
+  # file with a nested inductive splices a model in and changes the declaration
+  # count; nanoda is handed the path as it stands. Comparing a filtered run
+  # against an unfiltered one would report a difference this script's whole
+  # point is to attribute to a port bug. No corpus export has a nested
+  # inductive, so today the flag changes nothing but an exec — it is here so
+  # that the day one does, the table does not start lying.
+  out="$("$MINI" --no-modelgen --acceptance-only "$1" 2>/dev/null)"; rc=$?
   case $rc in
     0) echo accept;;
     1) echo reject;;

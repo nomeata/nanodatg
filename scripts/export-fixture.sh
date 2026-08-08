@@ -64,6 +64,30 @@
 # has: `042_rbTreeDef.ndjson` contains `Color`, `N`, `RBTree`, their
 # constructors, `rec`, and `rbTreeDef` — no `recOn`, no `below`.
 #
+# # The `modelgen` pass, and why the filtered output is what is committed
+#
+# `mini/src/nested_splice.rs` no longer *generates* the model of a nested
+# inductive: `modelgen/` splices it into the export (`MODELGEN.md` §1) and mini
+# recognises what is there. So a fixture with a nested inductive has to arrive
+# already filtered, and every `.ndjson` this script writes is passed through
+# `modelgen` before it is committed. The filter is the **identity** on a file
+# with nothing to splice — measured over 73 corpus files — so the pass is
+# unconditional and the diff on a non-nested fixture is empty.
+#
+# The alternative was to commit the raw export and filter at test time. That
+# was rejected: `mini/tests/fixtures`' whole point is that "the `.ndjson` is
+# checked in too, so neither `lean` nor the network is needed to run the tests"
+# (above), and filtering at test time would put a pinned Lean toolchain on the
+# critical path of `cargo test`. The cost of the choice is that a committed
+# `.ndjson` is no longer byte-for-byte what `lean4export` emitted for the
+# `.lean` beside it — for the five nested fixtures it is that export with the
+# model spliced in. `modelgen` is idempotent (it declines `nested model name
+# taken` on its own output and passes it through byte for byte), so
+# re-running this script over an already-filtered tree is a no-op.
+#
+# `MODELGEN_BIN` overrides the binary; the default is `modelgen`'s own
+# `lake build` output, which this script builds if it is not there.
+#
 # Set `LEAN4EXPORT_DIR` to reuse an existing clone; the default is a scratch
 # checkout under `target/`, which is gitignored.
 set -euo pipefail
@@ -86,6 +110,12 @@ git -C "$EXPORT_DIR" checkout --quiet "$EXPORT_REV"
 printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
 ( cd "$EXPORT_DIR" && lake build >&2 )
 BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
+MODELGEN_BIN="${MODELGEN_BIN:-$ROOT/modelgen/.lake/build/bin/modelgen}"
+if [[ ! -x "$MODELGEN_BIN" ]]; then
+  echo "building modelgen" >&2
+  ( cd "$ROOT/modelgen" && lake build >&2 )
+fi
+[[ -x "$MODELGEN_BIN" ]] || { echo "no modelgen at $MODELGEN_BIN" >&2; exit 2; }
 EXPORT_LEAN_PATH="$(cd "$EXPORT_DIR" && lake env printenv LEAN_PATH)"
 
 declare -a SOURCES=()
@@ -114,5 +144,11 @@ for src in "${SOURCES[@]}"; do
     LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" > "$FIXTURES/$base.ndjson"
   fi
   unset ONLY
+  # The model of every nested inductive, spliced in — see the header. The
+  # filter writes to a scratch file inside `$WORK` and the result is moved into
+  # place, so a failed pass leaves the previous fixture untouched rather than
+  # half a file.
+  "$MODELGEN_BIN" "$FIXTURES/$base.ndjson" -o "$WORK/$base.filtered.ndjson" >&2
+  mv "$WORK/$base.filtered.ndjson" "$FIXTURES/$base.ndjson"
   echo "$base.ndjson: $(wc -l < "$FIXTURES/$base.ndjson") lines" >&2
 done

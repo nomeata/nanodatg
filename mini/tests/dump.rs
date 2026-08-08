@@ -34,6 +34,7 @@ fn fixture(name: &str) -> PathBuf {
 /// `--block` exits 3 by design, and this suite is about what was printed.
 fn run(path: &Path, flags: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
         .args(flags)
         .arg(path)
         .output()

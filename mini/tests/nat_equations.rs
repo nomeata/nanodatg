@@ -164,6 +164,7 @@ fn fixture() -> PathBuf {
 /// harness cannot contain.
 fn run(flags: &[&str]) -> (Option<i32>, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mini"));
+    cmd.arg("--no-modelgen");
     for f in flags {
         cmd.arg(f);
     }

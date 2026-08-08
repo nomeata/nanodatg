@@ -47,8 +47,9 @@
 //! T._model.iota_k_j : ∀ p⃗ M⃗ S⃗ f⃗, Eq.{v} (T._model.rec_k p⃗ M⃗ S⃗ (c p⃗ f⃗)) (Sⱼ f⃗ ih⃗)
 //! ```
 //!
-//! [`crate::nested_ev`] wrote it, [`crate::kernel::add`] checked it and
-//! [`crate::nested_splice::splice`] put it in the declaration list, so the
+//! `modelgen` wrote it, mini's own kernel checked it as an ordinary declaration
+//! of the file and [`crate::nested_splice::recognise`] checked its statement
+//! against the export's before keying it, so the
 //! interpretation pass has already opened its pair. There is no derivation here
 //! and `derived/` owes this row nothing.
 //!
@@ -99,7 +100,7 @@
 //! # What declines
 //!
 //! * **a rule with no `model_iota` entry.** The table is filled only from a
-//!   theorem [`crate::nested_splice::splice`] built, checked and seeded, and
+//!   theorem [`crate::nested_splice::recognise`] found and checked, and
 //!   the seeding is now **total** over the rules of every recursor the file
 //!   applies — it used to leave out the ones whose model proof transports,
 //!   because their own constant typings had no endpoint and there was nothing
@@ -177,7 +178,8 @@ pub(crate) fn selects(c: &mut Checker<'_, '_>, rec: &Name) -> bool {
 /// parameters then its fields) and `rhs` the Lean right-hand side `whnf` is
 /// about to move to. `ls` is the redex's own level list, which the rule is
 /// instantiated at: the model's theorem carries the recursor's universe
-/// parameters, because [`crate::nested_ev`] states it over the recursor's own.
+/// parameters, because `modelgen` states it over the recursor's own
+/// (`MODELGEN.md` §1.1, property 3).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fire(
     c: &mut Checker<'_, '_>,

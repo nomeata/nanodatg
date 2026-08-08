@@ -1090,6 +1090,22 @@ impl Config {
             panic!("Configuration file must specify en export file path or \"use_stdin\": true")
         }
     }
+
+    /// [`Config::to_export_file`], reading from `r` instead of from
+    /// `export_file_path`.
+    ///
+    /// Added for `mini/src/modelgen.rs`, which runs the export through the
+    /// `modelgen` filter as a subprocess and holds the result in memory: the
+    /// filter's output has to reach the parser without a temporary file, and
+    /// `parse_export_file` already takes a `BufRead`. `export_file_path` is
+    /// still read by `Instantiations` and by error messages, so it is left set;
+    /// this entry point only decides where the *bytes* come from.
+    pub fn to_export_file_from<'a, R: std::io::BufRead>(
+        self,
+        r: R,
+    ) -> Result<(ExportFile<'a>, Vec<String>), Box<dyn Error>> {
+        crate::parser::parse_export_file(r, self)
+    }
 }
 
 // The intent is to use this for reporting exit status/error info
