@@ -198,7 +198,9 @@ saying the pipeline works.
      `|ℓ⃗|` like the other seven, so the marker commutes with the model. Over
      `modelgen/tests` — every fixture through `modelgen` and then `monomorph` —
      **141 models, of which 90 were split across more than one marker and now 0
-     are**, in mode A and in mode B alike.
+     are**, in mode A and in mode B alike. On Mathlib, which is the population
+     that matters, **82 model owners, 49 of them split before and 0 now**
+     (§9.10).
 
      The tenth family is not a counterexample: a spliced `T._model.funext`
      (§`MODELGEN.md` 1.5) is genuinely polymorphic in universes that are nobody's
@@ -378,7 +380,10 @@ writes the same order, so the two agree on every export there is. If they ever
 stop agreeing, the copy would come out with the right parameter and its uses at
 the wrong one and nothing downstream would catch it — so the pass **refuses the
 file** instead of assuming. Zero refusals over `vendor/arena-tests/good`'s 99
-files and over every fixture in `modelgen/tests`.
+files, over every fixture in `modelgen/tests`, and over Mathlib — whose 6,644
+inductive records hold 6,796 recursors, 6,507 of them with an eliminating
+universe and **all 6,507 with it at position 0**, at level-parameter arities
+running from 0 to 15 (§9.10).
 
 Mode A is the default for one reason: **it is the only mode with an external
 oracle.** Lean's kernel typechecks its output and `nanoda` accepts it (§5), so
@@ -673,7 +678,9 @@ answer and then **ran out of memory writing it out**, at 44.9 GB. All three are
 fixed — §9.2's naming scheme, §9.3's grouping, §9.5's streaming writer — and the
 whole file now goes through the **unpatched** binary in 741.14 s at 35.3 GB,
 with `nanoda` accepting all 776,723 output declarations (§9.7). Every number
-below is from the commands named; §9.7 lists what was not run.
+below is from the commands named; §9.7 lists what was not run. §9.10 is the
+**composition with `modelgen`** at this scale, which is where `#116`'s marker
+half is measured closed.
 
 ## 9.1 The input, and how it was made
 
@@ -1516,3 +1523,57 @@ performance decision. `MODELGEN.md` and this file both now carry a fourth of the
 same family: an `x := y` inside a `match` arm whose sibling arm `return`s does
 not escape the match at all, and `x` reads back as `default` — the pass reported
 **zero declarations in** and exited 0.
+
+## 9.10 The composition with `modelgen`, at Mathlib scale
+
+§1.3's second failure is closed and this is the population it is closed on. The
+run is `modelgen` over `mathlib.ndjson` and then `monomorph` over that, both
+unpatched, both under a `ulimit -v` cap:
+
+| | wall | peak RSS | instructions |
+| --- | --- | --- | --- |
+| `modelgen mathlib.ndjson -o mathlib.model.ndjson` | **277.66 s** | 23,901,084 KB | 3.073e12 |
+| `monomorph mathlib.model.ndjson -o …` (mode A) | **846.66 s** | 32,659,224 KB | 5.405e12 |
+
+`modelgen` writes **51 models, 1,842 declarations, 0 declined**, and its own
+oracle holds at scale: *"statements: 742 compared against the installed
+recursors' own rules, 0 differ"*. `monomorph` then takes **673,370
+declarations in and writes 779,463 out** — 656,346 groups, 31 carried, 165,154
+defaulted, 2,034 recursors the kernel minted differently, **0 rejected by the
+replay**. No refusal: §4.1's head assertion did not fire.
+
+**Uniformity, which is what the run is for.** Over the output's 779,463
+declaration names there are 2,740 under a `_model` prefix, in **82 owners**
+(51 models; a mutual block contributes one owner per real member, since each
+gets its own `R_k._model.self`). Splitting each at §1.1's marker:
+
+```
+all `_model` names          '': 2297   _at.1.0: 170   _at.2.0.0: 244   _at.3.0.0.0:  29
+rec_k / iota_k_j only       '':  629   _at.1.0:  46   _at.2.0.0:  60   _at.3.0.0.0:   7
+```
+
+The two rows are the point: `rec_k` and `iota_k_j` now appear under the *same*
+four markers as their siblings, in proportion, rather than one marker deeper
+than each. **Models split across more than one marker: 0.** Under the old rule
+it would have been **49 of the 82** — every owner that has a `rec_k` at all —
+which is arithmetic rather than a second 846 s run: the old marker was
+`_at.|lp|.…` for each declaration's own `lp`, so an owner came out split
+exactly when its families had two different arities.
+
+**The precondition, checked directly rather than inferred.** Over
+`mathlib.model.ndjson`'s 82 owners: **0** have no `X._model.self`, **1,248**
+declarations carry exactly the carrier's `ℓ⃗`, **730** carry one extra
+parameter *in front of* it, and **0 are neither**. That is `MODELGEN.md` §1.1
+property 3 as a measurement, on the population that matters.
+
+**§4.1's head assertion, over the whole export rather than over what happened
+to reach it.** A static scan of `mathlib.ndjson`'s 6,644 inductive records
+finds 6,796 recursors, **6,507 with an eliminating universe, all 6,507 of them
+at position 0** — recursor level-parameter arities run from 0 to 15 and every
+one of them puts the motive first. Zero candidates for either refusal.
+
+**`--check` still rejects 0, on the composition.** The full-file kernel replay
+is out of reach for the reason §9.7 gives, so it is run on the 20-million-line
+prefix put through *both* tools: `modelgen` (51.32 s, 4,747,800 KB, 35 models)
+then `monomorph --check` (210.66 s, 5,981,644 KB), **0 rejected of 146,525**,
+and 0 of that prefix's 64 model owners split.
