@@ -647,10 +647,14 @@ its dependencies are ready, and a mutual `partial def` block need not be
 contiguous for that.
 
 Only this row was traced to line numbers; the other four are the same shape
-(`Mathlib.Tactic.Ring`'s mutual machinery) but were not checked. The consequence
-for §9.6's `MONO_UNSORTED` is unchanged in size and different in kind: the right
-fix is not a fixpoint over the file but a grouping that emits a mutual `def`
-block's members where they stand.
+(`Mathlib.Tactic.Ring`'s mutual machinery) but were not checked. **`nanoda`
+agrees about the file as a whole**: it accepts all 670,630 declarations of
+`mathlib.ndjson` in dependency order without a typechecker error (§9.7), which
+it could not do if any of the five were a forward reference in the export.
+
+The consequence for §9.6's `MONO_UNSORTED` is unchanged in size and different in
+kind: the right fix is not a fixpoint over the file but a grouping that emits a
+mutual `def` block's members where they stand.
 
 ## 9.4 Duplication — the answer
 
@@ -859,13 +863,16 @@ A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
 
   That name is §9.3's, and it is the `MONO_UNSORTED` undercount made visible
   rather than a defect in the naming or the writer: the pass was told to ignore
-  the forward reference, so the group that mentions `AnalyzeAppM` is emitted
-  before the group that declares it, and `nanoda` reads a file strictly in
-  order. It is the same thing the unpatched binary refuses the file for. What
-  it does **not** yet distinguish is whether the export is unsorted in *record*
-  order or only under §2.1's group model — a mutual member that joins an earlier
-  group is emitted at that group's position — and the control for that is
-  `nanoda` on the unmodified input, which is not reported here.
+  the forward reference, so the member that mentions `AnalyzeAppM` is emitted at
+  its group's position rather than its own, and `nanoda` reads a file strictly
+  in order. It is the same thing the unpatched binary refuses the file for.
+* **`nanoda` on the unmodified Mathlib input** — the control for the row above,
+  and not run before either. **It accepts the whole file**: *"Checked 670630
+  declarations with no typechecker errors"*, **3011.42 s at 10,711,008 KB**.
+  (One pretty-printer complaint, `Unable to print axioms`, which is not a
+  checking result.) So the export really is in dependency order and the
+  reordering above is `monomorph`'s — §9.3 traces it to the grouping, by line
+  number, and this is the independent confirmation.
 * **Mode B's output, at any Mathlib scale.** Counted, never written or checked —
   and §4.2 says no checker accepts it anyway.
 * **The maximal sorted prefix.** §9.3 puts the first violation at group 135,365
