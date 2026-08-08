@@ -168,20 +168,62 @@ runs the last two on every file.
    nested construction itself — given `Tree`'s `inductDecl` it generates *both*
    `Tree.rec` and `Tree.rec_1`, at the export's shapes — so replaying the input
    already compares every recursor in the file against Lean's. Over the whole
-   205-file corpus, **682 recursors, and the only four that differ are in
+   205-file corpus, **682 recursors, and the only five files that differ are in
    `vendor/arena-tests/bad/`**: `nat-rec-rules`, `level-imax-leq`,
-   `nat-rec-k-lie` and `rec-k-lie`, each named for the lie it tells.
+   `nat-rec-k-lie`, `rec-k-lie` and `130_misnamed_rec_user`, each named for the
+   lie it tells. This is `mini/tests/mutual.rs`'s
+   `the_generated_recursors_are_the_ones_lean_exports` for nothing, over the
+   corpus rather than the fixtures.
+
+Measured over the whole corpus: **205 files, 0 failures, 12 models, 87
+statements compared with 0 differing, 682 recursors with 0 differing outside
+`bad/`.** Twenty `bad/` files stop replaying — Lean's kernel will not load a
+deliberately ill-formed *inductive* even with checking off, because the
+inductive elaboration is not skippable — and are passed through byte for byte.
 
 Acceptance is `nanoda_bin` — the same parser `mini` uses — on the filtered
-export.
+export. It accepts every one, and the negative control fires: give
+`Tree._model.iota_0_1` the *statement* of `iota_0_0` and it stops at
+`assert_def_eq: not definitionally equal`.
+
+## 4.1 Speed
+
+`MEASUREMENTS.md`'s table for the Rust generator, and the same work here:
+
+| | Rust (`mini/tests/nested.rs`, test profile) | `modelgen` |
+| --- | --- | --- |
+| `nested_iota` (`Tree` + `BTree` + `PT`) | 10.3 + 38.0 + 26.5 s | **0.17 s** |
+| `nested_deep` (`DTree`) | 91.1 s | **0.22 s** |
+| `nested_shapes` (four declarations) | 10.4 + 2.8 + 89.3 + 16.6 s | **0.14 s** |
+| all three, end to end | **284 s** (measured) | **0.53 s** |
+| `init-prelude` (3.7 MB, 1777 declarations, `Lean.Syntax`) | cannot (see §5) | **0.28 s** |
+
+The Rust figure is `cargo test --test nested
+the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
+and `kernel::add`s exactly these eight models: 284.12 s. `modelgen`'s figures
+are whole-file — parse, replay every declaration, generate, kernel-check, run
+both oracles — and include ~0.1 s of process start. **Roughly 500×**, and the
+superlinearity is gone: `DTree`, the 91-second case, is not distinguishable
+from the others here.
 
 ---
 
 # 5. What it declines, each a shape
 
 * `nested model with universe parameters` — the declaration has level
-  parameters of its own. No fixture has one. (A *container* with level
-  parameters is fine and `Lean.Syntax` needs it: `List.{0} Syntax`.)
+  parameters of its own. No fixture has one.
+
+  A **container** with level parameters is fine, and this is where `modelgen`
+  reaches something the Rust does not. `nested_ev.rs`'s `rec_levels` puts the
+  container's *declared* level parameter on `C.rec`, as `Level::Param`; the
+  occurrence's own instantiation is what belongs there. For every committed
+  fixture the containers are monomorphic and the two coincide, so the guard has
+  no witness in the tree — but `Lean.Syntax` nests into `Array.{0} Syntax` over
+  `List.{0} Syntax`, and there the declared parameter is a free universe
+  variable in a declaration with no level parameters. Measured on a scratch
+  fixture with a polymorphic `List`: `nested_ev::iso` returns
+  `Err(nested model shape)`, and `modelgen` writes the 15 declarations and
+  `nanoda` accepts them. `modelgen` uses `u :: cls` — the occurrence's levels.
 * `nested model with indices` — the declaration or a container has indices.
 * `nested model with dependent fields` — a constructor field's type mentions an
   earlier field; the congruence fold replaces one argument of a constructor
@@ -191,6 +233,21 @@ export.
 * `nested model name taken (N)` — `N` is declared somewhere in the input.
 * `nested model shape: …` — a shape the generator cannot write, or a proof the
   kernel did not accept.
+
+## 5.1 One Lean-side wrinkle
+
+`Environment.addDeclCore` maintains an elaborator-side index keyed by
+*normalised* names, and `panic!`s when two distinct private names collide
+there. An export is many modules flattened into one file, so
+`vendor/arena-tests/good/perf/grind-ring-5.ndjson` has
+`_private.Init.Grind.Ring.CommSolver.0.PSigma.casesOn._arg_pusher` beside
+`_private.Init.Data.Nat.Gcd.0.…` and the panic fires. It is not fatal — the
+entry is dropped from an index this tool never reads — and that file's filtered
+output is accepted by `nanoda` at 2470 declarations. The kernel-level API
+(`Kernel.Environment.addDeclWithoutChecking`) avoids it but is not usable:
+`Environment.find?`, which `MetaM`'s `inferType` goes through, reads the
+*imported* half of the constant map and then the async map, so a constant added
+that way is invisible and the generator cannot name `List.rec`.
 
 Mutual-and-nested together is declined by the planner: the specialisation of a
 mutual block is not written.

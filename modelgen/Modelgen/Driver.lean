@@ -288,6 +288,18 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
     -- when that happens, so the file passes through untouched.
     if let some dcl := toDeclaration (← getEnv) d then
+      -- `Environment.addDeclCore` and not `Kernel.Environment.
+      -- addDeclWithoutChecking`, even though the elaborator-side bookkeeping is
+      -- unwanted here: `Environment.find?` — which `MetaM`'s `inferType` goes
+      -- through — reads the *imported* half of the constant map and then the
+      -- **async** map, so a constant added at the kernel level is invisible to
+      -- it and the generator cannot so much as name `List.rec`. The price is
+      -- one `panic!` from `AsyncConsts.add` on
+      -- `vendor/arena-tests/good/perf/grind-ring-5.ndjson`, where two private
+      -- names from different modules normalise alike — normal in an export,
+      -- which is many modules flattened into one file, and impossible during
+      -- elaboration. It is not fatal: the entry is dropped from an index this
+      -- tool never reads, and that file's model is still accepted by `nanoda`.
       match (← getEnv).addDeclCore 0 dcl none false with
       | .ok e => setEnv e
       | .error ex =>
