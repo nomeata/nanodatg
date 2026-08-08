@@ -390,12 +390,22 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (18): **216 files, 0 failures,
-61 models, 450 statements compared with 0 differing, 897 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (23): **221 files, 0 failures,
+61 models, 450 statements compared with 0 differing, 962 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
+
+Three of those numbers moved at `6ae6515`, which recommitted
+`mini/tests/fixtures`' five nested exports **already filtered**, and the
+sentence above went stale rather than wrong-by-a-little: on an already-filtered
+file this tool declines by name, so the tree fell to **51 models and 383
+statements** while the recursor total *rose* to 920 — a spliced model's own
+recursors are replayed and checked too. `modelgen/tests` now carries the
+unfiltered export of each of the five (`modelgen/tests/export.sh`,
+`MODELGEN_FILTER=0`), which is what restores 61 and 450 to being true, and 962
+is 920 plus the raw copies' 42.
 
 Acceptance is `nanoda_bin` — the same parser `mini` uses — on the filtered
 export. It accepts every file this tool wrote a model into, and the negative

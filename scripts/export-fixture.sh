@@ -85,6 +85,35 @@
 # taken` on its own output and passes it through byte for byte), so
 # re-running this script over an already-filtered tree is a no-op.
 #
+# # `MODELGEN_FILTER=0`, and the directory that must *not* be filtered
+#
+# Idempotence is what makes the pass safe to re-run, and it is also what makes
+# an already-filtered file **useless as input to `modelgen`'s own test suite**:
+# the generator declines `nested model name taken` and axes 1–3 of
+# `modelgen/Test.lean` — the counts, the kernel, the statements — measure
+# nothing. `modelgen/tests/` therefore holds the *unfiltered* export of every
+# shape it asserts on, and `modelgen/tests/export.sh` sets `MODELGEN_FILTER=0`
+# to get one. Two directories, two requirements: `mini/tests/fixtures` must be
+# filtered so `cargo test` needs no Lean, `modelgen/tests` must not be so the
+# generator has something to generate.
+#
+# `MODELGEN_FILTER=0` was also, until it existed, a **silent** hazard rather
+# than a choice: `modelgen/tests/export.sh` and `monotests/export.sh` route
+# through this script, so from the commit that added the pass onward,
+# regenerating either directory would have filtered it — turning `modelgen`'s
+# own inputs into its own output. Neither had been re-run since.
+#
+# # Where it reads and where it writes
+#
+# `FIXTURE_DIR` is the directory the `.lean` sources are read from (default
+# `mini/tests/fixtures`) and `OUT_DIR` is where the `.ndjson` is written
+# (default: the same). They are separate so the five nested shapes can have
+# **one** `.lean` — in `mini/tests/fixtures`, where the Rust suite's fixture
+# lives — and two exports, a filtered one beside the source and a raw one under
+# `modelgen/tests`. A second copy of a `.lean` would be a second thing to keep
+# in step, and `modelgen/Test.lean` cross-checks the two exports against each
+# other instead.
+#
 # `MODELGEN_BIN` overrides the binary; the default is `modelgen`'s own
 # `lake build` output, which this script builds if it is not there.
 #
@@ -93,7 +122,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURES="$ROOT/mini/tests/fixtures"
+FIXTURES="${FIXTURE_DIR:-$ROOT/mini/tests/fixtures}"
+OUT="${OUT_DIR:-$FIXTURES}"
+FILTER="${MODELGEN_FILTER:-1}"
 TOOLCHAIN="leanprover/lean4:v4.29.1"
 EXPORT_REV="caccfbe"
 EXPORT_DIR="${LEAN4EXPORT_DIR:-$ROOT/target/lean4export}"
@@ -111,11 +142,13 @@ printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
 ( cd "$EXPORT_DIR" && lake build >&2 )
 BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
 MODELGEN_BIN="${MODELGEN_BIN:-$ROOT/modelgen/.lake/build/bin/modelgen}"
-if [[ ! -x "$MODELGEN_BIN" ]]; then
-  echo "building modelgen" >&2
-  ( cd "$ROOT/modelgen" && lake build >&2 )
+if ((FILTER)); then
+  if [[ ! -x "$MODELGEN_BIN" ]]; then
+    echo "building modelgen" >&2
+    ( cd "$ROOT/modelgen" && lake build >&2 )
+  fi
+  [[ -x "$MODELGEN_BIN" ]] || { echo "no modelgen at $MODELGEN_BIN" >&2; exit 2; }
 fi
-[[ -x "$MODELGEN_BIN" ]] || { echo "no modelgen at $MODELGEN_BIN" >&2; exit 2; }
 EXPORT_LEAN_PATH="$(cd "$EXPORT_DIR" && lake env printenv LEAN_PATH)"
 
 declare -a SOURCES=()
@@ -139,9 +172,9 @@ for src in "${SOURCES[@]}"; do
   while IFS= read -r name; do ONLY+=("$name"); done \
     < <(sed -n 's/^--#export  *//p' "$src" | tr ' ' '\n' | grep -v '^$')
   if ((${#ONLY[@]})); then
-    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" -- "${ONLY[@]}" > "$FIXTURES/$base.ndjson"
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" -- "${ONLY[@]}" > "$OUT/$base.ndjson"
   else
-    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" > "$FIXTURES/$base.ndjson"
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" > "$OUT/$base.ndjson"
   fi
   unset ONLY
   # The model of every nested inductive, spliced in — see the header. The
@@ -150,7 +183,9 @@ for src in "${SOURCES[@]}"; do
   # half a file.
   # (`>&2` used to be needed here because the report was on stdout; it is on
   # stderr now — `MODELGEN.md` §1.4 — so the report arrives there by itself.)
-  "$MODELGEN_BIN" "$FIXTURES/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
-  mv "$WORK/$base.filtered.ndjson" "$FIXTURES/$base.ndjson"
-  echo "$base.ndjson: $(wc -l < "$FIXTURES/$base.ndjson") lines" >&2
+  if ((FILTER)); then
+    "$MODELGEN_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
+    mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
+  fi
+  echo "$base.ndjson: $(wc -l < "$OUT/$base.ndjson") lines$( ((FILTER)) || echo ' (unfiltered)')" >&2
 done
