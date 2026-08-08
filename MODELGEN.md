@@ -168,6 +168,8 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_through_nested` / **`T`** | 2 | 6 | 23 |
 | `nest_cycle_group` / **`U`** | 2 | 6 | 23 |
 | `nest_cycle_group` / **`V`** | 3 | 7 | 30 |
+| `nest_mutual_cycle` / **`P`/`Q`** | 3 | 10 | 37 |
+| `nest_mutual_cycle` / **`R.{w}`/`S.{w}`** | 1 | 6 | 21 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -230,8 +232,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (10): **208 files, 0 failures,
-24 models, 179 statements compared with 0 differing, 766 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (11): **209 files, 0 failures,
+27 models, 209 statements compared with 0 differing, 779 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -412,6 +414,24 @@ lucky coincidence, because a single two-element cycle cannot:
 
 23 and 30 declarations, `nanoda`-accepted, every recursor and ι rule compared
 against the installed recursors' own rules.
+
+## The two family axes compose, and that is measured too
+
+Nothing about either axis says it survives the other, and a treatment that
+special-cased one would pass both fixtures above and fail this.
+`nest_mutual_cycle.lean` is the crossing:
+
+* `P`/`Q` — a **mutual** block that nests **through a nested container**. Five
+  block members (`P`, `Q`, `Tree Q`, `List P`, `List (Tree Q)`), five recursors
+  `P.rec`, `Q.rec`, `P.rec_1`, `P.rec_2`, `P.rec_3` over one shared vector of
+  five motives and ten minors, and a mimic graph whose condensation is a
+  genuine DAG: `Tree Q` and `List (Tree Q)` are a cycle and one simultaneous
+  recursion, `List P` is neither. **37 declarations.**
+* `R.{w}`/`S.{w}` — the mutual axis crossed with a level parameter of the
+  declaration's own, at a polymorphic container. **21 declarations.**
+
+Both `nanoda`-accepted, both compared against the installed recursors' own
+rules with 0 differing.
 
 ---
 

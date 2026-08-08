@@ -109,7 +109,13 @@ is not nested) at mimic 0, so the family has to be found from mimic 1 and the
 mimic-to-family mapping is the transposition rather than the identity.
 `V.mk : Box (Tree V) → V` puts an ordinary mimic **outside** the cycle and
 depending on it, so the condensation is a real DAG and the cycle has to be
-emitted first. -/
+emitted first.
+
+**`nest_mutual_cycle` is the two family axes at once**, because nothing says
+they compose. `P`/`Q` is a mutual block that nests through a nested container:
+five block members, five recursors over one shared vector, a cyclic pair of
+mimics beside an ordinary one, and a carrier family. `R`/`S` crosses the mutual
+axis with a level parameter of the declaration's own. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [],
@@ -130,6 +136,7 @@ def expectedOwn : List Row :=
   , ("nest_mutual_both", [("A", 28)], [])
   , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
   , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
+  , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
   ]
 
 structure TAcc where
