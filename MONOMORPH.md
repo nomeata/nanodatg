@@ -271,9 +271,12 @@ declaration that is not a carried built-in.
 **Mode B needs a checker that does not regenerate recursors by name.** `nanoda`
 does regenerate them, so it refuses mode B's output with
 `Expected (Declar::Recursor, Declar::Recursor)` — it minted `T._at.σ.rec` and
-looked for the export's declaration of that name, which mode B renamed. Lean's
-kernel refuses for the same reason. That refusal is the measurement that the two
-modes are genuinely different, and it is expected.
+looked for the export's declaration of that name, which mode B renamed. Lean is
+the same: run `modelgen --check-recursors` over mode B's `mono_elim` output and
+it reports **3 of the 4 recursors as differing from Lean's own**
+(`N.rec._elim.0`, `._elim.1`, `._elim.2`; the fourth is the carried `Eq.rec`),
+because the kernel mints `N.rec` and nothing else. That refusal is the
+measurement that the two modes are genuinely different, and it is expected.
 
 On `init-prelude` mode B is 2365 declarations against mode A's 2244: the
 difference is 121 extra recursor copies, and every one of them is a recursor
