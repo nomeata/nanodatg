@@ -5526,3 +5526,75 @@ was therefore the most contended of the three and still came in **8.4 % faster
 than the uncontended figure on record** — which is the clearest single
 demonstration in this file that a wall clock on this machine is not measuring
 what it is being asked to measure.
+
+## `nested.rs` and `init-prelude`, in instructions — 2026-08-08
+
+Two counters that had never been taken, both on `origin/master` at `9120294`,
+both `perf stat -e instructions` per `47b262b`. The machine carried two other
+seats throughout; that is why the wall columns are here only as commentary.
+
+### The CI long pole, `mini/tests/nested.rs` (#110)
+
+```text
+perf stat -e instructions  cargo test --test nested -- --test-threads=1
+  17 760 968 447 568 instructions      20 passed, 2 ignored, 1 207.27 s serial
+```
+
+`ci/check.sh` runs the workspace three times — plain, `--features stepcount`,
+`--features tg` — so this **one file is 53.3 T instructions per check run**.
+
+Every wall figure previously attached to it is uncomparable and must not be
+chained: 285.7 s (`6b11c94`), 309.50 s (`9a8702f`, PROFILE §5, at 15 tests),
+336 s (the file's own header). None records the load and the file has grown to
+22 tests across them. The count above is the first figure a later one can be
+compared against.
+
+Two tests are essentially the whole file. Each spawns one `mini` subprocess;
+measured against the **test-profile** binary (`target/debug/deps/mini-<hash>`,
+not `target/debug/mini` — see below), `--no-modelgen --verbose --nested`:
+
+| fixture | test | instructions | conversions |
+| --- | --- | ---: | ---: |
+| `nested_keying` | `the_nested_declarations_interpretation_is_its_models` | 9.931 T | 9 857 800 |
+| `nested_iota_arm` | `the_iota_dispatch_arm_fires_the_rules_its_model_proved` | 9.945 T | 9 900 638 |
+
+Both `gapped 0`. They are different fixtures asserting different axes — keying
+against ι-arm firing — so they cannot be merged, which is why `#110`'s recorded
+"merge the two tower tests" fix does not transfer (the tests it named went with
+`mini/src/nested_ev.rs` at `#112`).
+
+**The arithmetic does not close, and that is recorded rather than smoothed.**
+9.931 + 9.945 = 19.88 T against the containing binary's 17.76 T — the two rows
+sum to 12 % *more* than the thing that contains them. They were taken later,
+under different memory pressure and under `ulimit -v 8 GB`, and `perf stat`
+counts kernel instructions too. Read them as "each heavy test is about 10 T",
+not as a decomposition; re-take all three in one sitting if the split has to be
+exact.
+
+**A profile trap that corrupted two runs before it was noticed.** `cargo build`
+uplifts an **opt-level 0** `mini` to `target/debug/mini` (54 389 712 bytes; no
+`-C opt-level` in the `dev` profile), `cargo test` builds an **opt-level 1** one
+(45 041 256 bytes, `-C opt-level=1`), and both uplift to the *same path*. If
+cargo judges the test-profile binary fresh it does **not** re-uplift: after
+`cargo build --bin mini`, `cargo test --test nested --no-run` finished in 0.48 s
+and left the opt-level-0 binary in place — which is what `CARGO_BIN_EXE_mini`,
+and therefore every subprocess test, then runs. A cold tree is safe; a warm one
+is not, and nothing says so.
+
+### `init-prelude`, past its first two blockers (#87)
+
+`scripts/nat-reach.py` closes the declarations reaching a nat literal above
+mini's cap of 10 forward under `const`: **77 carry one directly and 529 of
+1 777 (29.8 %) fall with them**. Run against the complement, mini gets
+**1 459 declarations and 3 078 scheduled pairs** through `convert::load` —
+against `declars=0` on the unfiltered file — and declines on
+`non-standard axiom: sorryAx`, which is a **leaf** (removing it drops exactly
+one declaration of 1 248).
+
+Drop that too and **mini does not finish**: killed by a 3 000 s timeout at
+**14.8 GB RSS with no verdict printed**, on the *release* profile. Not the
+memory cap (20 GB), not a decline — fifty minutes is not enough to reach the
+first line of output. That is the first observation of init-prelude's cost at
+all, every previous run having died at `convert::load`, and 14.8 GB is already
+past the 4 GB a seat runs under. Note there is no cheap split available:
+`--acceptance-only` changes the exit code, not the work.
