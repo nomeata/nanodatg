@@ -85,26 +85,31 @@ declarations are untouched.
 
 ### The names
 
-For a declaration `T`, writing `ℓ⃗` for `T`'s own level parameters:
+**Four names are the interface.** For a declaration `T`:
 
 ```
-T._model.0 … T._model.{n-1}   the block: real members first, then one mimic
-                              per nested occurrence
 T._model.self                 the carrier
 T._model.ctor_j               the block's j-th constructor
 T._model.rec_k                the recursor at block index k
 T._model.iota_k_j             the j-th ι rule of rec_k, as a theorem
-T._model.pack_i / unpack_i    the isomorphism, per mimic
-T._model.unpackPack_i / packUnpack_i    both round trips
-T._model.congrPack_i
 ```
 
-For the mutual construction the block is `T._model.tag` and `T._model.aux`
-instead; **the carrier `T._model.self` is the one name both constructions
-agree on**, which is what a consumer should key off.
+That is the whole of what a consumer reads — measured, not asserted: when our
+own checker was wired up as the first consumer it touched these four families
+and none of the others.
 
-Build these names off `T` rather than pattern-matching them — that is what lets
-the convention survive other renaming passes, including `monomorph`'s.
+Build them off `T` rather than pattern-matching them; that is what lets the
+convention survive other renaming passes, including `monomorph`'s. **The carrier
+`T._model.self` is the one name both constructions agree on**, so key off it.
+
+The output also carries the construction itself — the block (`T._model.0 …
+T._model.{n-1}`, real members first then one mimic per nested occurrence, or
+`T._model.tag` and `T._model.aux` for the mutual construction), the `pack_i` /
+`unpack_i` isomorphism per mimic, both round trips, and `congrPack_i`. **These
+are internal.** They exist because the four above have to be *proved* from
+something, they are what differs between the two constructions, and **no
+consumer needs them.** They are named here only so that nobody wonders what
+those declarations are doing in their input.
 
 ### What a consumer may rely on
 
@@ -135,9 +140,10 @@ mints**, and reported as `statements: N compared …, 0 differ`.
 
 ### What the contract does *not* say
 
-* **Nothing about the constructors, `pack`, `unpack` or the round trips beyond
-  the statements above.** Those are the construction, and the point of the tool
-  is that a checker stops needing to know it.
+* **Nothing at all about the internal names above.** Their statements, their
+  order, their existence in a future version — none of it is promised. They are
+  the construction, and the point of the tool is that a checker stops needing to
+  know it.
 * **Nothing about mimic order** except that it is the export's own: mimic `i` is
   the occurrence the export's recursor at block index `r+i` eliminates. Read the
   correspondence off the recursor index, never off the container.
