@@ -249,6 +249,53 @@ counters exclude it and the cost of a declaration is the difference to the
 hot spot is acted on by name, and the name is `Nat.modCoreGo_lt`. The row now
 says `starting` so the question cannot be asked again.
 
+#### 1.3.5 The abort is gone — a verdict, a declaration and a number
+
+Both recursions are bounded and literals are compared by value. The full
+export, `--nested --mutual`, 12 GB cap, 3 000 s timeout, `perf stat`:
+
+```
+init-prelude.ndjson  decline  budget: weak-head reduction recursed past 2000
+  levels while reducing 260146
+… while checking type of recursor for ByteArray.IsValidUTF8
+facts  declars=2059  natLits=35  maxNatLit=18446744073709551616
+       strLits=25  scheduledPairs=3861
+```
+
+| | |
+|---|---|
+| instructions | **22 499 730 269 922** (22.50 T) |
+| elapsed | **1 782 s** |
+| memory | the 12 GB cap was **never approached** — the run ended by the guard |
+| verdict | a **decline**, naming the declaration and the literal |
+
+**What changed is the kind of ending.** This file used to abort: a stack
+overflow in seconds, no verdict, no counter, a core file, and the one failure
+mode neither `timeout` nor `ulimit -v` catches. It now stops the way everything
+else in `mini` stops — with a word, a reason and a name. That was the point of
+the guard and it is worth more than the declaration number, because the
+declaration number is now *reportable at all*.
+
+*(The verdict reads `reject` in the run the instruction count comes from: that
+binary predates the `BUDGET_DECLINE` classification by one commit. Everything
+else about the run is the current behaviour — same declaration, same literal,
+same guard. A budget refusal is a decline because `init-prelude` is a good
+export and mini is the one running out of room.)*
+
+**Where it stops, and it is the trap after all.** `ByteArray.IsValidUTF8`'s
+*recursor type* mentions the literal `260146`, and reducing it fires `Nat.rec`
+on a literal major: peel one `succ`, fire ι, and the right-hand side contains
+the eliminator again one smaller. That is §7 step 3's trap, exactly — and it is
+**second**, not first. The first abort, at declaration 96, was `def_eq`
+comparing a literal with *itself* and is fixed by comparing literals by value;
+that alone moved the failure from seconds to twenty-four minutes.
+
+So the accelerated operations remain the piece that removes this, and their
+scope is now known precisely. `PRELUDE-COST.md` measured that the *residue*'s
+hot closure has **no numeral other than 0 or 1** anywhere in it, so accelerated
+arithmetic has nothing to fire on there and the wall at `Nat.mod_lt` will not
+move. What it does cover is exactly this: a literal reaching a recursor.
+
 ### 1.4 What `init-prelude` actually contains — measured statically
 
 35 literals; the distribution over `init-prelude` ∪ `grind-ring-5`:
