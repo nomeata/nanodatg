@@ -327,20 +327,53 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
+/-- The quotient-side names deriving `funext` may splice
+([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
+and wherever a pad at a level `dsingOk` cannot build is discharged by
+transport — `PUnit`'s and `PULift`'s shapes. -/
+def fxNames : List Name := [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound]
+
+/-- [`Modelgen.primReady`]'s question, asked of the quotient. Not folded into
+`primReady` itself: most prim models never touch `funext`, and waiting on the
+quotient for all of them would move every pre-`Quot` model of a `Quot`-late
+export for no reason. -/
+def primFxReady (reserved : Std.HashSet Name) : MetaM Bool := do
+  let env ← getEnv
+  for n in fxNames do
+    unless env.constants.contains n || !reserved.contains n do return false
+  return true
+
+/-- Did the model stop at a quotient name the replay has not reached? That is
+a **wait**, not a decline: the input's own quotient is coming, and the model
+is generated after it, exactly as a mutual model waits for the input's own
+`Eq`. -/
+def Decline.isFxWait : Decline → Bool
+  | .nameTaken n => fxNames.contains n
+  | _ => false
+
 /-- One simple inductive's model from the primitives, generated and
 accounted for — the third construction, [`Modelgen.primIso`], behind
 `--prim-models`. Shared by the input's own simple inductives and the
-composition (the single inductives the other two constructions emit). -/
+composition (the single inductives the other two constructions emit).
+
+`canWait` says whether the caller can hold the model back: a decline at a
+quotient name the replay has not reached ([`Modelgen.Decline.isFxWait`]) then
+comes back as `true` in the second component — recorded nowhere, generated
+later — instead of a decline. The composition and the end-of-file drain pass
+`false`: there, nothing more is coming. -/
 def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
-    (ctors : Array (Name × Expr)) (reserved : Std.HashSet Name)
+    (ctors : Array (Name × Expr)) (reserved : Std.HashSet Name) (canWait : Bool)
     (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Bool) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   match ← (primIso tname lparams np ty ctors reserved).run with
   | .error dec =>
     setEnv saved
-    return (out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") }, pending)
+    if canWait && dec.isFxWait && !(← primFxReady reserved) then
+      return ((out, rep, pending), true)
+    return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
+      pending), false)
   | .ok is =>
     let mut out := out
     for gd in is.decls do
@@ -348,7 +381,7 @@ def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    return (out, rep, pending.push (#[tname], np, is))
+    return ((out, rep, pending.push (#[tname], np, is)), false)
 
 /-- **The composition's third step**: the single inductives a mutual model
 just emitted — `T._model.tag` and `T._model.aux` — are declarations of the
@@ -367,7 +400,7 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     for cn in iv.ctors do
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
-    st ← genPrim n lparams np iv.type cts reserved st
+    st := (← genPrim n lparams np iv.type cts reserved false st).1
   return st
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -410,8 +443,12 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
   -- Plain mutual blocks whose model is waiting for the input's own `Eq`.
   let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
     Array (Array (Name × Expr))) := #[]
-  -- Simple inductives (`--prim-models`) waiting for the input's own `Eq`.
-  let mut waitingPrim : Array (Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
+  -- Simple inductives (`--prim-models`) waiting for the input's own basis
+  -- declarations. The leading `Bool` says *which* wait: `false` for the basis
+  -- ([`Modelgen.primReady`]) and `true` for the quotient behind `funext`
+  -- ([`Modelgen.primFxReady`]) — kept apart so a model that never touches
+  -- `funext` is not moved past a `Quot` it does not need.
+  let mut waitingPrim : Array (Bool × Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
@@ -561,10 +598,16 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
         if primModels && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           if ← primReady reserved then
-            (out, rep, pending) ← genPrim t.name t.levelParams t.numParams t.type ctors
-              reserved (out, rep, pending)
+            let (st, fxWait) ← genPrim t.name t.levelParams t.numParams t.type ctors
+              reserved true (out, rep, pending)
+            if fxWait then
+              waitingPrim := waitingPrim.push
+                (true, t.name, t.levelParams, t.numParams, t.type, ctors)
+            else
+              (out, rep, pending) ← pure st
           else
-            waitingPrim := waitingPrim.push (t.name, t.levelParams, t.numParams, t.type, ctors)
+            waitingPrim := waitingPrim.push
+              (false, t.name, t.levelParams, t.numParams, t.type, ctors)
     out := out.push d
     -- The input's own `Eq` has just arrived: every block that was waiting for
     -- it gets its model here, **after** the `Eq` record, which is where
@@ -575,11 +618,26 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
           (out, rep, pending)
       waiting := #[]
     -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
-    -- for whichever of those the input declares later, not only for `Eq`.
-    if !waitingPrim.isEmpty && (← primReady reserved) then
-      for (n, lp, np, ty, ctors) in waitingPrim do
-        (out, rep, pending) ← genPrim n lp np ty ctors reserved (out, rep, pending)
-      waitingPrim := #[]
+    -- for whichever of those the input declares later, not only for `Eq` —
+    -- and one whose proofs need `funext` waits for the input's own quotient
+    -- on top of that, re-queued with the flag flipped if the basis drain
+    -- discovers the need.
+    if !waitingPrim.isEmpty then
+      let basisOk ← primReady reserved
+      let fxOk ← primFxReady reserved
+      if basisOk || fxOk then
+        let mut keep : Array (Bool × Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
+        for job in waitingPrim do
+          let (needsFx, n, lp, np, ty, ctors) := job
+          if (if needsFx then fxOk else basisOk) then
+            let (st, fxWait) ← genPrim n lp np ty ctors reserved true (out, rep, pending)
+            if fxWait then
+              keep := keep.push (true, n, lp, np, ty, ctors)
+            else
+              (out, rep, pending) ← pure st
+          else
+            keep := keep.push job
+        waitingPrim := keep
     for (all, np, is) in pending do
       let (m, errs) ← checkModel all np is
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
@@ -596,8 +654,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
   for (all, lp, np, tys, ctors) in waiting do
     (out, rep, pending) ← genMutual all lp np tys ctors reserved primModels (out, rep, pending)
-  for (n, lp, np, ty, ctors) in waitingPrim do
-    (out, rep, pending) ← genPrim n lp np ty ctors reserved (out, rep, pending)
+  for (_, n, lp, np, ty, ctors) in waitingPrim do
+    (out, rep, pending) ← pure (← genPrim n lp np ty ctors reserved false (out, rep, pending)).1
   for (all, np, is) in pending do
     let (m, errs) ← checkModel all np is
     rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }

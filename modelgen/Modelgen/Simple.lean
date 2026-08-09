@@ -27,31 +27,37 @@ sixth inductive. `Acc` is in the basis for the recursive construction
 (plan B, not implemented here) and is therefore not yet spliced: the
 prelude splice's rule is "only what a model actually needs".
 
-## The two routes
+## The three routes
 
 **Type route** — carrier sort `w` never zero:
 
 ```text
 T._model.self p⃗ := Σ'(n : Nat), F n        F : a Nat.rec cases tower
 F ȷ̄  := the j-th constructor's field chain  (right-nested PSigma,
-        padded to exactly Sort w by a Sing when the levels demand it)
+        boxed and padded to exactly Sort w when the levels demand it)
 F n  := an empty type at Sort w for n ≥ #ctors  (Σ'(h : False), False.rec h)
 ```
 
 The recursor destructs the pair, cases on the tag with `Nat.rec` — the
 large elimination the basis buys, and the reason `Nat` is in it — and then
-destructs the chain. A pad is discharged by transporting along its
-uniqueness proof (`funext`-derived); on a constructor application the
-transport sits on a closed self-equality, which proof irrelevance plus ι
-erase, so **every ι theorem is `Eq.refl`**.
+destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
-`Sing ℓ` is an inhabited, propositionally-singleton type at exactly
-`Sort ℓ`, built by recursion on the level: `Sing (a+1) := (α : Sort a) →
-Σ'(f : α → α), Eq f id` — the Π lands at `imax (a+1) (max 1 a) = a+1`
-exactly because the body is never `Prop` — and `Sing (max a b) :=
-Σ'(_ : Sing a), Sing b`. A level whose normal form is neither a successor
-nor a `max` of constructible sides has no `Sing`, and a shape that needs
-one there declines.
+* **A pad** closes a level gap. At a `dsingOk` level the pad is `D`
+  ([`Modelgen.dsingAt`]), every element *defeq* to canonical — no
+  transport. At any other level — a bare parameter in the gap, `PULift`'s
+  shape — it is the `False`-Π singleton `(h : False) → False.rec (fun _ =>
+  Sort ℓ) h`, at exactly `Sort ℓ` because `imax 0 ℓ = ℓ`; its uniqueness is
+  `funext` at a pointwise `False.rec`, the destructor transports along it,
+  and on a constructor application the transport sits on a closed
+  self-equality that K-like reduction on `Eq.rec` erases.
+* **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's
+  level is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an
+  `imax` under a `max` — what collapses it is a never-`Prop` codomain, so
+  the field is stored with its codomain wrapped as `Σ'(_ : S), D 1` and
+  unboxed by projection wherever the minor consumes it; `unbox (box v) ≡ v`
+  by βι, structure eta, proof irrelevance and function eta, no transport.
+
+**Every ι theorem is `Eq.refl`** on all routes.
 
 **Prop route** — carrier sort `0`: the impredicative Church encoding
 `∀ C : Prop, (∀ f⃗₀, C) → … → C`. At a `Prop` motive the dependent recursor
@@ -59,7 +65,15 @@ is the fold itself — the motive's proof argument is definitionally
 irrelevant. When the export's recursor is large-eliminating the
 subsingleton rule holds, so (non-indexed) every field is a proposition and
 is **extracted** by instantiating the encoding at the field's own type;
-proof irrelevance closes the motive. ι is `Eq.refl` on both counts.
+proof irrelevance closes the motive.
+
+**Singleton route** — carrier at a *variable* sort (`Prop` at some
+instantiations, `Type` at others: `PUnit : Sort u`). The basis reaches such
+a sort exactly once: the `False`-Π singleton above, which is a type at any
+`Sort w` and is inhabited. So a one-constructor, no-field declaration
+models with it as carrier, the canonical element as constructor, and the
+recursor a transport along the singleton's uniqueness — erased on the
+constructor by K-like reduction, so ι is `Eq.refl` here too.
 
 ## What declines, and why
 
@@ -67,12 +81,18 @@ proof irrelevance closes the motive. ι is `Eq.refl` on both counts.
   construction (plan B). Not implemented; the reason is printed.
 * **indexed** (`HEq`, `Nat.le`, the composed `T._model.aux`) — the
   skeleton-plus-`good` translation (thesis §5.2) is not implemented.
-* **sort-variable carriers** (`PUnit : Sort u`, `PEmpty : Sort u`) — a
-  carrier that reaches `Prop` at some instantiations and `Type` at others
-  has no uniform model in this fragment; `monomorph` resolves the variable
-  and the monomorphized file models.
-* **a `Sing`-less level** — a pad is needed and the level's normal form is
-  not constructible.
+* **an empty carrier at a variable sort** (`PEmpty : Sort u`) — not
+  constructible over the basis: every basis former lands at `0`, `1` or
+  `max 1 ·`, a Π reaches a bare `u` only through an `imax` collapse whose
+  body is already at `Sort u`, and the one `Sort u`-valued family with no
+  `Sort u` seed is `False.rec`'s over the empty domain — whose Π is
+  *inhabited*. A model of `PEmpty.rec` would be a closed term that, at
+  `motive := fun _ => False`, proves `False`.
+* **a variable-sort carrier that is not the singleton** (several
+  constructors, or fields) — the singleton is the fragment's only type at
+  such a sort.
+* **a level gap no pad or box closes** — an `imax` in a field's level that
+  boxing does not collapse (an `imax`-leveled *domain* inside the field).
 * the five **basis primitives themselves** — the exemption that makes the
   construction well-founded.
 -/
@@ -229,6 +249,55 @@ def transportAlong (eqi : EqInfo) (v ℓ : Level) (α a b h base : Expr)
 def symmOf (eqi : EqInfo) (ℓ : Level) (α a b h : Expr) : GenM Expr :=
   transportAlong eqi .zero ℓ α a b h (eqi.refl' ℓ α a) fun z => pure (eqi.mk' ℓ α z a)
 
+/-! ## The singleton at an arbitrary level
+
+`Sort ℓ` for a **bare or variable** `ℓ` is out of every basis former's reach —
+`Eq`, `False` and `Acc` land in `Prop`, `Nat` in `Type`, `PSigma` at
+`max 1 u v` — and a Π lands there only through an `imax` collapse, which needs
+a `Sort ℓ`-valued *body*. The one such family the basis builds without a
+`Sort ℓ` seed is `False.rec (fun _ => Sort ℓ)`, over the empty domain; its Π
+`(h : False) → False.rec (fun _ => Sort ℓ) h` sits at `imax 0 ℓ = ℓ` exactly,
+for **any** `ℓ` whatsoever. A function out of `False` is inhabited, so this is
+a singleton — and it is the *only* carrier shape the fragment has at such a
+sort, which is why `PUnit` models and `PEmpty` (below) cannot.
+
+Unlike [`Modelgen.dsingAt`]'s pads it is **not definitionally canonical**: two
+inhabitants are `funext`-equal, not defeq. So wherever one is destructed the
+applied minor is transported along [`Modelgen.falsePiUniq`], and on a
+constructor application that proof is a *closed self-equality* which the
+kernel's K-like reduction on `Eq.rec` erases — ι stays `Eq.refl`. -/
+
+/-- `False.rec (fun _ => Sort ℓ) h`. -/
+def sortFamOverFalse (ℓ : Level) (h : Expr) : Expr :=
+  falseRec (.succ ℓ) (.lam `x (.const `False []) (.sort ℓ) .default) h
+
+/-- The singleton at exactly `Sort ℓ`: `(h : False) → False.rec (fun _ =>
+Sort ℓ) h`, at `imax 0 ℓ = ℓ` because the domain is a proposition. -/
+def falsePiAt (ℓ : Level) : Expr :=
+  .forallE `h (.const `False []) (sortFamOverFalse ℓ (.bvar 0)) .default
+
+/-- Its canonical element, by a second `False.rec` at the dependent motive. -/
+def falsePiCanon (ℓ : Level) : Expr :=
+  .lam `h (.const `False [])
+    (falseRec ℓ (.lam `h' (.const `False []) (sortFamOverFalse ℓ (.bvar 0)) .default) (.bvar 0))
+    .default
+
+/-- `Eq f t` for `f, t : falsePiAt ℓ` — `funext` at the pointwise proof
+`fun h => False.rec _ h`. `f` is always the canonical element (possibly under
+a definition's name), so on a constructor application this is a neutral proof
+of a closed self-equality and K-like reduction erases the transport built on
+it. -/
+def falsePiUniq (eqi : EqInfo) (fx : Name) (ℓ : Level) (f t : Expr) : Expr :=
+  let fls : Expr := .const `False []
+  let fam := Expr.lam `h fls (sortFamOverFalse ℓ (.bvar 0)) .default
+  let pointwise := Expr.lam `h fls
+    (falseRec .zero
+      (.lam `h' fls
+        (eqi.mk' ℓ (sortFamOverFalse ℓ (.bvar 0)) (.app f (.bvar 0)) (.app t (.bvar 0)))
+        .default)
+      (.bvar 0)) .default
+  mkAppN (.const fx [.zero, ℓ]) #[fls, fam, f, t, pointwise]
+
 /-- The always-true proposition `∀ C : Prop, C → C`, and its inhabitant.
 Pure Π — it consumes no primitive at all. -/
 def trueP : Expr :=
@@ -266,13 +335,64 @@ partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
     return (psigmaT a b ta β, psigmaMk a b ta β ca cb)
   | _ => badShape s!"no pad at Sort {ℓ}"
 
-/-- A chain's pad: its type, its type's level, and its canonical element —
-to which every element is **defeq** ([`Modelgen.dsingAt`]), so no
-uniqueness proof rides along. -/
+/-- A chain's pad: its type, its type's level, and its canonical element.
+`canonical` says which of the two pad families it is: a [`Modelgen.dsingAt`]
+pad, every element **defeq** to `canon` so no uniqueness proof rides along —
+or, at a level `dsingOk` cannot build (a bare parameter in the gap —
+`PULift`'s shape), the [`Modelgen.falsePiAt`] singleton, whose uniqueness is
+propositional and whose destruction transports along it. -/
 structure Pad where
   ty : Expr
   lv : Level
   canon : Expr
+  canonical : Bool
+
+/-! ## Boxing a field whose level is an `imax`
+
+A Π-typed field's level is an `imax` chain — `Trans.mk`'s field `(a b c : …) →
+r a b → s b c → t a c` reaches `Sort (imax u₁ (imax u₂ (imax u₃ (imax u
+(imax v w)))))` — and no pad absorbs an `imax`: level defeq is normal-form
+equality, and a `max` does not subsume an `imax` term even when both its sides
+are present. What does collapse it is making the *codomain* never-`Prop`:
+`imax a b = max a b` once `b` cannot be zero. So such a field is stored
+**boxed** — the same telescope, the codomain `S` wrapped as `Σ'(_ : S), D 1` —
+and its level normalizes to a plain `max`. The box pad is `D 1`, every element
+of which is *defeq* to canonical, so `unbox (box v) ≡ v` and `box (unbox y) ≡
+y` hold by βι, structure eta, proof irrelevance and function eta alone: no
+transport, and ι stays `Eq.refl`. -/
+
+/-- Is there an `imax` anywhere in the level? Asked of normal forms: a level
+the pads cannot absorb. -/
+partial def levelHasIMax : Level → Bool
+  | .imax .. => true
+  | .max a b => levelHasIMax a || levelHasIMax b
+  | .succ a => levelHasIMax a
+  | _ => false
+
+/-- The boxed type: the field's telescope unchanged, the codomain `S` wrapped
+as `Σ'(_ : S), D 1`. A field that is not a Π is the degenerate case `xs = []`.
+-/
+def boxTyOf (t : Expr) : GenM Expr := forallTelescope t fun xs S => do
+  let ℓS ← ilevel S
+  let (d1, _) ← dsingAt (.succ .zero)
+  mkForallFVars xs (psigmaT ℓS (.succ .zero) S (.lam `x S d1 .default))
+
+/-- `box`: eta-expand and pair each value of the codomain with the canonical
+`D 1`. -/
+def boxValOf (t v : Expr) : GenM Expr := forallTelescope t fun xs S => do
+  let ℓS ← ilevel S
+  let (d1, c1) ← dsingAt (.succ .zero)
+  mkLambdaFVars xs (psigmaMk ℓS (.succ .zero) S (.lam `x S d1 .default) (mkAppN v xs) c1)
+
+/-- `unbox`: first projection, pointwise, by `PSigma.rec` at the codomain's
+own universe. -/
+def unboxValOf (t v : Expr) : GenM Expr := forallTelescope t fun xs S => do
+  let ℓS ← ilevel S
+  let (d1, _) ← dsingAt (.succ .zero)
+  let β := Expr.lam `x S d1 .default
+  let motive := Expr.lam `p (psigmaT ℓS (.succ .zero) S β) S .default
+  let m := Expr.lam `fst S (.lam `snd d1 (.bvar 1) .default) .default
+  mkLambdaFVars xs (psigmaRec ℓS ℓS (.succ .zero) S β motive m (mkAppN v xs))
 
 /-! ## One constructor's chain
 
@@ -280,72 +400,94 @@ A constructor's field telescope becomes a right-nested `PSigma` at exactly
 `Sort w`. The builders below recurse on the (progressively instantiated)
 telescope expression, so nothing is stored across scopes. `pad?` closes the
 chain when the field levels do not already reach `w` — and always for a
-nullary constructor. -/
+nullary constructor. `boxed` says, per field, whether the field is stored
+boxed ([`Modelgen.boxTyOf`]); a later field's type always depends on the
+*unboxed* value, so the recursions instantiate with `unbox` of the bound
+variable and the real value stays what the minor is applied to. -/
 
 /-- The chain's type and level. `nf` is the field count; the telescope's
 trailing result type is never entered. -/
-partial def chainTy (pad? : Option Pad) (nf : Nat) (tele : Expr) :
-    GenM (Expr × Level) := do
+partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
+    (i : Nat := 0) : GenM (Expr × Level) := do
   if nf == 0 then
     let some p := pad? | badShape "a chain with no fields needs a pad"
     return (p.ty, p.lv)
   let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
-  let ℓt ← ilevel t
+  let bx := boxed[i]?.getD false
+  let st ← if bx then boxTyOf t else pure t
+  let ℓt ← ilevel st
   if nf == 1 && pad?.isNone then
-    return (t, ℓt)
-  withLocalDeclD x t fun xv => do
-    let (inner, ℓi) ← chainTy pad? (nf - 1) (rest.instantiate1 xv)
-    return (psigmaT ℓt ℓi t (← mkLambdaFVars #[xv] inner),
+    return (st, ℓt)
+  withLocalDeclD x st fun xv => do
+    let rv ← if bx then unboxValOf t xv else pure xv
+    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
+    return (psigmaT ℓt ℓi st (← mkLambdaFVars #[xv] inner),
       (mkLevelMax' (mkLevelMax' (.succ .zero) ℓt) ℓi).normalize)
 
-/-- The tuple `⟨v₁, ⟨v₂, …⟩⟩` at the given field values, closed by the
-pad's canonical element when there is one. -/
-partial def chainTuple (pad? : Option Pad) (nf : Nat) (tele : Expr)
+/-- The tuple `⟨v₁, ⟨v₂, …⟩⟩` at the given field values — each boxed where its
+plan says so — closed by the pad's canonical element when there is one. -/
+partial def chainTuple (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
     (vals : Array Expr) (i : Nat := 0) : GenM Expr := do
   if nf == 0 then
     let some p := pad? | badShape "a chain with no fields needs a pad"
     return p.canon
   let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
+  let bx := boxed[i]?.getD false
+  let sv ← if bx then boxValOf t vals[i]! else pure vals[i]!
   if nf == 1 && pad?.isNone then
-    return vals[i]!
-  let ℓt ← ilevel t
-  let (β, ℓi) ← withLocalDeclD x t fun xv => do
-    let (inner, ℓi) ← chainTy pad? (nf - 1) (rest.instantiate1 xv)
+    return sv
+  let st ← if bx then boxTyOf t else pure t
+  let ℓt ← ilevel st
+  let (β, ℓi) ← withLocalDeclD x st fun xv => do
+    let rv ← if bx then unboxValOf t xv else pure xv
+    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
     return (← mkLambdaFVars #[xv] inner, ℓi)
-  let snd ← chainTuple pad? (nf - 1) (rest.instantiate1 vals[i]!) vals (i + 1)
-  return psigmaMk ℓt ℓi t β vals[i]! snd
+  let snd ← chainTuple pad? boxed (nf - 1) (rest.instantiate1 vals[i]!) vals (i + 1)
+  return psigmaMk ℓt ℓi st β sv snd
 
 /-- The recursor's destructor for one chain: from `scrut : chainTy`, an
 element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
 full tuple (the identity at the top) and `target` is `fun tup => M ⟨j̄,
-tup⟩`. The minor is applied to the collected fields; a pad is discharged by
-transporting the applied minor along the pad's uniqueness, and on a
-constructor application `uniq canon` is a closed self-equality that proof
-irrelevance plus ι erase. -/
-partial def chainDestruct (v : Level) (pad? : Option Pad)
-    (nf : Nat) (tele : Expr) (scrut : Expr)
+tup⟩`. The minor is applied to the collected fields, each unboxed where the
+plan boxed it. A canonical pad costs nothing — `scrut` is defeq to its
+canonical element. A [`Modelgen.falsePiAt`] pad is discharged by transporting
+the applied minor along [`Modelgen.falsePiUniq`], and on a constructor
+application that proof is a closed self-equality which K-like reduction on
+`Eq.rec` erases — ι stays `Eq.refl` on both. -/
+partial def chainDestruct (v : Level) (eqi : EqInfo) (fx? : Option Name)
+    (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (scrut : Expr)
     (wrap : Expr → Expr) (target : Expr → GenM Expr)
-    (minorAt : Array Expr → Expr) (vals : Array Expr := #[]) : GenM Expr := do
+    (minorAt : Array Expr → Expr) (vals : Array Expr := #[]) (i : Nat := 0) : GenM Expr := do
   if nf == 0 then
-    let some _ := pad? | badShape "a chain with no fields needs a pad"
-    -- `scrut` is defeq to the pad's canonical element, so the applied minor
-    -- already has the target type.
-    return minorAt vals
+    let some p := pad? | badShape "a chain with no fields needs a pad"
+    if p.canonical then
+      -- `scrut` is defeq to the pad's canonical element, so the applied minor
+      -- already has the target type.
+      return minorAt vals
+    -- The plan ensured `funext` before planning a non-canonical pad.
+    let some fx := fx? | badShape "a non-canonical pad and no funext to discharge it"
+    return ← transportAlong eqi v p.lv p.ty p.canon scrut
+      (falsePiUniq eqi fx p.lv p.canon scrut) (minorAt vals) (fun z => target (wrap z))
   let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
+  let bx := boxed[i]?.getD false
   if nf == 1 && pad?.isNone then
-    return minorAt (vals.push scrut)
-  let ℓt ← ilevel t
-  let (β, ℓi) ← withLocalDeclD x t fun xv => do
-    let (inner, ℓi) ← chainTy pad? (nf - 1) (rest.instantiate1 xv)
+    let rv ← if bx then unboxValOf t scrut else pure scrut
+    return minorAt (vals.push rv)
+  let st ← if bx then boxTyOf t else pure t
+  let ℓt ← ilevel st
+  let (β, ℓi) ← withLocalDeclD x st fun xv => do
+    let rv ← if bx then unboxValOf t xv else pure xv
+    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
     return (← mkLambdaFVars #[xv] inner, ℓi)
-  let motive ← withLocalDeclD `s (psigmaT ℓt ℓi t β) fun s => do
+  let motive ← withLocalDeclD `s (psigmaT ℓt ℓi st β) fun s => do
     mkLambdaFVars #[s] (← target (wrap s))
-  let m ← withLocalDeclD x t fun xv => do
+  let m ← withLocalDeclD x st fun xv => do
+    let rv ← if bx then unboxValOf t xv else pure xv
     withLocalDeclD `s (mkApp β xv).headBeta fun s => do
-      let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi t β xv z)
-      mkLambdaFVars #[xv, s] (← chainDestruct v pad? (nf - 1)
-        (rest.instantiate1 xv) s wrap' target minorAt (vals.push xv))
-  return psigmaRec v ℓt ℓi t β motive m scrut
+      let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
+      mkLambdaFVars #[xv, s] (← chainDestruct v eqi fx? pad? boxed (nf - 1)
+        (rest.instantiate1 rv) s wrap' target minorAt (vals.push rv) (i + 1))
+  return psigmaRec v ℓt ℓi st β motive m scrut
 
 /-! ## The Type route's recursor tower -/
 
@@ -355,10 +497,12 @@ structure PCtor where
   tele : Expr
   nf : Nat
   pad? : Option Pad
+  /-- Which fields are stored boxed ([`Modelgen.boxTyOf`]). -/
+  boxed : Array Bool
   /-- The chain type. -/
   chain : Expr
 
-instance : Inhabited PCtor := ⟨⟨default, 0, none, default⟩⟩
+instance : Inhabited PCtor := ⟨⟨default, 0, none, #[], default⟩⟩
 
 /-- `F`'s cases tower over `scrut`: `chain_j` at tag `j̄`, empty above. -/
 partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
@@ -375,7 +519,7 @@ partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
 constructor `j`'s destructor and the successor case descends; past the last
 constructor the fibre is empty and `False.rec` closes it. `scrut` is the
 level's own binder; the original tag is `succ^j scrut`. -/
-partial def stepTower (v w : Level) (fib motive : Expr)
+partial def stepTower (v w : Level) (eqi : EqInfo) (fx? : Option Name) (fib motive : Expr)
     (minors : Array Expr) (cs : Array PCtor) (j : Nat) (scrut : Expr) : GenM Expr := do
   let natT : Expr := .const `Nat []
   let mkAt := fun (tag tup : Expr) => psigmaMk (.succ .zero) w natT fib tag tup
@@ -388,7 +532,7 @@ partial def stepTower (v w : Level) (fib motive : Expr)
     withLocalDeclD `f c.chain fun f => do
       let target := fun (tup : Expr) => pure (mkApp motive (mkAt (natNumeral j) tup))
       let minorAt := fun (vs : Array Expr) => mkAppN minors[j]! vs
-      mkLambdaFVars #[f] (← chainDestruct v c.pad? c.nf c.tele f id target minorAt)
+      mkLambdaFVars #[f] (← chainDestruct v eqi fx? c.pad? c.boxed c.nf c.tele f id target minorAt)
   let sc ← withLocalDeclD `m natT fun m => do
     let inner ←
       if j + 1 == cs.size then
@@ -398,7 +542,7 @@ partial def stepTower (v w : Level) (fib motive : Expr)
             (.lam `h (.const `False []) (mkApp motive (mkAt tag f)) .default)
             (emptyAtFst w f))
       else
-        stepTower v w fib motive minors cs (j + 1) m
+        stepTower v w eqi fx? fib motive minors cs (j + 1) m
     withLocalDeclD `ih (mkApp mot m).headBeta fun ih =>
       mkLambdaFVars #[m, ih] inner
   return natRec (mkLevelIMax' w v).normalize mot zc sc scrut
@@ -420,26 +564,45 @@ partial def churchBinders (kTys : Array Expr) (j : Nat) (ks : Array Expr)
 
 /-! ## The model -/
 
+/-- One constructor's storage plan, settled by level arithmetic before
+anything is spliced: which fields are boxed, and the pad level, `none` where
+the chain reaches `Sort w` on its own. The pad level is `1` when that already
+closes the gap and `w` otherwise. -/
+structure CPlan where
+  boxed : Array Bool
+  pad? : Option Level
+  deriving Inhabited
+
 /-- The pads of every constructor at the given parameter scope, `none` where
-the chain reaches `Sort w` on its own. Pad decisions are level arithmetic
-and were made (and possibly declined) before anything was spliced; the pad
-level is `1` when that already closes the gap and `w` otherwise. -/
-def padsAt (padPlan : Array (Option Level)) :
+the plan needs none. A `dsingOk` level gets the definitionally-canonical
+[`Modelgen.dsingAt`] pad; any other level — a bare parameter in the gap,
+`PULift`'s shape — gets the [`Modelgen.falsePiAt`] singleton, which exists at
+every level and is discharged by transport instead. -/
+def padsAt (plans : Array CPlan) :
     GenM (Array (Option Pad)) := do
-  padPlan.mapM fun plan => do
-    let some ℓ := plan | return none
-    let (t, c) ← dsingAt ℓ
-    return some { ty := t, lv := ℓ, canon := c }
+  plans.mapM fun plan => do
+    let some ℓ := plan.pad? | return none
+    if dsingOk ℓ then
+      let (t, c) ← dsingAt ℓ
+      return some { ty := t, lv := ℓ, canon := c, canonical := true }
+    return some { ty := falsePiAt ℓ, lv := ℓ, canon := falsePiCanon ℓ, canonical := false }
 
 /-- The constructors, analysed at a parameter scope. -/
-def pctorsAt (exportCtors : Array (Name × Expr)) (pads : Array (Option Pad))
-    (ps : Array Expr) : GenM (Array PCtor) := do
+def pctorsAt (exportCtors : Array (Name × Expr)) (plans : Array CPlan)
+    (pads : Array (Option Pad)) (ps : Array Expr) : GenM (Array PCtor) := do
   (Array.range exportCtors.size).mapM fun j => do
     let (_, cty) := exportCtors[j]!
     let tele ← instForall cty ps
     let nf := numForalls tele
-    let (chain, _) ← chainTy pads[j]! nf tele
-    return { tele, nf, pad? := pads[j]!, chain }
+    let boxed := plans[j]!.boxed
+    let (chain, _) ← chainTy pads[j]! boxed nf tele
+    return { tele, nf, pad? := pads[j]!, boxed, chain }
+
+/-- Which route the carrier's sort admits: `Sort 0` is the Church encoding,
+a never-zero sort the `Nat`-tagged sum, and a **variable** sort — `Prop` at
+some instantiations, `Type` at others, `PUnit`'s shape — the one carrier the
+fragment has there, the [`Modelgen.falsePiAt`] singleton. -/
+inductive PrimRoute | type | prop | singleton
 
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
@@ -507,18 +670,37 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
   let recLs := if large then v :: us else us
 
   let wn := w.normalize
-  let typeRoute ←
-    if wn.isZero then pure false
-    else if wn.isNeverZero then pure true
-    else badShape s!"a carrier at Sort {w}, which reaches Prop at some instantiations \
-      and Type at others (monomorph resolves the variable)"
+  let route : PrimRoute ←
+    if wn.isZero then pure .prop
+    else if wn.isNeverZero then pure .type
+    else do
+      -- A carrier at a **variable** sort, `Prop` at some instantiations and
+      -- `Type` at others. The basis has exactly one type at such a sort — the
+      -- inhabited `False`-Π singleton ([`Modelgen.falsePiAt`]) — so exactly
+      -- the singleton shape models there.
+      unless nc == 1 do
+        badShape (if nc == 0 then
+            s!"an empty carrier at Sort {w}: every type the basis builds at a \
+              bare-parameter sort is a Π reached through an imax collapse, and the only \
+              Sort-valued family there without a Sort {w} seed is False.rec's, over the \
+              empty domain — inhabited, so an empty carrier is not constructible, and a \
+              model of {ern} would prove False"
+          else
+            s!"a carrier at Sort {w} with {nc} constructors: the only carrier the basis \
+              builds at a bare-parameter sort is the inhabited False-Π singleton")
+      let nf0 ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+        pure (numForalls (← instForall exportCtors[0]!.2 ps))
+      unless nf0 == 0 do
+        badShape s!"a carrier at Sort {w} whose constructor has fields: the only carrier \
+          the basis builds at a bare-parameter sort is the False-Π singleton"
+      pure .singleton
 
   if isRec then
-    badShape (if typeRoute then
+    badShape (match route with
+      | .type =>
         "a recursive Type-valued inductive (the carrier needs the W/path construction — \
           plan B, not implemented)"
-      else
-        "a recursive proposition (the Church induction derivation is not implemented)")
+      | _ => "a recursive proposition (the Church induction derivation is not implemented)")
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
@@ -532,38 +714,63 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
 
-  if typeRoute then
+  if route matches PrimRoute.type then
     -- ════ the Type route ════
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureFalse reserved do out := out.push d; spliced := spliced ++ d.getNames
 
-    -- Pad decisions — pure level arithmetic, and a decline here costs no
-    -- splice. A chain of one field is that field bare (no `PSigma`, so no
-    -- built-in `1`); longer chains carry `max 1 ℓ⃗` already. A pad at `1`
-    -- closes most gaps; `w` itself covers a deliberately-raised carrier
-    -- when it is constructible.
-    let padPlan : Array (Option Level) ← withParams fun ps =>
+    -- Storage decisions — pure level arithmetic, and a decline here costs no
+    -- further splice. A chain of one field is that field bare (no `PSigma`,
+    -- so no built-in `1`); longer chains carry `max 1 ℓ⃗` already. A pad at
+    -- `1` closes most gaps and `w` itself covers a deliberately-raised
+    -- carrier — at *any* `w` now, since `falsePiAt` exists at every level.
+    -- What no pad absorbs is an `imax` in a field's level: those fields are
+    -- boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the boxed
+    -- levels, which are never-zero `max`es.
+    let plans : Array CPlan ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
         let nf := numForalls tele
-        let ℓs ← forallBoundedTelescope tele (some nf) fun fs _ =>
-          fs.mapM fun f => do ilevel (← ityp f)
-        let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
-        if nf > 0 then
-          if ← isLevelDefEq raw w then return none
-        let withOne := (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
-        if ← isLevelDefEq withOne w then return some (Level.succ .zero)
-        if dsingOk w then
-          if ← isLevelDefEq (mkLevelMax' withOne w) w then return some w
-        badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
-          buildable pad closes the gap"
+        forallBoundedTelescope tele (some nf) fun fs _ => do
+          let tys ← fs.mapM ityp
+          let ℓs ← tys.mapM ilevel
+          let plan : Array Level → GenM (Option (Option Level)) := fun ms => do
+            let raw := if nf == 1 then ms[0]! else (ms.foldl mkLevelMax' (.succ .zero)).normalize
+            if nf > 0 then
+              if ← isLevelDefEq raw w then return some none
+            let withOne := (ms.foldl mkLevelMax' (.succ .zero)).normalize
+            if ← isLevelDefEq withOne w then return some (some (Level.succ .zero))
+            if ← isLevelDefEq (mkLevelMax' withOne w) w then return some (some w)
+            return none
+          if let some pad? ← plan ℓs then
+            return { boxed := Array.replicate nf false, pad? }
+          let boxed := ℓs.map fun ℓ => levelHasIMax ℓ.normalize
+          if boxed.any id then
+            let ms ← (Array.range nf).mapM fun k => do
+              if boxed[k]! then ilevel (← boxTyOf tys[k]!) else pure ℓs[k]!
+            if let some pad? ← plan ms then
+              return { boxed, pad? }
+          let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
+          badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
+            pad or codomain box closes the gap"
+
+    -- A pad at a level `dsingOk` cannot build is discharged by transport,
+    -- and the transport's uniqueness proof is `funext` at a pointwise
+    -- `False.rec` — so `funext` (and whatever deriving it splices) is
+    -- ensured exactly when such a pad is planned.
+    let fx? ← do
+      if plans.any (fun pl => pl.pad?.any (fun ℓ => !dsingOk ℓ)) then
+        let (n, ds) ← ensureFunext model eqi reserved
+        for d in ds do out := out.push d; spliced := spliced ++ d.getNames
+        pure (some n)
+      else pure none
 
     let natT : Expr := .const `Nat []
     let fibreAt := fun (ps : Array Expr) => do
-      let pads ← padsAt padPlan
-      let cs ← pctorsAt exportCtors pads ps
+      let pads ← padsAt plans
+      let cs ← pctorsAt exportCtors plans pads ps
       withLocalDeclD `n natT fun n =>
         return (cs, ← mkLambdaFVars #[n] (← fibreTower w cs 0 n))
 
@@ -585,7 +792,7 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
         let (cs, fib) ← fibreAt ps
         let c := cs[j]!
         forallBoundedTelescope c.tele (some c.nf) fun fs _ => do
-          let tup ← chainTuple c.pad? c.nf c.tele fs
+          let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
           mkLambdaFVars (ps ++ fs)
             (psigmaMk (.succ .zero) w natT fib (natNumeral j) tup)
       let d := Declaration.defnDecl
@@ -614,14 +821,14 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
           withLocalDeclD `n natT fun n => do
             withLocalDeclD `f (mkApp fib n).headBeta fun f => do
               mkLambdaFVars #[n, f]
-                (mkApp (← stepTower v w fib motive minors cs 0 n) f)
+                (mkApp (← stepTower v w eqi fx? fib motive minors cs 0 n) f)
       mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT fib motive minor major)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
-  else
+  else if route matches PrimRoute.prop then
     -- ════ the Prop route ════
     let churchAt := fun (ps : Array Expr)
         (k : Expr → Array Expr → Array Expr → GenM Expr) => do
@@ -695,6 +902,52 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
           es := es.push (mkAppN t #[ft, proj])
           curT := rest.instantiate1 es[i]!
         mkLambdaFVars bs (mkAppN minors[0]! es)
+    let dRec := Declaration.defnDecl
+      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
+  else
+    -- ════ the singleton route: one constructor, no fields, a variable sort ════
+    -- The carrier is `(h : False) → False.rec (fun _ => Sort w) h` — at
+    -- exactly `Sort w` because `imax 0 w = w` — and the constructor its
+    -- canonical element. Any element is `funext`-equal to it (pointwise from
+    -- `h : False`), so the recursor transports the minor along that proof;
+    -- at the constructor the proof is a closed self-equality and K-like
+    -- reduction on `Eq.rec` erases the transport, so ι is `Eq.refl` here as
+    -- on the other two routes.
+    for d in ← ensureFalse reserved do out := out.push d; spliced := spliced ++ d.getNames
+    let (fxN, fxDecls) ← ensureFunext model eqi reserved
+    for d in fxDecls do out := out.push d; spliced := spliced ++ d.getNames
+
+    -- ── the carrier ──
+    let selfVal ← withParams fun ps => mkLambdaFVars ps (falsePiAt w)
+    let dSelf := Declaration.defnDecl
+      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+        hints := ← hintsFor selfVal, safety := .safe }
+    addChecked dSelf
+    out := out.push dSelf
+
+    -- ── the constructor ──
+    let ty := restore tbl exportCtors[0]!.2
+    let val ← withParams fun ps => mkLambdaFVars ps (falsePiCanon w)
+    let dCtor := Declaration.defnDecl
+      { name := ctorN 0, levelParams := lparams, type := ty, value := val
+        hints := ← hintsFor val, safety := .safe }
+    addChecked dCtor
+    out := out.push dCtor
+
+    -- ── the recursor ──
+    let recTy := restore tbl rv.type
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + 1 + 1)) fun bs _ => do
+      let ps := bs.extract 0 np
+      let motive := bs[np]!
+      let minor := bs[np + 1]!
+      let major := bs[bs.size - 1]!
+      let selfT := mkAppN (.const selfN us) ps
+      let ctorE := mkAppN (.const (ctorN 0) us) ps
+      mkLambdaFVars bs (← transportAlong eqi v w selfT ctorE major
+        (falsePiUniq eqi fxN w ctorE major) minor (fun z => pure (mkApp motive z)))
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }

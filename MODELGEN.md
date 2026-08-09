@@ -2415,7 +2415,9 @@ exactly as §1.5 splices `Eq` and the quotient. The interface is §1's four
 names unchanged — `T._model.self`, `ctor_j`, `rec_0`, `iota_0_j` — and there
 are **no internal declarations at all**: every helper the construction needs
 is an inline subterm, so a model is exactly `2 + 2c` declarations for `c`
-constructors, plus whichever basis members had to be spliced.
+constructors, plus whichever basis members had to be spliced — and, for the
+models whose proofs transport (§8.1's `False`-Π pads and the singleton
+route), §1.5's quotient-and-`funext` splice.
 
 The commission named the basis `{Eq, False, Sigma, Acc, Nat}` and asked for
 it to be verified rather than inherited. Two corrections came out of that,
@@ -2427,18 +2429,22 @@ both compiled at the pinned toolchain in `scripts/prim-basis/Derivations.lean`:
   `Type`-only `Sigma` cannot give them without `PLift`, a sixth inductive.
   (`init-prelude` declares no `PSigma`, so on the corpus below it is spliced
   — the one basis splice that run needs.)
-* **level pads are definitionally canonical, and the derivation table's
-  machinery collapses.** The commission's table reached `Bool` through
-  `Σ (n : Nat), n < 2` and proof irrelevance; what is actually emitted is
-  simpler and stronger. `D 1 := Σ'(_ : ⊤), ⊤` with `⊤ := ∀ C : Prop, C → C`
-  has every element *definitionally* equal to its canonical one — structure
-  eta turns an element into a `mk` of two proofs and proof irrelevance
-  closes the components — and the property survives `D (a+1) := (α : Sort a)
-  → D 1` and `D (max a b) := Σ'(_ : D a), D b`. So a pad never needs a
-  transport, the whole non-recursive Type route consumes **no `funext`, no
-  `Quot`, and no `Eq.rec`**, and every ι theorem is `Eq.refl`.
+* **level pads at constructible levels are definitionally canonical, and the
+  derivation table's machinery collapses.** The commission's table reached
+  `Bool` through `Σ (n : Nat), n < 2` and proof irrelevance; what is actually
+  emitted is simpler and stronger. `D 1 := Σ'(_ : ⊤), ⊤` with `⊤ := ∀ C :
+  Prop, C → C` has every element *definitionally* equal to its canonical one
+  — structure eta turns an element into a `mk` of two proofs and proof
+  irrelevance closes the components — and the property survives `D (a+1) :=
+  (α : Sort a) → D 1` and `D (max a b) := Σ'(_ : D a), D b`. So at a level
+  built from successors and `max`es a pad never needs a transport, and a
+  model with only such pads consumes **no `funext`, no `Quot`, and no
+  `Eq.rec`** — 113 of the 115 models below are in that class. A pad at any
+  *other* level, and the singleton route, transport (§8.1) and splice the
+  §1.5 `funext` prelude for it — `PULift` and `PUnit`, the remaining two.
+  Every ι theorem is `Eq.refl` regardless.
 
-## 8.1 The two routes
+## 8.1 The three routes
 
 **Type route** — carrier sort `w` never zero. The carrier is a `Nat`-tagged
 sum of `PSigma` chains:
@@ -2456,9 +2462,27 @@ the reason `Nat` is in it** — then `PSigma.rec` down the chain. On a
 constructor application everything reduces by δβι, so ι is `Eq.refl`. The
 pad level is `1` when `max 1 ℓ⃗ ≡ w` already (a `Prop` field under a `Type`
 carrier — `Decidable`'s shape) and `w` itself when the carrier is
-deliberately raised and `w`'s normal form is built from successors and
-`max`es of such; a bare level parameter in the gap has no pad and declines
-(`PULift`, `Trans`).
+deliberately raised. At a level built from successors and `max`es the pad
+is the definitionally-canonical `D`; at any other level — a bare parameter
+in the gap, `PULift`'s shape — it is the **`False`-Π singleton** `(h :
+False) → False.rec (fun _ => Sort ℓ) h`, at exactly `Sort ℓ` because
+`imax 0 ℓ = ℓ`. That one is not definitionally canonical: its uniqueness is
+`funext` at a pointwise `False.rec`, the destructor transports the applied
+minor along it, and on a constructor application the proof is a closed
+self-equality that the kernel's K-like reduction on `Eq.rec` erases — so ι
+stays `Eq.refl` and the model splices §1.5's `funext` prelude.
+
+What no pad absorbs is an **`imax` in a field's level** — a Π-typed field,
+`Trans.mk`'s shape — because level defeq is normal-form equality and a
+`max` does not subsume an `imax` term even with both sides present. What
+collapses an `imax` is a never-`Prop` codomain, so such a field is stored
+**boxed**: the same telescope, the codomain `S` wrapped as `Σ'(_ : S),
+D 1`, unboxed by projection wherever the minor consumes it. The box pad is
+the canonical `D 1`, so `unbox (box v) ≡ v` and `box (unbox y) ≡ y` hold by
+βι, structure eta, proof irrelevance and function eta — no transport, no
+`funext`. An `imax` sitting on a *domain* of the field's own telescope is
+where the box does not reach, and that shape declines
+(`tests/prim_declines.lean`'s `BoxF`).
 
 **Prop route** — carrier sort `0`. The impredicative Church encoding
 `∀ C : Prop, (∀ f⃗₀, C) → … → C`. At a `Prop` motive the dependent recursor
@@ -2468,36 +2492,57 @@ subsingleton rule that minted it says every field is a proposition
 (non-indexed, so nothing can appear in the output type), and the recursor
 extracts each field by instantiating the encoding at the field's own type —
 sequentially, a later field's type instantiated at the earlier extractions,
-with proof irrelevance closing the gap. ι is `Eq.refl` on both routes.
+with proof irrelevance closing the gap.
+
+**Singleton route** — carrier at a **variable** sort: `Prop` at some
+instantiations and `Type` at others, `PUnit : Sort u`'s shape, where
+neither of the other two routes applies at generation time. The basis
+reaches such a sort exactly once — every former lands at `0`, `1` or
+`max 1 ·`, and a Π lands on a bare parameter only through an `imax`
+collapse whose body is already there, which only `False.rec`'s family over
+the empty domain provides — and that once is the `False`-Π singleton
+above, which is *inhabited*. So a one-constructor, no-field declaration
+models with the singleton as carrier, its canonical element as the
+constructor, and the recursor a transport along the singleton's uniqueness,
+erased on the constructor by K-like reduction. A model on this route waits
+for the input's own quotient the way a mutual model waits for the input's
+own `Eq` (§1.6): `PUnit` sits at record 29 of `init-prelude` and `Quot` at
+351, so `PUnit._model` is emitted after the quotient, with `Quot.sound` —
+which `init-prelude` never declares — spliced beside it.
+
+ι is `Eq.refl` on all three routes.
 
 ## 8.2 Coverage, measured on `init-prelude`
 
 `vendor/arena-tests/good/init-prelude.ndjson` has 126 inductive types. One
 (`Lean.Syntax`) is nested and is §1's business. Of the 125 simple ones,
-**112 model and 13 decline**, each decline with its printed reason:
+**115 model and 10 decline**, each decline with its printed reason:
 
 | declined | count | reason |
 |---|---|---|
 | `Eq`, `Nat`, `False` | 3 | the basis itself — the exemption that makes the construction well-founded |
 | `Nat.le`, `HEq`, `Nat.le.below` | 3 | indexed families (thesis §5.2's skeleton-plus-`good`, not implemented) |
-| `PUnit`, `PEmpty` | 2 | `Sort u` carriers that reach `Prop` at some instantiations — no uniform model in the fragment; **`monomorph` resolves the variable** |
 | `List`, `Lean.Name`, `Lean.ParserDescr` | 3 | recursive `Type`-valued — the carrier needs the W/path construction (§8.4) |
-| `PULift`, `Trans` | 2 | a level gap over a bare parameter, which has no pad; `monomorph` resolves these too |
+| `PEmpty` | 1 | an **empty** carrier at `Sort u`, which the basis cannot build: its one type at a variable sort is the inhabited `False`-Π singleton, and a model of `PEmpty.rec` would prove `False` (§8.1) |
+
+`PUnit` models on the singleton route, `PULift` on a `False`-Π pad, and
+`Trans` on a boxed field — the three level-shaped gaps this construction
+used to hand to `monomorph`, which was wrong twice over: the tool must
+stand on its own, and the variable-sort and bare-parameter shapes were
+never beyond the fragment (§8.1). `PEmpty` is the one that is, and the
+decline says exactly why.
 
 Every generated declaration goes through `Environment.addDeclCore` with
-checking on, and §4's statement oracle runs on all of it: **257 statements
+checking on, and §4's statement oracle runs on all of it: **263 statements
 compared against the installed recursors' own rules, 0 differ**. Replaying
-the whole output export with kernel checking on accepts all 2297
-declarations. The run splices exactly one basis member (`PSigma`) and reports
-it. Filtering the output again with the flag on declines 115 times at the
-name guard and returns the file byte-identical — idempotence, §1.5's
-mechanism unchanged.
-
-That `monomorph` resolves the two level-bound classes is measured, not
-assumed: on the monomorphized `init-prelude` the same run generates **128
-models — every `PUnit`, `PEmpty`, `PULift` and `Trans` instance among them
-— with 282 statements compared and 0 differing**. A pipeline that wants
-those shapes runs `monomorph` first.
+the whole output export with kernel checking on accepts all 2312
+declarations. The run splices one basis member (`PSigma`), `Quot.sound`
+(once, at `PUnit` — `init-prelude` has the quotient but not the axiom), and
+a namespaced `funext` per transporting model (`PUnit._model.funext`,
+`PULift._model.funext`), and reports every splice.
+Filtering the output again with the flag on declines 118 times at the name
+guard and returns the file byte-identical — idempotence, §1.5's mechanism
+unchanged.
 
 Fixtures: `modelgen/tests/prim_shapes.lean` is one positive occupant per
 route variant, `modelgen/tests/prim_declines.lean` one per refusal path with
@@ -2523,8 +2568,9 @@ from the primitives directly, recursor as `Acc.rec` on the subterm relation
 — actually differs from plan B, building W. Settled as follows.
 
 * **For everything non-recursive, plan A is real and is what shipped**: no
-  W, no `Acc`, and (a sharpening nobody asked for) no `funext` either. This
-  is 112 of `init-prelude`'s 125 simple inductives.
+  W, no `Acc`, and — for every model but the two that transport, `PUnit`
+  and `PULift` (§8.1) — no `funext` either. This is 115 of `init-prelude`'s
+  125 simple inductives.
 * **For recursive carriers the two plans coincide at infinite branching.**
   A constructor field `f : I → T` with `I` infinite forces the carrier to
   hold every well-founded `I`-branching tree; any type the primitives build
@@ -2556,8 +2602,11 @@ propositional ι — as raw `Expr`s. The remaining classes are the indexed
 families (thesis §5.2 skeleton-plus-`good`, which §8.3's composition also
 waits on), recursive `Prop`s (the Church induction derivation — the
 strong-induction predicate `S m := T' m ∧ motive m`, mechanical but real),
-and nothing else: sort-variable carriers and bare-parameter level gaps are
-not constructible in the fragment and belong to `monomorph`.
+and the two shapes §8.1 shows unreachable from the basis: an **empty**
+carrier at a variable sort (`PEmpty` — the fragment's one type there is
+inhabited), and a field whose level keeps an `imax` on a *domain* after
+boxing. The variable-sort singleton, the bare-parameter pad and the
+`imax`-leveled field are constructions now, not gaps.
 
 ## 8.5 Cost, measured
 
@@ -2566,12 +2615,13 @@ not constructible in the fragment and belong to `monomorph`.
 
 | | instructions | output bytes |
 |---|---|---|
-| `modelgen` (layers 1+2) | 2.576 × 10⁹ | 3,857,568 |
-| `modelgen --prim-models` | 3.146 × 10⁹ | 4,624,683 |
+| `modelgen` (layers 1+2) | 2.565 × 10⁹ | 3,857,568 |
+| `modelgen --prim-models` | 3.164 × 10⁹ | 4,664,741 |
 
-**+22 % instructions and +20 % output bytes for 113 models** (112 input
+**+23 % instructions and +21 % output bytes for 116 models** (115 input
 inductives and one composed tag) — about 5 × 10⁶ instructions per model.
-Reproduce with:
+The three level-shaped models this section gained cost 18 × 10⁶
+instructions over the 3.146 × 10⁹ they joined. Reproduce with:
 
 ```bash
 cd modelgen && lake build

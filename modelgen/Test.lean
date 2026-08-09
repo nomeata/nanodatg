@@ -369,24 +369,27 @@ def expectedOwn : List Row :=
 /-- **The third construction's rows** (`--prim-models`), run with the flag on.
 
 `prim_shapes` is one positive occupant per route variant — the counts pin the
-shape of each model (`self + ctors + rec + iotas`, plus the nine spliced basis
-declarations on the first Type-route model). `prim_declines` pins every
-refusal path and its printed reason; `P` inside it is the control that says
-the guard is not refusing everything. `Eq` declines as basis in both, because
-both declare it. -/
+shape of each model (`self + ctors + rec + iotas`, plus the spliced basis
+declarations on the first Type-route model, `Opt`, and the quotient,
+`Quot.sound` and `PU._model.funext` on `PU`, the first model whose proofs
+need `funext`). `prim_declines` pins every refusal path and its printed
+reason; `P` inside it is the control that says the guard is not refusing
+everything. `Eq` declines as basis in both, because both declare it. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
-      [("Tor", 8), ("Big", 7), ("Opt", 6), ("Tri", 8), ("Dec", 6), ("Emp", 2),
-       ("Boxed", 4), ("Sub", 4), ("Conj", 4)],
+      [("Opt", 9), ("Tri", 8), ("Dec", 6), ("Emp", 2), ("TrL", 4), ("PU", 7),
+       ("Sub", 4), ("Conj", 4), ("Boxed", 4), ("Big", 4), ("Tor", 8), ("UL", 5)],
       [("Eq", "prim model shape: a basis primitive")])
   , ("prim_declines", [("P", 9)],
       [ ("Eq", "prim model shape: a basis primitive")
       , ("Lst", "prim model shape: a recursive Type-valued inductive")
-      , ("PU", "prim model shape: a carrier at Sort u, which reaches Prop")
+      , ("PE", "prim model shape: an empty carrier at Sort u")
       , ("Idx", "prim model shape: an indexed family")
       , ("Inf", "prim model shape: a recursive proposition")
+      , ("PM", "prim model shape: a carrier at Sort u with 2 constructors")
       , ("Inf.below", "prim model shape: an indexed family")
-      , ("UL", "prim model shape: UL.up's fields reach Sort s")])
+      , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")
+      , ("PF", "prim model shape: a carrier at Sort u whose constructor has fields")])
   ]
 
 structure TAcc where

@@ -24,12 +24,26 @@
      large elimination by sequential extraction, the second field's type
      instantiated at the first's extraction and closed by definitional
      proof irrelevance.
+   * `PU` — a **variable-sort singleton** (`PUnit`'s shape): the carrier is
+     the `False`-Π singleton at exactly `Sort u`, the recursor a transport
+     along its `funext`-derived uniqueness — this is the model that splices
+     the quotient, `Quot.sound` and `PU._model.funext`.
+   * `UL` — `PULift`'s shape: a carrier raised by a level (`r`) no field
+     reaches, whose pad level is not `dsingOk` — the `False`-Π pad,
+     discharged by transport in the destructor.
+   * `TrL` — `Trans`'s shape: a Π-typed field at an **imax** level, stored
+     **boxed** (codomain wrapped `Σ'(_ : S), D 1`) so the level collapses
+     to the carrier's never-zero `max`; the recursor unboxes by projection
+     and needs no transport at all.
 
    The file declares `Eq` and nothing else of the basis, so one run splices
-   `Nat`, `PSigma` and `False` and the report names them. -/
+   `Nat`, `PSigma` and `False` and the report names them — and, at `PU`,
+   the quotient and `Quot.sound` behind the spliced `funext`. -/
 prelude
 
-universe u v
+set_option bootstrap.inductiveCheckResultingUniverse false
+
+universe r s u v
 
 inductive Eq : {α : Sort u} → α → α → Prop where
   | refl (a : α) : Eq a a
@@ -69,3 +83,12 @@ inductive Tor (a b c : Prop) : Prop where
 
 inductive Conj (a : Prop) (b : a → Prop) : Prop where
   | mk : (ha : a) → b ha → Conj a b
+
+inductive PU : Sort u where
+  | mk : PU
+
+inductive UL (α : Sort s) : Sort (max s r 1) where
+  | up : α → UL α
+
+inductive TrL (α : Sort u) (r : α → α → Sort v) : Sort (max 1 u v) where
+  | mk : ((a b : α) → r a b) → TrL α r

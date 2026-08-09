@@ -83,8 +83,8 @@ modelled as ordinary `def`s and `theorem`s over five primitive inductives,
 `Eq`, `False`, `PSigma`, `Nat`, `Acc`, each spliced at Lean's shape if the
 input lacks it. Same four interface names, no internal declarations at all,
 every ι theorem `Eq.refl`. `MODELGEN.md` §8 carries the construction, its
-measured coverage (112 of `init-prelude`'s 125 simple inductives; every
-decline with a printed reason), and its cost (+22 % instructions there).
+measured coverage (115 of `init-prelude`'s 125 simple inductives; every
+decline with a printed reason), and its cost (+23 % instructions there).
 
 **They compose in one pass.** A nested declaration's model *is* a mutual block,
 so the second construction runs on it too — and with `--prim-models` the third
