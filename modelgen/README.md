@@ -12,7 +12,8 @@ have checked what it is handed.
 
 Neither typechecks its input. The input is trusted; that is where the speed
 comes from. Only the declarations a tool *generates* are checked, one at a time,
-by Lean's kernel.
+by Lean's kernel via `Environment.addDeclCore` with checking on. **A proof the
+generator builds and the kernel rejects is a decline, never an emission.**
 
 ## Why you might want this
 
@@ -24,17 +25,16 @@ These tools remove both from the checker's job:
 
 * After `modelgen`, a checker never needs to *derive* a nested inductive's
   recursors and ι rules. They are in the file, as ordinary declarations, proved,
-  under a documented naming convention. The checker only needs to recognise the
-  names.
+  under the naming convention below. The checker only needs to recognise names.
 * After `monomorph`, a checker never sees a level variable.
 
-In our own case this deleted a 2117-line Rust generator outright and is expected
-to delete a further ~500 lines of level scheduling.
+In our own case this deleted a 2117-line generator outright and is expected to
+delete a further ~500 lines of level scheduling.
 
 ## Build and run
 
 ```bash
-cd modelgen && lake build          # toolchain is pinned, see below
+cd modelgen && lake build
 
 .lake/build/bin/modelgen  IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]
 .lake/build/bin/monomorph IN.ndjson [-o OUT.ndjson] [--mono-recursors]
@@ -44,14 +44,21 @@ cd modelgen && lake build          # toolchain is pinned, see below
 `-o -` writes the export to stdout. **The report always goes to stderr**, so a
 consumer can stream the export and still read the diagnostics.
 
-Exit statuses are meaningful and stable — `0` ran to completion *including every
-decline*, `1` usage, `2` input unreadable or unparsable, `3` the tool's own
-failure. A generated model whose statement does not match the installed
-recursor's rule is a `3`, not a silently-written model.
+Exit statuses are meaningful and stable:
+
+| | |
+|---|---|
+| `0` | ran to completion, **including every decline** |
+| `1` | usage |
+| `2` | input unreadable or unparsable |
+| `3` | the tool's own failure |
+
+A generated model whose statement does not match the installed recursor's rule
+is a `3`, not a silently-written model.
 
 **Toolchain**: pinned to `leanprover/lean4:v4.29.1` — the version `lean4export`
 3.1.0 was built at (githash `f72c35b3`). The package is self-contained and does
-not participate in the surrounding Rust build.
+not participate in any surrounding build.
 
 ## `modelgen`
 
@@ -62,8 +69,8 @@ whose recursors the kernel constructs:
   with one extra *mimic* member per nested occurrence, with the export's own
   recursors proved over that.
 * **Plain mutual block** (`Modelgen/Mutual.lean`) — the members' index
-  telescopes packed into a tag, and the members into one *single* inductive
-  indexed by it.
+  telescopes packed into a tag, and the members themselves into one *single*
+  inductive indexed by it.
 
 They are not one construction at two settings: a nested model *keeps*
 mutuality, a mutual model *removes* it, so the second at zero mimics would be
@@ -76,25 +83,79 @@ a model beside it — including the ones the tool just wrote.
 A model is emitted **beside** what it models, never in place of it. The original
 declarations are untouched.
 
-### The interface: a naming convention
+### The names
 
-The contract is the whole point, and it is specified in `MODELGEN.md` §1 with
-three properties a consumer may rely on and three it explicitly may not. In
-outline, for a declaration `T`:
+For a declaration `T`, writing `ℓ⃗` for `T`'s own level parameters:
 
 ```
-T._model.0 … T._model.{n-1}   the block
+T._model.0 … T._model.{n-1}   the block: real members first, then one mimic
+                              per nested occurrence
 T._model.self                 the carrier
+T._model.ctor_j               the block's j-th constructor
+T._model.rec_k                the recursor at block index k
+T._model.iota_k_j             the j-th ι rule of rec_k, as a theorem
 T._model.pack_i / unpack_i    the isomorphism, per mimic
 T._model.unpackPack_i / packUnpack_i    both round trips
-T._model.ctor_j               constructors
-T._model.rec_k                recursors
-T._model.iota_k_j             the ι rules, as theorems
 T._model.congrPack_i
 ```
 
-A consumer builds these names off `T` rather than pattern-matching them, which
-is what makes the convention survive other renaming passes.
+For the mutual construction the block is `T._model.tag` and `T._model.aux`
+instead; **the carrier `T._model.self` is the one name both constructions
+agree on**, which is what a consumer should key off.
+
+Build these names off `T` rather than pattern-matching them — that is what lets
+the convention survive other renaming passes, including `monomorph`'s.
+
+### What a consumer may rely on
+
+**1. `T._model.rec_k` is the export's recursor at block index `k`, stated about
+different constants.** Take that recursor's declared type as the export carries
+it; rewrite each real member `R_k ↦ R_k._model.self`, each of their constructors
+to its `T._model.ctor_j`, and the export's recursor at block index `m` to
+`T._model.rec_m` at the same level list — and nothing else. The result is
+`T._model.rec_k`'s declared type **on the nose**. The same holds for
+`T._model.ctor_j` against the block's `j`-th constructor. This is what makes
+`⟦A.rec_1⟧ := ⟦A._model.rec_2⟧` an alias rather than a coincidence.
+
+**2. `T._model.iota_k_j` is `T.rec_k`'s `j`-th rule, in the export's own
+order.** It is about the constructor that rule is keyed by — `T.node` at the
+root, `List.cons` at a mimic — and the rule's right-hand side appears verbatim
+modulo the same rewriting. **So a consumer may line ι theorems up with rules by
+index, and check the key by name.**
+
+**3. Every level list is the export's own.** `T._model.rec_k`'s level parameters
+are those of the recursor it models, name for name and in order: the motive
+universe first, then the block's own. `iota_k_j` carries the same list.
+Everything else carries exactly `ℓ⃗`. The motive universe's *name* is Lean's,
+minted from the same list for the model's recursor as for the export's, and
+property 1's syntactic equality is what says the two agree.
+
+Properties 1 and 2 are **checked by the tool against the recursors Lean's kernel
+mints**, and reported as `statements: N compared …, 0 differ`.
+
+### What the contract does *not* say
+
+* **Nothing about the constructors, `pack`, `unpack` or the round trips beyond
+  the statements above.** Those are the construction, and the point of the tool
+  is that a checker stops needing to know it.
+* **Nothing about mimic order** except that it is the export's own: mimic `i` is
+  the occurrence the export's recursor at block index `r+i` eliminates. Read the
+  correspondence off the recursor index, never off the container.
+* **The model may not be identified with `T` definitionally.** `T` is a
+  primitive inductive and `T._model.self` is a `def` over a different block;
+  Lean has no conversion between `M₀ : T._model.self → Sort v` and
+  `m1 : T → Sort v`. *"Same statement about different constants"* is true of the
+  statement and **false of the type**. This one has cost us a day; do not plan
+  around a conversion that does not exist.
+
+### When there is no model
+
+`modelgen` emits nothing for a declaration it declines and says which shape
+stopped it, on stderr. **A consumer must treat the absence of `T._model.self` as
+"no model", not as an error** — and a `T._model.*` name it did not generate as
+an ordinary declaration of the file. `modelgen` will not collide with one: the
+name guard scans **the whole input file**, not the prefix before the
+declaration, and declines with `nested model name taken`.
 
 ### The prelude
 
@@ -106,33 +167,43 @@ generated, so a file with nothing to model comes back byte-identical.
 ## `monomorph`
 
 Emits one copy of each declaration per level instantiation used, computed by a
-single backwards pass over declaration groups (exports are topologically sorted,
-so no fixpoint is needed). Declarations nothing references take a configurable
-default, `--default 0`.
+**single backwards pass over declaration groups**: exports are topologically
+sorted, so walking from the last declaration backwards means every user of `d`
+has been seen by the time you reach `d`, and no fixpoint is needed. Sortedness
+is asserted rather than assumed. Declarations nothing references take a
+configurable default, `--default 0`.
 
-**Two recursor modes.** By default the eliminating universe stays a parameter,
-which keeps the output acceptable to kernels that require recursors to be
-level-polymorphic. `--mono-recursors` folds it into the name too, and needs a
-checker liberal enough to accept a monomorphic recursor.
+**Two recursor modes.** By default the eliminating (motive) universe stays a
+parameter, which keeps the output acceptable to kernels that require recursors
+to be level-polymorphic. `--mono-recursors` folds it into the name too, and
+needs a checker liberal enough to accept a monomorphic recursor.
 
 **Built-ins are left alone** — `Eq`, the `Quot` family and the standard axioms
 are recognised (structurally, not by name, for the quotient) and passed through,
 closed under "mentioned by a carried declaration at a non-numeral level".
 
-Names are marked with a root prefix carrying the instantiation, which is
-deliberately free of any dependence on the shape of the name being renamed.
+Names take a **root prefix** carrying the instantiation, deliberately free of any
+dependence on the shape of the name being renamed — so it composes with
+`modelgen`'s names without either scheme knowing about the other.
 
 **A model is instantiated with the declaration it models**, at exactly the same
-set of instantiations — nothing in a file *references* a model, so without this
-rule every model would take the default.
+set of instantiations. Nothing in a file *references* a model, so without this
+rule every model would fall to the default and only one copy would get one.
+
+Two properties worth knowing if you build on the output: a `Sort u` inductive at
+`σ = 0` lands in `Prop`, and the kernel's *derived* flags move with it — so some
+recursors legitimately come back different from the input's. And a pass that
+erases levels **erases lies told in levels**: a file that was ill-typed only in
+its level arguments may become well-typed. Acceptance of the output is not a
+claim about the input.
 
 ## Coverage
 
 There is no shape Lean accepts that `modelgen` refuses. That claim is worth
 exactly what it is measured against, so: it comes from a sweep of what Lean's
 `inductive` command actually admits, and **every refusal path has a fixture**.
-Three shapes remain that *Lean itself* rejects, recorded as boundaries with the
-error Lean gives.
+Three shapes remain that *Lean itself* rejects, recorded with the error Lean
+gives.
 
 On Mathlib (5.6 GB export, 670,630 declarations):
 
@@ -162,29 +233,33 @@ recursor's own major premise rather than off the plan. Across our corpus that is
 thousands of statements with zero differences, and it has caught real bugs that
 no test of ours would have.
 
-`envprobe` is a small diagnostic for the parse/replay phases.
+`envprobe` is a small diagnostic for the parse and replay phases.
 
-## Design notes worth knowing before you read the code
+## Design notes worth having before you read the code
 
-* **The output is re-interned.** Any file that is modified is rewritten whole,
-  because the export format's back-references must stay continuous. Files with
-  nothing to splice come back byte-identical, and that property is measured.
+* **The output is re-interned.** Any modified file is rewritten whole, because
+  the export format's back-references must stay continuous. Files with nothing
+  to splice come back byte-identical, and that property is measured.
 * **The writer streams.** An earlier version accumulated the whole output as one
-  string and died at Mathlib scale; `MONOMORPH.md` §9 has the numbers.
-* **The reader streams too**, and this mattered more than expected — the parse
-  was once 2.8× the memory of a purpose-built parse-only baseline, and all of it
-  was the reader materialising lines, not the parsed data.
+  string and died at Mathlib scale — a ~110M-entry array intercalated into a
+  6 GB string, out of memory at 44.9 GB. Streaming completes the same file at
+  36 GB.
+* **The reader streams too**, and this mattered more: the parse was once 2.8× the
+  memory of a purpose-built parse-only baseline, and **all of it was the reader
+  materialising lines, not the parsed data** — peak was reached before a single
+  JSON object was parsed. Chunked reading took the parse from 23.9 GB to 5.5 GB,
+  which is 1.00× the file's own bytes.
 * **We keep our own writer rather than reusing `lean4export`'s.** It writes from
   an `Environment`; we emit records that deliberately differ, including
   declarations the replay rejected but that must still be written through.
+* **Level substitution memoises on `(Expr, σ restricted to the expression's own
+  level parameters)`.** Pruning σ to what an expression actually mentions is what
+  makes entries shared across instantiations that differ elsewhere; memoising
+  every node instead was measured as a regression.
 
-## Where the detail is
+## Further reading
 
-* `MODELGEN.md` — the contract (§1), what is generated (§2), the oracles (§4),
-  what is declined and why (§5), with gaps, boundaries and unreached arms kept
-  apart.
-* `MONOMORPH.md` — the naming contract, the backwards pass, the two recursor
-  modes, and the Mathlib measurements.
-
-Both are written verdict-first, with every number sourced to the command that
-produced it and anything unmeasured named as unmeasured.
+Not required to use the tools — `MODELGEN.md` and `MONOMORPH.md` in the parent
+directory carry the derivations, the coverage sweep case by case, and the
+measurements with the command that produced each. Both are written verdict-first,
+with anything unmeasured named as unmeasured.
