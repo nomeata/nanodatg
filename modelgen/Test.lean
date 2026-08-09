@@ -366,6 +366,29 @@ def expectedOwn : List Row :=
        ("PS", 13), ("PS._model.0", 12), ("Q", 12), ("Q._model.0", 10)], [])
   ]
 
+/-- **The third construction's rows** (`--prim-models`), run with the flag on.
+
+`prim_shapes` is one positive occupant per route variant — the counts pin the
+shape of each model (`self + ctors + rec + iotas`, plus the nine spliced basis
+declarations on the first Type-route model). `prim_declines` pins every
+refusal path and its printed reason; `P` inside it is the control that says
+the guard is not refusing everything. `Eq` declines as basis in both, because
+both declare it. -/
+def expectedPrim : List Row :=
+  [ ("prim_shapes",
+      [("Tor", 8), ("Big", 7), ("Opt", 6), ("Tri", 8), ("Dec", 6), ("Emp", 2),
+       ("Boxed", 4), ("Sub", 4), ("Conj", 4)],
+      [("Eq", "prim model shape: a basis primitive")])
+  , ("prim_declines", [("P", 9)],
+      [ ("Eq", "prim model shape: a basis primitive")
+      , ("Lst", "prim model shape: a recursive Type-valued inductive")
+      , ("PU", "prim model shape: a carrier at Sort u, which reaches Prop")
+      , ("Idx", "prim model shape: an indexed family")
+      , ("Inf", "prim model shape: a recursive proposition")
+      , ("Inf.below", "prim model shape: an indexed family")
+      , ("UL", "prim model shape: UL.up's fields reach Sort s")])
+  ]
+
 structure TAcc where
   failures : Array String := #[]
   checks : Nat := 0
@@ -385,7 +408,7 @@ what reads `mini`'s copy is a parser (`nanoda`'s, through
 this was written; if a change to the renderer makes them differ in bytes alone,
 that is not a defect and this does not report one. -/
 def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
-    (cross := false) : IO TAcc := do
+    (cross := false) (prim := false) : IO TAcc := do
   let (name, want, wantDeclined) := r
   let path := s!"{root}/{dir}/{name}.ndjson"
   let text ← IO.FS.readFile path
@@ -395,7 +418,7 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((decls, rep), _) ←
-    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x true)) ctx { env }
+    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x true prim)) ctx { env }
   let mut a := a
   -- axis 1: the counts, in order
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
@@ -727,6 +750,8 @@ def main (args : List String) : IO UInt32 := do
     a ← runOne root a r (dir := "modelgen/tests") (cross := true)
   for r in expectedOwn do
     a ← runOne root a r (dir := "modelgen/tests")
+  for r in expectedPrim do
+    a ← runOne root a r (dir := "modelgen/tests") (prim := true)
   a ← runSyntax root a
   a ← runEnvProbe root a
   a ← runMonoCompose root a
