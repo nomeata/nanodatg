@@ -38,6 +38,12 @@ num-bigint = "0.4.4"
 # was measured at 22.6% of a `mutual` run on its own.
 rustc-hash = "1.1"
 
+[features]
+# B0 prototype (ENV-UNIFY.md §3.5, task #125): the cross-engine skeleton-key
+# comparison in tests/b0_env_unify.rs, which needs the checker's TG backend
+# actually wired in as the certifier.
+b0 = ["nanoda_lib/tg"]
+
 [[bin]]
 name = "mini"
 path = "src/main.rs"

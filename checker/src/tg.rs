@@ -2214,6 +2214,148 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// B0 prototype (ENV-UNIFY.md §3.5, task #125).
+//
+// The one prototype-gated unknown in the environment-unification design is
+// whether this engine's and mini's dispatches produce the same skeleton key
+// for the same shape. Answering it needs the two engines' keys to be
+// comparable *terms*: one `Env` (one brand), one `x_canon`, one canonical
+// hole-variable series. `b0_install_shared` seeds this thread's `Shared`
+// with exactly those, and `b0_sites` reads the tables back out afterwards.
+// Diagnostics only; nothing in the checking path calls either.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Install this thread's [`Shared`] over a caller-supplied `Env` and canonical
+/// skeleton variables. The `Env` must already be `fast_forward`ed past the
+/// prelude, and `x_canon`/`hole_vars` must have been minted from it — they end
+/// up inside every skeleton key, which is the whole point. Panics if the
+/// thread already has a `Shared`: replacing one mid-run would strand every
+/// symbol the old one minted.
+pub fn b0_install_shared(mut env: Env, x_canon: FreeVar, hole_vars: Vec<FreeVar>) {
+    SHARED.with(|slot| {
+        assert!(slot.borrow().is_none(), "b0: this thread already has a Shared");
+        let syms = Syms {
+            sort: env.declare(1),
+            pi: env.declare(2),
+            let_: env.declare(3),
+            proj: env.declare(2),
+            bvar: env.declare(1),
+            lzero: env.declare(0),
+            lsucc: env.declare(1),
+            lmax: env.declare(2),
+            limax: env.declare(2),
+            idx: env.declare(1),
+        };
+        let sh = Rc::new(std::cell::RefCell::new(Shared {
+            env,
+            syms,
+            hole_vars,
+            x_canon,
+            lam_infos: HashMap::new(),
+            lam_by_lam: HashMap::new(),
+            lam_betas: HashMap::new(),
+            lam_exts: HashMap::new(),
+            pi_exts: HashMap::new(),
+            pi_infos: HashMap::new(),
+            pi_by_dprod: HashMap::new(),
+            pi_bridges: HashMap::new(),
+            prop_infos: HashMap::new(),
+            prop_by_chi: HashMap::new(),
+            undet_syms: HashMap::new(),
+            prop_exts: HashMap::new(),
+            prop_u0s: HashMap::new(),
+            prop_intros: HashMap::new(),
+            lam_fss: HashMap::new(),
+            lam_dprods: HashMap::new(),
+            inds: None,
+            ind_ty_u1: None,
+            rec_core: None,
+            bool_rec: None,
+            nat_rec: None,
+            list_rec: None,
+            machine: None,
+            gen_inds: HashMap::new(),
+            gen_recs: HashMap::new(),
+            opaque_syms: HashMap::new(),
+            const_syms: HashMap::new(),
+            param_syms: HashMap::new(),
+            idx_syms: HashMap::new(),
+            lit_syms: HashMap::new(),
+            ind_syms: HashMap::new(),
+            rec_nests: HashMap::new(),
+            gen_ty_nests: HashMap::new(),
+            gen_ctor_nests: HashMap::new(),
+            declar_typings: HashMap::new(),
+            declined_cond: std::collections::HashSet::new(),
+            false_anchor: None,
+        }));
+        *slot.borrow_mut() = Some(sh);
+    })
+}
+
+/// This engine's skeleton-site tables, dumped for the B0 comparison. Row
+/// shape mirrors mini's `Interp::b0_sites`: the key `Term` and the symbols
+/// minted for it, head first — lams `[lam, t?]`, fibres (`pi_infos`)
+/// `[dprod, b?, img?]`, conds (`prop_infos`) `[chi, b?]`; the optional aux
+/// symbols are absent on an inert encoding. `undet` is the clause mini
+/// structurally lacks. `None` if this thread never built a `Shared`.
+#[allow(clippy::type_complexity)]
+pub fn b0_sites() -> Option<(Vec<(Term, Vec<FnSym>)>, Vec<(Term, Vec<FnSym>)>, Vec<(Term, Vec<FnSym>)>, Vec<(Term, FnSym)>)> {
+    SHARED.with(|slot| {
+        let b = slot.borrow();
+        let sh = b.as_ref()?.borrow();
+        let lams = sh
+            .lam_infos
+            .iter()
+            .map(|(k, i)| {
+                let mut v = vec![i.lam];
+                if let Some(g) = &i.graph {
+                    v.push(g.t);
+                }
+                (k.clone(), v)
+            })
+            .collect();
+        let fibres = sh
+            .pi_infos
+            .iter()
+            .map(|(k, i)| {
+                let mut v = vec![i.dprod];
+                if let Some(f) = &i.fibre {
+                    v.push(f.b);
+                    v.push(f.img);
+                }
+                (k.clone(), v)
+            })
+            .collect();
+        let conds = sh
+            .prop_infos
+            .iter()
+            .map(|(k, i)| {
+                let mut v = vec![i.chi];
+                if let Some((b, _)) = &i.fibre {
+                    v.push(*b);
+                }
+                (k.clone(), v)
+            })
+            .collect();
+        let undet = sh.undet_syms.iter().map(|(k, s)| (k.clone(), *s)).collect();
+        Some((lams, fibres, conds, undet))
+    })
+}
+
+/// The canonical skeleton variables this thread's `Shared` ended up with —
+/// `x_canon` and the full hole-variable series, which may have grown past what
+/// [`b0_install_shared`] was given. The keys mention them, so the comparison
+/// needs the grown list. `None` if this thread never built a `Shared`.
+pub fn b0_canon_vars() -> Option<(FreeVar, Vec<FreeVar>)> {
+    SHARED.with(|slot| {
+        let b = slot.borrow();
+        let sh = b.as_ref()?.borrow();
+        Some((sh.x_canon, sh.hole_vars.clone()))
+    })
+}
+
 /// The Tarski–Grothendieck backend.
 pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// The signature, and everything keyed on it, shared per thread.

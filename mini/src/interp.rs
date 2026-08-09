@@ -1419,13 +1419,27 @@ impl Interp {
         // be arranged is that this one never re-issues an id the prelude used.
         fast_forward(&mut env, &prelude);
         let x_canon = env.fresh_var();
+        Interp::over(env, x_canon, Vec::new())
+    }
+
+    /// **B0 prototype (ENV-UNIFY.md §3.5, task #125): an `Interp` over a
+    /// caller-supplied `Env` and canonical skeleton variables.**
+    ///
+    /// The caller must already have `fast_forward`ed `env` past the prelude's
+    /// ids ([`Interp::new`] shows the two lines), and `x_canon`/`hole_vars`
+    /// must have been minted from *this* `env` (or one sharing its brand):
+    /// they end up inside every skeleton key, so handing two engines the same
+    /// ones is what makes their keys comparable term-for-term. The
+    /// `Nat::over`/`Chain::over` pattern, one level up.
+    pub fn over(mut env: Env, x_canon: FreeVar, hole_vars: Vec<FreeVar>) -> Interp {
+        let prelude = prelude();
         let cumul = Cumul::new(&mut env, &prelude.tower, CUMUL_HEIGHT)
             .expect("the cumulativity table is a closed derivation over the prelude's own tower");
         let mut ip = Interp {
             env,
             prelude,
             x_canon,
-            hole_vars: Vec::new(),
+            hole_vars,
             cumul,
             consts: HashMap::new(),
             lams: HashMap::new(),
@@ -2886,6 +2900,44 @@ impl Interp {
     /// How many per-shape binder symbols carry a defining axiom. Summarised in
     /// the dump rather than listed; see `crate::dump`'s header.
     pub fn site_count(&self) -> usize { self.lams.len() + self.fibres.len() + self.conds.len() }
+
+    // ── B0 prototype (ENV-UNIFY.md §3.5, task #125) ──────────────────────────
+    //
+    // The three skeleton-site tables, dumped so a test can compare this
+    // engine's keys against `checker`'s over one shared `Env`. Read-only,
+    // diagnostics-shaped: nothing here is consumed by any derivation.
+
+    /// The site tables, one row per distinct skeleton: the key `Term` and the
+    /// symbols this engine minted for it, in a fixed role order —
+    /// lams `[lam, t]`, fibres `[dprod, b, img]`, conds `[chi, b]`.
+    pub fn b0_sites(&self) -> crate::b0::SiteDump {
+        crate::b0::SiteDump {
+            lams: self.lams.iter().map(|(k, s)| (k.clone(), vec![s.lam, s.t])).collect(),
+            fibres: self
+                .fibres
+                .iter()
+                .map(|(k, s)| (k.clone(), vec![s.dp.dprod, s.b, s.dp.img]))
+                .collect(),
+            conds: self.conds.iter().map(|(k, s)| (k.clone(), vec![s.chi, s.b])).collect(),
+        }
+    }
+
+    /// The constant store's keys and carrier terms, for the constant-level
+    /// half of the B0 comparison: `(name, σ, ⟦c.{σ}⟧, typing sealed?, defeq?)`.
+    pub fn b0_consts(&self) -> Vec<(String, Vec<u32>, Term, bool, bool)> {
+        self.consts
+            .iter()
+            .map(|((n, sig), ci)| {
+                (n.to_string(), sig.clone(), ci.term.clone(), ci.typing.is_ok(), ci.defeq.is_some())
+            })
+            .collect()
+    }
+
+    /// Tear down: the `Env` and the canonical variables, so the *same* objects
+    /// can be handed to a second engine. Everything else is dropped.
+    pub fn b0_into_env(self) -> (Env, FreeVar, Vec<FreeVar>) {
+        (self.env, self.x_canon, self.hole_vars)
+    }
 }
 
 #[cfg(test)]

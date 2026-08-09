@@ -163,6 +163,20 @@ impl Outcome {
 pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::default()) }
 
 pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
+    check_file_with_interp(path, opts, crate::interp::Interp::new()).0
+}
+
+/// **B0 prototype (ENV-UNIFY.md §3.5, task #125): [`check_file_with`] over a
+/// caller-supplied [`crate::interp::Interp`]**, handed back beside the
+/// [`Outcome`] so the caller can read the site tables and recover the kernel
+/// `Env` afterwards ([`crate::interp::Interp::b0_into_env`]). Behaviour is
+/// [`check_file_with`]'s exactly; the only difference is who built the
+/// `Interp` and who gets to keep it.
+pub fn check_file_with_interp(
+    path: &Path,
+    opts: Options,
+    ip: crate::interp::Interp,
+) -> (Outcome, crate::interp::Interp) {
     let mut loaded = match convert::load_with(
         path,
         convert::LoadOptions {
@@ -174,14 +188,17 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     ) {
         Ok(l) => l,
         Err(e) => {
-            return Outcome {
-                verdict: Verdict::Declined { reason: e.to_string() },
-                facts: Facts::default(),
-                census: Census::default(),
-                elim_audit: Vec::new(),
-                ledger: None,
-                dump: None,
-            }
+            return (
+                Outcome {
+                    verdict: Verdict::Declined { reason: e.to_string() },
+                    facts: Facts::default(),
+                    census: Census::default(),
+                    elim_audit: Vec::new(),
+                    ledger: None,
+                    dump: None,
+                },
+                ip,
+            )
         }
     };
     let census = Census::of(&loaded.decls);
@@ -204,25 +221,31 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
             // because this is the one place a kernel-pass error becomes a
             // verdict.
             if msg.starts_with(crate::kernel::BUDGET_DECLINE) {
-                return Outcome {
-                    verdict: Verdict::Declined {
-                        reason: format!("{} while checking {}", msg, decl.name()),
+                return (
+                    Outcome {
+                        verdict: Verdict::Declined {
+                            reason: format!("{} while checking {}", msg, decl.name()),
+                        },
+                        facts: loaded.facts,
+                        census,
+                        elim_audit: Vec::new(),
+                        ledger: None,
+                        dump: None,
                     },
+                    ip,
+                )
+            }
+            return (
+                Outcome {
+                    verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
                     facts: loaded.facts,
                     census,
                     elim_audit: Vec::new(),
                     ledger: None,
                     dump: None,
-                }
-            }
-            return Outcome {
-                verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
-                facts: loaded.facts,
-                census,
-                elim_audit: Vec::new(),
-                ledger: None,
-                dump: None,
-            }
+                },
+                ip,
+            )
         }
         accepted += 1;
     }
@@ -237,14 +260,17 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // have turned four rejections into declines — a weaker claim, made
     // silently, on the axis that is supposed to be exact.
     if let Some(n) = axioms.used.first() {
-        return Outcome {
-            verdict: Verdict::Declined { reason: format!("non-standard axiom: {n}") },
-            facts: loaded.facts,
-            census,
-            elim_audit: Vec::new(),
-            ledger: None,
-            dump: None,
-        }
+        return (
+            Outcome {
+                verdict: Verdict::Declined { reason: format!("non-standard axiom: {n}") },
+                facts: loaded.facts,
+                census,
+                elim_audit: Vec::new(),
+                ledger: None,
+                dump: None,
+            },
+            ip,
+        )
     }
     // **An unused one is ignored**, and the drop happens here — after the
     // kernel, before the interpretation pass — so that both halves are true at
@@ -267,7 +293,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // The interpretation pass runs only on a file mini accepted: MINI-DESIGN
     // §0's two axes, kept apart.
     crate::blocker::arm(opts.block);
-    let mut ip = crate::interp::Interp::new();
+    let mut ip = ip;
     // Names for the dump have to be switched on *before* the pass, because the
     // registry is written as each constant is stored. Not by arming: arming
     // also stops at the first blocker, which would dump one pair.
@@ -339,14 +365,17 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     if let Some(b) = led.first_blocker.as_mut() {
         b.export = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     }
-    Outcome {
-        verdict: Verdict::Accepted { declars: accepted },
-        facts,
-        census,
-        elim_audit,
-        ledger: Some(led),
-        dump,
-    }
+    (
+        Outcome {
+            verdict: Verdict::Accepted { declars: accepted },
+            facts,
+            census,
+            elim_audit,
+            ledger: Some(led),
+            dump,
+        },
+        ip,
+    )
 }
 
 /// `check_file` on a thread with a large stack. `whnf` and `inferType` are
