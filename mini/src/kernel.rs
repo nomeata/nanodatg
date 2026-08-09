@@ -2484,8 +2484,8 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let Some(nc) = ip.nat_clause() else {
                     return Ok(Typing { ty, tm: None, ev: Ev::missing(Gap::IndApparatus) })
                 };
-                let tm = nc.numeral(u128::from(*n));
-                let ev = match nc.mem(&mut ip.env, u128::from(*n)) {
+                let tm = nc.numeral(*n);
+                let ev = match nc.mem(&mut ip.env, *n) {
                     Some(m) => Ev::Proved(m),
                     None => Ev::missing(Gap::IndApparatus),
                 };
@@ -2531,7 +2531,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// whose cost depended on the *value* would make one `whnf` call on
     /// `UInt32.size` a non-terminating one, and it would look fast on every
     /// literal small enough to write in a test.
-    fn natlit_succ_leg(&mut self, n: u64, cur_tm: &Option<Term>) -> Ev {
+    fn natlit_succ_leg(&mut self, n: u128, cur_tm: &Option<Term>) -> Ev {
         let Some(from) = cur_tm.clone() else { return Ev::missing(Gap::NoEndpoint) };
         let succ_name = Name::str(&Name::simple("Nat"), "succ");
         // **`⟦Nat.succ⟧` is *asked for*, not read out of the store.** The
@@ -2545,12 +2545,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         let Some(former) = st.tm else { return Ev::missing(st.ev.reason(Gap::NoEndpoint)) };
         let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
         let Some(nc) = ip.nat_clause() else { return Ev::missing(Gap::IndApparatus) };
-        let prev = u128::from(n - 1);
+        let prev = n - 1;
         // **The caller's endpoint must be the numeral this clause would build.**
         // Compared rather than assumed: a `cur_tm` that is not `num(n)` means
         // the literal was interpreted by something else, and composing this
         // equation onto it would be composing across two interpretations.
-        if from != nc.numeral(u128::from(n)) {
+        if from != nc.numeral(n) {
             return Ev::missing(Gap::ConvCompose("natlit-endpoint"))
         }
         let prev_tm = nc.numeral(prev);
@@ -2572,7 +2572,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
     }
 
-    fn nat_unfold(n: u64) -> R<E> {
+    fn nat_unfold(n: u128) -> R<E> {
         let nat = Name::simple("Nat");
         Ok(if n == 0 {
             konst(Name::str(&nat, "zero"), no_levels())

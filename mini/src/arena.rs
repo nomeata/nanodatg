@@ -332,7 +332,7 @@ pub fn proj(ind: NamePtr<'static>, idx: usize, s: ExprPtr<'static>) -> ExprPtr<'
 /// `None` only when the export file was parsed without the nat extension,
 /// which mini never does — hence the `expect` rather than a `Result` that
 /// every one of the call sites would have to thread.
-pub fn nat_lit(n: u64) -> ExprPtr<'static> {
+pub fn nat_lit(n: u128) -> ExprPtr<'static> {
     write(|c| c.mk_nat_lit_quick(num_bigint::BigUint::from(n)))
         .expect("mini::arena: the nat extension is off, which mini never configures")
 }

@@ -380,7 +380,7 @@ pub enum Expr {
     App(E, E),
     Lam { ty: E, body: E },
     Forall { ty: E, body: E },
-    NatLit(u64),
+    NatLit(u128),
     StrLit(Rc<str>),
     Sort(Level),
     Proj { ind: Name, idx: u32, s: E },
@@ -423,7 +423,10 @@ impl E {
                 // literal that reaches here fits. `u64::MAX` keeps the old
                 // `parse().unwrap_or(u64::MAX)` behaviour for the impossible
                 // case rather than panicking in the middle of a walk.
-                Expr::NatLit(s.parse().unwrap_or(u64::MAX))
+                // `convert::literal_value` declines anything past the
+                // type on the way in, so a parse failure here is not a value
+                // this walk can meet.
+                Expr::NatLit(s.parse().unwrap_or(u128::MAX))
             }
             CExpr::StringLit { ptr, .. } => {
                 Expr::StrLit(Rc::from(crate::arena::read_string(ptr)))
@@ -448,7 +451,7 @@ pub fn let_(ty: E, val: E, body: E) -> E { E(crate::arena::let_(ty.0, val.0, bod
 pub fn proj(ind: Name, idx: u32, s: E) -> E {
     E(crate::arena::proj(ind.0, idx as usize, s.0))
 }
-pub fn nat_lit(n: u64) -> E { E(crate::arena::nat_lit(n)) }
+pub fn nat_lit(n: u128) -> E { E(crate::arena::nat_lit(n)) }
 pub fn str_lit(s: &str) -> E { E(crate::arena::str_lit(s)) }
 
 /// `Expr.arrow` — a non-dependent `Π`. Note the original does **not** shift

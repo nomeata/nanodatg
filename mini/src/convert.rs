@@ -57,7 +57,7 @@ pub struct Facts {
     pub declars: usize,
     /// `natLit` nodes seen, and the largest.
     pub nat_lits: usize,
-    pub max_nat_lit: u64,
+    pub max_nat_lit: u128,
     /// `strLit` nodes seen.
     pub str_lits: usize,
     /// Inductives whose export recursor is not named `T.rec`, or whose level
@@ -749,7 +749,7 @@ impl Cv {
 
 /// A nat literal's value, as a `u64`, or a **decline that names the overflow**.
 ///
-/// `mini`'s [`Expr::NatLit`](crate::expr::Expr::NatLit) is a `u64` and the
+/// `mini`'s [`Expr::NatLit`](crate::expr::Expr::NatLit) is a `u128` and the
 /// arena's is arbitrary precision, so the conversion is partial and the
 /// partiality is not hypothetical: `init-prelude` declares `UInt64.size` as
 /// `18446744073709551616` = 2⁶⁴, which is the **first value past the type** —
@@ -768,9 +768,9 @@ impl Cv {
 /// The decline is its own reason and not the `> 10` one, because the two are
 /// different facts about the export and a single message would make the
 /// measurement above unreadable a second time.
-fn literal_value(s: &str) -> LR<u64> {
+fn literal_value(s: &str) -> LR<u128> {
     s.parse().map_err(|_| {
-        declined(format!("nat literal {s} does not fit in the 64 bits mini's Expr::NatLit has"))
+        declined(format!("nat literal {s} does not fit in the 128 bits mini's Expr::NatLit has"))
     })
 }
 
@@ -778,24 +778,35 @@ fn literal_value(s: &str) -> LR<u64> {
 mod tests {
     use super::*;
 
-    /// **2⁶⁴ is a decline, not `2⁶⁴ − 1`.** The boundary is pinned from both
-    /// sides — `u64::MAX` is the largest value that fits and must survive
-    /// intact — because a clamp passes any test that only looks at the value
-    /// *below* the boundary, and because the two neighbours differ by one and
-    /// the wrong answer is exactly the smaller of them.
+    /// **A literal past the type declines rather than clamping.**
+    ///
+    /// The bound is `u128`, and it moved there for a measured reason:
+    /// `init-prelude` declares `UInt64.size = 2⁶⁴`, which is the *first* value
+    /// past a `u64`, so a 64-bit literal could not carry the file at all. With
+    /// the binary clause `num(2⁶⁴)` is 66 nodes and there is nothing expensive
+    /// about it — the old width was a limit of the representation, not of the
+    /// arithmetic.
+    ///
+    /// Pinned from both sides at both boundaries. `2⁶⁴` and `u128::MAX` must
+    /// survive **intact**, because the failure this test exists for is a clamp
+    /// and a clamp is invisible to any check that only looks below the
+    /// boundary; `2¹²⁸` must decline, with a reason that names the width.
     #[test]
-    fn a_literal_past_sixty_four_bits_declines_rather_than_clamping() {
+    fn a_literal_past_the_type_declines_rather_than_clamping() {
         assert_eq!(literal_value("0").ok(), Some(0));
         assert_eq!(literal_value("11").ok(), Some(11));
-        assert_eq!(literal_value("18446744073709551615").ok(), Some(u64::MAX));
-        // 2⁶⁴ — `UInt64.size` in `init-prelude`, and the first value past the type.
+        assert_eq!(literal_value("18446744073709551615").ok(), Some(u128::from(u64::MAX)));
+        // 2⁶⁴ — `UInt64.size`, and the value the whole exercise is named after.
+        assert_eq!(literal_value("18446744073709551616").ok(), Some(1u128 << 64));
+        assert_eq!(literal_value(&u128::MAX.to_string()).ok(), Some(u128::MAX));
+        // 2¹²⁸ — the first value past the type as it now stands.
+        let two_128 = "340282366920938463463374607431768211456";
         assert!(
-            literal_value("18446744073709551616").is_err(),
-            "2⁶⁴ was accepted, which can only be by clamping it to 2⁶⁴ − 1"
+            literal_value(two_128).is_err(),
+            "2¹²⁸ was accepted, which can only be by clamping it"
         );
-        // …and the reason says which fact about the export it is.
-        let e = format!("{:?}", literal_value("18446744073709551616").unwrap_err());
-        assert!(e.contains("64 bits"), "the decline does not name the overflow: {e}");
+        let e = format!("{:?}", literal_value(two_128).unwrap_err());
+        assert!(e.contains("128 bits"), "the decline does not name the width: {e}");
     }
 
     /// **The whitelist is three names, matched component by component.**

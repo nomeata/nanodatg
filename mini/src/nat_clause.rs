@@ -188,7 +188,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
 
-        for (n, nodes) in [(0u64, 1u64), (1, 2), (11, 5), (u64::MAX, 65)] {
+        for (n, nodes) in [(0u128, 1u64), (1, 2), (11, 5), (u128::from(u64::MAX), 65), (1u128 << 64, 66)] {
             let t = c.infer_type(&crate::expr::nat_lit(n)).expect("infer a literal");
             let tm = t.tm.clone().unwrap_or_else(|| panic!("⟦natLit {n}⟧ has no term"));
             let mem = t
@@ -197,14 +197,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("⟦natLit {n}⟧ has no typing: {:?}", t.ev))
                 .clone();
             let nc = c.interp().expect("threaded").nat_clause().expect("the ω apparatus");
-            assert_eq!(tm, nc.numeral(u128::from(n)), "⟦natLit {n}⟧ is not num({n})");
+            assert_eq!(tm, nc.numeral(n), "⟦natLit {n}⟧ is not num({n})");
             assert_eq!(
                 *mem.concl(),
                 kernel::Formula::mem(tm, nc.nat.omega()),
                 "⟦natLit {n}⟧ is not typed in ω"
             );
             assert_eq!(
-                derived::nat::numeral_size(u128::from(n)),
+                derived::nat::numeral_size(n),
                 nodes,
                 "num({n}) is not {nodes} nodes — the encoding moved"
             );
@@ -227,7 +227,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
 
-        for n in [1u64, 11, u64::MAX] {
+        for n in [1u128, 11, u128::from(u64::MAX), 1u128 << 64] {
             let e = crate::expr::nat_lit(n);
             let t = c.infer_type(&e).expect("infer the literal");
             let tm = t.tm.clone().expect("the literal has a term");
@@ -249,7 +249,7 @@ mod tests {
                 .clone();
             let nc = c.interp().expect("threaded").nat_clause().expect("the ω apparatus");
             let (lhs, _) = thm.concl().as_eq().expect("the leg is an equation");
-            assert_eq!(lhs, nc.numeral(u128::from(n)), "the leg is not about num({n})");
+            assert_eq!(lhs, nc.numeral(n), "the leg is not about num({n})");
         }
     }
 
