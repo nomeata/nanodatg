@@ -27,6 +27,7 @@
 //! ordered ([`order`]) — and `imax` is the one conditional, which is the
 //! if-then-else the design brief predicted.
 
+pub mod apparatus;
 pub mod ite0;
 pub mod order;
 pub mod srt;
