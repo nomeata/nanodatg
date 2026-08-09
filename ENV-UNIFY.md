@@ -2,8 +2,11 @@
 
 *2026-08-09. A design, on the owner's instruction, for the step after #120:
 one global environment for `checker/` and `mini/`, leaning toward nanoda's
-design, to unblock choosing one checker or the other per declaration. Not an
-implementation; nothing is landed except this document. Everything cited was
+design, to unblock choosing one checker or the other per declaration.
+Written ahead of the implementation; track B's first rungs have since
+landed — B0 as the `explore/b0-shared-env` prototype, B1/B2 as `tg::EnvCore`
+at both engine roots (§3.4 item 1, §5) — and the affected sections are kept
+current in place. Everything cited was
 read in a scratch worktree at `f29c7ef`; nothing here is measured beyond what
 the cited documents and tests already measure, and §9 names what is not.
 Revised in place the same day: the first version's central negative finding —
@@ -311,13 +314,21 @@ whole reason the engines can remain two while the certificates become one.
 
 ### 3.4 The price, enumerated
 
-1. **`over`-constructors at the engine roots.** `Interp::new`
-   (`interp.rs:1414`) builds env + prelude + cumul + sites by value;
-   `Shared::new` likewise. Both grow an `over(...)` taking the shared
-   handles — the `Nat::over` template one level up. `Machine` needs `&mut`
-   (its caches grow); the `RefCell` pattern is already in place on the
-   checker side (`tg.rs:1949–1953`). Mini-side refactor is the larger half
-   and is confined to construction plumbing, not clause logic.
+1. **`over`-constructors at the engine roots — paid; this is B1/B2, landed.**
+   The shared handle is `tg::EnvCore` (checker/src/tg.rs): one kernel `Env`,
+   `x_canon` and the hole series, and the lazily-built `Wtype`/`Bound`/
+   `Machine`, behind same-thread `Rc<RefCell<…>>` cells. `Interp::over(core)`
+   and `tg::install_shared_core(core)` are the two entries; `Interp::new`
+   and the `shared()` fallback mint a private core each, reproducing the
+   historical behaviour. The mini-side refactor was indeed the larger half
+   and stayed construction plumbing: every `self.env`/`ip.env` access became
+   a statement-scoped `env_mut()` guard, `ind_parts` hands zone B a `RefMut`
+   it rebinds, and `IndApparatus.mach` holds the core's
+   `Rc<RefCell<Machine>>` — the checker's `Inductives::build` takes the same
+   pair instead of minting its own `Sums`/`Wtype`/`Bound`.
+   `mini/tests/envshare.rs` pins each identity with its disagree direction;
+   `mini/tests/envshare_tg.rs` (behind `mini`'s `tg` feature) runs both
+   engines over one core in one thread, in either order.
 2. **One `Sealed`.** The two are the same newtype with the same gate —
    `Sealed(Thm)` refusing hypotheses (`mini/src/ev.rs:629`,
    `checker/src/sealed.rs:71`). One shared type (a small common crate or a
@@ -325,10 +336,21 @@ whole reason the engines can remain two while the certificates become one.
 3. **One key.** `ConstKey = (Name, Vec<u32>)` vs `(NamePtr::raw,
    Vec<Term>)` — one definition at the seam. The first version parked this
    as optional stage 6; it is now on the critical path (track B3).
-4. **Concurrency.** `Shared` is per-thread; mini is single-threaded. One
-   store means a single-threaded evidence axis (or one full apparatus per
-   thread, mini arc included — memory-expensive against the 40 G ceiling).
-   Cost of `num_threads 1` on the tg path: unmeasured (§9).
+4. **Concurrency — settled, with the measurement.** Nothing on the evidence
+   axis runs multi-threaded today: `Config::num_threads` serde-defaults to 0
+   (`checker/src/util.rs:988`), `check_all_declars` goes parallel only above
+   1 (`tc.rs:367`), no test or CI configuration sets it, and mini is
+   single-threaded throughout. So the decision is: **the evidence axis of a
+   mixed run is single-threaded, and the type system says so** — `EnvCore`
+   is `Rc`-backed, hence `!Send`. A checker-only run that asks for
+   `num_threads > 1` keeps today's behaviour exactly: each thread lazily
+   builds its own core and `Shared`. The replication price of that, measured
+   (`perf stat -e instructions:u`, tg backend, `good/init-prelude.ndjson`,
+   three runs each): 198.20 G instructions serial vs 240.92 G at
+   `num_threads 4` — **14.2 G per additional thread, ~7% of the serial run
+   each**, dominated by the per-thread re-derivation of skeleton graphs that
+   `tg.rs`'s own sharing note quantifies (32388 → 2651 skeletons when one
+   thread shares), not by the prelude replay.
 5. **Both engines write; both writes are already funnelled.** Mini's
    `fill_declaration` stores terms with their certificates; checker's
    `store_declar_typing` **drops conditional typings** rather than storing
@@ -473,12 +495,20 @@ stage 6"):
 
 * **B0** — **the prototype that gates depth**: interpret one fixture's
   shapes through both dispatches over one `Env` and diff the skeleton keys
-  (§3.5). Cheap, settles the only technical unknown, decides B5's scope.
-* **B1** — one `Env`, one `Prelude`, one `Tower`: `Interp::over` /
-  `Shared::over` taking shared handles; the `Nat::over` test template
-  (two-over-one agree, fresh disagrees) pinned at this level.
-* **B2** — one `Machine` and chain behind the shared `RefCell` — the
-  `tg.rs:1941` coordination point, satisfied without touching `derived/`.
+  (§3.5). Done, on `explore/b0-shared-env` (head `fc4fda8`): with the arrow
+  alignment in, the inductive-free fragment agrees lam 38/38, fibre 11/11,
+  cond 17/17 canonical plain; the residue is recursor-adjacent lambda
+  bodies, B5's scope.
+* **B1** — one `Env`, one `Prelude`, one `Tower` — **landed**, as
+  `tg::EnvCore` + `Interp::over` + `install_shared_core` (§3.4 item 1); the
+  `Nat::over` test template (two-over-one agree, fresh disagrees) is pinned
+  at this level by `mini/tests/envshare.rs`.
+* **B2** — one `Machine` behind the shared `RefCell` — **landed with B1**:
+  the machine lives in the `EnvCore`, over a `Wtype`/`Bound` built once on
+  the prelude tower's own `Sums`, and both engines' inductive layers take
+  that pair — the `tg.rs` coordination point, satisfied without touching
+  `derived/`. Mini's chain (`IndChain`) stays mini's: it mints no carrier
+  symbols of its own and is checked `is_over` the shared machine.
 * **B3** — one key type and one `Sealed` at the seam (§3.4 items 2–3).
 * **B4** — the shared constant store: mini's `fill_declaration` writes
   carriers, typings, defining equations and ι theorems under the joint
@@ -560,19 +590,24 @@ the store remains one, and no finding in this document re-opens the wall.
 
 ## 9. Not measured
 
-* **The skeleton normal-form coincidence** (§3.5, B0) — the one unknown that
-  scopes B5; nothing else in track B depends on its answer.
-* **Single-threaded tg on `init-prelude`** — the concurrency price of one
-  store (§3.4 item 4); nanoda-at-N-threads vs 1 is known upstream behaviour,
-  the tg path's version is not isolated.
+* **The skeleton normal-form coincidence** — measured by B0
+  (`explore/b0-shared-env`): full agreement on the inductive-free fragment
+  after the arrow alignment; the recursor-adjacent lambda residue scopes B5.
+* **The concurrency price of one store** — measured; §3.4 item 4 has the
+  numbers and the decision.
 * **Cross-engine adopt-and-check drift rates** — `Dt::IndDrift`-class
   counters exist per engine; what a mixed run scores is unknown.
 * **The `init-prelude` projection under the split** — checker certifying the
   def population at `nested_model`-like cost is an extrapolation from PIVOT
   §4's 3.96 G vs 1,277 G and PRELUDE-COST.md's wall attribution, not a
   measurement; B4's measurement step is the test.
-* **The `Interp::over` refactor size** — read as construction plumbing
-  (`interp.rs:1414` and the `IndApparatus` builder), not prototyped.
+* **The `Interp::over` refactor size** — done, and it was construction
+  plumbing as read: every `env` access became a statement-scoped guard, and
+  the corpus ratchet plus one committed fixture
+  (`mini/tests/fixtures/quot_lift_reduction.lean`) hold the one dynamic
+  hazard that introduced — a guard held across a closure's second borrow.
+  Instruction cost of the cells, measured over the whole 91-export tutorial
+  loop (release, two runs each): 360.36 G before, 361.86 G after — **+0.42%**.
 * **The adapter's cost on a mini-only run** (A1) and **the boundary gate's
   cost** (A3) — expected neutral / bounded by the `keep_export_recursors`
   walk; the ratchets measure them.
