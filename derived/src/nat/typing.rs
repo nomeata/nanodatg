@@ -6,9 +6,15 @@
 //! ```text
 //! natrec_mem(env, nat, C, c, g) ->
 //!   ⊢ ( c ∈ app(C, 0)
-//!     ∧ ∀x ∀v. ((x ∈ ω ∧ v ∈ app(C,x)) → app(app(g,x), v) ∈ app(C, succ x)) )
+//!     ∧ ∀x. (x ∈ ω → ∀v. (v ∈ app(C,x) → app(app(g,x), v) ∈ app(C, succ x))) )
 //!     → ∀n. (n ∈ ω → natrec(c,g,n) ∈ app(C,n))
 //! ```
+//!
+//! The step premise is **curried**, one binder and one antecedent at a time,
+//! rather than stated over a conjunction. That is not a matter of taste: it is
+//! the shape a checker's scope stack produces — open a binder, assume its
+//! typing, apply, discharge — so a conjunctive spelling would make every caller
+//! begin by taking apart what it had just built.
 //!
 //! `C`, `c` and `g` are **terms the caller supplies** and nothing is assumed
 //! about any of them: `app(C,·)` is a term whatever `C` is, exactly as
@@ -95,13 +101,16 @@ pub fn natrec_mem(env: &mut Env, nat: &Nat, cfam: &Term, c: &Term, g: &Term) -> 
     let base_f = Formula::mem(c.clone(), fibre(zero.clone()));
     let step_f = Formula::forall(
         x,
-        Formula::forall(
-            v,
-            Formula::imp(
-                Formula::and(nat.in_omega(tx.clone()), Formula::mem(tv.clone(), fibre(tx.clone()))),
-                Formula::mem(
-                    nat.apply(nat.apply(g.clone(), tx.clone()), tv.clone()),
-                    fibre(nat.succ_of(tx.clone())),
+        Formula::imp(
+            nat.in_omega(tx.clone()),
+            Formula::forall(
+                v,
+                Formula::imp(
+                    Formula::mem(tv.clone(), fibre(tx.clone())),
+                    Formula::mem(
+                        nat.apply(nat.apply(g.clone(), tx.clone()), tv.clone()),
+                        fibre(nat.succ_of(tx.clone())),
+                    ),
                 ),
             ),
         ),
@@ -123,8 +132,8 @@ pub fn natrec_mem(env: &mut Env, nat: &Nat, cfam: &Term, c: &Term, g: &Term) -> 
         let rec_x = nat.natrec_of(c.clone(), g.clone(), tx.clone());
         // The step premise at `v := natrec(c,g,x)`, discharged with the two
         // facts the induction hands in.
-        let at = inst_all(&step_h, &[tx.clone(), rec_x])?;
-        let applied = prim::mp(&at, &and_intro(x_om, phi_x))?;
+        let at = prim::mp(&inst_all(&step_h, std::slice::from_ref(&tx))?, x_om)?;
+        let applied = prim::mp(&inst_all(&at, std::slice::from_ref(&rec_x))?, phi_x)?;
         // …and moved onto the recursor by the ι rule at a successor, whose own
         // side condition is the `x ∈ ω` in hand.
         let rule = inst_all(&nat.iota_succ, &[c.clone(), g.clone(), tx.clone()])?;

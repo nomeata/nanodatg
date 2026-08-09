@@ -160,6 +160,14 @@ impl Direct {
 /// decline with a reason and not a wrong theorem.
 pub const ACC_INTRO: &str = "acc: Acc.intro's step hypothesis is not transported to preds_in";
 
+/// A declaration named `Nat` whose constructors are not Lean's two.
+///
+/// Reached when the name and the arity disagree — a `zero` that takes a field,
+/// a `succ` that takes none, or a constructor called neither. It is a decline
+/// with a reason and never a wrong theorem: the alternative is handing `⊢ 0 ∈ ω`
+/// to something that is not zero.
+pub const NAT_CTOR: &str = "nat: a constructor is not Nat.zero at arity 0 or Nat.succ at arity 1";
+
 /// Which direct clause a declaration takes, if any.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Clause {
@@ -182,6 +190,30 @@ pub enum Clause {
     /// mint site at all — the walk expresses depth-1 telescopes and declines
     /// the rest as `Gap::IndSpec` with the step that refused them.)*
     Acc,
+    /// `Nat : Type 0`, with `Nat.zero` and `Nat.succ`.
+    ///
+    /// **The third row, and the first that is not `Prop`-valued.** Everything
+    /// above denotes a subset of `1`, so its former's bottom is a conditional
+    /// singleton and each of its constructors' is `•`; `⟦Nat⟧ = ω` is neither,
+    /// and both bottoms below therefore grew a second route.
+    ///
+    /// It is not a fourth row of the retired closed-form table either, and the
+    /// standing rule this module states is not violated by it. That rule is
+    /// against a *collapse that happens to be convenient* — a declaration the
+    /// general clause already covers, hardcoded because a closed form was
+    /// noticed. The general clause covers `Nat` perfectly well and produces a
+    /// **W-type carrier**; what it cannot produce is a carrier a *binary
+    /// numeral* is a term of, and that is the whole reason this row exists.
+    /// `⟦natLit n⟧` is `num(n)` — 66 nodes at `2⁶⁴` against 2⁶⁴ of anything —
+    /// and `num` is built from `double`/`double1` on `ω`, which are symbols
+    /// no W-type has. So the row is `Acc`'s kind: a construction the general
+    /// route does not have and cannot be made to reach.
+    ///
+    /// The cost of *not* taking it was measured before it was taken: with the
+    /// literal guard lifted and the general carrier kept, `init-prelude`
+    /// expanding one 55296-deep successor tower peaked at 166 MB and produced
+    /// no verdict in 600 s (`NAT-REPRESENTATION.md` §1.3.2).
+    Nat,
 }
 
 impl Clause {
@@ -195,6 +227,8 @@ impl Clause {
             // `Acc.intro` is the one constructor — the same three numbers as
             // `Eq`, at a different declaration.
             Clause::Acc => (2, 1, 1),
+            // No parameters, no indices, `zero` and `succ`.
+            Clause::Nat => (0, 0, 2),
         }
     }
 }
@@ -209,6 +243,7 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
     match &*s {
         "Eq" => Some(Clause::Eq),
         "Acc" => Some(Clause::Acc),
+        "Nat" => Some(Clause::Nat),
         _ => None,
     }
 }
@@ -262,6 +297,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
         let codomain = crate::zoneb::peel(cty, cdepth).ok_or_else(|| bad("ctor arity"))?;
         let site = CtorSite {
             ind: *name,
+            ctor: *cname,
             inst: inst.to_vec(),
             clause: cl,
             codomain,
@@ -300,6 +336,36 @@ fn former_bottom(
     let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     let Some((xs, _)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+
+    // **`⟦Nat⟧ = ω`, and its typing is not a conditional singleton's.** Every
+    // other row reaches `tower.cond_in_u0` below, because every other row
+    // denotes a subset of `1`. This one denotes the carrier itself and the
+    // membership is already a closed theorem of the apparatus — so the route
+    // is not "the same derivation at a different `φ`", it is a different
+    // derivation, and it returns before the `[φ]` machinery is touched.
+    //
+    // The level is **read off the export** and required to be `1`, exactly as
+    // the general route reads it: `Nat : Type 0` is `Sort 1`, and a
+    // declaration named `Nat` that claims any other resultant sort is not the
+    // one `ω` models and is declined by height rather than given `ω` anyway.
+    if cl == Clause::Nat {
+        if level != 1 {
+            return gap(Gap::IndUniverseHeight(*name, level))
+        }
+        let Some(nc) = ip.nat_clause() else { return gap(Gap::IndApparatus) };
+        let term = nc.nat.omega();
+        let mem = nc.nat.omega_mem().clone();
+        // `⊢ ω ∈ U₁` **is** `⊢ ω ∈ ⟦Sort 1⟧` — the same term, not one that
+        // prints the same — because the apparatus was built over this
+        // `Interp`'s own tower. If it were not, this comparison is what would
+        // fail, and that is why it is a comparison and not an assumption.
+        return if *mem.concl() == Formula::mem(term.clone(), ip.sort(1)) {
+            Typing { ty, tm: Some(term), ev: Ev::Proved(mem) }
+        } else {
+            gap(Gap::IndSpec(*name, "denotation typing"))
+        }
+    }
+
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
     let tower = ip.prelude.tower.clone();
 
@@ -331,6 +397,9 @@ fn former_bottom(
             };
             (t, phi, chi)
         }
+        // Returned above: `ω` is not a conditional singleton and this match is
+        // only about the rows that are.
+        Clause::Nat => return gap(Gap::IndSpec(*name, "nat: reached the conditional-singleton route")),
     };
 
     // `⊢ term ∈ U₀`, then raised to the declaration's own level. `[φ] ∈ U₀` is a
@@ -388,6 +457,7 @@ pub(crate) fn eq_bottom(
 ) -> Typing {
     let site = CtorSite {
         ind: Name::simple("Eq"),
+        ctor: Name::str(&Name::simple("Eq"), "refl"),
         inst,
         clause: Clause::Eq,
         codomain: *codomain,
@@ -400,6 +470,13 @@ pub(crate) fn eq_bottom(
 /// read off its Lean type.
 struct CtorSite {
     ind: Name,
+    /// The **constructor's** own name. `Eq` and `Acc` have one constructor
+    /// each and never read it; `Nat` has two whose bottoms are different terms
+    /// — `0` and `succ(x)` — and picking between them by position in the
+    /// export's list would hand `⟦Nat.zero⟧ = 0` to whichever constructor
+    /// happened to be listed first. The arity check below is the derivation
+    /// that confirms the name.
+    ctor: Name,
     inst: Vec<u32>,
     clause: Clause,
     codomain: E,
@@ -416,7 +493,7 @@ struct CtorSite {
 /// *inferred* — not assumed to be the binders in order — so the membership is
 /// established about the set the export says the constructor lands in.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { ind, inst, clause, codomain, eq } = site;
+    let CtorSite { ind, ctor, inst, clause, codomain, eq } = site;
     let ty = *codomain;
     let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
     // The codomain must be this declaration, applied to something.
@@ -444,11 +521,15 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // the match — the same ordering [`crate::zoneb`]'s bottoms use.
     let step_hyp = match clause {
         Clause::Acc => c.binder(0).map(|(_, m)| m),
-        Clause::Eq => None,
+        Clause::Eq | Clause::Nat => None,
     };
+    // **`Nat.succ`'s only binder is its field**, and the bottom needs the
+    // *term* as well as the typing: `⟦Nat.succ x⟧` is `succ(⟦x⟧)`, not `•`.
+    // `Nat.zero` has no binder and this is `None`, which is the arity check
+    // that tells the two constructors apart.
+    let field = if *clause == Clause::Nat { c.binder(0) } else { None };
     let Some(store_ty) = c.stored_term(ind, inst) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-    let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
     let point = ip.point();
 
     // `⟦T⟧` applied to the codomain's own arguments, beta-reduced to the set the
@@ -467,7 +548,12 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // then records it against the declaration's own key.
     let undecided = |g: Gap| Typing { ty, tm: Some(point.clone()), ev: Ev::missing(g) };
 
-    // `⊢ • ∈ carrier`, per clause.
+    // **What the constructor denotes.** `•` for the two `Prop` rows, whose
+    // declarations are subsets of `1`; `Nat`'s two constructors denote `0` and
+    // `succ(⟦x⟧)`, which is the whole difference between this row and those.
+    let mut value = point.clone();
+
+    // `⊢ value ∈ carrier`, per clause.
     let mem = match clause {
         // `Eq.refl a : Eq α a a` — reflexivity at the *second* codomain
         // argument. If the export's codomain were `Eq α a b` this concludes a
@@ -480,6 +566,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         // walk **inferred**, so a proof about some other pair is refused here
         // rather than believed.
         Clause::Eq => {
+            let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
             let (Some(l), Some(r)) = (arg_tms.get(1), arg_tms.get(2)) else {
                 return gap(Gap::IndSpec(*ind, "refl instance"))
             };
@@ -524,8 +611,47 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
                 None => return undecided(Gap::IndSpec(*ind, ACC_INTRO)),
             }
         }
+        // `Nat.zero : Nat` and `Nat.succ (n : Nat) : Nat` — `0` and `succ(⟦n⟧)`
+        // in `ω`, with the apparatus's own two closed theorems.
+        //
+        // **Keyed by name and checked by arity, and both are needed.** The name
+        // alone would give `⟦Nat.zero⟧ = 0` to a nullary constructor called
+        // `zero` of a two-nullary-constructor declaration named `Nat`, which is
+        // `Bool` and is not this type; the arity alone would give it to
+        // whichever constructor the export happened to list without a field.
+        // Together they say: the constructor called `zero` takes no field and
+        // the one called `succ` takes exactly one, of the type the nest already
+        // typed as `⟦x⟧ ∈ ω`.
+        Clause::Nat => {
+            let Some(nc) = ip.nat_clause() else { return gap(Gap::IndApparatus) };
+            let nat_n = Name::simple("Nat");
+            if !args.is_empty() {
+                return gap(Gap::IndSpec(*ind, "nat: the carrier takes no arguments"))
+            }
+            match (&field, *ctor == Name::str(&nat_n, "zero"), *ctor == Name::str(&nat_n, "succ")) {
+                (None, true, _) => {
+                    value = nc.nat.zero();
+                    nc.nat.zero_mem().clone()
+                }
+                (Some((x, x_mem)), _, true) => {
+                    // **Through `Interp::mk`, not `Nat::succ_of`.** The term
+                    // mentions the binder, and `Interp::skeleton` — which the
+                    // λ clause one level up runs to abstract it — answers
+                    // `None` on any subterm mentioning the binder that was not
+                    // recorded. A `succ(x)` built directly by `derived` is such
+                    // a subterm, and the whole declaration then declines with
+                    // `Gap::Skeleton`, which is what it did.
+                    value = ip.mk(nc.nat.core().succ, vec![x.clone()]);
+                    match nc.nat.succ_mem_at(x_mem) {
+                        Ok(t) => t,
+                        Err(_) => return gap(Gap::IndSpec(*ind, NAT_CTOR)),
+                    }
+                }
+                _ => return gap(Gap::IndSpec(*ind, NAT_CTOR)),
+            }
+        }
     };
-    if *mem.concl() != Formula::mem(point.clone(), carrier) {
+    if *mem.concl() != Formula::mem(value.clone(), carrier) {
         return gap(Gap::IndSpec(*ind, "ctor is not about its own codomain"))
     }
     // …and back onto the applied spine, which is what the Lean codomain
@@ -535,7 +661,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         None => return gap(Gap::ConvCompose("direct-spine-symm")),
     };
     match ip.retarget_set(&mem, &back) {
-        Some(t) => Typing { ty, tm: Some(point), ev: Ev::Proved(t) },
+        Some(t) => Typing { ty, tm: Some(value), ev: Ev::Proved(t) },
         None => gap(Gap::ConvCompose("direct-codomain")),
     }
 }

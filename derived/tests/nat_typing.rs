@@ -32,13 +32,16 @@ fn premises(env: &mut Env, nat: &Nat, cfam: &Term, c: &Term, g: &Term) -> Formul
     let base = Formula::mem(c.clone(), fibre(nat.zero()));
     let step = Formula::forall(
         x,
-        Formula::forall(
-            v,
-            Formula::imp(
-                Formula::and(nat.in_omega(tx.clone()), Formula::mem(tv.clone(), fibre(tx.clone()))),
-                Formula::mem(
-                    nat.apply(nat.apply(g.clone(), tx.clone()), tv),
-                    fibre(nat.succ_of(tx)),
+        Formula::imp(
+            nat.in_omega(tx.clone()),
+            Formula::forall(
+                v,
+                Formula::imp(
+                    Formula::mem(tv.clone(), fibre(tx.clone())),
+                    Formula::mem(
+                        nat.apply(nat.apply(g.clone(), tx.clone()), tv),
+                        fibre(nat.succ_of(tx)),
+                    ),
                 ),
             ),
         ),

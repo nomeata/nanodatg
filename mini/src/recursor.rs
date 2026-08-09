@@ -168,6 +168,15 @@ pub(crate) fn ensure(
         Some(Clause::Acc) => {
             return crate::rec_acc::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
         }
+        // **`Nat.rec` is [`crate::rec_nat`].** Named here for the reason `Acc`
+        // is: every test below is a *store read* on a table `Nat` is in none
+        // of — the declaration takes [`crate::direct`]'s clause, so it has no
+        // `ClassS` and no erased W-skeleton — and the fall-through is
+        // `crate::rec_dep`, which would report that a family it never
+        // translated has no carrier.
+        Some(Clause::Nat) => {
+            return crate::rec_nat::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
+        }
         None => {}
     }
     // A class-(S) declaration is the one the *carrier* route already

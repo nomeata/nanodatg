@@ -145,6 +145,13 @@ pub struct Interp {
     pub(crate) quotient: Option<Rc<crate::quot_classes::QuotClause>>,
     /// Why it could not be built, if it could not.
     pub(crate) quotient_failed: bool,
+    /// The `Nat` clause's apparatus — `ω`, its recursor and its arithmetic —
+    /// built on **its own** first use. Two of the ninety-one tutorial exports
+    /// mention `Nat`; the other eighty-nine must not pay for the whole of
+    /// `derived/src/nat/`. See [`crate::nat_clause`].
+    pub(crate) nat: Option<Rc<crate::nat_clause::NatClause>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) nat_failed: bool,
     /// The `Acc` clause's apparatus, built on **its own** first use.
     ///
     /// Separate from [`Interp::direct`] rather than a field of it: `Eq` occurs
@@ -1436,6 +1443,8 @@ impl Interp {
             prop_sub: None,
             dprod_fs: HashMap::new(),
             direct: None,
+            nat: None,
+            nat_failed: false,
             direct_failed: false,
             acc: None,
             acc_failed: false,
