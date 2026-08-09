@@ -35,6 +35,12 @@
 //! `ω` — hardcoding it as the interpretation of some declaration — is the
 //! checker's business, and no theorem below changes if it does something else.
 //!
+//! It does have to hand its **own tower** in, though. [`Nat::new`] mints one,
+//! which is right for a test and wrong for a checker: a second
+//! [`Tower`](crate::tower::Tower) is a second `1`, `•`, `app`, `∅`, pairing and
+//! `ω`, and `⊢ ω ∈ U₁` would then be about a `U₁` no interpretation mentions.
+//! [`Nat::over`] takes the caller's.
+//!
 //! # Why the recursor is built by iteration on a triple
 //!
 //! [`crate::recursion::recursion`] already gives recursion along `ω`, but its
@@ -62,6 +68,8 @@
 //! here, because they are otherwise `⋃⋂p` and `app({p}, ⋃⋂p)` — correct, but
 //! terms that would multiply the size of every state below.
 
+use std::rc::Rc;
+
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::discharge::{assuming, discharge};
@@ -88,7 +96,12 @@ pub struct Nat {
     /// Pairing, `∅`, `app`, `ω`, `succ` and the Peano properties.
     pub rec: Rec,
     /// The universe tower, so that `⊢ ω ∈ U₁` is about *this* `ω`.
-    pub tower: Tower,
+    ///
+    /// Shared rather than owned: see [`Nat::over`]. A caller that already has a
+    /// tower — every checker does — must hand it in, or `1`, `•`, `app`, `∅`,
+    /// the pairing and `ω` are all minted a *second* time and no theorem about
+    /// one says anything about the other.
+    pub tower: Rc<Tower>,
     /// Rung 1, `U₁`.
     pub u1: Rung,
     /// `π₁`/`π₂` as term-formers.
@@ -179,6 +192,25 @@ impl Nat {
     /// Build the whole apparatus, from the axioms up.
     pub fn new(env: &mut Env) -> DResult<Nat> {
         let tower = imported("crate::tower::Tower::new", Tower::new(env))?;
+        Nat::over(env, Rc::new(tower))
+    }
+
+    /// The same apparatus **over a tower the caller already has**.
+    ///
+    /// [`Nat::new`] mints its own, which is right for a test and wrong for
+    /// anything else: `Tower::new` is a fresh chain of definitional extensions,
+    /// so a second one is a second `1`, a second `•`, a second `app`, a second
+    /// `∅`, a second pairing and a second `ω`. A checker whose interpretation
+    /// store has already committed to a unit set cannot use an `ω` built over a
+    /// different one — the membership `⊢ ω ∈ U₁` would be about a `U₁` no
+    /// interpretation mentions, and `⟦Nat.zero⟧ = 0` about an `∅` nothing else
+    /// names.
+    ///
+    /// This is the hazard [`crate::tower::Tower`]'s own header states, and the
+    /// one `mini/src/acc.rs` pays for deliberately in the one place where two
+    /// symbols provably cannot meet. Here they would meet immediately, so the
+    /// tower is threaded instead.
+    pub fn over(env: &mut Env, tower: Rc<Tower>) -> DResult<Nat> {
         let u1 = imported("crate::tower::Tower::at", tower.at(1))?;
         let ap: Apply = tower.sums.ap.clone();
         let app_pair = imported("crate::ext::app_of_pair", crate::ext::app_of_pair(env, &ap))?;

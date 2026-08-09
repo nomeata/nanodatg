@@ -114,3 +114,34 @@ fn the_iota_rules_the_proof_rests_on_are_not_reflexivity() {
         nat.apply(nat.apply(g.clone(), n.clone()), nat.natrec_of(c, g, n)),
     );
 }
+
+/// **The tower is threaded, and it has to be.** `Nat::over` builds `ω` over the
+/// caller's tower; `Nat::new` mints its own. Two `Nat`s in one `Env` therefore
+/// speak of *different* `ω`s, and this pins both halves — a `over` that quietly
+/// re-minted would pass a test that only checked it built at all.
+#[test]
+fn over_takes_the_callers_tower_and_new_does_not() {
+    use std::rc::Rc;
+    use derived::tower::Tower;
+
+    let mut env = Env::new();
+    let tower = Rc::new(Tower::new(&mut env).expect("a tower"));
+    let shared = Nat::over(&mut env, Rc::clone(&tower)).expect("ω over the caller's tower");
+
+    // The carrier and the rung are the caller's, not copies of them.
+    let u1 = tower.at(1).expect("rung 1");
+    assert_eq!(shared.u1.set, u1.set, "`U₁` is not the caller's");
+    assert_eq!(*shared.omega_mem().concl(), Formula::mem(shared.omega(), u1.set.clone()));
+
+    // A second apparatus over the *same* tower agrees about `ω`, `0` and `succ`
+    // — so `over` is not minting per call either.
+    let again = Nat::over(&mut env, Rc::clone(&tower)).expect("a second one over the same tower");
+    assert_eq!(again.omega(), shared.omega());
+    assert_eq!(again.zero(), shared.zero());
+    assert_eq!(again.succ_of(shared.zero()), shared.succ_of(shared.zero()));
+
+    // …and one built with its own tower does not. This is the hazard.
+    let fresh = Nat::new(&mut env).expect("ω over a fresh tower");
+    assert_ne!(fresh.omega(), shared.omega(), "a fresh tower gave the same ω — the mint is shared");
+    assert_ne!(fresh.zero(), shared.zero(), "a fresh tower gave the same ∅");
+}
