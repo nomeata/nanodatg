@@ -43,6 +43,18 @@
 //! the key is a name the pass is entitled to rewrite. Those sites ask about the
 //! declaration the copy *is a copy of*, and this is how they ask.
 //!
+//! **One caller, and the reason is the built-in list and not luck.** `mini`'s
+//! other name-keyed tables are [`crate::quot::prim_for`]
+//! (`Quot`/`Quot.mk`/`Quot.lift`/`Quot.ind`), [`crate::axiom::clause_for`]
+//! (`Quot.sound`) and [`crate::convert::is_standard_axiom`] (`propext`,
+//! `Classical.choice`, `Quot.sound`), and every one of those names is in
+//! `monomorph`'s carried seed (`MONOMORPH.md` §3) — the quotient recognised
+//! *structurally*, by the export's own record kind, and the three axioms by
+//! name. They cannot acquire a prefix, so they do not need to see through one.
+//! `Eq` and `Nat`, [`crate::direct`]'s other two rows, are carried for the same
+//! reason; `Acc` is not, and that asymmetry is what made the table the one
+//! caller.
+//!
 //! It is **not** a general "real name of" and must not be used to decide
 //! anything two copies of one declaration disagree about. `⟦T.{0}⟧` and
 //! `⟦T.{1}⟧` are unrelated symbols (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.1),

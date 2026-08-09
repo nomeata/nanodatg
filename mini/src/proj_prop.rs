@@ -892,17 +892,25 @@ mod tests {
     /// `Type 0` — so `is_prop` is false — and whose *carrier* is a conditional
     /// singleton in `U₀` all the same.
     ///
-    /// **`PU` must be level-*polymorphic*, and that is the whole of what makes
-    /// the second route reachable.** [`crate::zoneb::provably_nonzero`] reads
-    /// the declaration's own level *expression*, so `Sort u` at a bare `Param`
-    /// is class (S) at every σ, `PU.{1}` included, and the carrier lands in
-    /// `IndApparatus::props` with `ClassS::in_u0` beside it. Written
-    /// monomorphically as `inductive PU : Type 0`, the level is `Succ Zero`,
-    /// the declaration is class (T), its carrier is in `decls` — which the
-    /// second route does not consult — and the projection routes to
-    /// [`crate::proj_data`] at `π₀(⟦x⟧)` instead. That was measured, not
-    /// reasoned: the monomorphic version of this fixture was written first and
-    /// failed, with `field_in_u0` declining and `props` empty.
+    /// **`PU`'s level does not decide this, and it used to.** The route needs
+    /// the field declaration's carrier in `IndApparatus::props` with
+    /// `ClassS::in_u0` beside it — that is, it needs `PU` to be class (S). The
+    /// trichotomy chooses class (S) for a **subsingleton**
+    /// ([`crate::zoneb::subsingleton`]), which one constructor and no fields
+    /// makes `PU` at every σ and in every spelling, so the monomorphic
+    /// `inductive PU : Type 0` reaches this route as surely as `PU.{u}` at
+    /// `u := 1` does. `mini/tests/fixtures/ground_unit_subsingleton.lean` is
+    /// that spelling, kept as a fixture.
+    ///
+    /// It was not always so, and the polymorphic spelling here is the record of
+    /// it: the branch used to be [`crate::zoneb::provably_nonzero`] on the
+    /// declaration's own level *expression*, under which `Sort u` at a bare
+    /// `Param` was class (S) and `Sort 1` was class (T) with its carrier in
+    /// `decls`, which this route does not consult. That was measured, not
+    /// reasoned — the monomorphic version of this fixture was written first and
+    /// failed, with `field_in_u0` declining and `props` empty — and it is the
+    /// same defect `monomorph` hit on four `tutorial/` exports
+    /// (`MONOMORPH.md` §4.3).
     fn unit_field_env() -> Environment {
         let (pu, w) = (nm("PU"), nm("W"));
         let u = nm("u");

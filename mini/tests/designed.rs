@@ -2391,3 +2391,134 @@ fn an_unused_axiom_is_ignored_and_a_used_one_still_declines() {
         "reporting an unused axiom as the reason is the old rule, unnarrowed:\n{out}"
     );
 }
+
+// ────────────────────────────── monomorphization, and what it may rewrite ──
+
+/// **A subsingleton at a ground nonzero sort keeps the class-(S) carrier.**
+///
+/// `ground_unit_subsingleton.lean`. `zoneb::build`'s trichotomy used to ask
+/// `provably_nonzero` on the declaration's own level expression *first*, so
+/// `U1 : Type` — one constructor, no fields — took the class-(T) W branch and
+/// with it lost the `LeProp` that `unit_like` and `proj_prop::field_in_u0`'s
+/// second route consume. Measured against that code this fixture reports
+/// `waiting:unit-like(U1)=1` and `gapped=4`; the branch is `zoneb::subsingleton`
+/// now, which is structural, and it derives.
+///
+/// **The controls are the assertion, not decoration.** `all_derived` is what
+/// says the narrowing held: `EmptyG` (no constructors) and `RecU` (one
+/// recursive field) are subsingletons by Carneiro §2.6.2 reason 2 and must
+/// *not* be preferred to class (T), because `class_s` has no `LeProp` for
+/// either — widen the preference past
+/// [`collapsed_subsingleton`](mini::zoneb::collapsed_subsingleton) and this
+/// file reports `recursor(EmptyG: class (S) eliminator: no constructors)` and
+/// `ind-spec(RecU: class (S): recursive constructor)` before the corpus does.
+/// `Three` and `Pair2` are the other pair: `U1` differs from `Pair2` in its
+/// fields and from `Three` in its constructor count, so neither alone says what
+/// the preference is keyed on.
+#[test]
+fn a_subsingleton_at_a_ground_sort_keeps_the_class_s_carrier() {
+    let out = run("ground_unit_subsingleton.ndjson");
+    all_derived(&out, 10);
+    assert_eq!(
+        row(&out, "untranslated").get("eliminators"),
+        Some(&0),
+        "`EmptyG.rec` is the narrowing's witness: on the class-(S) route it is \
+         `CLASS_S_EMPTY` and there is no eliminator at all:\n{out}"
+    );
+    assert_eq!(
+        row(&out, "convs").get("gapped"),
+        Some(&0),
+        "unit-like η is a *conversion* gap before it is a pair gap, and the four \
+         `convGap:unit-like(U1)` conversions are what `102_unitEta1` reports under \
+         `monomorph`:\n{out}"
+    );
+    // Every one of the five declarations is large-eliminating and Lean agrees;
+    // the trichotomy is downstream of that and this is the oracle for the
+    // half of it that is not being changed.
+    let e = elim(&out);
+    for n in ["U1", "Three", "Pair2", "EmptyG", "RecU", "WG"] {
+        assert_eq!(e.get(n), Some(&(true, true)), "{n}'s eliminator class must agree:\n{out}");
+    }
+
+    // **The second route, at a ground unit.** `field_in_u0_by_carrier.lean`'s
+    // `W.u` with `PU.{1}` replaced by `U1`, which that fixture's header records
+    // as having been "written first and **failed**". `f?(<the point>, ⟦WG⟧)` is
+    // `λ z ∈ ⟦WG⟧. •`; if this reads `f?(⟦WG.{}⟧)` the route stopped firing and
+    // `proj_data` answered with a projection instead.
+    let ls = theorem_lines("ground_unit_subsingleton.ndjson", "WG.u");
+    let defeq = ls
+        .iter()
+        .find(|l| l.starts_with("defeq "))
+        .unwrap_or_else(|| panic!("no `defeq` line for WG.u: {ls:#?}"));
+    let masked: String = {
+        let mut s = String::new();
+        let mut it = defeq.chars().peekable();
+        while let Some(c) = it.next() {
+            s.push(c);
+            if c != 'f' {
+                continue
+            }
+            let mut any = false;
+            while it.peek().is_some_and(char::is_ascii_digit) {
+                it.next();
+                any = true;
+            }
+            if any {
+                s.push('?');
+            }
+        }
+        s
+    };
+    assert_eq!(
+        masked, "defeq ⊢ ⟦WG.u.{}⟧ = f?(⟦Eq.refl.{0}⟧, ⟦WG.{}⟧)",
+        "the projection of a ground unit field must denote the point:\n{out}"
+    );
+}
+
+/// **`monomorph`'s output, end to end** — `mono_prefix.ndjson` is the one
+/// fixture here that is not `lean4export`'s output (`--#monomorph`, see
+/// `scripts/export-fixture.sh`).
+///
+/// It carries the two decisions `MONOMORPH.md` §4.3 found the pass entitled to
+/// rewrite, and measured against the code before the fix it reports all three
+/// of
+///
+/// ```text
+/// waiting:ind-spec(_at.1.0.Acc: recursive argument telescope depth)=1
+/// waiting:ind-spec(_at.1.1.Acc: recursive argument telescope depth)=1
+/// waiting:unit-like(_at.1.1.PU)=1
+/// ```
+///
+/// **Two copies of `Acc`, not one.** `monomorph` emits `_at.1.0.Acc` for the
+/// `Prop` instantiation `accRec` defaults to and `_at.1.1.Acc` for the one
+/// `accIntro` uses at `PU.{1}`, so the fixture has two names that must both
+/// reach `direct::Clause::Acc` and two σ's that must stay distinct. A strip
+/// that returned the wrong copy, or one that collapsed the two, is visible
+/// here and would not be at a single instantiation.
+#[test]
+fn a_monomorphized_export_costs_nothing() {
+    let out = run("mono_prefix.ndjson");
+    all_derived(&out, 5);
+    assert_eq!(
+        row(&out, "untranslated").get("declarations"),
+        Some(&0),
+        "an `Acc` the named clause did not reach is declined by the general walk at \
+         `Acc.intro`'s depth-2 telescope and counted here:\n{out}"
+    );
+    // The prefix is *in* the file — a regenerated fixture that lost the
+    // `--#monomorph` line would derive its five pairs and measure nothing.
+    let e = elim(&out);
+    for n in ["_at.1.0.Acc", "_at.1.1.Acc", "_at.1.1.PU"] {
+        assert_eq!(
+            e.get(n),
+            Some(&(true, true)),
+            "{n} must be in the export under its monomorphized name — regenerate with \
+             `scripts/export-fixture.sh mono_prefix.lean`:\n{out}"
+        );
+    }
+    assert_eq!(
+        row(&out, "convs").get("gapped"),
+        Some(&0),
+        "`_at.1.1.PU`'s η is the conversion half of the second cause:\n{out}"
+    );
+}

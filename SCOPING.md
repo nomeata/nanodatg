@@ -570,10 +570,10 @@ build you were postponing.
 downstream observable instead of by the datum that decides.** Scoping `proj` I
 grouped `And`, `PProd.{0,0}` and `PSigma.{0,0}` as class (S) because all three
 project to `•`. Two of them are class (T). The trichotomy has exactly two
-inputs — `large_eliminating` (the recursor's own level-parameter count) and
-`provably_nonzero` (the declaration's own resultant sort) — and I had the first
-from `elim_audit` and **inferred** the second from the *parameter* sorts printed
-on the blocker's `⟦ty[σ]⟧` line. One decode would have shown
+inputs — `zoneb::subsingleton` (Carneiro's SS condition, computed from the
+declaration) and `provably_nonzero` (the declaration's own resultant sort) — and
+I had the first from `elim_audit` and **inferred** the second from the
+*parameter* sorts printed on the blocker's `⟦ty[σ]⟧` line. One decode would have shown
 `Sort max(max(0+1,u),v)`, with a literal `1` in it, nonzero at every σ.
 
 What makes it worth a paragraph rather than a fix: I had described the mechanism
@@ -813,8 +813,8 @@ Read the lines. All five took under five minutes and each changed a scope.
   `{"str":…}` *or* `{"num":{"i":…}}`, and `rec.levelParams` is
   `[motive, decl…]` with the motive **first**. (2) A census: walk every
   `inductive` record in every export, peel `np + ni` binders, read the
-  resultant sort, and classify (T)/(S)/(P) by `provably_nonzero` then by
-  recursor level count. Run it over `good/` and `bad/` **separately** — mixing
+  resultant sort, and classify (T)/(S)/(P) by the subsingleton condition then
+  by `provably_nonzero`. Run it over `good/` and `bad/` **separately** — mixing
   them is what produced the phantom class-(P) rows above.
 
 ---

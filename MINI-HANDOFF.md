@@ -2369,10 +2369,13 @@ it — `grep -rn … | grep -v /prop`, whole listing, 44 hits read — finds
 
 `derived/src/inductive/family/le_prop.rs:51`. It is exactly the theorem, and
 `mini/src/class_s.rs` **already builds a `LeProp` for every class-(S)
-declaration** (`ClassS::lp`). `PUnit` is class (S) at every `u` — its resultant
-sort is `Sort (Param u)`, so `provably_nonzero` is false and the trichotomy
-sends it there whatever `u` is, which is `SCOPING.md` §1's fifth item read the
-right way round for once.
+declaration** (`ClassS::lp`). `PUnit` is class (S) at every `u`, because it is a
+**subsingleton** — one constructor, no fields — and `zoneb::subsingleton` is
+what the trichotomy asks, which is `SCOPING.md` §1's fifth item read the right
+way round for once. *(This said "its resultant sort is `Sort (Param u)`, so
+`provably_nonzero` is false and the trichotomy sends it there whatever `u` is".
+That was the rule at the time and it was the wrong instrument: `monomorph`
+grounds the sort and the copy stopped being class (S) — `MONOMORPH.md` §4.3.)*
 
 **So the row is `mini/`'s, not `derived/`'s** — the opposite of what §20
 concluded, and the same axis error as item 3 one row over. Two rows filed
@@ -2413,9 +2416,9 @@ construction to Isla that already exists.
 
 **1. The theorem was `LeProp::subsingleton` and mini already held it.**
 §21's correction stands: `mini::class_s` builds a `LeProp` for every class-(S)
-declaration, and `PUnit.{u}` is class (S) at every `u` — its resultant sort is
-`Sort (Param u)`, so `provably_nonzero` reads **false**, and the trichotomy runs
-on the declaration's own level *expression* rather than on the ground σ.
+declaration, and `PUnit.{u}` is class (S) at every `u` — it is a subsingleton,
+which `zoneb::subsingleton` decides from the declaration and not from any level
+at all, ground or symbolic.
 
 **2. The one thing that was not obvious, and it is a general fix rather than a
 case.** `103_unitEta2` landed immediately; `102_unitEta1` did not, and the

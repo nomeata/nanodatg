@@ -470,14 +470,16 @@ split the design has already paid for.
 
 ### 4.2 `provably_nonzero` is the wrong instrument
 
-`provably_nonzero` (`mini/src/zoneb.rs:84`, `checker/src/tg.rs:6255`) answers a
-different question: it fixes the translation branch **per declaration**, on the
-declaration's own level *expression* (params included), because Lean's eliminator
-trichotomy (thesis §2.6.2; LEVEL-POLYMORPHIC-INDUCTIVES.md §2) is per-declaration
-— `PUnit.{u}` has one recursor and must take one branch at every `u`. Applied to
-`Quot.{u}`, whose own resultant level is a bare `Param u`, it answers `false`,
-which would force the `Prop` reading (or a decline) at every instantiation,
-including `Type` ones — exactly wrong.
+`provably_nonzero` (`mini::zoneb`, `checker/src/tg.rs`) answers a different
+question: it is half of the **per-declaration** translation branch, asked on the
+declaration's own level *expression* (params included), because Lean's
+eliminator trichotomy (thesis §2.6.2; LEVEL-POLYMORPHIC-INDUCTIVES.md §2) is
+per-declaration — `PUnit.{u}` has one recursor and must take one branch at every
+`u`. (In `mini` it is the *second* half: `zoneb::subsingleton` is asked first,
+and `provably_nonzero` decides only what a non-subsingleton gets. That does not
+change anything below.) Applied to `Quot.{u}`, whose own resultant level is a
+bare `Param u`, it answers `false`, which would force the `Prop` reading (or a
+decline) at every instantiation, including `Type` ones — exactly wrong.
 
 And the per-declaration rule's *rationale* does not reach `Quot`: `Quot` is not
 an inductive, has no recursor and no trichotomy — `Quot.lift` is large-eliminating

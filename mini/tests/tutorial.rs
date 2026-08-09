@@ -2188,9 +2188,10 @@ fn tutorial_evidence_ledger() {
 /// disagreements. The cases that make it worth running:
 ///
 /// * `PUnit` and `PProd` — *identical* recursor signatures, opposite sides of
-///   the trichotomy. Both are large-eliminating; `provably_nonzero` on the
-///   declaration's own sort is what separates them, and a rule that got the
-///   class from the recursor alone could not tell them apart at all.
+///   the trichotomy. Both are large-eliminating; which *reason* holds is what
+///   separates them (`PUnit` is a subsingleton, `PProd`'s fields are its
+///   parameters), and a rule that got the class from the recursor alone could
+///   not tell them apart at all.
 /// * `Acc` — subsingleton-eliminating only because `intro`'s non-propositional
 ///   field `x : α` **appears in the result index**. The one declaration here
 ///   that exercises the `y ∈ e` side condition.

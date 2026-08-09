@@ -57,22 +57,26 @@ function into a `Prop` is itself a `Prop`, so `⟦Mixed.p⟧` is `•` by proof
 irrelevance whatever the projection clause does. Route 1 is asserted where it
 is load-bearing, at `Mixed.u` — whose rung 0 *is* `Mixed.p`'s field.
 
-# The witness must be level-polymorphic, and that was measured
+# The witness is level-polymorphic because the audit's is, not because it must be
 
-`inductive PU : Type 0 | unit : PU` was written first and **failed**.
-`zoneb::provably_nonzero` reads the declaration's own resultant level
-*expression* and never the σ-substituted numeral
-(`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3), so:
+`inductive PU : Type 0 | unit : PU` was written first and **failed**, and the
+reason is worth keeping because it was a defect and has been fixed.
+`zoneb::build`'s trichotomy used to ask `provably_nonzero` on the declaration's
+own resultant level *expression* first (`LEVEL-POLYMORPHIC-INDUCTIVES.md`
+§3.3), so `Sort u` was class (S) at every σ and lands in
+`IndApparatus::props` with `ClassS::in_u0` beside it — which is exactly what
+route 2 reads — while a ground `Type 0` unit was class (T), landed in
+`IndApparatus::decls`, and its projection routed to `proj_data`.
 
-* `Sort u` is not provably nonzero at *any* σ, so `PU.{u}` is class (S) at
-  every σ including `u := 1`, lands in `IndApparatus::props`, and carries
-  `ClassS::in_u0` — which is exactly what route 2 reads;
-* a ground `Type 0` unit is class (T), lands in `IndApparatus::decls`, which
-  route 2 does not consult, and the projection routes to `proj_data`.
+The branch is `zoneb::subsingleton` now: one constructor and no fields, which
+is true of `PU` in either spelling, so a monomorphic unit reaches route 2 too.
+`ground_unit_subsingleton.lean` is that spelling and is a fixture in its own
+right; the same defect cost four `tutorial/` exports under `monomorph`
+(`MONOMORPH.md` §4.3), which grounds `PU.{u}` into exactly the declaration that
+used to fail here.
 
-That is why the audit's witness is `PUnit.{1}` and why this file declares
-`PU.{u}` and uses it at `u := 1`. A monomorphic unit would make this fixture
-green for the wrong reason — it would be a second `Two`.
+This file keeps `PU.{u}` because the audit's witness is `PUnit.{1}` and this is
+the audit's cell verbatim, not because the polymorphism is load-bearing.
 
 `PUnit` itself is not available: every fixture here is `prelude` and imports
 nothing (`scripts/export-fixture.sh`'s header says why), so `PU.{u}` is

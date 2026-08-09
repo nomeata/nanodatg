@@ -621,7 +621,7 @@ is not merely unproven, it is refuted**, and the same holds of `nanoda`.
 before the panic — 24 % of the original's work, so §4.2's "no check cost for
 mode B can be derived at any scale" reproduces.
 
-### What mode A *does* cost our own checker, and it is not levels
+### What mode A cost our own checker, why it was not levels, and what closed it
 
 `mini` over the 91 `tutorial/` exports, by exit code — `0` accepted and fully
 certified, `1` rejected, `2` declined, `4` accepted with a gap:
@@ -629,39 +629,78 @@ certified, `1` rejected, `2` declined, `4` accepted with a gap:
 | | `0` | `1` | `2` | `4` |
 | --- | ---: | ---: | ---: | ---: |
 | original | 89 | 0 | 2 | 0 |
-| mode A | **85** | 0 | 2 | **4** |
+| mode A, when this was measured | **85** | 0 | 2 | **4** |
+| mode A, today | 89 | 0 | 2 | 0 |
 | mode B | 67 | **20** | 2 | 2 |
+
+The two declines are `031_letTypeDep` and `032_letRed`, which declare a
+non-standard axiom their own declarations use; they are the arena's contract
+(`mini/src/main.rs`'s exit table) and are the same two before and after the
+pass. Nothing in this section is a rejection.
 
 Mode B's twenty rejections are `Unknown constant …rec._elim.N`: mini regenerates
 recursors by name exactly as `nanoda` does, so mode B is a *rejection* for our
 checker today and not only for the oracle.
 
-Mode A's four are `086_projProp3`, `102_unitEta1`, `117_accRecType`,
-`118_accRecReduction`, and **none of them is a level-machinery cost**. Two
-causes, both of them consequences of monomorphization itself and present in mode
-B identically:
+Mode A's four were `086_projProp3`, `102_unitEta1`, `117_accRecType`,
+`118_accRecReduction`, and **none of them was a level-machinery cost**. Two
+causes, both consequences of monomorphizing at all and present in mode B
+identically, and both **a consumer decision keyed on something the pass is
+entitled to rewrite**:
 
-* **The eliminator trichotomy is read off the declaration's own level
-  *expression*, and monomorphization deletes it.** `mini::zoneb::provably_nonzero`
+* **The eliminator trichotomy asked the declaration's own level *expression*
+  first, and monomorphization grounds it.** `mini::zoneb::provably_nonzero`
   answers *false* for `PUnit.{u} : Sort (Param u)` — deliberately, because a
   declaration that is a `Prop` at `u := 0` must take one branch at every `u`
-  (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3) — which routes `PUnit` to class (S)
-  and gives it the `LeProp::subsingleton` that `mini::unit_like` consumes. The
-  monomorphized copy is `_at.1.1.PUnit : Sort 1`, `provably_nonzero` answers
-  *true*, class (S) is never built, and `102_unitEta1` reports
+  (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3) — which routed `PUnit` to class (S)
+  and gave it the `LeProp::subsingleton` that `mini::unit_like` consumes. The
+  monomorphized copy is `_at.1.1.PUnit : Sort 1`, `provably_nonzero` answered
+  *true*, class (S) was never built, and `102_unitEta1` reported
   `library-gap … waiting:unit-like(_at.1.1.PUnit)=1`. `086_projProp3` is the
-  same shape at `proj(_at.2.0.1.PropStructure)`.
-* **`mini::direct::clause_for` is keyed on a bare name** — `Eq`, `Acc`, `Nat`,
-  one comparison, no shape match. `Eq` and `Nat` survive because they are
-  carried built-ins; `Acc` becomes `_at.1.0.Acc`, the clause does not fire, the
-  general walk reaches `Acc.intro`'s depth-2 recursive telescope and declines
-  with `ind-spec(_at.1.0.Acc: recursive argument telescope depth)`. That is
-  `117`/`118`, one untranslated declaration each.
+  same declaration reached through `proj_prop::field_in_u0`'s second route: its
+  `_at.2.0.1.PropStructure` is `Prop`-valued at every σ and never left class
+  (S), but its fields are `PUnit` at `u` and at `v`, and the route reads the
+  *field* declaration's `ClassS::in_u0`.
 
-Both are wiring in `mini/`, neither is a `derived/` debt, and neither is an
-argument for mode B — mode B has both and twenty rejections besides.
-`perf stat -e instructions` over the 91 exports: mini retires **419.80 G** on
-the originals and **385.11 G** on mode A, −8.3 %.
+  **Fixed by asking the question directly.** The W-carrier is a set of pairs, so
+  it is admissible only where the declaration can never be a `Prop`; the
+  class-(S) carrier is a subset of `{•}`, a member of every rung, and is
+  admissible wherever the declaration is a **subsingleton** — whatever its sort
+  (LPI §3.3). So `provably_nonzero` decides nothing about a subsingleton, and
+  the trichotomy now asks `zoneb::subsingleton` (Carneiro §2.6.2's SS
+  condition, structural) first. Where both carriers are admissible the choice is
+  free and `zoneb::collapsed_subsingleton` is the narrowing: class (S) is
+  preferred to class (T) only at the non-indexed, one-constructor,
+  non-recursive shape whose §5.3 carrier `class_s` builds. Without that
+  narrowing the preference costs five *originals* — `Empty` has no class-(S)
+  eliminator and `reduceCtorParam`'s carrier would have to be the `acc`.
+* **`mini::direct::clause_for` was keyed on a bare name** — `Eq`, `Acc`, `Nat`,
+  one comparison, no shape match. `Eq` and `Nat` survive because they are
+  carried built-ins (§3); `Acc` becomes `_at.1.0.Acc`, the clause did not fire,
+  the general walk reached `Acc.intro`'s depth-2 recursive telescope and
+  declined with `ind-spec(_at.1.0.Acc: recursive argument telescope depth)`.
+  That was `117`/`118`, one untranslated declaration each.
+
+  **Fixed by inverting the prefix**, `mini::mono_name::strip`, which is §1.1's
+  scheme read backwards and the identity on everything else. The alternative —
+  adding `Acc` to §3's built-in seed — was rejected: that list is for constants
+  a *kernel* mints by name and cannot be told about a copy, and putting `Acc` in
+  it would make the pass's output depend on which declarations one consumer has
+  a closed form for.
+
+Both were wiring in `mini/`, neither was a `derived/` debt, and neither was an
+argument for mode B — mode B has both and twenty rejections besides. Mode A now
+matches the originals **ledger row for ledger row**, and on mode-A output
+`pairs=147 constEv=147 gapped=0 unsealed=0` where it was `147/143/4/0`. (`pairs`
+is 147 against the originals' 218 because a monomorphized declaration has one σ
+and a polymorphic one takes `DEFAULT_LEVELS = [0,1]`; that is the pass working,
+not a loss.) The two behaviours have fixtures of their own —
+`mini/tests/fixtures/ground_unit_subsingleton.lean` and `mono_prefix.lean`, the
+latter the only fixture in the tree that is `monomorph`'s output rather than
+`lean4export`'s.
+
+`perf stat -e instructions` over the 91 exports, measured before the fix: mini
+retires **419.80 G** on the originals and **385.11 G** on mode A, −8.3 %.
 
 ---
 

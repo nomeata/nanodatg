@@ -2967,19 +2967,22 @@ a recursor naming itself or a mutual sibling at its *own* motive parameter
 inside its own ι rules, which the enclosing σ grounds. **The first leg of the
 trigger is nowhere near firing.**
 
-**The second leg has fired, and it is not about levels — which is why the
-decision stands.** `mini` over the 91 `tutorial/` exports goes from 89 accepted
-and fully certified to 85, with four new gaps (`086_projProp3`, `102_unitEta1`,
-`117_accRecType`, `118_accRecReduction`). Neither cause is level scheduling and
-**both are present in mode B identically**, so neither is an argument for
-switching: `mini::zoneb::provably_nonzero` reads the declaration's *own* level
-expression by design (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3), which
-monomorphization deletes — `_at.1.1.PUnit : Sort 1` stops being class (S) and
-loses the `LeProp::subsingleton` that `unit_like` consumes — and
-`mini::direct::clause_for` is keyed on the bare names `Eq`, `Acc`, `Nat`, of
-which only the first two are carried built-ins, so `_at.1.0.Acc` falls to the
-general walk. Both are wiring in `mini/`; **"mode A costs the checker nothing
-new" was true of the level axis and false of the file as a whole.**
+**The second leg fired, was not about levels, and has been closed.** `mini`
+over the 91 `tutorial/` exports went from 89 accepted and fully certified to 85,
+with four new gaps (`086_projProp3`, `102_unitEta1`, `117_accRecType`,
+`118_accRecReduction`). Neither cause was level scheduling and **both were
+present in mode B identically**, so neither was an argument for switching. Both
+were consumer-side decisions keyed on something `monomorph` is entitled to
+rewrite: `mini::zoneb::build`'s trichotomy asked `provably_nonzero` on the
+declaration's *own* level expression first, which the pass grounds, so
+`_at.1.1.PUnit : Sort 1` stopped being class (S) and lost the
+`LeProp::subsingleton` that `unit_like` consumes; and `mini::direct::clause_for`
+was keyed on the bare names `Eq`, `Acc`, `Nat`, of which only the first two are
+carried built-ins, so `_at.1.0.Acc` fell to the general walk. The trichotomy now
+asks `zoneb::subsingleton`, a structural test, and the clause table asks through
+`mini::mono_name::strip`; mode A is back to **89/2/0/0**, ledger row for ledger
+row identical to the originals, and **mode A costs the checker nothing new on
+either axis.**
 
 **And mode B would not have bought the deletion.** Measured on the same output:
 `init-prelude` under mode B still carries **14 level-carrying declarations**,

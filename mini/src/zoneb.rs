@@ -71,26 +71,40 @@
 //! # The branch decider is the eliminator, and nothing else
 //!
 //! `WIRING-DESIGN.md` §4 and `LEVEL-POLYMORPHIC-INDUCTIVES.md` §2–3: the
-//! translation branch is fixed **per declaration** by Lean's own eliminator
-//! trichotomy, read off the declaration's *own* level expression, never off the
-//! instantiated numeral. [`provably_nonzero`] is that predicate. A declaration
-//! whose resultant sort is not provably nonzero is class (S) or (P) — §5.3's
-//! subsingleton elimination or the truncation clause — and gets a W-type from
-//! nobody, not even at a `Type` instantiation, because a per-instantiation
-//! branch is the design error that note closes.
+//! translation branch is fixed **per declaration**, by Lean's own eliminator
+//! trichotomy, and never by the instantiated numeral — a per-instantiation
+//! branch is the design error that note closes. Two predicates decide it, both
+//! on the declaration's own data:
+//!
+//! * [`subsingleton`] — Carneiro §2.6.2's SS side condition, one constructor
+//!   and every non-recursive field a proposition or a result index. A
+//!   subsingleton's §5.3 carrier is a subset of `{•}`, hence a member of every
+//!   rung, so it is a faithful denotation **whatever the declaration's sort
+//!   is**, and this is the first question [`build`] asks.
+//! * [`provably_nonzero`] — on the declaration's own level *expression*, never
+//!   the numeral. The class-(T) W-carrier is a set of pairs, so it is
+//!   admissible only where the declaration can never be a `Prop`, and this is
+//!   what decides a **non**-subsingleton: nonzero gets the W-type, anything
+//!   else gets the truncation.
+//!
+//! Asking `provably_nonzero` first is what monomorphization broke: it grounds
+//! `Sort u` to `Sort 1` and a copy of `PUnit` stopped being class (S)
+//! (`MONOMORPH.md` §4.3). [`collapsed_subsingleton`] carries the one place
+//! where the order is *not* free, and the measurement that fixed its extent.
 //!
 //! # What this reaches, and what it declines
 //!
 //! Reached by the general walk: a **non-indexed, non-nested, single**
-//! declaration whose resultant sort is provably nonzero, whose constructors
-//! have no function-typed recursive argument, and each of whose non-recursive
-//! field types lands in `U₁` — the level `derived::cumul::sigma_n`'s summand
-//! induction is stated at. The *declaration's own* level is no longer a
-//! constraint: `cumul::DeclUniverse::over_at` places a carrier anywhere in the
-//! tower, so `Type n` is reached for every `n` the cumulativity table covers.
+//! declaration that is not a subsingleton, whose resultant sort is provably
+//! nonzero, whose constructors have no function-typed recursive argument, and
+//! each of whose non-recursive field types lands in `U₁` — the level
+//! `derived::cumul::sigma_n`'s summand induction is stated at. The
+//! *declaration's own* level is no longer a constraint:
+//! `cumul::DeclUniverse::over_at` places a carrier anywhere in the tower, so
+//! `Type n` is reached for every `n` the cumulativity table covers.
 //!
 //! Reached by a named clause: [`crate::direct`]'s three, which are class (S)
-//! and would be declined by [`provably_nonzero`] otherwise.
+//! and which the general walk would decline.
 //!
 //! Everything else is recorded as untranslated, and counted. The population is
 //! not a defensive list: each entry is a shape `derived::inductive::DeclSpec`
@@ -918,6 +932,13 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         // subsingleton carrier at an index, which `class_s::build` does not
         // take. The walk still runs, so the representability answer is not lost
         // to the decline.
+        //
+        // `class_s ||` changes nothing here **today**:
+        // [`collapsed_subsingleton`] requires `ni = 0`, so at an index a
+        // provably-nonzero declaration is class (T) exactly as it was. It is
+        // written the general way round because the *rule* is the one above —
+        // a subsingleton is class (S) — and `class_s` is where the narrowing
+        // lives, not here.
         if class_s || !pnz {
             let (shape, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
             let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
@@ -1098,11 +1119,19 @@ pub fn elim_audit(
 ///
 /// `PUnit.{u} : Sort u` and `PProd.{u,v} : Sort (max (max 1 u) v)` have
 /// *identical* recursor signatures and fall on opposite sides of the
-/// trichotomy. Both are large-eliminating; what separates them is
-/// [`provably_nonzero`] on the declaration's own resultant sort, which sends
-/// `PProd` to class (T) before this question is asked and leaves `PUnit` to
-/// class (S). This function must return `true` for both, and does — by reason
-/// 1 for `PProd` and reason 2 for `PUnit`.
+/// trichotomy. Both are large-eliminating; what separates them is which of the
+/// two reasons holds. `PUnit` is a subsingleton — reason 2 — and [`build`]
+/// sends every subsingleton to class (S). `PProd` is not: its fields are the
+/// parameters `α` and `β`, which are neither propositions nor indices, so only
+/// reason 1 fires and it is class (T). This function must return `true` for
+/// both, and does.
+///
+/// **Whole-declaration LE and the carrier choice are two questions, and this is
+/// only the first.** Nothing routes on this function's answer; [`build`] asks
+/// [`subsingleton`] and [`provably_nonzero`] separately, because their
+/// disjunction cannot say *which* reason held and that is exactly what the
+/// carrier depends on. It is here to be checked against Lean's export
+/// ([`elim_audit`]) and to answer Carneiro's judgement, nothing else.
 ///
 /// **No interpretation is built here.** Every binder is opened
 /// *uninterpreted*, so this is a walk over Lean syntax and inference only; it
@@ -3820,9 +3849,9 @@ mod tests {
 
     fn p(s: &str) -> Level { Level::param(Name::simple(s)) }
 
-    /// **The eliminator trichotomy, at the shapes the corpus actually
-    /// presents.** Each line is a real declaration's resultant sort, and the
-    /// two that matter most are the ones a "is it `Sort 0`?" test gets wrong:
+    /// **[`provably_nonzero`] at the shapes the corpus actually presents.**
+    /// Each line is a real declaration's resultant sort, and the two that
+    /// matter most are the ones a "is it `Sort 0`?" test gets wrong:
     /// `PUnit.{u} : Sort u` is *not* provably nonzero even though `u := 1` is a
     /// `Type`, and `PProd.{u,v} : Sort (max (max 1 u) v)` *is*, because Lean
     /// spells the `1` into the level.
@@ -3830,9 +3859,15 @@ mod tests {
     /// Deciding this per instantiation instead of per declaration is the design
     /// error `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3 closes, and the `PUnit` row
     /// is exactly where it would show up.
+    ///
+    /// **This is not the whole branch.** [`build`] asks [`subsingleton`] first
+    /// and only asks this of a declaration that is not one, so the labels below
+    /// name what a *non*-subsingleton gets: `PUnit` is class (S) because it is a
+    /// subsingleton, not because its level is a bare `Param`, and that is why
+    /// `_at.1.1.PUnit : Sort 1` is class (S) too.
     #[test]
     fn the_branch_is_decided_by_the_declarations_own_level() {
-        // Class (T): a W-type.
+        // Provably nonzero: a non-subsingleton here is class (T), a W-type.
         assert!(provably_nonzero(&Level::zero().succ()), "Bool : Type 0");
         assert!(provably_nonzero(&p("u").succ()), "List at Type u");
         assert!(
@@ -3843,7 +3878,7 @@ mod tests {
             provably_nonzero(&Level::max(p("u").succ(), p("v").succ())),
             "Prod at Type (max u v)"
         );
-        // Class (S) or (P): never a W-type, at any σ.
+        // Not provably nonzero: a non-subsingleton here is class (P).
         assert!(!provably_nonzero(&Level::zero()), "And : Prop");
         assert!(!provably_nonzero(&p("u")), "PUnit at Sort u — a Prop when u is 0");
         assert!(

@@ -87,18 +87,34 @@ which this design adopts as-is):
 
 | class | test on the export | translation |
 | --- | --- | --- |
-| (T) | resultant level **provably nonzero** (`tg.rs::provably_nonzero`, existing) | §5.2: skeleton W + `good` subset (this document §3–4); `good` vacuous iff `numIndices = 0` (existing path) |
-| (S) | resultant level possibly 0 **and** the recursor is large-eliminating — its motive's `Sort` is a fresh universe parameter, visible as the extra entry in the `rec`'s `levelParams` | §5.3: `acc(A_φ, R)` carrier (§6) |
-| (P) | resultant level possibly 0, recursor **not** LE — motive `Sort 0`, no extra level parameter | §5.2's truncation clause: `‖·‖` of the lifted translation — **built**, `family::trunc`, §6.3; **indifferent to `numIndices`**, since seven of the thirteen witnesses have none |
+| (T) | **not a subsingleton**, and resultant level **provably nonzero** (`provably_nonzero`) | §5.2: skeleton W + `good` subset (this document §3–4); `good` vacuous iff `numIndices = 0` (existing path) |
+| (S) | a **subsingleton** — one constructor, every non-recursive field a proposition or a result index (Carneiro §2.6.2 reason 2) | §5.3: `acc(A_φ, R)` carrier (§6) |
+| (P) | not a subsingleton, resultant level possibly 0 | §5.2's truncation clause: `‖·‖` of the lifted translation — **built**, `family::trunc`, §6.3; **indifferent to `numIndices`**, since seven of the thirteen witnesses have none |
 
-The (S)/(P) split is read off the recursor rather than recomputed from Lean's
-subsingleton rules: `071`'s `SortElimProp.rec` has `levelParams=['u']` (LE)
-and `072`'s `SortElimProp2.rec` has `levelParams=[]` (not LE) **[decoded]** —
-the same constructor shape, differing only in that `072`'s index `id Bool b1`
-is not invertible. Recomputing Lean's invertibility analysis to get that
-distinction right would be re-implementing the thing being checked; the
-export states the outcome, and using it can only mis-classify if the export
-lies, which is the standing threat model for every field this project reads.
+**(S) is asked first, and does not consult the level.** The class-(S) carrier is
+a subset of `{•}`, hence a member of every rung, so it denotes a `Type`-valued
+declaration as faithfully as a `Prop`-valued one (LPI §3.3) — `provably_nonzero`
+therefore decides nothing about a subsingleton and only says what a
+non-subsingleton gets. Asking it first is what `monomorph` broke, since it
+grounds `Sort u` to `Sort 1` (`MONOMORPH.md` §4.3). Where both carriers are
+admissible the choice is free and `mini::zoneb::collapsed_subsingleton` is the
+narrowing: the preference for (S) stops at the non-indexed, one-constructor,
+non-recursive shape whose §5.3 carrier `class_s` builds.
+
+This design proposed reading the (S)/(P) split **off the recursor** rather than
+recomputing Lean's subsingleton rules — `071`'s `SortElimProp.rec` has
+`levelParams=['u']` (LE) and `072`'s `SortElimProp2.rec` has `levelParams=[]`
+(not LE) **[decoded]**, the same constructor shape, differing only in that
+`072`'s index `id Bool b1` is not invertible — on the argument that recomputing
+Lean's invertibility analysis would be re-implementing the thing being checked.
+
+**`mini` does not do that, and the reason it does not is worth keeping.**
+Reading the recursor makes the answer depend on whether one was exported at all,
+which is not a property of the type; `mini::zoneb::subsingleton` computes it
+from the declaration and the exported recursor is kept as an **oracle**
+(`zoneb::elim_audit`, cross-checked over the whole corpus by
+`mini/tests/tutorial.rs`). The two agree on all 91 files, `071` and `072`
+included.
 
 ### 2.2 The census — every indexed family in the 91 tutorial files [decoded]
 

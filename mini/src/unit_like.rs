@@ -29,14 +29,22 @@
 //! the second of `ev.rs`'s four `Cause::Library` gaps that was never library
 //! debt.
 //!
-//! # Why a unit-like structure is class (S) at every `σ`
+//! # Why a unit-like structure is class (S) at every `σ`, and under every name
 //!
-//! `PUnit.{u}`'s resultant sort is `Sort (Param u)`, so `provably_nonzero`
-//! answers **false** — it reads the declaration's own level *expression*, not
-//! the ground instantiation (`QUOT-MODEL.md` §4.2, and it is the same
-//! per-declaration rule Lean's eliminator trichotomy runs on). So the
-//! trichotomy sends it down the class-(S) route at `u = 1` exactly as at
-//! `u = 0`, and `LeProp` is available wherever the probe fires.
+//! A unit-like structure is a **subsingleton** — one constructor, and every
+//! field a proposition — so [`crate::zoneb::subsingleton`] answers *true* about
+//! it and the trichotomy sends it down the class-(S) route. That is a
+//! structural fact about the declaration; it does not consult the level and so
+//! is the same answer at `u = 0`, at `u = 1`, and at the monomorphized copy
+//! `_at.1.1.PUnit : Sort 1`. `LeProp` is available wherever the probe fires.
+//!
+//! **That last clause is the one this had to be corrected for.** The branch
+//! used to be `provably_nonzero` on the declaration's own level *expression*,
+//! which answers *false* for `PUnit.{u} : Sort (Param u)` and so gave the right
+//! answer for the wrong reason: `monomorph` grounds the expression, its copy of
+//! `PUnit` at `[1]` answered *true*, took the class-(T) branch, and
+//! `102_unitEta1` reported `waiting:unit-like(_at.1.1.PUnit)` where it had been
+//! certified (`MONOMORPH.md` §4.3).
 //!
 //! # What is general here and what declines
 //!

@@ -117,6 +117,27 @@
 # `MODELGEN_BIN` overrides the binary; the default is `modelgen`'s own
 # `lake build` output, which this script builds if it is not there.
 #
+# # `--#monomorph`, and why one fixture is not `lean4export`'s output
+#
+# A source may carry a line
+#
+#     --#monomorph
+#
+# on which the export is additionally passed through `monomorph`
+# (`MONOMORPH.md`), after the `modelgen` filter and before it is written.
+# `mini/tests/fixtures/mono_prefix.lean` is the only one that does.
+#
+# It is there because the shape it measures **cannot be written in Lean**.
+# `monomorph` names the copy of a declaration at σ by prepending
+# `_at.⟨|σ|⟩.⟨σ₀⟩…` at the root, and a name whose root component is `_at`
+# followed by `Name.num` components is not something a `.lean` source can
+# declare. The alternative — a unit test that hands `direct::clause_for` a
+# hand-built `_at.1.0.Acc` — measures the table and not the pipeline, and the
+# pipeline is what `MONOMORPH.md` §4.3 found the defect in.
+#
+# `MONOMORPH_BIN` overrides the binary, which is built beside `modelgen` from
+# the same package.
+#
 # Set `LEAN4EXPORT_DIR` to reuse an existing clone; the default is a scratch
 # checkout under `target/`, which is gitignored.
 set -euo pipefail
@@ -142,6 +163,7 @@ printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
 ( cd "$EXPORT_DIR" && lake build >&2 )
 BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
 MODELGEN_BIN="${MODELGEN_BIN:-$ROOT/modelgen/.lake/build/bin/modelgen}"
+MONOMORPH_BIN="${MONOMORPH_BIN:-$ROOT/modelgen/.lake/build/bin/monomorph}"
 if ((FILTER)); then
   if [[ ! -x "$MODELGEN_BIN" ]]; then
     echo "building modelgen" >&2
@@ -187,5 +209,21 @@ for src in "${SOURCES[@]}"; do
     "$MODELGEN_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
     mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
   fi
-  echo "$base.ndjson: $(wc -l < "$OUT/$base.ndjson") lines$( ((FILTER)) || echo ' (unfiltered)')" >&2
+  # `--#monomorph`: universe levels removed, one copy per instantiation, every
+  # name carrying the root prefix. After the `modelgen` filter, because that is
+  # the order the pipeline runs them in and `MONOMORPH.md` §1.1's prefix is
+  # shape-free precisely so it composes onto `T._model.*`. Same move-into-place
+  # discipline as above.
+  MONO=0
+  grep -q '^--#monomorph *$' "$src" && MONO=1
+  if ((MONO)); then
+    if [[ ! -x "$MONOMORPH_BIN" ]]; then
+      echo "building monomorph" >&2
+      ( cd "$ROOT/modelgen" && lake build monomorph >&2 )
+    fi
+    [[ -x "$MONOMORPH_BIN" ]] || { echo "no monomorph at $MONOMORPH_BIN" >&2; exit 2; }
+    "$MONOMORPH_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.mono.ndjson"
+    mv "$WORK/$base.mono.ndjson" "$OUT/$base.ndjson"
+  fi
+  echo "$base.ndjson: $(wc -l < "$OUT/$base.ndjson") lines$( ((FILTER)) || echo ' (unfiltered)')$( ((MONO)) && echo ' (monomorphized)')" >&2
 done
