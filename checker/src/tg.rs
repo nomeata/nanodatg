@@ -1474,7 +1474,9 @@ struct PropSite {
 //
 // Only the *signature* and what is keyed on it moves. `parts`, `consts`,
 // `exprs`, `locals` and the rest stay per declaration: they are keyed by Lean
-// nodes whose identity is per declaration, and they are not what makes
+// nodes whose identity is per declaration (`locals` by the level-and-type key
+// [`LocalKey`], kept per declaration to match the checker's own `TcCache`
+// lifetime), and they are not what makes
 // skeletons differ — everything in a body that does not mention the binder is
 // abstracted into a hole, so a skeleton contains only `app`/`proj`/`Π`
 // structure, the canonical variables, and the graph symbols of nested lambdas.
@@ -2282,7 +2284,39 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Leibniz holes, and a collision between such a hole and a Lean local would
     /// substitute at the wrong occurrences — a genuine soundness bug, not just a
     /// wrong answer.
-    locals: HashMap<u64, kernel::FreeVar>,
+    ///
+    /// **The key is [`LocalKey`]: a de Bruijn-level local is identified by its
+    /// level *and* its interpreted declared type; a `mk_unique` local by its id
+    /// alone.** Level and type identify the variable — two locals agreeing in
+    /// both have no attribute left to differ in — and the level alone does not:
+    /// [`TcCtx::replace_dbj_level`] retires a level when its binder closes, so
+    /// one level is reused across a declaration by binders with unrelated
+    /// types. Under a level-only key those all mapped to a single kernel
+    /// variable, and a memoised theorem mentioning that variable (its typing
+    /// hypothesis `v ∈ ⟦A⟧` above all) would be a statement about *some earlier
+    /// binder's* type at every later reuse. With the type in the key, a hit
+    /// returns a variable whose every memoised statement was made at exactly
+    /// this level and this type, so the statement is the one the caller is
+    /// asking about — that identity, not hope, is what makes the memoised
+    /// theorems valid.
+    ///
+    /// Why the *interpreted* type and not the Lean node: every memoised theorem
+    /// is a kernel statement, so kernel-term identity of the type is exactly
+    /// the grain at which two locals' statements coincide. Two Lean spellings
+    /// with one interpretation generate literally identical statements and may
+    /// share a variable; splitting them would only lose hits. The converse
+    /// direction is safe because the interpretation memo (`exprs`) makes
+    /// `⟦·⟧` a function, and `Env`'s counters never reissue a symbol, so equal
+    /// terms cannot stand for different types. A type that itself mentions
+    /// locals makes the key recursive — `⟦A⟧` contains the *variables* of the
+    /// outer locals — which is deliberate: level `n` at type `P x` shares
+    /// exactly when `x` resolved to the same variable first, and that is
+    /// precisely when the typing hypotheses agree verbatim.
+    ///
+    /// This map lives and dies with the backend, i.e. per declaration — the
+    /// same lifetime as the checker's `TcCache` (`infer`/`whnf`/`eq`), which is
+    /// the set of caches the (level, type) discipline exists to serve.
+    locals: HashMap<LocalKey, kernel::FreeVar>,
     params: HashMap<NamePtr<'t>, Term>,
     idxs: HashMap<u64, Term>,
 
@@ -4115,7 +4149,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // it up front so the interpretation of the body puts that variable in
         // exactly the bound occurrences.
         let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-        let key = local_key(ctx, local)?;
+        let key = unique_key(ctx, local)?;
         let v = self.env_mut().fresh_var();
         self.locals.insert(key, v);
         let body_open = ctx.inst(body, &[local]);
@@ -4558,7 +4592,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-        let key = local_key(ctx, local)?;
+        let key = unique_key(ctx, local)?;
         let v = self.env_mut().fresh_var();
         self.locals.insert(key, v);
         let body_open = ctx.inst(body, &[local]);
@@ -5638,7 +5672,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             doms.push(self.interp(ctx, binder_type));
             let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-            let lkey = local_key(ctx, local)?;
+            let lkey = unique_key(ctx, local)?;
             let v = match cached.as_ref().and_then(|c| c.vars.get(i)) {
                 Some(v) => *v,
                 None => self.env_mut().fresh_var(),
@@ -6495,7 +6529,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             param_doms.push(self.interp(ctx, binder_type));
             let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-            let lkey = local_key(ctx, local).ok_or(Decline::Shape)?;
+            let lkey = unique_key(ctx, local).ok_or(Decline::Shape)?;
             let v = match reuse {
                 Some(g) => *g.param_vars.get(i).ok_or(Decline::Shape)?,
                 None => self.env_mut().fresh_var(),
@@ -6625,7 +6659,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 order.push(slot);
                 field_vars.push(v);
                 let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-                let lkey = local_key(ctx, local).ok_or(Decline::Shape)?;
+                let lkey = unique_key(ctx, local).ok_or(Decline::Shape)?;
                 self.locals.insert(lkey, v);
                 cur = ctx.inst(body, &[local]);
             }
@@ -7707,17 +7741,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     }
                 }
             }
-            Expr::Local { id, .. } => {
+            Expr::Local { id, binder_type, .. } => {
                 // Lean locals become kernel *free* variables. This is what makes
                 // the eventual certificate a closed statement: generalising over
                 // them is `lam_cong`/`pi_cong`'s job, and free variables are
                 // exactly what the kernel's `gen` rule can abstract.
-                // `FVarId` is either a de Bruijn *level* (used while descending
-                // under binders) or a globally unique id; keep the two in
-                // separate halves of the key space so they cannot alias.
+                //
+                // A de Bruijn-level local is keyed by its level **and its
+                // interpreted declared type** — levels are reused across a
+                // declaration's telescopes, and level + type is what identifies
+                // the variable (see [`LocalKey`]). Interpreting the type here
+                // terminates because it is a strict subterm, and it is the same
+                // memoised `⟦A⟧` the typing hypothesis `v ∈ ⟦A⟧` is stated at,
+                // so the key and the hypotheses about the variable can never
+                // disagree. A unique-id local is keyed by its id alone.
                 let key = match id {
-                    crate::expr::FVarId::DbjLevel(n) => n as u64,
-                    crate::expr::FVarId::Unique(n) => (n as u64) | (1 << 32),
+                    crate::expr::FVarId::DbjLevel(n) => {
+                        let ty = self.interp(ctx, binder_type);
+                        LocalKey::Level(n, ty)
+                    }
+                    crate::expr::FVarId::Unique(n) => LocalKey::Unique(n),
                 };
                 let v = match self.locals.get(&key) {
                     Some(v) => *v,
@@ -13437,11 +13480,35 @@ fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<T
     Some(retarget_cond(parts, &c, want_l, want_r)?.thm)
 }
 
-/// The `locals` key for a Lean free variable expression.
-fn local_key<'t, 'p>(ctx: &TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<u64> {
+/// The key of [`TgBackend::locals`] — which Lean local a kernel free variable
+/// stands for. See the field's doc for the full argument; in brief:
+///
+/// * A **`Level`** local is a checker-telescope binder. Its level is a stack
+///   position that [`TcCtx::replace_dbj_level`] hands back on close, so the
+///   level alone recurs at unrelated binders and the interpreted declared type
+///   completes the identity: same level and type — the same variable, and
+///   nothing left to differ in; different type — a different variable, so no
+///   memoised statement can cross.
+/// * A **`Unique`** local's id is never reused within a `TcCtx`
+///   (`util.rs`'s monotonic counter), so the id alone already identifies the
+///   binder opening it stands for. Its type is deliberately *not* part of the
+///   key: the recursive-field reservations ([`TgBackend::walk_spec`]) must
+///   reserve a variable for a binder whose type is never interpreted at all.
+///
+/// The two variants are distinct constructors, so the halves of the key space
+/// cannot alias — the property the old `(1 << 32)` bit encoded.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum LocalKey {
+    Level(u16, Term),
+    Unique(u32),
+}
+
+/// The [`TgBackend::locals`] key for a **`mk_unique`** local. `None` on
+/// anything else — in particular on a de Bruijn-level local, whose key needs
+/// the interpreted type and is built where the interpretation is at hand.
+fn unique_key<'t, 'p>(ctx: &TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<LocalKey> {
     match ctx.read_expr(e) {
-        Expr::Local { id: crate::expr::FVarId::DbjLevel(n), .. } => Some(n as u64),
-        Expr::Local { id: crate::expr::FVarId::Unique(n), .. } => Some((n as u64) | (1 << 32)),
+        Expr::Local { id: crate::expr::FVarId::Unique(n), .. } => Some(LocalKey::Unique(n)),
         _ => None,
     }
 }
@@ -13523,8 +13590,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         seen.push(e);
         match ctx.read_expr(e) {
-            Expr::Local { binder_type, .. } => {
-                if let Some(k) = local_key(ctx, e) {
+            Expr::Local { binder_type, id, .. } => {
+                // A level local's key contains its interpreted type. Read that
+                // from the interpretation memo rather than interpreting here:
+                // any local that *has* a variable had its declared type
+                // interpreted when the variable was minted (the `Local` arm
+                // does so for the key), so an `exprs` miss means there is no
+                // variable to collect — and this walk stays a read, minting
+                // nothing.
+                let key = match id {
+                    crate::expr::FVarId::Unique(n) => Some(LocalKey::Unique(n)),
+                    crate::expr::FVarId::DbjLevel(n) =>
+                        self.exprs.get(&binder_type).map(|ty| LocalKey::Level(n, ty.clone())),
+                };
+                if let Some(k) = key {
                     if let Some(v) = self.locals.get(&k) {
                         out.push(*v);
                     }
@@ -15952,6 +16031,88 @@ mod tests {
 
     /// A fresh constant, usable to instantiate a quantifier at.
     fn constant(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
+
+    /// **A de Bruijn-level local is one kernel variable per (level, declared
+    /// type) — the level alone does not identify it, and neither does the type
+    /// alone.** This is [`LocalKey`]'s contract, pinned directly.
+    ///
+    /// An *invariant* fixture, not a regression: no corpus declaration is known
+    /// to miscompile under the level-only key, because two same-level locals
+    /// are never simultaneously in scope ([`TcCtx::replace_dbj_level`] retires
+    /// a level before it is reused) and every certificate is checked against
+    /// its claim. What the level-only key *did* do is interpret successive
+    /// same-level binders of unrelated types as one variable, so a memo keyed
+    /// by anything containing that variable could hold a statement made at one
+    /// binder's type and hand it back at the other's. The caches this enables
+    /// are keyed at exactly this grain, so the invariant is pinned here, at
+    /// the map itself.
+    ///
+    /// **Three level-locals, deliberately** — `(3, A)`, `(3, B)`, `(4, A)`:
+    /// with only two, a key that projects out either component still passes
+    /// one of the assertions, so each projection needs its own witness to go
+    /// red. Mutation-verified: rekeying `Level` on the level alone fails the
+    /// `(3, A) ≠ (3, B)` assertion; rekeying on the type alone fails
+    /// `(3, A) ≠ (4, A)`.
+    ///
+    /// The fourth atom pins the key-space split: `DbjLevel(0)` and `Unique(0)`
+    /// agree numerically and in type, and must still be two variables — the
+    /// separation the retired `(1 << 32)` bit used to encode, now structural
+    /// in [`LocalKey`]'s constructors.
+    #[test]
+    fn a_level_local_is_identified_by_level_and_type() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+
+                let x = ctx.str1("x");
+                let y = ctx.str1("y");
+                let zero = ctx.zero();
+                let one = ctx.succ(zero);
+                let ty_a = ctx.mk_sort(zero);
+                let ty_b = ctx.mk_sort(one);
+                let style = crate::expr::BinderStyle::Default;
+
+                let l3a = ctx.remake_dbj_level(x, style, ty_a, 3);
+                let l3a_renamed = ctx.remake_dbj_level(y, style, ty_a, 3);
+                let l3b = ctx.remake_dbj_level(x, style, ty_b, 3);
+                let l4a = ctx.remake_dbj_level(x, style, ty_a, 4);
+
+                let t3a = be.interp(ctx, l3a);
+                let t3a_renamed = be.interp(ctx, l3a_renamed);
+                let t3b = be.interp(ctx, l3b);
+                let t4a = be.interp(ctx, l4a);
+
+                // Same level, same type: the same variable — the binder name is
+                // not part of the variable's identity, and there is nothing
+                // else left for two such locals to differ in.
+                assert_eq!(
+                    t3a, t3a_renamed,
+                    "level 3 at type A must be one variable whatever the binder is called"
+                );
+                // Same level, different type: levels are reused across a
+                // declaration's telescopes, so without the type in the key
+                // these two would be one variable and a memoised statement
+                // made at `A` would be handed back at `B`.
+                assert_ne!(t3a, t3b, "level 3 at type B must not reuse level 3 at type A's variable");
+                // Different level, same type: two locals of one telescope may
+                // share a type and are still two variables.
+                assert_ne!(t3a, t4a, "level 4 at type A must not reuse level 3 at type A's variable");
+
+                // `Unique(0)` versus `DbjLevel(0)` at the same type: the two
+                // halves of the id space must not alias.
+                let l0a = ctx.remake_dbj_level(x, style, ty_a, 0);
+                let u0 = ctx.mk_unique(x, style, ty_a);
+                let (t0a, tu0) = (be.interp(ctx, l0a), be.interp(ctx, u0));
+                assert_ne!(t0a, tu0, "a unique-id local must never alias a level local");
+
+                // And the memo is a memo: a second interpretation of the same
+                // local is the same variable, not a fresh one.
+                assert_eq!(t3a, be.interp(ctx, l3a), "re-interpreting a local must hit its variable");
+            })
+        })
+        .unwrap()
+    }
 
     /// **A stored nest must not be adopted at a different walk.**
     ///
