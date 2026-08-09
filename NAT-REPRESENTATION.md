@@ -194,6 +194,40 @@ So the order in §7's list is not a preference. **The accelerated operations are
 not an optimisation over the successor path; they are what makes step 3 usable
 at all**, and `Nat.isValidChar` is 96 declarations in.
 
+#### 1.3.4 Measured against `#121`'s baseline — the wall does not move
+
+`#121`'s figure is the one to beat, and it is on the **residue**
+(`scripts/nat-reach.py --write`, 1 143 declarations in the file, 1 245 mini
+declarations) rather than the whole export, so it is the residue this was
+re-run on: same input, same 10 GB `ulimit -v`, same `MINI_CONV_TRACE=1`,
+release.
+
+| `convtrace` row (**starting** that declaration) | `#121` | with the `Nat` clause |
+|---|---|---|
+| 229 `Nat.modCoreGo_lt` | 7.8 M | **7 808 716** |
+| 230 `Nat.modCore_lt` | 20.2 M | **20 241 310** |
+| 231 `Nat.mod_lt` — the last row printed | 30 347 733 | **30 341 025** |
+| gapped, throughout | 0 | **0** |
+| how it ended | `SIGABRT`, 10 GB cap | `SIGABRT`, 10 GB cap |
+
+**The wall has not moved.** Same declaration, same order, and −6 708
+conversions out of 30.3 M — 0.02 %, which is noise at this scale and is
+certainly not a change of régime. Replacing the W-type carrier with `ω` did not
+make the residue cheaper, and there is no reason it should have: the cost is
+not in *what* the carrier is, it is in how many `Nat.rec` reductions the
+prelude's arithmetic proofs perform, and the clause changes none of them. What
+removes those is §7's step 4, which is not in.
+
+**One correction to `#121`'s reading, and it changes which declaration to act
+on.** The trace row is printed *before* the declaration it names, so its
+counters exclude it and the cost of a declaration is the difference to the
+**next** row. §43's "`Nat.modCore_lt` alone takes conversions from 7.8 M to
+20.2 M" is the span *ending* at the row labelled `Nat.modCore_lt`, so it is
+`Nat.modCoreGo_lt`'s **12.43 M**; `Nat.modCore_lt`'s own is the next span,
+**10.10 M**. Both are enormous and nothing about the diagnosis changes — but a
+hot spot is acted on by name, and the name is `Nat.modCoreGo_lt`. The row now
+says `starting` so the question cannot be asked again.
+
 ### 1.4 What `init-prelude` actually contains — measured statically
 
 35 literals; the distribution over `init-prelude` ∪ `grind-ring-5`:

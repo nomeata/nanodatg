@@ -658,11 +658,27 @@ impl Ledger {
         // where it should have yielded a number. Gated, because on the corpus
         // this is one line per declaration and the census is not what most runs
         // are for.
+        //
+        // **The row says `starting`, and that word is load-bearing.** It is
+        // emitted *before* the declaration it names is interpreted, so its
+        // counters are the totals for everything **up to but not including**
+        // it — which is what makes the last row of an aborted run name the
+        // declaration that killed it. The cost *of* a declaration is therefore
+        // the difference to the **next** row, and reading it off the row's own
+        // line attributes every declaration's cost to its predecessor.
+        //
+        // That is not hypothetical. `MINI-HANDOFF.md` §43 reported
+        // "`Nat.modCore_lt` alone takes conversions from 7.8 M to 20.2 M";
+        // that span is the row *labelled* `Nat.modCore_lt` minus the one
+        // before it, so it is `Nat.modCoreGo_lt`'s cost, and `Nat.modCore_lt`'s
+        // own is the next span, 10.1 M. Both are enormous and the conclusion
+        // does not move, but the declaration named does, and a hot spot is
+        // acted on by name.
         let trace = std::env::var_os("MINI_CONV_TRACE").is_some();
         for (done, d) in decls.iter().enumerate() {
             if trace {
                 eprintln!(
-                    "convtrace\t{done}\t{}\tproved={}\tsealed={}\tgapped={}",
+                    "convtrace\t{done}\tstarting\t{}\tproved={}\tsealed={}\tgapped={}",
                     d.name(),
                     ip.convs.proved,
                     ip.convs.sealed,
