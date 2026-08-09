@@ -1,0 +1,571 @@
+# What `init-prelude` costs, and what is behind `Nat`
+
+*2026-08-09. A measurement study; it changes no behaviour and lands no fix. The
+question it was set: **when `Nat` stops dominating, what does?** — asked while a
+seat landed the `Nat` clause, so that the next lever would be known rather than
+discovered. That seat's own re-measurement, `NAT-REPRESENTATION.md` §1.3.4,
+arrived mid-study and reports **the wall unmoved**: 21.71 T against 20.85 T,
+`SIGABRT` inside the same declaration. This document says why, in numbers, and
+says which lever moves it and which does not.*
+
+*Provenance. **Which binary**: `origin/master` at `1e817c5` — the `Nat` clause
+in — `release` profile, instrumented by `scripts/prelude-cost-probe.diff` (a
+counting global allocator, a per-declaration memory trace, `MINI_STOP_AFTER`, a
+teardown attribution pass, `MINI_PARTS_RESET`, a per-declaration acceptance
+trace). The probe is **behaviour-neutral and costs a measured +7.6 % to +8.1 %
+in instructions** (§7). Where a figure predates `1e817c5` it says so and gives
+the `f9bc1db` pair beside it. **Which workload**: the `Nat`-filtered residue,
+`scripts/nat-reach.py --write` over `vendor/arena-tests/good/init-prelude.ndjson`
+— 1 248 declaration lines, 1 245 mini declarations — and two backward closures
+cut out of it with `scripts/decl-closure.py`. All runs `perf stat -e
+instructions`, each under its own `ulimit -v`. Wall clocks are commentary: the
+machine carried up to five other seats, `anon` between 9.3 and 24.9 GB.*
+
+## Verdict
+
+**On the prefix that has ever been measured, `Nat` is 98.8 % of the
+conversions — so "what dominates once `Nat` is dealt with" cannot be answered
+from that prefix at all. It has to be answered by cutting declarations out of
+the file and running them alone, and when you do, the answer is
+`BitVec.decEq._proof_1`: 5 545 459 conversions and 1.39 GB in one declaration,
+measured** (§4).
+
+**And the accelerated operations — `NAT-REPRESENTATION.md` §7's step 4, the
+outstanding half of the `Nat` work — cannot move this wall, because there is
+nothing for them to fire on.** Over the *entire backward dependency closure* of
+each hot declaration, every numeral in existence is `0` or `1`:
+
+| closure of | declarations in it | `natVal` nodes | distinct values |
+| --- | ---: | ---: | --- |
+| `Nat.modCoreGo_lt` | 174 | 50 | **`0`, `1`** |
+| `Nat.modCore_lt` | 180 | 56 | **`0`, `1`** |
+| `Nat.mod_lt` | 196 | 65 | **`0`, `1`** |
+| `Nat.ble_eq_true_of_le` | 69 | 8 | **`0`, `1`** |
+| `List.get.match_1` | 76 | 6 | **`0`, `1`** |
+
+`init-prelude`'s arithmetic *proofs* are universally quantified: what runs
+inside them is `Nat.rec` / `Nat.casesOn` / `noConfusion_of_Nat` against
+`Nat.succ` chains that are **symbolic**, never numeric, and 77.6 % of the
+conversions are `whnf` reduction legs rather than def-eq decisions (§2.3). §1.3.4
+already attributes the null result to the residue having had its literals
+deleted; **this is the stronger statement, and it survives on the unfiltered
+file too** — a literal-pair rule has no literal pair to match in any of these
+closures. The lever that moves this wall makes *symbolic* `Nat.rec` reduction
+cheaper, or makes the proofs need fewer of them. Step 4 is neither.
+
+**Three further results, each measured here.**
+
+* **The acceptance pass is not the cost, and now there is a number.** Parsing
+  the residue and running `kernel::add` over all 1 245 declarations is
+  **285 017 328 220 instructions and a 31.4 MB peak heap** — **1.3 %** of
+  §1.3.4's 21.71 T and 0.3 % of its 10 GB (§1). The interpretation pass is
+  98.7 % of the run.
+* **The 10 GB is not the certificates, not the frame memo and not the parsed
+  export. It is one hint table.** `Interp::parts` — `derived::skeleton`'s
+  `HashMap<Term, (FnSym, Vec<Term>)>`, which remembers the applicative structure
+  of every term ever built through `Interp::mk` and is never pruned — is
+  **54.4 % of the live heap** and holds **80 % of the live kernel `Term` nodes**.
+  Certificate structure retained by `Interp::consts` is **0.5 %**. At most
+  **24 %** of the table's entries are ever read (§3).
+* **The memory is accumulation, and it tracks the conversions at ~241 bytes
+  each.** The per-pair `Checker` — `frames` and `wt_memo`, what a "transient
+  peak" reading would blame — never holds more than 35 frame entries and frees
+  at most 11.6 MB when dropped, against 1.88 GB live (§3.1). So the brief's
+  alternative, "the 10 GB has nothing to do with the conversions", is refuted:
+  it is the same story, through `parts`.
+
+**What that means for the goal — "the checker handles `init-prelude` at
+reasonable time and memory costs".** Time and memory are now two different
+problems with two different owners. Time is `Nat.rec` on symbolic successors,
+and step 4 does not address it. Memory is `parts`, and it is *independent of
+`Nat`*: at 241 B/conversion, any 30 M-conversion run needs ~7 GB and any 100 M
+run needs ~24 GB, whatever the conversions are about. **Bounding `parts` is the
+one lever in this document that pays off no matter how the `Nat` question is
+settled** (§3.3).
+
+## 1. The two passes, separated
+
+`--acceptance-only` does not skip the interpretation pass — it only changes the
+exit code — so the two had never been priced apart. `MINI_STOP_AFTER=0` (probe)
+runs load, `kernel::add` over every declaration and the schedule, then stops
+before `Ledger::run`'s first row:
+
+| the acceptance axis, all 1 245 declarations | |
+| --- | ---: |
+| instructions | **285 017 328 220** |
+| task-clock | 22.8 s |
+| peak live heap (counting allocator) | **31 376 256 B** |
+| RSS | 35 749 888 B |
+| frame-cache hits / calls | 18 229 899 / 89 792 055 = **20.3 %** |
+
+Against §1.3.4's 21.71 T and 10 GB that is **1.3 % of the instructions and
+0.3 % of the memory**. Everything below is the interpretation pass.
+
+## 2. The conversions, by declaration
+
+`MINI_STOP_AFTER=231` under `ulimit -v` 4 GB. It ended the way a capped run
+should — `memory allocation of 956 301 328 bytes failed`, **inside declaration
+229** — having completed 229 of them. *(Taken at `f9bc1db`; §1.3.4's own table
+shows the cumulative counts at 229/230/231 moving by 0.02 % when the `Nat`
+clause landed, so the per-declaration shares below are unaffected. A repeat on
+`1e817c5` is in §2.5.)*
+
+| | |
+| --- | --- |
+| declarations completed | **229** (indices 0–228) |
+| conversions there | `proved` **7 809 091**, `sealed` 7 512 339, **`gapped` 0** |
+| instructions | **6 772 129 718 234** (6.77 T; ≈**6.27 T** less the probe's 8 %) |
+| task-clock | 907 s |
+| live heap / RSS at that point | 1 883 509 983 B / 2 247 561 216 B |
+| how it ended | allocator failure at the 4 GB cap, inside `Nat.modCoreGo_lt` |
+
+**This run reproduces `1ba1220`'s off-by-one independently and by a different
+route.** That commit corrects `MINI-HANDOFF.md` §43's "`Nat.modCore_lt` alone
+takes conversions from 7.8 M to 20.2 M" to `Nat.modCoreGo_lt`'s 12.43 M, with
+`Nat.modCore_lt`'s own 10.10 M next. Here the declaration *index* is read off a
+separate per-declaration acceptance trace over all 1 245 declarations — 229
+`Nat.modCoreGo_lt`, 230 `Nat.modCore_lt`, 231 `Nat.mod_lt`, 232
+`Fin.Internal.ofNat` — and the ladder's own last completed row is 7 809 091 at
+index 229. 7 809 091 + 12.43 M + 10.10 M = 30.34 M, which is the recorded figure
+at index 231. The two derivations agree to the digit.
+
+### 2.1 The ten that pay for it
+
+Percentages are of the 7 809 091 the ladder measured, and of the 30 347 733 at
+declaration 231.
+
+| idx | declaration | conversions | of 7.81 M | of 30.3 M |
+| ---: | --- | ---: | ---: | ---: |
+| 133 | `_private.…0.Nat.le_of_ble_eq_true.match_1_1` | 1 259 748 | 16.1 % | 4.15 % |
+| 153 | `_private.…0.Nat.ble_succ_eq_true.match_1_1` | 1 259 748 | 16.1 % | 4.15 % |
+| 155 | `Nat.ble_eq_true_of_le` | 1 113 995 | 14.3 % | 3.67 % |
+| 154 | `Nat.ble_succ_eq_true` | 633 435 | 8.1 % | 2.09 % |
+| 148 | `Nat.le_of_ble_eq_true` | 498 134 | 6.4 % | 1.64 % |
+| 177 | `_private.…0.Nat.le_trans.match_1_6` | 495 973 | 6.4 % | 1.63 % |
+| 199 | `Nat.sub_lt` | 431 110 | 5.5 % | 1.42 % |
+| 140 | `_private.…0.Nat.succ_le_succ.match_1_4` | 253 984 | 3.3 % | 0.84 % |
+| 150 | `_private.…0.Nat.ble_eq_true_of_le.match_1_4` | 253 984 | 3.3 % | 0.84 % |
+| 129 | `_private.…0.noConfusion_of_Nat.aux` | 191 906 | 2.5 % | 0.63 % |
+
+**Two pairs have identical counts to the digit** — 1 259 748 twice
+(`Nat.le_of_ble_eq_true.match_1_1`, `Nat.ble_succ_eq_true.match_1_1`) and
+253 984 twice (`Nat.succ_le_succ.match_1_4`, `Nat.ble_eq_true_of_le.match_1_4`).
+Equal to the unit over a million conversions is not coincidence: these are
+Lean's generated `match_` auxiliaries, and the two of a pair are the *same
+matcher shape* over the same scrutinee. The work is a function of the shape and
+not of the theorem it serves.
+
+### 2.2 The `Nat` split
+
+A declaration counts as `Nat`-attributable if its **logical** name — the
+`_private.Init.Prelude.0.` prefix stripped — is `Nat`, is under `Nat.`, or
+contains `of_Nat`. Without the stripping the `_private` namespace looks like a
+separate 48.9 % cost centre, which it is not.
+
+| over the 229 completed declarations | declarations | conversions | allocations | live-heap growth |
+| --- | ---: | ---: | ---: | ---: |
+| `Nat`-attributable | 90 | **7 432 009 (95.2 %)** | 96.9 % | 94.5 % |
+| everything else | 139 | **377 082 (4.8 %)** | 3.1 % | 5.5 % |
+
+Declarations 229 and 230 take the count from 7 809 091 to 30 347 733 and both
+are `Nat`, so over the whole 231-declaration prefix:
+
+> **`Nat` is 29 970 651 of 30 347 733 conversions — 98.76 %. Non-`Nat` is
+> 377 082 — 1.24 %.**
+
+The largest non-`Nat` declaration in the entire prefix is
+`EStateM.Backtrackable.noConfusion` at 50 179 conversions — **0.17 %** — with
+`Pow.noConfusion` (43 912), `Fin.noConfusion` (34 209), `BitVec.toNat` (34 069)
+and `eq_of_heq` (29 890) behind it. **On this prefix there is no second cost
+centre at all**, which is why §4 has to leave the prefix to find one.
+
+### 2.3 Which kinds of work
+
+Both splits from `1e817c5`, over the first 60 declarations, where `gapped` is 0
+and the totals reconcile exactly against `proved`.
+
+**By the site that asks.** `Interp::note_conv` has exactly two callers, and they
+are the two axes MINI-DESIGN.md §0.3 distinguishes:
+
+| | conversions | share |
+| --- | ---: | ---: |
+| `Checker::whnf`'s `done!` — reduction legs | 159 127 | **77.6 %** |
+| `Checker::assert_def_eq_as` — decisions | 45 947 | 22.4 % |
+| total (= `proved` 205 074, `gapped` 0) | 205 074 | |
+
+**Reduction, not decision, is more than three quarters of the census.** That is
+the population any `Nat` acceleration has to act on.
+
+**By the shape of the declaration**, over all 229 (`f9bc1db`):
+
+| shape | declarations | conversions | share |
+| --- | ---: | ---: | ---: |
+| `match_` auxiliaries | 37 | 3 677 946 | **47.1 %** |
+| plain definitions and theorems | 152 | 3 573 703 | 45.8 % |
+| `noConfusion` | 13 | 390 135 | 5.0 % |
+| `casesOn` | 14 | 61 271 | 0.8 % |
+| `rec` | 4 | 51 650 | 0.7 % |
+| `brecOn` | 5 | 39 738 | 0.5 % |
+| `below` | 3 | 13 151 | 0.2 % |
+| `decEq` | 1 | 1 497 | 0.0 % |
+
+**Lean's generated `match_` auxiliaries are 16 % of the declarations and 47 % of
+the conversions** — the most over-represented shape on the axis, and, unlike a
+`Nat` lemma, one that is generated for every pattern match in the file. It
+recurs past the wall: `List.get.match_1`, `BitVec.decEq.match_1` (§4).
+
+### 2.4 The hot declarations contain no numerals
+
+Counted statically over each declaration's whole expression DAG, and then over
+its whole backward dependency closure:
+
+| declaration | DAG nodes | `natVal` in it | closure | `natVal` in the closure |
+| --- | ---: | --- | ---: | --- |
+| `_private.…Nat.le_of_ble_eq_true.match_1_1` | 241 | 2 × `0` | — | — |
+| `Nat.ble_eq_true_of_le` | 131 | **none** | 69 | 8, all `0`/`1` |
+| `_private.…Nat.le_trans.match_1_6` | 755 | **none** | — | — |
+| `_private.…noConfusion_of_Nat.aux` | 66 | **none** | — | — |
+| `Nat.modCoreGo_lt` | 197 | — | 174 | 50, all `0`/`1` |
+| `Nat.modCore_lt` | — | — | 180 | 56, all `0`/`1` |
+| `Nat.mod_lt` | — | — | 196 | 65, all `0`/`1` |
+| `List.get.match_1` | 380 | 2 × `0` | 76 | 6, all `0`/`1` |
+
+**Nine declarations carrying 5.9 M of the 7.8 M measured conversions, and
+between them eight numeral nodes, all `0`.** These are *small* declarations —
+66 to 755 DAG nodes — whose cost is entirely dynamic. Widening the search to
+everything they can reach does not change the picture: across 174–196
+declarations of closure, the only numerals that exist anywhere are `0` and `1`.
+
+`List.get.match_1`'s 28 constants make the point across a family boundary:
+`Nat`, `Nat.casesOn`, `Nat.ctorIdx`, `Nat.succ`, `Nat.zero`, `Nat.le`,
+`Nat.le.casesOn`, `Nat.le.refl`, `Nat.le.step`, `noConfusion_of_Nat`,
+`instOfNatNat`, `instLTNat` — eleven of them. **The second wall is not a
+different problem wearing a `List` name; it is the same `Nat`-destructuring
+matcher shape.**
+
+### 2.5 The `Nat` clause changed none of this
+
+Every figure in §2.3, §3.2 and §3.3 was re-taken on `1e817c5` after the clause
+landed. The 60-declaration prefix, side by side:
+
+| | `f9bc1db` | `1e817c5` |
+| --- | ---: | ---: |
+| instructions | 370 483 647 037 | 369 268 757 865 |
+| conversions `proved` / `gapped` | 205 331 / **0** | 205 074 / **0** |
+| `whnf` / `assert_def_eq` split | 159 300 / 46 031 | 159 127 / 45 947 |
+| live heap at declaration 60 | 92 426 479 | 91 819 730 |
+| `parts` share of it | **54.4 %** | **54.4 %** |
+| `parts` entries / lookups | 124 468 / 30 193 | 123 037 / 30 193 |
+
+## 3. The memory, on its own
+
+### 3.1 It is accumulation, not a transient
+
+The probe prints the live heap at every declaration boundary — a point at which
+the previous pair's `Checker` has been dropped — with the all-time peak beside
+it. Over the 229-declaration ladder:
+
+| | |
+| --- | --- |
+| live at declaration 229 | 1 883 509 983 B |
+| all-time peak there | 1 883 779 036 B — **269 KB above live** |
+| high-water of `peak − live` at any boundary | 114 479 229 B (**6.1 %** of the final live) |
+| largest heap freed by dropping one pair's `Checker` | 11 601 188 B |
+| largest `Frame::map` over 295 traced pairs | **35** entries |
+| largest `wt_memo` | 5 018 entries |
+
+**The per-pair `Checker` is not where the memory is.** `frames` — the memo
+`PROFILE.md` §5 was about — peaks at 35 entries. What costs is what survives the
+declaration boundary, and it grows with the conversions at a rate that slowly
+*improves*:
+
+| conversions | live heap | bytes / conversion |
+| ---: | ---: | ---: |
+| 26 904 | 42.3 MB | 1 573 |
+| 636 094 | 193.5 MB | 304 |
+| 7 809 091 | **1 883.5 MB** | **241** |
+
+At 241 B/conversion the 30 347 733 conversions of the recorded run come to
+**7.3 GB**, which is the run that dies at 10 GB.
+
+### 3.2 Where it goes: `Interp::parts`, 54 %
+
+At declaration 60 the probe drops each retained table in turn and reports the
+live-heap fall. Shared structure is attributed to whichever table goes first, so
+the order is a parameter (`MINI_TEARDOWN_ORDER=reverse`). **It is not a caveat
+here**: run both ways, `parts` frees 35 305 728 B forward and 35 808 104 B
+reverse — 1.4 % apart, so essentially nothing it holds is shared. *(Those two
+use `HashMap::clear`, which keeps the table's own allocation; the column below
+uses `= Default::default()`, which returns it. Both are `parts`.)*
+
+| dropped, in order | freed | share of the 91 819 730 B live |
+| --- | ---: | ---: |
+| **`Interp::parts`** | **49 942 008** | **54.4 %** |
+| `Interp::consts` — the certificates: `term`, `typing`, `defeq` | 442 652 | 0.5 % |
+| `lams`/`fibres`/`conds` and their three by-symbol indices | 5 428 728 | 5.9 % |
+| the clauses — `direct`, `eta`, `quotient`, `acc`, `rec_acc`, `ind`, `dprod_fs` | 3 937 522 | 4.3 % |
+| `prop_sub`, `labels` | 1 240 | 0.0 % |
+| **residue: parsed export, the `TcCtx` arena, `Environment`, the schedule** | 32 067 580 | 34.9 % |
+
+`parts` takes the live kernel `Term` count from **491 503 to 99 604** on its own
+— **80 % of every live `Term` in the process is held by the hint table.** The
+residue, 32.1 MB, is within 3 % of the 31.4 MB the acceptance pass peaks at
+before any interpretation runs (§1): the parsed export and the arena are
+**flat**.
+
+`derived/src/skeleton.rs` says what the table is, and its own header is why it
+is 54 % of the heap:
+
+> `pub type Parts = HashMap<Term, (FnSym, Vec<Term>)>;`
+> … `record` builds `f(args)` and remembers its applicative structure in
+> `parts`; **every term the caller intends to decompose later must be built
+> through it.**
+
+It is a *hint* — "a wrong hint yields a skeleton whose reassembly fails to
+match, never a bad proof" — so no soundness rests on it. It has no eviction, no
+scope and no bound, and `Interp::mk` is the only way to build an interpretation
+term, so every term the interpretation ever constructs is retained for the life
+of the run together with a cloned `Vec` of its arguments.
+
+### 3.3 How much of it is dead, and what pruning costs
+
+Counted over the same 60 declarations:
+
+| | |
+| --- | ---: |
+| `skeleton::record` calls | 431 598 |
+| distinct entries inserted | **123 037** |
+| `skeleton` lookups into the table | **30 193** |
+| lookup misses | **0** |
+
+**At most 30 193 of 123 037 entries are ever read — at least 76 % of the table
+is never touched**, and the true figure is higher because lookups repeat.
+
+**The naive prune is unsound, and that is measured rather than argued.**
+`MINI_PARTS_RESET=1` empties `parts` at each declaration boundary:
+
+| first 60 declarations, `1e817c5` | baseline | `parts` cleared per declaration |
+| --- | ---: | ---: |
+| instructions | 369 268 757 865 | 357 817 603 209 (**−3.1 %**) |
+| live heap at declaration 60 | 91 819 730 | **36 532 425 (−60.2 %)** |
+| conversions `proved` | 205 074 | 171 643 |
+| **`gapped`** | **0** | **213** |
+
+The 213 are `not-decomposable` 108, `no-endpoint` 69,
+`NoDefiningEquation(LT.lt)` 36. So `parts` genuinely *is* read across
+declaration boundaries and cannot simply be dropped at one. What the row
+establishes is the size of the prize: **the table costs nothing in time — it
+saves slightly more than it costs — and holds 60 % of the heap.** A prune that
+kept the cross-declaration entries and discarded the rest is worth about that
+much. This document does not claim to know how to identify them; it does
+observe that `skeleton` never misses, so the reads are a strict subset of the
+writes and a two-pass or reference-counted scheme has something to work with.
+
+## 4. Is there a second `Nat.modCore_lt`? Yes — `BitVec.decEq._proof_1`
+
+No run has ever reached declaration 232, so the prefix cannot answer this. Two
+methods were used instead and they agree.
+
+### 4.1 The acceptance pass as a proxy, over all 1 245 declarations
+
+The acceptance pass runs the whole file in 23 s (§1), so a per-declaration
+allocation trace over *all* of it is cheap. Against the 229 declarations
+measured on both axes it predicts interpretation cost with a **Spearman rank
+correlation of 0.776**, an aggregate ratio of **1 643×**, and a per-declaration
+spread of 130×–7 400× (p10–p90). Good enough to rank; not to price.
+
+**Validated out of sample on five declarations no ladder has ever reached.**
+The `BitVec` closure of §4.2 interprets residue declarations 427–431 on its way,
+so their interpretation-pass allocations are directly measured:
+
+| idx | declaration | measured allocs | predicted (1 645×) | error |
+| ---: | --- | ---: | ---: | ---: |
+| 427 | `_private.…Nat.eq_of_beq_eq_true.match_1_1` | 1 968 387 268 | 2 083 463 235 | **+6 %** |
+| 428 | `Nat.eq_of_beq_eq_true` | 1 545 279 683 | 1 012 642 260 | −34 % |
+| 429 | `_private.…Nat.ne_of_beq_eq_false.match_1_1` | 2 350 738 289 | 2 475 035 745 | **+5 %** |
+| 430 | `Nat.ne_of_beq_eq_false` | 1 425 597 266 | 1 029 796 320 | −28 % |
+| 431 | `Nat.decEq` | 146 079 057 | 106 053 150 | −27 % |
+
+Five for five inside 1.5×, two inside 6 %. The closure interprets them with a
+different store behind it, so this is not a controlled comparison — but it is
+far better than the p10–p90 spread would suggest, and it is why §5's aggregate
+is written down at all.
+
+Of the file's 68 109 737 acceptance-pass allocations, the first 229 declarations
+are 10.8 % and the unreached 1 015 are **89.2 %**. The largest of the unreached,
+`Nat` set aside:
+
+| idx | declaration | acceptance allocs |
+| ---: | --- | ---: |
+| 555 | **`List.get.match_1`** | 4 760 852 |
+| 466 | **`BitVec.noConfusion`** | 3 830 784 |
+| 464 | **`BitVec.decEq._proof_1`** | 3 639 824 |
+| 468 | `BitVec.decEq` | 2 713 880 |
+| 467 | `BitVec.decEq._proof_2` | 2 282 470 |
+| 1164 | `BitVec.ofFin.noConfusion` | 1 814 332 |
+| 557 | `List.get` | 1 509 134 |
+| 456 | `BitVec.decEq.match_1` | 1 365 932 |
+| 845 | `Trans.noConfusion` | 560 258 |
+| 455 | `BitVec.casesOn` | 453 772 |
+
+The **eight-declaration `BitVec` cluster (455, 456, 464–468, 1164) is 16.46 M —
+59 % of all non-`Nat` acceptance cost in the unreached remainder**; `List.get`
+and its matcher a further 6.27 M. Both are §2.3's over-represented shapes,
+`match_` and `noConfusion`, recurring where the prefix cannot see.
+
+### 4.2 Cut them out and run them
+
+`scripts/decl-closure.py` emits the **backward dependency closure** of named
+declarations as a standalone export — the closure only, so no `Nat.mod*` is in
+either of these. Both run under `ulimit -v` 8 GB.
+
+**`BitVec.decEq` + `BitVec.noConfusion`: 83 declarations, and one of them is a
+second `Nat.modCoreGo_lt`.** 81 rows in, at 12 604 296 conversions and
+**3.08 GB**:
+
+| idx | declaration | conversions | share | live added |
+| ---: | --- | ---: | ---: | ---: |
+| 78 | **`BitVec.decEq._proof_1`** | **5 545 459** | **44.0 %** | **+1 393.8 MB** |
+| 70 | `BitVec.decEq.match_1` | 1 375 045 | 10.9 % | +464.8 MB |
+| 65 | `_private.…Nat.ne_of_beq_eq_false.match_1_1` | 1 373 902 | 10.9 % | +352.8 MB |
+| 63 | `_private.…Nat.eq_of_beq_eq_true.match_1_1` | 1 146 434 | 9.1 % | +251.0 MB |
+| 64 | `Nat.eq_of_beq_eq_true` | 890 104 | 7.1 % | +216.3 MB |
+| 69 | `BitVec.casesOn` | 852 465 | 6.8 % | +139.6 MB |
+| 66 | `Nat.ne_of_beq_eq_false` | 834 842 | 6.6 % | +144.6 MB |
+| 79 | `BitVec.noConfusionType` | 401 719 | 3.2 % | +65.6 MB |
+| | `BitVec`-named, total | 8 174 912 | **64.9 %** | |
+| | `Nat`-named, total | 4 354 379 | 34.5 % | |
+
+**`BitVec.decEq._proof_1` alone is 5 545 459 conversions and 1.39 GB.** For
+scale, `Nat.modCoreGo_lt` — the declaration that kills the whole file — is
+12.43 M. This is the same class of object, it is measured rather than projected,
+and §4.1's proxy put it third on the list before it was run.
+
+Two further things the table settles. **Reaching the first `BitVec`
+declaration at all costs 4 385 547 conversions and 1.01 GB, and every one of
+them is `Nat`** — five declarations, the same generated-`match_1_1`-plus-theorem
+shape as §2.1's, over `Nat.beq` at symbolic arguments with no numeral in reach
+(§2.4). And **`BitVec` genuinely is a cost centre of its own**: 64.9 % of the
+closure, not an artefact of the `Nat` it drags in.
+
+**`List.get`: 71 declarations, and `List.get.match_1` does not finish.** The
+closure reaches declaration 68, `List.get.match_1`, at 1 100 680 conversions and
+263 MB — one twenty-eighth of what it takes to reach `Nat.modCoreGo_lt` — and
+then that single declaration ran **longer than everything before it put
+together, in two separate runs, the second past 18 minutes**. Its cost is not
+bounded by this study; only its lower bound is.
+
+## 5. What `init-prelude` costs with `Nat` solved — an estimate
+
+**Flagged as an estimate throughout, and now doubly so, because §1.3.4 has shown
+that landing the `Nat` clause moved the wall by 0.02 % and this projection
+assumes a `Nat` that is actually cheap.**
+
+The measured anchors:
+
+* the 229 completed declarations cost **6.27 T** instructions (probe-corrected)
+  for 12 062 157 335 interpretation-pass allocations — **519.8 instructions and
+  0.154 live bytes per allocation**, 1 544.6 allocations per conversion;
+* the interpretation-to-acceptance allocation ratio is **1 643×** over all 229,
+  **1 595×** over the 138 non-`Nat` declarations and **1 645×** over the 91
+  `Nat` ones. That the two agree to 3 % is what makes the projection worth
+  writing down;
+* the 1 015 unreached declarations carry **60 768 475** acceptance allocations,
+  **27 688 115 (46 %)** of them non-`Nat`.
+
+Applying the non-`Nat` ratio to the non-`Nat` remainder, 27 688 115 × 1 595:
+
+> **≈44.2 G allocations ≈ 28.6 M conversions ⇒ ≈23 T instructions and ≈6.8 GB
+> of live heap.**
+
+So even granting a free `Nat`, `init-prelude` would cost about today's whole
+run again on `BitVec` and `List`, with memory binding both times — 6.8 GB is
+under a 10 GB cap and over a 4 GB one, with no margin either way.
+
+**Four things make this weak.** The per-declaration ratio spans two orders of
+magnitude, so only the aggregate is meant; the out-of-sample check came in five
+for five inside 1.5× (§4.1), which is the reason to state it. The 54 % of
+unreached acceptance cost that is `Nat`-named is set to zero here, and §2.4
+argues it will not be zero. The projection assumes the unreached declarations
+behave like the reached ones, which `List.get.match_1` already strains. **And
+"non-`Nat`" means only that the declaration's name does not begin with `Nat.`**:
+`BitVec.decEq._proof_1`'s closure is 34.5 % `Nat` by measurement (§4.2) and
+`List.get.match_1` spends its conversions on `Nat.casesOn` and
+`noConfusion_of_Nat` (§2.4).
+
+**The memory half is the firmer half**, because it rests on a measured constant
+rather than a proxy — and it is the half `Nat` does not touch.
+
+## 6. What was not measured, and why
+
+* **The full `init-prelude` run was not re-taken.** The critical path had
+  priority and a second ~10 GB / 26-minute run would have risked the ~50 GB
+  ceiling. §1.3.4's 21.71 T / 30 341 025 / 10 GB is used as given.
+* **Declarations 229–231 were never completed here.** `Nat.modCoreGo_lt` killed
+  the 4 GB ladder. So declarations 0–228 are 30 % of the recorded instructions
+  and 26 % of the recorded conversions, and the three `Nat.mod*` declarations
+  plus the aborted 232nd are the other 70 % — the split *within* those three is
+  `1ba1220`'s, not this study's.
+* **`List.get.match_1`'s cost has a lower bound and no upper one.** It did not
+  finish in either run.
+* **The closures were run, not profiled.** They say *whether* a declaration is a
+  wall, not what inside it is expensive. A `perf record` on
+  `BitVec.decEq._proof_1` is the obvious next measurement and was not taken.
+* **Nothing past declaration 232 has been interpreted in file order.** §4.1's
+  ranking is a proxy; §4.2 measures two points on it out of context.
+* **The teardown proportions (§3.2) are from declaration 60**, where `parts` is
+  ~30× smaller than at declaration 229. The share is assumed stable and that is
+  untested.
+* **The 229-declaration ladder and the shape table are `f9bc1db`.** §2.5 shows
+  the 60-declaration prefix unmoved by the `Nat` clause and §1.3.4 shows the
+  cumulative counts unmoved by 0.02 %, but the per-declaration table itself was
+  not re-taken.
+
+## 7. How to reproduce
+
+```bash
+git apply scripts/prelude-cost-probe.diff     # not landed; a scratch worktree
+cargo build --release --bin mini
+python3 scripts/nat-reach.py vendor/arena-tests/good/init-prelude.ndjson --write residue.ndjson
+
+# §1 the acceptance axis alone, and §4.1's per-declaration trace over all 1245
+( ulimit -v 4000000; MINI_STOP_AFTER=0 MINI_CONV_TRACE=1 MINI_ACCEPT_TRACE=1 \
+    perf stat -e instructions ./target/release/mini --no-modelgen --verbose residue.ndjson )
+
+# §2 the ladder — dies inside declaration 229 under a 4 GB cap, which is the point
+( ulimit -v 4000000; MINI_STOP_AFTER=231 MINI_CONV_TRACE=1 \
+    perf stat -e instructions ./target/release/mini --no-modelgen --verbose residue.ndjson )
+
+# §2.3, §2.5, §3.2, §3.3 — ~90 s each
+( ulimit -v 4000000; MINI_STOP_AFTER=60 MINI_CONV_TRACE=1 \
+    perf stat -e instructions ./target/release/mini --no-modelgen --verbose residue.ndjson )
+( ulimit -v 4000000; MINI_TEARDOWN_ORDER=reverse MINI_STOP_AFTER=60 MINI_CONV_TRACE=1 \
+    ./target/release/mini --no-modelgen --verbose residue.ndjson )
+( ulimit -v 4000000; MINI_PARTS_RESET=1 MINI_STOP_AFTER=60 MINI_CONV_TRACE=1 \
+    perf stat -e instructions ./target/release/mini --no-modelgen --verbose residue.ndjson )
+
+# §4.2 the closures
+python3 scripts/decl-closure.py residue.ndjson bitvec.ndjson BitVec.decEq BitVec.noConfusion
+python3 scripts/decl-closure.py residue.ndjson listget.ndjson List.get
+( ulimit -v 8000000; MINI_CONV_TRACE=1 perf stat -e instructions \
+    ./target/release/mini --no-modelgen --verbose bitvec.ndjson )
+```
+
+**The probe's cost and its neutrality, measured rather than assumed.** Against a
+clean release build of the same tree, on three tutorial exports both binaries
+complete:
+
+| export | clean | probe | overhead |
+| --- | ---: | ---: | ---: |
+| `090_projDataIndexRec` | 2 594 189 899 | 2 804 603 444 | +8.1 % |
+| `124_quotLiftReduction` | 5 159 534 343 | 5 551 402 030 | +7.6 % |
+| `037_prodType` | 2 810 708 482 | 3 035 498 229 | +8.0 % |
+
+and the two binaries' `--verbose` output is **byte-identical** on all three, so
+no ledger row, conversion count or verdict here is a probe artefact.
+
+Sources: §1, §2, §2.5, §3, §4 — the probe's `convtrace` / `convtrace-stop` /
+`pairdrop` / `convkind` / `teardown` / `accepttrace` rows and `perf stat`;
+§2.4 and the verdict's closure table — `scripts/nat-reach.py`'s pool walker over
+the export JSON, no run involved; §4.2 — `scripts/decl-closure.py` outputs;
+§1.3.4 and `1ba1220` are cited as the record and were not re-derived.

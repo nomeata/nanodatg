@@ -1,0 +1,428 @@
+diff --git a/derived/src/skeleton.rs b/derived/src/skeleton.rs
+index fd21b00..0572fd1 100644
+--- a/derived/src/skeleton.rs
++++ b/derived/src/skeleton.rs
+@@ -72,10 +72,27 @@ pub type Parts = HashMap<Term, (FnSym, Vec<Term>)>;
+ /// structure, so a later insertion could only be redundant.
+ pub fn record(parts: &mut Parts, f: FnSym, args: Vec<Term>) -> Term {
+     let t = Term::apply(f, args.clone());
++    // PROBE (scripts/prelude-cost-probe.diff — not landed).
++    probe::PARTS_RECORD.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++    let before = parts.len();
+     parts.entry(t.clone()).or_insert((f, args));
++    if parts.len() != before {
++        probe::PARTS_NEW.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++    }
+     t
+ }
+ 
++/// PROBE (scripts/prelude-cost-probe.diff — not landed).
++pub mod probe {
++    #![allow(missing_docs)]
++    use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
++    pub static PARTS_RECORD: AtomicUsize = AtomicUsize::new(0);
++    pub static PARTS_NEW: AtomicUsize = AtomicUsize::new(0);
++    pub static PARTS_HIT: AtomicUsize = AtomicUsize::new(0);
++    pub static PARTS_MISS: AtomicUsize = AtomicUsize::new(0);
++    pub fn get(a: &AtomicUsize) -> usize { a.load(Relaxed) }
++}
++
+ /// Split `t` into the part that mentions `v` and the maximal `v`-free
+ /// subterms, which are pushed onto `holes` and replaced by canonical hole
+ /// variables. `v` itself becomes the canonical bound-variable slot `x_canon`.
+@@ -99,7 +116,16 @@ pub fn skeleton(
+     if *t == Term::var(v) {
+         return Some(Term::var(x_canon))
+     }
+-    let (f, args) = parts.get(t)?.clone();
++    let (f, args) = match parts.get(t) {
++        Some(x) => {
++            probe::PARTS_HIT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++            x.clone()
++        }
++        None => {
++            probe::PARTS_MISS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++            return None
++        }
++    };
+     let mut out = Vec::with_capacity(args.len());
+     for a in &args {
+         out.push(skeleton(parts, x_canon, hole_var, a, v, holes)?);
+diff --git a/kernel/src/term.rs b/kernel/src/term.rs
+index 8ca5d90..99f096d 100644
+--- a/kernel/src/term.rs
++++ b/kernel/src/term.rs
+@@ -169,6 +169,8 @@ impl Term {
+                 h
+             }
+         };
++        probe::TERM_LIVE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++        probe::TERM_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+         Term { data: Rc::new(data), hash }
+     }
+ 
+@@ -396,6 +398,8 @@ impl Formula {
+             FormulaData::Imp(a, b) => mix(mix(0xff51_afd7_ed55_8ccd, a.hash), b.hash),
+             FormulaData::Forall(b) => mix(0xc4ce_b9fe_1a85_ec53, b.hash),
+         };
++        probe::FORM_LIVE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++        probe::FORM_TOTAL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+         Formula { data: Rc::new(data), hash }
+     }
+ 
+@@ -646,3 +650,25 @@ mod depth_tests {
+         assert!(std::panic::catch_unwind(|| f.close(y, u32::MAX)).is_err(), "close wrapped");
+     }
+ }
++
++// ─── PROBE (scripts/prelude-cost-probe.diff — not landed) ────────────────────
++/// Live and total `Rc<TermData>` / `Rc<FormulaData>` allocations.
++pub mod probe {
++    #![allow(missing_docs)]
++    use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
++    pub static TERM_LIVE: AtomicUsize = AtomicUsize::new(0);
++    pub static TERM_TOTAL: AtomicUsize = AtomicUsize::new(0);
++    pub static FORM_LIVE: AtomicUsize = AtomicUsize::new(0);
++    pub static FORM_TOTAL: AtomicUsize = AtomicUsize::new(0);
++    pub fn term_live() -> usize { TERM_LIVE.load(Relaxed) }
++    pub fn term_total() -> usize { TERM_TOTAL.load(Relaxed) }
++    pub fn form_live() -> usize { FORM_LIVE.load(Relaxed) }
++    pub fn form_total() -> usize { FORM_TOTAL.load(Relaxed) }
++}
++
++impl Drop for TermData {
++    fn drop(&mut self) { probe::TERM_LIVE.fetch_sub(1, core::sync::atomic::Ordering::Relaxed); }
++}
++impl Drop for FormulaData {
++    fn drop(&mut self) { probe::FORM_LIVE.fetch_sub(1, core::sync::atomic::Ordering::Relaxed); }
++}
+diff --git a/kernel/src/thm.rs b/kernel/src/thm.rs
+index c8cc7bb..45a8578 100644
+--- a/kernel/src/thm.rs
++++ b/kernel/src/thm.rs
+@@ -533,6 +533,9 @@ impl Env {
+         Env { brand, next_sym: 0, vars: VarGen::new(brand) }
+     }
+ 
++    /// PROBE (scripts/prelude-cost-probe.diff — not landed): symbols minted.
++    pub fn probe_next_sym(&self) -> u32 { self.next_sym }
++
+     /// Introduce a fresh function symbol of the given arity, constrained by no
+     /// axioms. Conservative by construction; see the type-level docs.
+     pub fn declare(&mut self, arity: u32) -> FnSym {
+diff --git a/mini/src/interp.rs b/mini/src/interp.rs
+index 7294e99..8663e8d 100644
+--- a/mini/src/interp.rs
++++ b/mini/src/interp.rs
+@@ -2841,6 +2841,89 @@ impl Interp {
+ 
+     // ─────────────────────────────────────────────────── the const store ──
+ 
++    /// PROBE (scripts/prelude-cost-probe.diff — not landed): the sizes of every
++    /// table this `Interp` keeps alive across declarations.
++    pub fn probe_sizes(&self) -> String {
++        format!(
++            "parts={} partsargs={} nextsym={} consts={} lams={} fibres={} conds={} lamsym={} fibsym={} condsym={} \
++dprodfs={} recaccelims={} labels={} holes={} inds={} eta={} quot={} acc={} recacc={} direct={}",
++            self.parts.len(),
++            self.parts.values().map(|(_, a)| a.len()).sum::<usize>(),
++            self.env.probe_next_sym(),
++            self.consts.len(),
++            self.lams.len(),
++            self.fibres.len(),
++            self.conds.len(),
++            self.lam_by_sym.len(),
++            self.fibre_by_sym.len(),
++            self.cond_by_sym.len(),
++            self.dprod_fs.len(),
++            self.rec_acc_elims.len(),
++            self.labels.len(),
++            self.hole_vars.len(),
++            self.ind.is_some() as u8,
++            self.eta.is_some() as u8,
++            self.quotient.is_some() as u8,
++            self.acc.is_some() as u8,
++            self.rec_acc.is_some() as u8,
++            self.direct.is_some() as u8,
++        )
++    }
++
++    /// PROBE (scripts/prelude-cost-probe.diff — not landed): clear each retained
++    /// table in turn, reporting the live-heap drop after each. Shared structure is
++    /// attributed to whichever table is cleared **first**, so the order is a
++    /// parameter — `MINI_TEARDOWN_ORDER=reverse` runs it the other way round and
++    /// the two together bracket each table's share.
++    /// PROBE: drop the skeleton hint table. See `probe_teardown`.
++    pub fn probe_clear_parts(&mut self) { self.parts = Default::default(); }
++
++    pub fn probe_teardown(&mut self) {
++        let mut steps: Vec<(&str, Box<dyn FnMut(&mut Interp)>)> = vec![
++            ("parts", Box::new(|i: &mut Interp| i.parts= Default::default())),
++            ("consts", Box::new(|i: &mut Interp| i.consts= Default::default())),
++            ("lam/fibre/cond sites", Box::new(|i: &mut Interp| {
++                i.lams= Default::default();
++                i.fibres= Default::default();
++                i.conds= Default::default();
++                i.lam_by_sym= Default::default();
++                i.fibre_by_sym= Default::default();
++                i.cond_by_sym= Default::default();
++            })),
++            ("clauses (direct/eta/quot/acc/recacc/ind)", Box::new(|i: &mut Interp| {
++                i.direct = None;
++                i.eta = None;
++                i.quotient = None;
++                i.acc = None;
++                i.rec_acc = None;
++                i.rec_acc_elims= Default::default();
++                i.ind = None;
++                i.dprod_fs= Default::default();
++            })),
++            ("prop_sub + labels", Box::new(|i: &mut Interp| {
++                i.prop_sub = None;
++                i.labels= Default::default();
++            })),
++        ];
++        if std::env::var("MINI_TEARDOWN_ORDER").as_deref() == Ok("reverse") {
++            steps.reverse();
++        }
++        let mut prev = crate::probe::live();
++        eprintln!("teardown\tstart\tlive={prev}\ttermlive={}\tformlive={}",
++            ::kernel::term::probe::term_live(), ::kernel::term::probe::form_live());
++        for (name, mut f) in steps {
++            f(self);
++            let now = crate::probe::live();
++            eprintln!(
++                "teardown\t{name}\tfreed={}\tlive={now}\ttermlive={}\tformlive={}",
++                prev.saturating_sub(now),
++                ::kernel::term::probe::term_live(),
++                ::kernel::term::probe::form_live(),
++            );
++            prev = now;
++        }
++    }
++
+     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }
+ 
+     pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) {
+diff --git a/mini/src/kernel.rs b/mini/src/kernel.rs
+index dc4b2f0..245ba48 100644
+--- a/mini/src/kernel.rs
++++ b/mini/src/kernel.rs
+@@ -542,6 +542,12 @@ impl<'e, 'i> Checker<'e, 'i> {
+         }
+     }
+ 
++    /// PROBE (scripts/prelude-cost-probe.diff — not landed): `(wt_memo entries,
++    /// frame entries summed over the telescope, frames)`.
++    pub fn probe_memo(&self) -> (usize, usize, usize) {
++        (self.wt_memo.len(), self.frames.iter().map(|f| f.map.len()).sum(), self.frames.len())
++    }
++
+     /// The evidence-carrying pass, at one ground instantiation.
+     pub fn threaded(env: &'e Environment, ip: &'i mut Interp) -> Self {
+         Checker {
+@@ -915,6 +921,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+                 // where a `Γ`-carrying conversion would come from, because beta
+                 // is the one step that consumes a membership.
+                 if tm_asked {
++                    crate::probe::CONV_WHNF.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                     if let Some(ip) = self.ip() {
+                         ip.note_conv(&acc.ev);
+                     }
+@@ -3618,6 +3625,7 @@ impl<'e, 'i> Checker<'e, 'i> {
+         let asked = tm1.is_some() && tm2.is_some();
+         let ev = self.def_eq_ev(e1, tm1, e2, tm2, lhs)?;
+         if asked {
++            crate::probe::CONV_DEFEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+             if let Some(ip) = self.ip() {
+                 ip.note_conv(&ev);
+             }
+diff --git a/mini/src/ledger.rs b/mini/src/ledger.rs
+index 5c10ab1..c429406 100644
+--- a/mini/src/ledger.rs
++++ b/mini/src/ledger.rs
+@@ -675,14 +675,62 @@ impl Ledger {
+         // does not move, but the declaration named does, and a hot spot is
+         // acted on by name.
+         let trace = std::env::var_os("MINI_CONV_TRACE").is_some();
++        // PROBE (scripts/prelude-cost-probe.diff — not landed).
++        let stop_after: Option<usize> =
++            std::env::var("MINI_STOP_AFTER").ok().and_then(|v| v.parse().ok());
+         for (done, d) in decls.iter().enumerate() {
++            if stop_after.is_some_and(|n| done >= n) {
++                eprintln!(
++                    "convtrace-stop\tafter={done}\tlive={}\tpeak={}\tallocs={}\trss={}\t\
++termlive={}\ttermtotal={}\tformlive={}\tformtotal={}\t{}",
++                    crate::probe::live(),
++                    crate::probe::peak(),
++                    crate::probe::allocs(),
++                    crate::probe::rss(),
++                    ::kernel::term::probe::term_live(),
++                    ::kernel::term::probe::term_total(),
++                    ::kernel::term::probe::form_live(),
++                    ::kernel::term::probe::form_total(),
++                    ip.probe_sizes(),
++                );
++                {
++                    use derived::skeleton::probe as sp;
++                    use std::sync::atomic::Ordering::Relaxed;
++                    eprintln!(
++                        "convkind\twhnf={}\tdefeq={}\tpartsRecord={}\tpartsNew={}\t\
++partsHit={}\tpartsMiss={}",
++                        crate::probe::CONV_WHNF.load(Relaxed),
++                        crate::probe::CONV_DEFEQ.load(Relaxed),
++                        sp::get(&sp::PARTS_RECORD),
++                        sp::get(&sp::PARTS_NEW),
++                        sp::get(&sp::PARTS_HIT),
++                        sp::get(&sp::PARTS_MISS),
++                    );
++                }
++                ip.probe_teardown();
++                break
++            }
++            // PROBE (scripts/prelude-cost-probe.diff — not landed).
++            if std::env::var_os("MINI_PARTS_RESET").is_some() {
++                ip.probe_clear_parts();
++            }
+             if trace {
+                 eprintln!(
+-                    "convtrace\t{done}\tstarting\t{}\tproved={}\tsealed={}\tgapped={}",
++                    "convtrace\t{done}\tstarting\t{}\tproved={}\tsealed={}\tgapped={}\t\
++live={}\tpeak={}\tallocs={}\trss={}\ttermlive={}\ttermtotal={}\tformlive={}\tformtotal={}\t{}",
+                     d.name(),
+                     ip.convs.proved,
+                     ip.convs.sealed,
+-                    ip.convs.gapped
++                    ip.convs.gapped,
++                    crate::probe::live(),
++                    crate::probe::peak(),
++                    crate::probe::allocs(),
++                    crate::probe::rss(),
++                    ::kernel::term::probe::term_live(),
++                    ::kernel::term::probe::term_total(),
++                    ::kernel::term::probe::form_live(),
++                    ::kernel::term::probe::form_total(),
++                    ip.probe_sizes(),
+                 );
+             }
+             let (name, lparams, ty, val) = match d {
+@@ -743,7 +791,22 @@ impl Ledger {
+                     }
+                     None => (None, None),
+                 };
+-                drop(c);
++                // PROBE (scripts/prelude-cost-probe.diff — not landed).
++                if trace {
++                    let (wt, fr, nfr) = c.probe_memo();
++                    let before = crate::probe::live();
++                    let bpeak = crate::probe::peak();
++                    drop(c);
++                    eprintln!(
++                        "pairdrop\t{}\tsigma={:?}\twt={wt}\tframe={fr}\tnframes={nfr}\t\
++before={before}\tafter={}\tpeak={bpeak}",
++                        name,
++                        sigma,
++                        crate::probe::live(),
++                    );
++                } else {
++                    drop(c);
++                }
+ 
+                 if ty_tm.is_some() {
+                     led.types_ok += 1;
+diff --git a/mini/src/lib.rs b/mini/src/lib.rs
+index 8495a7a..227193e 100644
+--- a/mini/src/lib.rs
++++ b/mini/src/lib.rs
+@@ -116,3 +116,65 @@ pub mod scope;
+ pub mod unit_like;
+ pub mod unused_axiom;
+ pub mod zoneb;
++
++// ─── PROBE (scripts/prelude-cost-probe.diff — not landed) ────────────────────
++/// A counting global allocator: live bytes, peak live bytes, and total
++/// allocations. Relaxed atomics on a single-threaded run; the cost is one
++/// `fetch_add` per `malloc`.
++pub mod probe {
++    use std::alloc::{GlobalAlloc, Layout, System};
++    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
++
++    pub static LIVE: AtomicUsize = AtomicUsize::new(0);
++    pub static PEAK: AtomicUsize = AtomicUsize::new(0);
++    pub static ALLOCS: AtomicUsize = AtomicUsize::new(0);
++    /// Conversions counted at `whnf`'s `done!`.
++    pub static CONV_WHNF: AtomicUsize = AtomicUsize::new(0);
++    /// Conversions counted at `assert_def_eq_as`.
++    pub static CONV_DEFEQ: AtomicUsize = AtomicUsize::new(0);
++
++
++    pub struct Counting;
++
++    unsafe impl GlobalAlloc for Counting {
++        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
++            let p = unsafe { System.alloc(l) };
++            if !p.is_null() {
++                let n = LIVE.fetch_add(l.size(), Relaxed) + l.size();
++                ALLOCS.fetch_add(1, Relaxed);
++                PEAK.fetch_max(n, Relaxed);
++            }
++            p
++        }
++        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
++            LIVE.fetch_sub(l.size(), Relaxed);
++            unsafe { System.dealloc(p, l) }
++        }
++        unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
++            let q = unsafe { System.realloc(p, l, new) };
++            if !q.is_null() {
++                LIVE.fetch_add(new, Relaxed);
++                LIVE.fetch_sub(l.size(), Relaxed);
++                ALLOCS.fetch_add(1, Relaxed);
++                PEAK.fetch_max(LIVE.load(Relaxed), Relaxed);
++            }
++            q
++        }
++    }
++
++    pub fn live() -> usize { LIVE.load(Relaxed) }
++    pub fn peak() -> usize { PEAK.load(Relaxed) }
++    pub fn allocs() -> usize { ALLOCS.load(Relaxed) }
++
++    /// Resident set, in bytes, from `/proc/self/statm`.
++    pub fn rss() -> usize {
++        std::fs::read_to_string("/proc/self/statm")
++            .ok()
++            .and_then(|s| s.split_whitespace().nth(1).and_then(|p| p.parse::<usize>().ok()))
++            .map(|p| p * 4096)
++            .unwrap_or(0)
++    }
++}
++
++#[global_allocator]
++static PROBE_ALLOC: probe::Counting = probe::Counting;
+diff --git a/mini/src/run.rs b/mini/src/run.rs
+index ef4422b..f187673 100644
+--- a/mini/src/run.rs
++++ b/mini/src/run.rs
+@@ -195,7 +195,21 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
+     let axioms = crate::unused_axiom::classify(&loaded.decls, |n| !convert::is_standard_axiom(n));
+     let mut env = Environment::empty();
+     let mut accepted = 0usize;
++    // PROBE (scripts/prelude-cost-probe.diff — not landed).
++    let acctrace = std::env::var_os("MINI_ACCEPT_TRACE").is_some();
++    let mut acc_i = 0usize;
+     for decl in &loaded.decls {
++        if acctrace {
++            eprintln!(
++                "accepttrace\t{acc_i}\t{}\tallocs={}\tlive={}\ttermtotal={}\tformtotal={}",
++                decl.name(),
++                crate::probe::allocs(),
++                crate::probe::live(),
++                ::kernel::term::probe::term_total(),
++                ::kernel::term::probe::form_total(),
++            );
++            acc_i += 1;
++        }
+         if let Err(msg) = kernel::add(&mut env, decl) {
+             return Outcome {
+                 verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
