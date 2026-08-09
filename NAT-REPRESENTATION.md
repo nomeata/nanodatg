@@ -157,7 +157,7 @@ line. `convert::literal_value` now declines it by name instead, ahead of the
 guard being lifted and independently of it; §1.4's table is otherwise
 unchanged and its `2⁶⁴` entry is the correct one.
 
-#### 1.3.3 With the clauses in — 96 declarations, and the trap §7 predicted
+#### 1.3.3 With the clauses in — 96 declarations, and what actually stopped it
 
 `direct::Clause::Nat`, the binary literal and `whnf`'s certified successor step
 are all in. Re-measured, and the wall moved three times in one sitting:
@@ -173,26 +173,38 @@ The middle row is this arc's own decline, installed one commit before it fired:
 `Expr::NatLit` is now a `u128` — the width was a limit of the representation
 and never of the arithmetic, `num(2⁶⁴)` being 66 nodes.
 
-**The last row is the answer, and it is the trap.** `Nat.isValidChar` is
-`n < 55296 ∨ (57343 < n ∧ n < 1114112)`, and deciding it runs `Nat.lt` — which
-the prelude compiles through `Nat.rec` — on a literal. The literal now peels one
-`succ` at a time, cheaply and with a certificate; the *recursor* then asks for
-the next one, 55296 times. That is exactly what §7's step 3 was warned about:
-peeling one successor is a step, peeling `n` of them is a program.
+**The last row is the answer.** It presents as a **stack overflow, in seconds,
+on a 256 MB worker stack** — not as the memory exhaustion this document's
+earlier sections were written against, and not as a timeout. It is also a
+**behaviour change worth naming**: on this file `mini` used to decline and now
+aborts. Nothing in the corpus can reach it, the largest tutorial literal being
+3, but the file that can is the one the project is aiming at.
 
-**It presents as a stack overflow, in seconds, on a 256 MB worker stack** — not
-as the memory exhaustion this document's earlier sections were written against,
-and not as a timeout either. Three probes place it: `whnf_conv` never reaches
-depth 2000 and `infer_type` never reaches 3000, so the recursion is neither of
-those two counted at their entry; a per-declaration trace puts it inside
-`kernel::add` on declaration 96. The overflow is also a **behaviour change worth
-naming**: on this file `mini` used to decline and now aborts. Nothing in the
-corpus can reach it — the largest tutorial literal is 3 — but the file that can
-is the one the project is aiming at.
+**What it is, and it took a core dump to find out — three readings before that
+were wrong.**
 
-So the order in §7's list is not a preference. **The accelerated operations are
-not an optimisation over the successor path; they are what makes step 3 usable
-at all**, and `Nat.isValidChar` is 96 declarations in.
+*(This paragraph first read: "deciding `Nat.isValidChar` runs `Nat.lt`, which
+the prelude compiles through `Nat.rec`, on a literal; the literal peels one
+`succ` at a time and the recursor asks for the next one, 55296 times". That is
+a plausible story and it is **not what happens**. A probe counting successor
+peels **within one `whnf_conv` call** never reached 4096 — there is only ever
+one peel per call — and probes at the entries of `whnf_conv` and `infer_type`
+never reached 2000 and 3000.)*
+
+The core dump names `assert_def_eq_as` ↔ `def_eq_struct`, alternating, and a
+dump of the live frames shows both sides to be **the same nat literal counting
+down**: `53814`, `53813`, `53812`. `def_eq` reduced before it compared: `whnf`
+turns `natLit n` into `Nat.succ (natLit (n−1))`, the `App`/`App` arm descends
+into the arguments, and the two literals meet again one smaller — **one stack
+frame per unit of the literal**, and nothing to do with `Nat.rec`.
+
+So the fix is not step 4 and never was. It is that **literals are compared by
+value**, above `whnf`, which is what Lean's kernel does; and, because the next
+runaway will not be a nat literal, that the recursion is **bounded** and the
+bound is a rejection with a reason. Both are in, with fixtures. See
+`DEFEQ_MAX_DEPTH`, whose own first value of `10_000` was measured to be *too
+late to be a guard* — arriving there cost 8 GB — and is now `2_000` against a
+corpus peak of 34.
 
 #### 1.3.4 Measured against `#121`'s baseline — the wall does not move
 
