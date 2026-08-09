@@ -80,9 +80,11 @@ fn check(export: &Path) -> (bool, u64, u64) {
 /// `006` and `007` both reduce `(λ x y : Type. x) Prop (Prop → Prop)` in a
 /// single two-argument contraction. The first argument is a sort, so its domain
 /// premise is `x ∈ U(x)`; the second is an arrow, and needs
-/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`. That is available because a non-dependent `Pi` is
-/// interpreted as `derived::funspace`'s function space `fs`, and
-/// `⊢ ∀a. fs(a,a) ∈ U(a)` is a theorem of that development.
+/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`. A non-dependent `Pi` is interpreted as the
+/// constant-fibre dependent product — `mini`'s clause, one symbol per corpus —
+/// and the membership is `derived::funspace`'s `⊢ ∀a. fs(a,a) ∈ U(a)` carried
+/// across `TgBackend::dprod_fs_eq`, the one seam between the interpretation's
+/// `dprod` and the library's `fs` vocabulary.
 ///
 /// `027`–`029` are the Church-numeral encodings, and they are the ones that
 /// need Lean's **lambda typing rule**: their beta arguments are lambdas and
@@ -407,6 +409,63 @@ fn tutorial_files_are_fully_derived() {
         assert_eq!(gaps, 0, "{name}: expected a complete derivation, found {gaps} gap(s)");
         assert!(derived > 0, "{name}: reported no derivation steps at all — is the backend wired up?");
     }
+}
+
+/// The non-dependent `Π` interprets as the **constant-fibre dependent
+/// product** — `mini`'s clause, `dprod₀(B,A)` for `A → B` — not as a separate
+/// function-space clause (task #125's alignment; SCOPING.md §10 is the
+/// decision).
+///
+/// Pinned through the typing report's clause census. Before the alignment an
+/// arrow-typed application or lambda was typed by the `fs` rules and the two
+/// rows below were nonzero on these files, so this test was red. After it,
+/// every obligation an *interpreted* `Π` serves goes through the
+/// dependent-product rules; the `fs` rows are reserved for targets a `derived`
+/// theorem states over the function space, and no tutorial export produces
+/// one. The gap counts are pinned elsewhere ([`FULLY_DERIVED`],
+/// [`GAP_BUDGET`], [`RECURSOR_DERIVED`]); this asserts the *route*, because
+/// the point of the alignment is that the two engines name one head symbol
+/// and agree by reflexivity rather than by bridge theorem.
+///
+/// The seam still pays, in both directions, and both are asserted: `006`'s
+/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` is `fs(a,a) ∈ U(a)` carried across
+/// `TgBackend::dprod_fs_eq` to the `dprod` term (the `FsDiag` row), and
+/// `075`'s `⟦N.succ⟧ ∈ ⟦N → N⟧` is `derived`'s `succ ∈ fs(N,N)` re-registered
+/// at the `dprod` spelling (a `Ctor` row hit at the new target). Dropping
+/// either seam consumer regresses the file's gap count, which its budget
+/// catches; the row assertions here catch the *silent* failure mode, where a
+/// rescue path masks the loss.
+#[test]
+fn arrows_are_typed_by_the_dependent_product_rules() {
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    for name in ["006_betaReduction", "027_peano1", "073_boolRecEqns", "075_nRecReduction"] {
+        let f = dir.join(format!("{name}.ndjson"));
+        assert!(f.exists(), "missing corpus file {}", f.display());
+        assert_eq!(
+            report_row(&f, "by App: a function's values lie in its codomain"),
+            None,
+            "{name}: an interpreted arrow was typed by the fs application rule"
+        );
+        assert_eq!(
+            report_row(&f, "by Lam: a graph is a function into any codomain it lands in"),
+            None,
+            "{name}: an interpreted arrow was typed by the fs lambda rule"
+        );
+    }
+    let f = dir.join("006_betaReduction.ndjson");
+    assert_eq!(
+        report_row(&f, "by fs(a,a) ∈ U(a)"),
+        Some(1),
+        "006: the arrow's universe membership stopped crossing the fs seam"
+    );
+    let f = dir.join("075_nRecReduction.ndjson");
+    assert!(
+        report_row(&f, "by Ctor: a constructor lies in its inductive type").is_some_and(|n| n > 0),
+        "075: no constructor membership fired — N.succ's dprod-spelled claim is not being found"
+    );
 }
 
 /// Beta is a *derivation*, not an admit.

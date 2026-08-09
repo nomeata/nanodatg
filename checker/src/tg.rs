@@ -26,12 +26,16 @@
 //!   [`derived::funcs::lambda`] — again unless the lambda is a proof, in which
 //!   case it is `•`. See "Lambdas" below for how the body is turned into a
 //!   function symbol, and why the version used here is `lambda_n`.
-//! * **`Pi`**. `⟦A → B⟧ := fs(⟦A⟧, ⟦B⟧)`, the set-theoretic function space of
-//!   [`derived::funspace`], when the body does not mention the binder; and
-//!   `⟦Π x:A. B⟧ := dprod_C(s⃗, ⟦A⟧)`, the **dependent product** over the fibre
-//!   `x ↦ ⟦B⟧`, when it does. The fibre is built by the same skeleton
+//! * **`Pi`**. `⟦Π x:A. B⟧ := dprod_C(s⃗, ⟦A⟧)`, the **dependent product** over
+//!   the fibre `x ↦ ⟦B⟧` — at *every* codomain, `mini`'s clause (SCOPING.md
+//!   §10). A body that does not mention the binder is the degenerate shape,
+//!   not a separate clause: its skeleton is the bare hole variable, so every
+//!   arrow `A → B` shares one constant-fibre symbol, `dprod₀(⟦B⟧, ⟦A⟧)`, and
+//!   two spellings of one arrow agree by reflexivity. The library's function
+//!   space `fs` remains `derived`'s statement vocabulary, met at
+//!   [`TgBackend::dprod_fs_eq`]. The fibre is built by the same skeleton
 //!   decomposition the lambdas use (see "Lambdas" below), so the binder is
-//!   opened at a local and non-dependence is decided *exactly* — "the
+//!   opened at a local and the constant fibre is recognised *exactly* — "the
 //!   interpreted body does not mention this binder's variable" — rather than
 //!   conservatively from the loose-bvar count. With every binder in a `Π` tower
 //!   opened, an interpreted term contains no `bvar` symbols at all.
@@ -121,7 +125,9 @@
 //! * `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, from `⊢ ∀x. x ∈ U(x)` — which is not restricted
 //!   to sorts, and settles any obligation whose target is `U(⟦a⟧)`;
 //! * `⟦A → A⟧ ∈ ⟦Sort (u+1)⟧` when `⟦A⟧` is `⟦Sort u⟧`, from
-//!   [`derived::funspace`]'s `⊢ ∀a. fs(a,a) ∈ U(a)`.
+//!   [`derived::funspace`]'s `⊢ ∀a. fs(a,a) ∈ U(a)`, carried across
+//!   [`TgBackend::dprod_fs_eq`] to the constant-fibre `dprod` the arrow
+//!   interprets to.
 //!
 //! The restriction to the diagonal `fs(a,a)` is not a shortcut either: the
 //! two-argument form `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))` exists,
@@ -130,10 +136,11 @@
 //!
 //! The rest are structural. A constant transfers the obligation to its *value*
 //! along the defining equation; an application is the characteristic property of
-//! its function's type — `fs`'s `app(f,x) ∈ b`, or the dependent product's
-//! `∀x ∈ A. app(f,x) ∈ b(x)` conjunct with the fibre unfolded. A **lambda** is
-//! [`lam_in_funspace_n`] when its type is an arrow and [`lam_in_dprod_n`] when
-//! it is a dependent product — the prefix-threaded ports of
+//! its function's type — the dependent product's `∀x ∈ A. app(f,x) ∈ b(x)`
+//! conjunct with the fibre unfolded, or `fs`'s `app(f,x) ∈ b` where a library
+//! theorem states the target over the function space. A **lambda** is
+//! [`lam_in_funspace_n`] when its stated type is an `fs` and [`lam_in_dprod_n`]
+//! when it is a dependent product — the prefix-threaded ports of
 //! [`derived::ext::lam_in_funspace`] and [`derived::ext::lam_in_dprod`], which
 //! exist only for a *unary* body and fibre symbol while every lambda and `Π`
 //! here carries the hole prefix its skeleton decomposition gives it. Their
@@ -293,26 +300,31 @@
 //! certificates arriving at a binder are about the terms the checker claimed, so
 //! `app_cong` was not the reason `pi_cong` could not use them.
 //!
-//! [`Certifier::pi_cong`] is handed both terms and checks, and has three routes
-//! to a derivation — congruence, Extensionality and the constant-fibre bridge.
-//! What each buys is stated plainly next.
+//! [`Certifier::pi_cong`] is handed both terms and checks, and has two routes
+//! to a derivation — congruence and Extensionality. What each buys is stated
+//! plainly next.
 //!
 //! # What `Π` congruence still costs
 //!
-//! A `Π` type interprets two ways — `fs` when the body ignores the binder and
-//! `dprod_C` when it does not — and the head symbol of the second depends on the
-//! *shape* of the fibre. So `pi_cong` is in the same three positions `lam_cong`
-//! is, and takes the same three routes:
+//! Every `Type`-clause `Π` interprets as a `dprod_C` whose head symbol depends
+//! on the *shape* of the fibre — the constant fibre (a body that ignores its
+//! binder) being the degenerate shape at the bare-hole skeleton, one symbol
+//! corpus-wide. So `pi_cong` is in the same two positions `lam_cong` is, and
+//! takes the same two routes:
 //!
-//! * both sides `fs` — congruence, via the derived [`derived::ext::fs_cong`];
-//! * both sides the same `dprod_C` — congruence over its arguments; failing
-//!   that, and for two *different* `dprod`s, dependent-product Extensionality
+//! * both sides the same `dprod_C` — congruence over its arguments;
+//! * two *different* `dprod`s — dependent-product Extensionality
 //!   ([`dprod_ext_n`]), whose pointwise premise is read off the body certificate
-//!   by the same [`TgBackend::pointwise_premise`] the lambda rule uses;
-//! * one of each — the **bridge**: `dprod_const_fibre_n` says a dependent
-//!   product over a *constant* fibre **is** the function space, and the fibre is
-//!   constant exactly when the other side's body ignores the binder, which is
-//!   what its certificate says.
+//!   by the same [`TgBackend::pointwise_premise`] the lambda rule uses. Two
+//!   spellings of one arrow whose `dep` classification disagrees (the
+//!   β-unstable case) land here, the constant fibre against the dependent one.
+//!
+//! There is no constant-fibre *bridge* in the conversion path any more: with
+//! one clause there are no two interpretation spellings to bridge, and
+//! [`dprod_const_fibre_n`] survives as [`TgBackend::dprod_fs_eq`] — the seam to
+//! theorems `derived` states over `fs` — rather than as a conversion rule. The
+//! history below predates that removal; its measurements are records, and the
+//! bridge rows it names are gone with the clause.
 //!
 //! Measured on `good/init-prelude.ndjson`, against the previous encoding (a
 //! dependent `Π` as an opaque `pi` symbol over the raw de Bruijn body):
@@ -1876,9 +1888,16 @@ struct Shared {
     /// attached, so the lambda rule needs the fibre machinery behind its head
     /// symbol; this is that lookup.
     pi_by_dprod: HashMap<FnSym, (Term, Rc<PiInfo>)>,
-    /// Constant-fibre bridge theorems, derived lazily: most `Π` types are never
-    /// compared against a function space.
-    pi_bridges: HashMap<Term, Option<Sealed>>,
+    /// `⊢ ∀B ∀A. dprod(B,A) = fs(A,B)` at the **constant-fibre skeleton** — the
+    /// interpreted arrow spelled as the library's function space. `⟦Π⟧` is a
+    /// `dprod` at every codomain, so nothing this backend interprets is ever an
+    /// `fs`; `derived` nevertheless states real obligations over `fs` —
+    /// `succ_in_funspace`, the ι rules' minor-premise chains — and this theorem
+    /// is the one place the two vocabularies meet. Derived on first use from
+    /// [`dprod_const_fibre_n`], whose constant-fibre hypothesis is the fibre's
+    /// own defining equation weakened and generalised. The outer `Option` is
+    /// "has it been attempted", the inner one "did it succeed".
+    dprod_fs: Option<Option<Sealed>>,
     /// Head symbol (and characteristic theorem) per distinct **`Prop`-valued
     /// `∀`** body skeleton — the other clause of §6.2. The exact analogue of
     /// [`Shared::pi_infos`].
@@ -2178,7 +2197,7 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             pi_exts: HashMap::new(),
             pi_infos: HashMap::new(),
             pi_by_dprod: HashMap::new(),
-            pi_bridges: HashMap::new(),
+            dprod_fs: None,
             prop_infos: HashMap::new(),
             prop_by_chi: HashMap::new(),
             undet_syms: HashMap::new(),
@@ -4470,11 +4489,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// shape instead. That is a gap by construction, and the right one: no
     /// reading of a level-polymorphic declaration can settle it.
     ///
-    /// For the second clause: a `Π` whose body does not mention the binder is
-    /// the arrow `A → B`, and the arrow is a set: the function space `fs(A,B)`
-    /// of [`derived::funspace`]. One that does is the **dependent product**
+    /// For the second clause: every `Π` is the **dependent product**
     /// `dprod_C(h⃗, A)` over the fibre `b_C(h⃗, ·)`, built by exactly the
     /// skeleton decomposition the lambda machinery uses — see [`build_fibre`].
+    /// A body that does not mention the binder is not a separate clause: its
+    /// skeleton is the bare hole variable, so every arrow `A → B` shares one
+    /// constant-fibre symbol — `dprod₀(B, A)`, `mini`'s own spelling — and two
+    /// non-dependent `Π`s agree by reflexivity where the retired `fs` clause
+    /// needed a bridge theorem. `derived::funspace`'s `fs` stays the library's
+    /// statement vocabulary; [`Self::dprod_fs_eq`] is the one crossing.
     ///
     /// [`build_fibre`]: Self::build_fibre
     ///
@@ -4524,7 +4547,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return match clause {
                 Clause::Prop => self.interp_pi_prop(e, dom, b, None),
                 Clause::Undet => self.interp_pi_undet(e, dom, b, None),
-                Clause::Type => Some(self.mk(self.pre.fs_sym(), vec![dom, b])),
+                // The constant fibre: the body is hole 0 entire and the
+                // skeleton is the bare hole variable — one table entry
+                // corpus-wide, shared with every arrow whatever its codomain.
+                Clause::Type => {
+                    let h = self.hole_var(0);
+                    self.finish_pi_site(e, Term::var(h), vec![b], dom)
+                }
             }
         }
 
@@ -4546,15 +4575,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Clause::Type => {}
         }
 
-        // The exact test: a body whose interpretation does not mention the
-        // binder's variable is a constant fibre, i.e. an arrow.
-        if !bt.occurs_free(v) {
-            return Some(self.mk(self.pre.fs_sym(), vec![dom, bt]))
-        }
-
+        // A body whose interpretation does not mention the binder's variable is
+        // a *constant* fibre. It is not a separate clause: `skeleton` sends the
+        // whole body to hole 0 and the key is the bare hole variable, so every
+        // arrow shares one skeleton — and one `dprod` symbol — corpus-wide.
         let mut holes = Vec::new();
         let sk = self.skeleton(&bt, v, &mut holes)?;
+        self.finish_pi_site(e, sk, holes, dom)
+    }
 
+    /// The tail of [`Self::interp_pi`]'s `Type` clause: register (or share) the
+    /// fibre skeleton's machinery and record where this occurrence sits.
+    fn finish_pi_site(&mut self, e: ExprPtr<'t>, sk: Term, holes: Vec<Term>, dom: Term) -> Option<Term> {
         let info = match self.pi_info(&sk) {
             Some(i) => i,
             None => {
@@ -4563,7 +4595,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
                     // Inert: the right *shape*, so that the interpretation stays
                     // compositional, but with no defining axioms and hence no
-                    // bridge. A reported gap rather than a wrong answer.
+                    // typing. A reported gap rather than a wrong answer.
                     None => Rc::new(PiInfo { dprod: self.env_mut().declare(arity), fibre: None }),
                 };
                 let mut sh = self.shared.borrow_mut();
@@ -6024,6 +6056,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let claim = target(&ty);
                 if *out.concl() != Formula::mem(ct.clone(), claim.clone()) {
                     return None
+                }
+                // An arrow-typed constructor's obligation arrives at the term
+                // `⟦T → T⟧` interprets to — the constant-fibre `dprod` — while
+                // `derived` states the membership over `fs`. Register the claim
+                // at both spellings; `mem_at_dprod` is the one Leibniz step
+                // between them.
+                if arrow {
+                    if let Some((dp, at_dp)) = self.mem_at_dprod(&ct, &ty, &ty, &out) {
+                        self.ind_mems.insert((ct.clone(), dp), at_dp);
+                    }
                 }
                 self.ind_mems.insert((ct.clone(), claim), out);
                 Some(ct)
@@ -7615,12 +7657,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
             }
             Expr::Pi { binder_name, binder_style, binder_type, body, .. } => {
-                // A *non-dependent* `Π x:A. B` is the arrow `A → B` — the
-                // function space `fs(A,B)` of [`derived::funspace`] — and a
-                // dependent one the **dependent product** `dprod_C(h⃗,A)` of
-                // [`dprod_symbol_n`]. Both have real axioms behind them, and
-                // `dprod_const_fibre_n` relates them when the fibre turns out to
-                // be constant. See [`Self::interp_pi`].
+                // Every `Type`-clause `Π x:A. B` is the **dependent product**
+                // `dprod_C(h⃗,A)` of [`dprod_symbol_n`], the arrow being the
+                // constant-fibre case at the bare-hole skeleton — one symbol
+                // corpus-wide, agreeing with `mini`'s clause by reflexivity.
+                // `dprod_const_fibre_n` relates it to the library's `fs` where
+                // a `derived` theorem is stated over the function space. See
+                // [`Self::interp_pi`].
                 match self.interp_pi(ctx, e, binder_name, binder_style, binder_type, body) {
                     Some(t) => t,
                     None => {
@@ -7738,8 +7781,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// * `⊢ U₀ ∈ U₁` — the one level where that fails, because the tower is
     ///   seeded at `ω` rather than at `U₀`. See [`Self::interp_sort`];
     /// * `⊢ ∀a. fs(a,a) ∈ U(a)` — the function space `t → t` sits in the least
-    ///   universe over `t`, which is what makes `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`
-    ///   available now that a non-dependent `Pi` is interpreted as `fs`.
+    ///   universe over `t`. A non-dependent `Pi` interprets as the
+    ///   constant-fibre `dprod`, so the fact is carried across
+    ///   [`Self::dprod_fs_eq`] to conclude `⟦t → t⟧ ∈ ⟦Sort (u+1)⟧` at the
+    ///   term the interpretation builds.
     ///
     /// Whichever applies, the result is checked to be literally `⟦a⟧ ∈ dom`
     /// before it is returned, so a mistake here yields a gap and not a theorem
@@ -7754,17 +7799,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let mem_u = self.pre.mem_u.clone();
             derived::inst_all(&mem_u, std::slice::from_ref(ta))?
         } else {
-            // `⟦a⟧` has to be a *diagonal* function space `fs(t,t)`: the
-            // two-argument form `(a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c)` carries an
-            // antecedent about binary unions that is not dischargeable here.
+            // `⟦a⟧` has to be a *diagonal* arrow `⟦t → t⟧`: the two-argument
+            // form `(a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c)` carries an antecedent
+            // about binary unions that is not dischargeable here. The arrow
+            // interprets as `dprod(t,t)` at the constant-fibre skeleton; the
+            // library facts are stated over `fs`, so the membership is derived
+            // there and carried across [`Self::dprod_fs_eq`] — one Leibniz
+            // step, exactly the seam `mini`'s `dprod_is_fs` is.
             let (f, args) = self.parts.get(ta)?.clone();
-            if f != self.pre.fs_sym() || args.len() != 2 || args[0] != args[1] {
+            if args.len() != 2 || args[0] != args[1] {
+                return None
+            }
+            let h = self.hole_var(0);
+            let const_dprod =
+                self.shared.borrow().pi_infos.get(&Term::var(h)).map(|i| i.dprod);
+            if Some(f) != const_dprod {
                 return None
             }
             let t = args[0].clone();
             // `⟦Prop → Prop⟧ ∈ ⟦Type 0⟧` is the one diagonal whose target is not
             // `U(t)`, since `⟦Type 0⟧` is `U(ω)` and not `U(U₀)`.
-            if t == self.pre.u0() && *dom == self.pre.u1() {
+            let at_fs = if t == self.pre.u0() && *dom == self.pre.u1() {
                 self.pre.fs_u0_in_u1.clone()
             } else {
                 if *dom != Term::apply(self.pre.u_sym, vec![t.clone()]) {
@@ -7772,7 +7827,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
                 let fs_in_u = self.pre.fs_in_u.clone();
                 derived::inst_all(&fs_in_u, std::slice::from_ref(&t))?
-            }
+            };
+            let fs_t = Term::apply(self.pre.fs_sym(), vec![t.clone(), t.clone()]);
+            (*at_fs.concl() == Formula::mem(fs_t, dom.clone())).then_some(())?;
+            let eq = self.dprod_fs_eq()?;
+            let inst = derived::inst_all(&eq, &[t.clone(), t])?;
+            let (dp, fs_at) = inst.concl().as_eq()?;
+            (dp == *ta).then_some(())?;
+            let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(fs_at, dp, w, Formula::mem(Term::var(w), dom.clone()));
+            Thm::mp(&Thm::mp(&leib, &back)?, &at_fs)?
         };
         (*out.concl() == want).then_some(out)
     }
@@ -7803,11 +7868,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     //   whatever, so nothing about where they live is derivable — honestly
     //   `None`.
     // * `App f a` — the characteristic property of the interpretation of `f`'s
-    //   type. For `fs(A,B)` that is `Prelude::fs_app_mem`; for a dependent
-    //   product it is the `∀x ∈ A. app(f,x) ∈ b(x)` conjunct of `dprod_def`,
-    //   after which `b(h⃗,⟦a⟧)` is unfolded to the fibre skeleton — the same
+    //   type: the `∀x ∈ A. app(f,x) ∈ b(x)` conjunct of `dprod_def`, after
+    //   which `b(h⃗,⟦a⟧)` is unfolded to the fibre skeleton — the same
     //   unfolding `beta_step` does, which is why the result lines up with
-    //   `⟦B[a]⟧` syntactically.
+    //   `⟦B[a]⟧` syntactically. For a target a `derived` theorem states over
+    //   `fs(A,B)` it is `Prelude::fs_app_mem` instead.
     // * `Local w` — the binder assumption in force, if there is one; failing
     //   that, [`TgBackend::has_type_local`] *acquires* the context's own typing
     //   `⟦w⟧ ∈ ⟦A⟧` of it as a new antecedent, which the caller then either
@@ -8815,8 +8880,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let hf = reassume(&hf, &used_f, &used)?;
         let hyp = conj_of(&used);
 
-        // Non-dependent: `⟦Π A B⟧` is the function space, and a function's
-        // values lie in its codomain.
+        // A function-space target: `⟦Π⟧` is always a `dprod` now, but a typing
+        // stated by a `derived` theorem — the ι rules' minor-premise chains —
+        // may still name `fs`, and a function's values lie in its codomain.
         if let Some((f, args)) = self.parts.get(&fty_t).cloned() {
             if f == self.pre.fs_sym() && args.len() == 2 && args[0] == dom_t {
                 let lem = self.pre.fs_app_mem.clone();
@@ -12775,101 +12841,99 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         CondEq::new(out, hyps).ok_or("pi congruence: the result is not the assumed equation")
     }
 
-    /// The constant-fibre bridge for one `Π` skeleton, derived on first use and
-    /// shared thereafter: `dprod_const_fibre_n` is a full Extensionality
-    /// argument in both directions, and the same body shape recurs.
-    fn pi_bridge_thm(&mut self, key: &Term) -> Option<Thm> {
-        if let Some(t) = self.shared.borrow().pi_bridges.get(key) {
-            return t.as_ref().map(|s| s.thm().clone())
+    /// `⊢ ∀B ∀A. dprod(B,A) = fs(A,B)` at the constant-fibre skeleton — the
+    /// interpreted arrow spelled as the library's function space. Derived once
+    /// per thread and shared; see [`Shared::dprod_fs`].
+    ///
+    /// This is [`dprod_const_fibre_n`] with its constant-fibre hypothesis
+    /// discharged outright: at the bare-hole skeleton the fibre's defining
+    /// equation is `⊢ ∀B ∀x. b(B,x) = B` — a projection — so
+    /// `∀x. (x ∈ A → b(B,x) = B)` is that axiom weakened by `a1i` and
+    /// generalised, and the equation holds unconditionally, the empty domain
+    /// included. The conclusion is compared against the statement above before
+    /// it is generalised, so a mistake yields `None` and a reported gap, never
+    /// a theorem about other terms.
+    fn dprod_fs_eq(&mut self) -> Option<Thm> {
+        if let Some(r) = self.shared.borrow().dprod_fs.clone() {
+            return r.map(Sealed::into_thm)
         }
-        let info = self.pi_info(key)?;
-        let thm = match info.fibre.as_ref() {
-            Some(fb) => {
-                let pre = self.pre.clone();
-                dprod_const_fibre_n(
-                    &mut self.env_mut(),
-                    &pre.ap,
-                    &pre.fs,
-                    fb.b,
-                    fb.img,
-                    &fb.img_ax,
-                    info.dprod,
-                    &fb.dprod_def,
-                    &pre.fs_app_mem,
-                    &pre.fs_retarget,
-                )
-            }
-            None => None,
-        };
-        self.shared.borrow_mut().pi_bridges.insert(key.clone(), Sealed::seal(thm.clone()));
-        thm
+        let built = (|| {
+            let h = self.hole_var(0);
+            let sk = Term::var(h);
+            // The constant-fibre skeleton's machinery — one table entry
+            // corpus-wide, shared with `interp_pi`'s own registration.
+            let info = match self.pi_info(&sk) {
+                Some(i) => i,
+                None => {
+                    let info = match self.build_fibre(&sk, 1) {
+                        Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
+                        None => return None,
+                    };
+                    let mut sh = self.shared.borrow_mut();
+                    sh.pi_infos.insert(sk.clone(), info.clone());
+                    sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
+                    info
+                }
+            };
+            let fb = info.fibre.as_ref()?;
+            let pre = self.pre.clone();
+            let bridge = dprod_const_fibre_n(
+                &mut self.env_mut(),
+                &pre.ap,
+                &pre.fs,
+                fb.b,
+                fb.img,
+                &fb.img_ax,
+                info.dprod,
+                &fb.dprod_def,
+                &pre.fs_app_mem,
+                &pre.fs_retarget,
+            )?;
+            let (vb, va, vx) = {
+                let mut env = self.env_mut();
+                (env.fresh_var(), env.fresh_var(), env.fresh_var())
+            };
+            let (tb, ta, tx) = (Term::var(vb), Term::var(va), Term::var(vx));
+            // `∀x. (x ∈ A → b(B,x) = B)`, from the fibre's own defining
+            // equation — checked to *be* the projection before it is used.
+            let at_x = derived::inst_all(&fb.b_def, &[tb.clone(), tx.clone()])?;
+            let want_ax =
+                Formula::eq(Term::apply(fb.b, vec![tb.clone(), tx.clone()]), tb.clone());
+            (*at_x.concl() == want_ax).then_some(())?;
+            let guarded = derived::a1i(&at_x, Formula::mem(tx.clone(), ta.clone()));
+            let family = derived::gen_all(&[vx], &guarded);
+            let inst = derived::inst_all(&bridge, &[tb.clone(), ta.clone(), tb.clone()])?;
+            let out = Thm::mp(&inst, &family)?;
+            let want = Formula::eq(
+                Term::apply(info.dprod, vec![tb.clone(), ta.clone()]),
+                Term::apply(pre.fs_sym(), vec![ta, tb]),
+            );
+            (*out.concl() == want).then_some(())?;
+            Some(derived::gen_all(&[vb, va], &out))
+        })();
+        self.shared.borrow_mut().dprod_fs = Some(Sealed::seal(built.clone()));
+        built
     }
 
-    /// The constant-fibre premise of [`dprod_const_fibre_n`], read off the body
-    /// certificate: `⊢ ∀x. (x ∈ A → b(h⃗,x) = B)`.
-    ///
-    /// The certificate relates the two `Π` bodies opened at the checker's local
-    /// `w`. One of them is the dependent side, and `b(h⃗,w)` unfolds — by the
-    /// fibre's defining equation — to exactly that; the other does not mention
-    /// the binder at all, so it *is* the constant `B` the function space names.
-    /// Chaining the two gives `b(h⃗,w) = B` at that one `w`, and
-    /// [`Self::guard_and_generalise`] turns it into the pointwise condition.
-    ///
-    /// Which variable `w` is, is not handed to this rule; it is searched for
-    /// among the free variables the certificate mentions, and the unfolding is
-    /// *compared* rather than assumed, so a wrong guess yields `None`.
-    fn fibre_premise(
-        &mut self,
-        b_def: &Thm,
-        holes: &[Term],
-        dom: &Term,
-        target: &Term,
-        body: &CondEq,
-    ) -> Option<(Thm, Vec<Formula>)> {
-        let (u1, u2) = body.as_eq()?;
-
-        // Variables `w` may be: those the certificate mentions, but not any that
-        // the parameters, the domain or the constant fibre do — generalising
-        // over one of those would capture it.
-        let mut excluded: Vec<FreeVar> = Vec::new();
-        for h in holes {
-            h.free_vars(&mut excluded);
-        }
-        dom.free_vars(&mut excluded);
-        target.free_vars(&mut excluded);
-        let mut seen: Vec<FreeVar> = Vec::new();
-        u1.free_vars(&mut seen);
-        u2.free_vars(&mut seen);
-        let mut cands: Vec<FreeVar> = Vec::new();
-        for v in seen {
-            if !excluded.contains(&v) && !cands.contains(&v) {
-                cands.push(v);
-            }
-        }
-        cands.push(self.env_mut().fresh_var());
-
-        for w in cands {
-            let mut args = holes.to_vec();
-            args.push(Term::var(w));
-            let Some(unfold) = derived::inst_all(b_def, &args) else { continue };
-            let Some((_, sk)) = unfold.concl().as_eq() else { continue };
-            // Orient the body certificate so that it proves `skeleton = B`.
-            let oriented = if u1 == sk && u2 == *target {
-                body.clone()
-            } else if u2 == sk && u1 == *target {
-                match self.ceq_symm(body) {
-                    Some(c) => c,
-                    None => continue,
-                }
-            } else {
-                continue
-            };
-            let Some(unfold) = CondEq::plain(unfold) else { continue };
-            let Some(at_w) = self.ceq_trans(&unfold, &oriented) else { continue };
-            let Some(out) = self.guard_and_generalise(&at_w, w, dom) else { continue };
-            return Some(out)
-        }
-        None
+    /// From `⊢ subj ∈ fs(a,b)` — a library theorem stated over the function
+    /// space — conclude `⊢ subj ∈ dprod(b,a)` at the constant-fibre skeleton,
+    /// the term `⟦a → b⟧` now interprets to. One Leibniz step along
+    /// [`Self::dprod_fs_eq`], run backwards; the claim is compared before it is
+    /// returned.
+    fn mem_at_dprod(&mut self, subj: &Term, a: &Term, b: &Term, mem_fs: &Thm) -> Option<(Term, Thm)> {
+        let eq = self.dprod_fs_eq()?;
+        let inst = derived::inst_all(&eq, &[b.clone(), a.clone()])?;
+        let (dp, fs_t) = inst.concl().as_eq()?;
+        (*mem_fs.concl() == Formula::mem(subj.clone(), fs_t.clone())).then_some(())?;
+        let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(fs_t, dp.clone(), w, Formula::mem(subj.clone(), Term::var(w)));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, mem_fs)?;
+        // Rebuilt through `mk` so the term's structure is on record for the
+        // rules that will take the claim apart later.
+        let (f, args) = dp.as_app()?;
+        let dp = self.mk(f, args.to_vec());
+        (*out.concl() == Formula::mem(subj.clone(), dp.clone())).then_some((dp, out))
     }
 
     /// [`retarget`] against this backend's record of term structure.
@@ -12896,43 +12960,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         (l == r).then(|| CondEq::refl(l.clone()))
     }
 
-    /// Discharge a lemma's premises with derivations that may carry assumptions.
-    ///
-    /// `lemma` is `⊢ p₁ → (p₂ → … → concl)` and each `prem` derives one `pᵢ`
-    /// under its own assumptions; the result is the conclusion under the union.
-    /// This is `Thm::mp`, once per premise, re-stated under the merged
-    /// assumption set — the shape both congruences need.
-    fn discharge(&mut self, lemma: &Thm, prems: &[CondEq]) -> Option<CondEq> {
-        let mut hyps: Vec<Formula> = Vec::new();
-        for p in prems {
-            hyps = merge_hyps(&hyps, &p.hyps);
-        }
-        let h = conj_of(&hyps);
-        let mut acc = u_a1i(lemma, h.as_ref());
-        for p in prems {
-            let lifted = reassume(&p.thm, &p.hyps, &hyps)?;
-            acc = u_mp(&acc, &lifted, h.as_ref())?;
-        }
-        CondEq::new(acc, hyps)
-    }
-
     /// `⊢ ⟦Π x:A. b⟧ = ⟦Π x:A'. b'⟧`.
     ///
-    /// Three cases, by the head symbols of the two interpretations:
+    /// Every `Type`-clause `Π` — dependent or not — interprets by a `dprod`
+    /// whose head symbol is a property of the fibre's *shape*, the constant
+    /// fibre being the degenerate shape at the bare-hole skeleton. So there are
+    /// two cases: the same `dprod` — congruence over its arguments, the fibre's
+    /// abstracted subterms followed by the domain — and two *different*
+    /// `dprod`s, related by dependent-product Extensionality
+    /// ([`Self::derive_pi_dprod_ext`]). Two spellings of one arrow that used to
+    /// land in different clauses (`fs` against `dprod`, `dep = has_bvar` being
+    /// β-unstable) now land in the second case, where `dprod_ext_n` relates
+    /// them; there is no bridge theorem because there are no longer two
+    /// interpretation spellings to bridge.
     ///
-    /// * both `fs` — congruence, via the derived [`derived::ext::fs_cong`];
-    /// * both the *same* `dprod` — congruence over its arguments, which are the
-    ///   fibre's abstracted subterms followed by the domain;
-    /// * one of each — the **bridge**: the dependent side's fibre is shown
-    ///   constant on the domain and [`dprod_const_fibre_n`] identifies it with
-    ///   the function space. See [`Self::derive_pi_bridge`].
-    ///
-    /// A fourth, ahead of all of them: two **`Prop`-valued `∀`s**, §6.2's other
-    /// clause. Over the same body skeleton that is plain congruence on the
-    /// shared conditional-singleton symbol, whose arguments are laid out
-    /// exactly as a dependent product's — the skeleton's holes, then the
-    /// domain — so [`Self::derive_pi_argwise`] serves both; over differently
-    /// shaped bodies the symbols are unrelated and what settles it is
+    /// Ahead of both: two **`Prop`-valued `∀`s**, §6.2's other clause. Over the
+    /// same body skeleton that is plain congruence on the shared
+    /// conditional-singleton symbol, whose arguments are laid out exactly as a
+    /// dependent product's — the skeleton's holes, then the domain — so
+    /// [`Self::derive_pi_argwise`] serves both; over differently shaped bodies
+    /// the symbols are unrelated and what settles it is
     /// [`Self::derive_prop_ext`], the same split for the same reason.
     fn derive_pi_cong(
         &mut self,
@@ -13002,13 +13049,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             return self.derive_pi_dprod_ext(a, b, dom, body)
         }
+        // Neither side registered a dependent-product site, so at least one
+        // interpretation fell back to the opaque `pi` symbol — a bug degraded
+        // into a gap, per `interp_pi`. Plain congruence over the shared symbol
+        // is all the signature supports.
         if fa != fb {
-            return self.derive_pi_bridge(a, b, fa, &aargs, fb, &bargs, dom, body)
+            return Err("pi congruence: a Π has no dependent-product interpretation")
         }
-        let fs = self.pre.fs_sym();
-        if fa == fs || fa == self.syms.pi {
-            // Both binary, and in the same order: domain then codomain (or, for
-            // the opaque fallback symbol, the raw body).
+        if fa == self.syms.pi {
+            // Binary, domain then the raw body.
             if aargs.len() != 2 || bargs.len() != 2 {
                 return Err("pi congruence: a Π interprets to an unexpected arity")
             }
@@ -13016,15 +13065,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let (ib, jb) = (bargs[0].clone(), bargs[1].clone());
             let dom_thm = self.pi_premise(dom, &ia, &ib).ok_or(pi_dom_gap(dom))?;
             let body_thm = self.pi_premise(body, &ja, &jb).ok_or(pi_body_gap(body))?;
-            if fa == fs {
-                // `fs_cong` is the lemma derived for exactly this case; the
-                // opaque fallback symbol has none, and plain congruence over it
-                // is all the signature supports.
-                let lemma = self.pre.fs_cong.clone();
-                let inst = derived::inst_all(&lemma, &[ia, ib, ja, jb])
-                    .ok_or("pi congruence: instantiating function-space congruence failed")?;
-                return self.discharge(&inst, &[dom_thm, body_thm]).ok_or("pi congruence: discharging a premise failed")
-            }
             return self.ceq_congr(fa, &[dom_thm, body_thm]).ok_or("pi congruence: congruence rule refused")
         }
         Err("pi congruence: a Π interprets to an unexpected head symbol")
@@ -13131,119 +13171,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("pi congruence: discharging the pointwise premise failed")
         };
         CondEq::new(out, hyps).ok_or("pi congruence: the result is not the assumed equation")
-    }
-
-    /// `⊢ fs(A,B) = dprod_C(h⃗,A')`, or its mirror — the two encodings of `Π`
-    /// bridged.
-    ///
-    /// `⟦Π x:A. B⟧` is the function space when the body does not mention the
-    /// binder and the dependent product when it does, so two `Π` types the
-    /// checker calls equal can interpret with unrelated head symbols. Congruence
-    /// relates nothing here; what does is
-    /// `⊢ ∀A ∀B. ((∀x. (x ∈ A → b(h⃗,x) = B)) → dprod(h⃗,A) = fs(A,B))`, whose
-    /// hypothesis says the fibre is *constant* on the domain — which is exactly
-    /// what the body certificate says, since the other side's body does not
-    /// mention the binder at all.
-    ///
-    /// Three steps: the fibre premise ([`Self::fibre_premise`]) discharges the
-    /// bridge at the dependent side's own domain, giving
-    /// `dprod(h⃗,A') = fs(A',B)`; `fs_cong` and the domain premise move `fs(A',B)`
-    /// to `fs(A,B)`; and the two are chained. Nothing is assumed about which
-    /// side is which — the result is compared against the claim by the caller.
-    #[allow(clippy::too_many_arguments)]
-    fn derive_pi_bridge(
-        &mut self,
-        a: ExprPtr<'t>,
-        b: ExprPtr<'t>,
-        fa: FnSym,
-        aargs: &[Term],
-        fb: FnSym,
-        bargs: &[Term],
-        dom: Option<&CondEq>,
-        body: Option<&CondEq>,
-    ) -> Result<CondEq, &'static str> {
-        let fs = self.pre.fs_sym();
-        // Which side is the function space, and which the dependent product?
-        // `flip` records that the *claim* is `dprod … = fs …`, so the derivation
-        // below — which always builds `fs … = dprod …` — has to be turned round.
-        let (dep_e, fs_args, flip) = if fa == fs && self.pi_sites.contains_key(&b) {
-            (b, aargs, false)
-        } else if fb == fs && self.pi_sites.contains_key(&a) {
-            (a, bargs, true)
-        } else if self.pi_sites.contains_key(&a) && self.pi_sites.contains_key(&b) {
-            // Two dependent products over *different* fibre skeletons. Relating
-            // them is dependent-product extensionality — `derived::ext::dprod_ext`
-            // in the parameter-threading form, which is not built here.
-            return Err("pi congruence: two Π bodies have unrelated fibre skeletons")
-        } else {
-            return Err("pi congruence: dependent and non-dependent Π interpret differently")
-        };
-        if fs_args.len() != 2 {
-            return Err("pi congruence: a Π interprets to an unexpected arity")
-        }
-        let (fs_dom, fs_cod) = (fs_args[0].clone(), fs_args[1].clone());
-
-        let site = self.pi_sites.get(&dep_e).expect("checked just above");
-        let (key, holes, dep_dom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
-        let Some(info) = self.pi_info(&key) else {
-            return Err("pi congruence: the Π's fibre skeleton was not registered")
-        };
-        let Some(b_def) = info.fibre.as_ref().map(|f| f.b_def.clone()) else {
-            return Err("pi congruence: the Π's fibre was not built")
-        };
-
-        // The domain premise, always oriented as `fs`'s domain = the dependent
-        // product's domain.
-        let (dl, dr) = if flip { (dep_dom.clone(), fs_dom.clone()) } else { (fs_dom.clone(), dep_dom.clone()) };
-        let Some(dom_thm) = self.pi_premise(dom, &dl, &dr) else { return Err(pi_dom_gap(dom)) };
-        let dom_thm = if flip {
-            self.ceq_symm(&dom_thm).ok_or("pi congruence: re-orienting the domain premise failed")?
-        } else {
-            dom_thm
-        };
-
-        // The constant-fibre premise, and the bridge it discharges.
-        let Some(body) = body else { return Err("pi congruence over an admitted body premise") };
-        let Some((fibre, rest)) = self.fibre_premise(&b_def, &holes, &dep_dom, &fs_cod, body) else {
-            return Err("pi congruence: the body certificate does not make the fibre constant")
-        };
-        let Some(bridge) = self.pi_bridge_thm(&key) else {
-            return Err("pi congruence: the constant-fibre bridge could not be derived")
-        };
-        let mut args = holes;
-        args.push(dep_dom.clone());
-        args.push(fs_cod.clone());
-        let Some(inst) = derived::inst_all(&bridge, &args) else {
-            return Err("pi congruence: instantiating the constant-fibre bridge failed")
-        };
-        // `⊢ conj(rest) → dprod(h⃗,A') = fs(A',B)`, then turned round.
-        let h = conj_of(&rest);
-        let lemma = u_a1i(&inst, h.as_ref());
-        let Some(bridged) = u_mp(&lemma, &fibre, h.as_ref()) else {
-            return Err("pi congruence: discharging the fibre premise failed")
-        };
-        let Some(bridged) = CondEq::new(bridged, rest) else {
-            return Err("pi congruence: the bridge is not the assumed equation")
-        };
-        let Some(bridged) = self.ceq_symm(&bridged) else {
-            return Err("pi congruence: re-orienting the bridge failed")
-        };
-
-        // `fs(A,B) = fs(A',B)` from the domain premise, then chained on.
-        let lemma = self.pre.fs_cong.clone();
-        let inst = derived::inst_all(&lemma, &[fs_dom, dep_dom, fs_cod.clone(), fs_cod.clone()])
-            .ok_or("pi congruence: instantiating function-space congruence failed")?;
-        let cod_refl = CondEq::refl(fs_cod);
-        let Some(retarget) = self.discharge(&inst, &[dom_thm, cod_refl]) else {
-            return Err("pi congruence: discharging the domain premise failed")
-        };
-        let Some(out) = self.ceq_trans(&retarget, &bridged) else {
-            return Err("pi congruence: chaining the bridge failed")
-        };
-        if flip {
-            return self.ceq_symm(&out).ok_or("pi congruence: re-orienting the result failed")
-        }
-        Ok(out)
     }
 
     /// `⊢ ⟦λx:A. b⟧ = ⟦λx:A'. b'⟧`, by graph extensionality.
@@ -13684,9 +13611,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `app(f,a) ∈ B` from `f ∈ ⟦Π A B⟧` and `a ∈ ⟦A⟧`.
     ///
     /// The two cases are [`Self::has_type_app`]'s, and for the same reasons: a
-    /// non-dependent `Π` is the function space, whose values lie in its
-    /// codomain; a dependent one is the dependent product, whose characteristic
-    /// property *is* `∀x ∈ A. app(f,x) ∈ b(x)`.
+    /// target a `derived` theorem stated over `fs`, whose values lie in its
+    /// codomain; an interpreted `Π`, always the dependent product, whose
+    /// characteristic property *is* `∀x ∈ A. app(f,x) ∈ b(x)`.
     #[allow(clippy::too_many_arguments)]
     fn ty_app_from(
         &mut self,
@@ -14939,7 +14866,8 @@ enum HtClause {
     /// `⊢ U₀ ∈ U₁`, i.e. `⟦Prop⟧ ∈ ⟦Type 0⟧` — the one level of the tower where
     /// `x ∈ U(x)` does not apply, because `U₁` is `U(ω)`.
     U0MemU1,
-    /// `⊢ ∀a. fs(a,a) ∈ U(a)`.
+    /// `⊢ ∀a. fs(a,a) ∈ U(a)`, carried across [`TgBackend::dprod_fs_eq`] to
+    /// the constant-fibre `dprod` the diagonal arrow interprets to.
     FsDiag,
     /// Along a constant's defining equation, from its value's typing.
     Const,
