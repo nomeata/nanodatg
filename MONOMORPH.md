@@ -554,6 +554,112 @@ On `init-prelude` mode B is 2365 declarations against mode A's 2244: the
 difference is 121 extra recursor copies, and every one of them is a recursor
 used at more than one motive universe.
 
+## 4.3 Which mode to build the checker against — the measurement
+
+**Verdict: mode A, and the trigger that would switch us to B is not close to
+firing.** The trigger was named as *"is any recursor's motive universe actually
+non-ground at a use site?"*, because mode A's whole claim on a consumer is that
+the surviving level work is "substitute one closed level into a recursor" and
+never "unify two open ones". Counted over every `monomorph` output of
+`vendor/arena-tests/good` outside `perf/` — `scripts/mono-motive-ground.py`,
+which reads the level table, marks a level ground when no `param` node is
+reachable from it, and takes the motive argument at position 0 (§4.1):
+
+| mode A | recursors | motive instantiations | non-ground | reached from a **ground** declaration |
+| --- | ---: | ---: | ---: | ---: |
+| `init-prelude` | 139 | 262 distinct | **7** | **0** |
+| 91 `tutorial/` exports | 104 | 48 distinct | **20** | **0** |
+| the other 7 `good/` files | 36 | 21 distinct | **6** | **0** |
+
+**Every non-ground motive argument in the corpus is a recursor naming itself or
+a sibling of its own mutual block, at its own motive parameter, inside its own
+ι-rule right-hand sides.** On `init-prelude` the seven are `Nat.rec`,
+`List.rec`, `Lean.Name.rec`, `Lean.ParserDescr.rec` and the three-member
+`Lean.Syntax.rec{,_1,_2}` block; the script checks *machine-wise* that the level
+is the owner's own parameter and not merely some parameter, and all 33
+non-ground uses across the corpus pass that check. A consumer substituting a
+ground σ into a recursor grounds them along with the rest of the declaration, so
+**|σ| = 1 with a closed right-hand side is the whole of it.** No use site
+anywhere in the corpus instantiates a recursor at an open level.
+
+```bash
+modelgen/.lake/build/bin/monomorph vendor/arena-tests/good/init-prelude.ndjson -o A.ndjson
+scripts/mono-motive-ground.py A.ndjson
+```
+
+**Mode B does not remove the question, only most of it.** Run the same counter
+on mode B's output and `init-prelude` still has **2 level-carrying recursors**
+(`Eq.rec.{u,u_1}` and `List.rec.{u_1,u}`) and **1 non-ground motive
+instantiation** — because `Eq` and `List` are *carried built-ins* (§3) and
+`foldElim` is handed the names mode A kept a parameter on, which those are not.
+Mode B's output holds 14 level-carrying declarations against mode A's 147. So
+the axis mode B buys is a 147 → 14 reduction and not a 147 → 0 one: a checker
+that consumes mode B still needs `interp_level`, `interp_levels` and
+`audit_instantiation`, and still meets a recursor at an open motive universe.
+**"After mode B the checker can delete its level machinery" is false**, and
+§4.2's `levelParams`-empty sentence is true only of the non-built-in population.
+
+### The oracles, both legs
+
+| | `nanoda_bin` | Lean's kernel (`modelgen --check-recursors`) |
+| --- | --- | --- |
+| `init-prelude` mode A | **accept**, 2244 declarations, 0 typechecker errors | 139 recursors, **0 differ** |
+| `init-prelude` mode B | **panic**, `checker/src/inductive.rs:1269`, exit 101 | 260 recursors, **254 differ** |
+| 91 `tutorial/` mode A | **91/91 accept** | — |
+| 91 `tutorial/` mode B | 41 accept, **50 panic** | — |
+
+Mode B's six agreements are the carried built-ins' recursors, the only ones it
+does not rename. §4.2 measured this on a four-recursor fixture; at
+`init-prelude` scale the ratio is 254/260, so **"Lean is an oracle for mode B"
+is not merely unproven, it is refuted**, and the same holds of `nanoda`.
+
+`perf stat -e instructions`, `nanoda_bin` on `init-prelude`: original
+**1 530 728 225**, mode A **985 254 911** (1.55× fewer), mode B **369 424 894**
+before the panic — 24 % of the original's work, so §4.2's "no check cost for
+mode B can be derived at any scale" reproduces.
+
+### What mode A *does* cost our own checker, and it is not levels
+
+`mini` over the 91 `tutorial/` exports, by exit code — `0` accepted and fully
+certified, `1` rejected, `2` declined, `4` accepted with a gap:
+
+| | `0` | `1` | `2` | `4` |
+| --- | ---: | ---: | ---: | ---: |
+| original | 89 | 0 | 2 | 0 |
+| mode A | **85** | 0 | 2 | **4** |
+| mode B | 67 | **20** | 2 | 2 |
+
+Mode B's twenty rejections are `Unknown constant …rec._elim.N`: mini regenerates
+recursors by name exactly as `nanoda` does, so mode B is a *rejection* for our
+checker today and not only for the oracle.
+
+Mode A's four are `086_projProp3`, `102_unitEta1`, `117_accRecType`,
+`118_accRecReduction`, and **none of them is a level-machinery cost**. Two
+causes, both of them consequences of monomorphization itself and present in mode
+B identically:
+
+* **The eliminator trichotomy is read off the declaration's own level
+  *expression*, and monomorphization deletes it.** `mini::zoneb::provably_nonzero`
+  answers *false* for `PUnit.{u} : Sort (Param u)` — deliberately, because a
+  declaration that is a `Prop` at `u := 0` must take one branch at every `u`
+  (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3) — which routes `PUnit` to class (S)
+  and gives it the `LeProp::subsingleton` that `mini::unit_like` consumes. The
+  monomorphized copy is `_at.1.1.PUnit : Sort 1`, `provably_nonzero` answers
+  *true*, class (S) is never built, and `102_unitEta1` reports
+  `library-gap … waiting:unit-like(_at.1.1.PUnit)=1`. `086_projProp3` is the
+  same shape at `proj(_at.2.0.1.PropStructure)`.
+* **`mini::direct::clause_for` is keyed on a bare name** — `Eq`, `Acc`, `Nat`,
+  one comparison, no shape match. `Eq` and `Nat` survive because they are
+  carried built-ins; `Acc` becomes `_at.1.0.Acc`, the clause does not fire, the
+  general walk reaches `Acc.intro`'s depth-2 recursive telescope and declines
+  with `ind-spec(_at.1.0.Acc: recursive argument telescope depth)`. That is
+  `117`/`118`, one untranslated declaration each.
+
+Both are wiring in `mini/`, neither is a `derived/` debt, and neither is an
+argument for mode B — mode B has both and twenty rejections besides.
+`perf stat -e instructions` over the 91 exports: mini retires **419.80 G** on
+the originals and **385.11 G** on mode A, −8.3 %.
+
 ---
 
 # 5. What it costs, measured
