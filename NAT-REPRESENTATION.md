@@ -208,11 +208,20 @@ release.
 | 230 `Nat.modCore_lt` | 20.2 M | **20 241 310** |
 | 231 `Nat.mod_lt` — the last row printed | 30 347 733 | **30 341 025** |
 | gapped, throughout | 0 | **0** |
+| instructions | 20.85 T | **21.71 T** (+4.2 %) |
+| elapsed | 1 555 s | **1 656 s** |
 | how it ended | `SIGABRT`, 10 GB cap | `SIGABRT`, 10 GB cap |
 
-**The wall has not moved.** Same declaration, same order, and −6 708
-conversions out of 30.3 M — 0.02 %, which is noise at this scale and is
-certainly not a change of régime. Replacing the W-type carrier with `ω` did not
+**The wall has not moved, and the clause costs 4.2 % to stand still.** Same
+declaration, same order, −6 708 conversions out of 30.3 M — 0.02 %, noise at
+this scale — and 0.87 T more instructions for it. On *this* input that is the
+expected outcome and not a disappointment: the residue is the export with every
+literal above ten **deleted**, so the binary literal clause is inert on it by
+construction, and what is left is the carrier swap, which changes what `⟦Nat⟧`
+*is* and not how many times the prelude's arithmetic proofs reduce `Nat.rec`.
+The 4.2 % is `ω`'s apparatus — one `Nat::over`, `Add`, `Binary`, `Mul`, `Sub`,
+`Compare` per file — plus `natrec`'s ι rules being spent where
+`DepRecursor::iota`'s were. Replacing the W-type carrier with `ω` did not
 make the residue cheaper, and there is no reason it should have: the cost is
 not in *what* the carrier is, it is in how many `Nat.rec` reductions the
 prelude's arithmetic proofs perform, and the clause changes none of them. What
