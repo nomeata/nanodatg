@@ -33,6 +33,14 @@ export **record**: an inductive block, its constructors and its recursors
 mention one another cyclically and arrive as a single `inductive` record, so a
 group is one node, collects one demand set, and is emitted whole. A mutual
 `def` block is *not* a group — see [`buildGroups`].
+
+**One edge is not in the file.** A `modelgen` model is referenced by nothing —
+`mini` builds `T._model.self` off `T` rather than finding it through a use site
+— so the sweep would see no demand on it at all and every model group would
+take the default: one model, however many copies of `T`. [`modelKeying`]
+supplies the edge and [`pushInst`] carries it, and because it runs against the
+file's order rather than along it, a cascade onto a group the sweep has already
+passed is *counted and named* rather than assumed away. `MONOMORPH.md` §2.3.
 -/
 
 open Lean Meta
@@ -114,6 +122,14 @@ structure Info where
   elim : Option Name := none
   deriving Inhabited
 
+/-- **The innermost `_model` prefix of `n`**, or `none` if it has none. The one
+name walk [`modelCarrier`] and [`modelOwner`] are both derived from, so that
+"which model" and "a model of what" cannot disagree. -/
+def modelPrefix : Name → Option Name
+  | .anonymous => none
+  | n@(.str p s) => if s == "_model" then some n else modelPrefix p
+  | .num p _ => modelPrefix p
+
 /-- **`P.self`, where `P` is the innermost `_model` prefix of `n`** — the
 carrier of the model `n` belongs to, or `none` if `n` is not under a `_model`
 prefix at all.
@@ -139,10 +155,29 @@ the two land under different markers, and a consumer that derives the whole
 family from the type's name finds seven of nine (`MONOMORPH.md` §1.3). It is a
 *lookup* and not a rename: a file with a `_model` name that is not a model's —
 no carrier — is left exactly as it was. -/
-def modelCarrier : Name → Option Name
-  | .anonymous => none
-  | n@(.str p s) => if s == "_model" then some (.str n "self") else modelCarrier p
-  | .num p _ => modelCarrier p
+def modelCarrier (n : Name) : Option Name := (modelPrefix n).map (.str · "self")
+
+/-- **`T`, where `T._model` is the innermost `_model` prefix of `n`** — the
+declaration `n` is part of a model *of*, or `none` if `n` is not under a
+`_model` prefix at all.
+
+`modelCarrier` says which model `n` belongs to; this says what that model
+models, and it is the other half of the same convention. The two read the *same*
+prefix, so they agree on what a model is by construction rather than by two
+name walks that could drift: `T._model.rec_k` gives carrier `T._model.self` and
+owner `T`, and `T._model.0._model.ctor_j` — the model of a model, which the
+nested construction produces because its own block is mutual (`MODELGEN.md`
+§1.6) — gives carrier `T._model.0._model.self` and owner `T._model.0`. Reading
+the *innermost* prefix is what makes the second layer come out as a model of
+`T._model.0` rather than of `T`.
+
+This is what [`modelKeying`] instantiates a model off, and it is a lookup for
+the same reason `modelCarrier` is: the owner must be a declaration the file
+actually introduces, or there is no model here to key. -/
+def modelOwner (n : Name) : Option Name :=
+  match modelPrefix n with
+  | some (.str p _) => some p
+  | _ => none
 
 /-- One node of the declaration DAG. -/
 structure Group where
@@ -279,6 +314,155 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
     for (n, elim) in introOf d do
       info := info.insert n { group := gi, elim := elim.orElse (fun _ => modelElim) }
   return (groups, info)
+
+/-! ## The models
+
+A `modelgen` model is the one thing in the file **nothing references**: `mini`
+finds `T._model.self` by constructing the name off `T`, not through a use site
+(`MODELGEN.md` §1). The backward sweep is driven entirely by references, so
+left alone it sees no demand on a model at all and every model group takes the
+default — one model for however many copies `T` has. That is the defect
+`MONOMORPH.md` §1.3 item 1 names, and it is about *demand* and not about
+naming: the marker already commutes with the model.
+
+What closes it is an edge the sweep does not get from the file: **a model's
+groups are instantiated at exactly the `σ` set of the declaration they model**.
+It is not a reference — a model of `T` need not mention `T` — so it is
+recovered from the naming convention, by [`modelOwner`], and then propagated as
+if it were one. -/
+
+/-- Which group each model group is keyed to, and the reverse index the sweep
+cascades along. -/
+structure Keying where
+  /-- For each group, the group of the declaration its declarations model —
+  `none` for a group that is not a model's, which is nearly all of them. -/
+  owner : Array (Option Nat) := #[]
+  /-- The reverse index: for each group, every model group keyed to it. **This
+  is what makes the propagation transitive**, and the second layer of the
+  composed naming needs it to be: `T._model.0._model.self` is keyed to
+  `T._model.0`, which is itself keyed to `T`, so `σ` reaches it only by
+  cascading through the first layer. -/
+  models : Array (Array Nat) := #[]
+  /-- Model groups whose `σ` could not be determined, and why. **Named, not
+  defaulted** — a silent default is the defect this pass exists to remove, and
+  guessing one level along is the same mistake. -/
+  declined : Array String := #[]
+  /-- **The tenth family**, per group. A declaration under `T._model` whose
+  level-parameter arity is not `T`'s is not one of the nine (`MONOMORPH.md`
+  §1.3): a spliced `T._model.funext` is genuinely polymorphic in universes that
+  are nobody's motive, so `T`'s `σ` says nothing about its own and there is no
+  positional mapping to make. It monomorphizes by demand like any other
+  declaration, which is *right* — unlike the nine, it is referenced, by the
+  model's own declarations. The arity is the discriminator rather than the
+  spelling `funext`, so this reads no more of the name than the rest of the
+  keying does.
+
+  It is recorded because the reading only holds while such a group **is**
+  demanded: one that reaches the default is a model declaration falling to a
+  default after all, and the sweep names it. -/
+  loose : Array Bool := #[]
+  /-- Model groups whose level parameters match their owner's in arity but not
+  in name. The mapping is positional either way; this counts how often the
+  convention's "carries exactly `ℓ⃗`" is literal. -/
+  renamed : Nat := 0
+  deriving Inhabited
+
+/-- **Key every model group to the declaration it models.**
+
+A group is a model's when a name it introduces is under a `_model` prefix
+*whose carrier the file declares* — the same fail-closed test [`modelCarrier`]
+already makes, so a file that happens to spell `_model` and is not a model is
+untouched. The owner is then [`modelOwner`]'s, looked up in `info`.
+
+**Every name of the record is asked, and they must agree.** A record is one
+group and takes one instantiation, so a record whose names model two different
+declarations has no single `σ` to take; it declines. In practice they agree by
+construction — the nested model's block declares `T._model.0 … T._model.{n−1}`
+and every constructor and recursor under them, all owned by `T` — and the
+agreement is checked rather than assumed because the cost is one comparison.
+
+**The `σ` mapping is the identity**, which is a claim about `modelgen` and so is
+checked: the model's declarations carry exactly `ℓ⃗` (`MODELGEN.md` §1, property
+3), and [`buildGroups`] has already lifted the motive's universe out of `rec_k`
+and `iota_k_j`, so what is left is the owner's own parameter list. A group whose
+arity does not match its owner's is `Keying.loose` — the tenth family — and is
+left to its own demand rather than truncated or padded onto a mapping that does
+not exist. -/
+def modelKeying (x : Export) (groups : Array Group) (info : Std.HashMap Name Info)
+    (carried : Std.HashSet Nat) : Keying := Id.run do
+  let mut k : Keying :=
+    { owner := Array.replicate groups.size none, models := Array.replicate groups.size #[]
+      loose := Array.replicate groups.size false }
+  for gi in [0 : groups.size] do
+    let d := x.decls[groups[gi]!.decl]!
+    let mut isModel := false
+    let mut owners : Array Nat := #[]
+    let mut orphan : Option Name := none
+    for (n, _) in introOf d do
+      let some c := modelCarrier n | continue
+      unless info.contains c do continue
+      isModel := true
+      match modelOwner n with
+      | none => orphan := some n
+      | some o =>
+        match info[o]? with
+        | none => orphan := some n
+        | some i => unless owners.contains i.group do owners := owners.push i.group
+    unless isModel do continue
+    let nm := d.names[0]!
+    let decline (why : String) : Keying := { k with declined := k.declined.push s!"{nm}: {why}" }
+    if let some n := orphan then
+      k := decline s!"a model whose owner the file does not declare ({n})"
+    else if owners.size != 1 then
+      k := decline s!"a model whose names key to {owners.size} different declarations"
+    else if owners[0]! == gi then
+      k := decline "a model of a declaration its own record introduces"
+    else if carried.contains gi then
+      -- A carried group is emitted once, at no instantiation at all; there is
+      -- nothing for a key to decide. Not a decline — nothing was declined.
+      pure ()
+    else if carried.contains (owners[0]!) then
+      k := decline "a model of a carried declaration, which has no σ to key to"
+    else
+      let oi := owners[0]!
+      let lp := groups[gi]!.levelParams
+      let olp := groups[oi]!.levelParams
+      if lp.length != olp.length then
+        k := { k with loose := k.loose.set! gi true }
+      else
+        if lp != olp then k := { k with renamed := k.renamed + 1 }
+        k := { k with owner := k.owner.set! gi (some oi)
+                      models := k.models.set! oi (k.models[oi]!.push gi) }
+  return k
+
+/-- Add `σ` to a group's demand **and to every model keyed to it**, transitively.
+
+`cutoff` is the group the backward sweep is currently at. A cascade that lands
+on a group the sweep has already passed (`> cutoff`) delivers an instantiation
+whose *own* references the sweep will never explore, so the output could name a
+copy that was never emitted. That is not repaired here — it is collected, so
+that it is reported by name instead of being lost.
+
+**Nothing structural rules it out** — a model's groups sit before what they
+model in `modelgen`'s output, but the second layer sits *after* the block it
+models, so the cascade runs both ways against the file's order. What holds in
+practice is that the whole chain is filled in one step, from the first `σ` to
+reach the root: `T` is the last of the lot in file order, so `T._model.…` and
+`T._model.0._model.…` are both still ahead of the sweep when demand arrives at
+`T`, and every later push repeats a `σ` the chain already has and stops at the
+first line. **Measured at zero** over `modelgen/tests` (both modes),
+`modelgen/monotests`, `vendor/arena-tests` and Mathlib — `MONOMORPH.md` §2.3,
+which also has the one thing that was *not* zero and is why `elimD` is not
+cascaded. -/
+private partial def pushInst (models : Array (Array Nat)) (cutoff : Nat)
+    (st : Array (Array Inst) × Array Nat) (gi : Nat) (σ : Inst) :
+    Array (Array Inst) × Array Nat :=
+  let (demand, late) := st
+  if demand[gi]!.contains σ then (demand, late)
+  else
+    let demand := demand.set! gi (demand[gi]!.push σ)
+    let late := if gi > cutoff && !late.contains gi then late.push gi else late
+    models[gi]!.foldl (fun s m => pushInst models cutoff s m σ) (demand, late)
 
 /-! ## Levels -/
 
@@ -904,8 +1088,17 @@ structure Report where
   recordsOut : Nat := 0
   /-- Groups left alone, by their first name. -/
   carried : Array Name := #[]
-  /-- Groups nothing in the file demanded, which took the default. -/
+  /-- Groups nothing in the file demanded, which took the default. **A model
+  group is never one of them** ([`modelKeying`]). -/
   defaulted : Nat := 0
+  /-- Groups keyed to the declaration they model rather than to a use site. -/
+  modelGroups : Nat := 0
+  /-- Model groups whose `σ` the keying declined to decide. Their reasons are in
+  `errors`, by name. -/
+  modelDeclined : Nat := 0
+  /-- The tenth family: model groups with no positional `σ` mapping to their
+  owner, left to their own demand ([`Keying.loose`]). -/
+  modelLoose : Nat := 0
   /-- Copies per group, as a histogram. -/
   hist : Array (Nat × Nat) := #[]
   errors : Array String := #[]
@@ -1302,20 +1495,44 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                 changed := true
 
   phase "carried"
+  -- ── The models, keyed to what they model. The keying needs the carried set
+  -- (a carried group has no `σ` to key to) and the sweep needs the keying, so
+  -- it goes exactly here.
+  let keying := modelKeying x groups info carried
+  let modelGroups := keying.owner.foldl (fun a o => if o.isSome then a + 1 else a) 0
+  let modelLoose := keying.loose.foldl (fun a b => if b then a + 1 else a) 0
+  if monoStats then
+    IO.eprintln s!"[mono] models: keyed={modelGroups} loose={modelLoose} \
+      declined={keying.declined.size} renamed={keying.renamed}"
+  phase "keying"
   -- ── The backward sweep.
   let mut demand : Array (Array Inst) := Array.replicate groups.size #[]
   let mut elimD : Array (Array Nat) := Array.replicate groups.size #[]
   let mut errors : Array String := #[]
+  let mut late : Array Nat := #[]
   let mut defaulted := 0
   for k in [0 : groups.size] do
     let gi := groups.size - 1 - k
     let g := groups[gi]!
     let isCarried := carried.contains gi
-    if !isCarried && demand[gi]!.isEmpty then
+    let isModel := keying.owner[gi]!.isSome
+    -- **A model does not default.** Its `σ` set is the one the declaration it
+    -- models takes, and the cascade below delivers it — from the owner's own
+    -- demand, or from the owner's default at the owner's visit. Falling back to
+    -- `--default` here is exactly `MONOMORPH.md` §1.3 item 1: one model for
+    -- however many copies of `T` the file wants.
+    if !isCarried && !isModel && demand[gi]!.isEmpty then
       defaulted := defaulted + 1
-      let mut ds : Array Inst := #[]
-      for l in opts.defaults do ds := addInst ds (Array.replicate g.levelParams.length l)
-      demand := demand.set! gi ds
+      -- The tenth family's reading is that it is demanded like anything else
+      -- ([`Keying.loose`]). One that is not is a model declaration taking a
+      -- default, which is the thing this pass must not do quietly.
+      if keying.loose[gi]! then
+        errors := errors.push
+          s!"{x.decls[g.decl]!.names[0]!}: a model declaration nothing demands, at the default"
+      for l in opts.defaults do
+        let (d, lt) := pushInst keying.models gi (demand, late) gi
+          (Array.replicate g.levelParams.length l)
+        demand := d; late := lt
     let sigmas := if isCarried then #[(#[] : Inst)] else demand[gi]!
     let ws := if g.elims.isEmpty then #[0] else
       (if elimD[gi]!.isEmpty then opts.defaults else elimD[gi]!)
@@ -1342,13 +1559,25 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
             unless demand[gi]!.contains σt do
               errors := errors.push s!"{n}: the group demands itself at a new instantiation"
           else
-            demand := demand.set! i.group (addInst demand[i.group]! σt)
+            let (d, lt) := pushInst keying.models gi (demand, late) i.group σt
+            demand := d; late := lt
           if let some wk := wv then
             if i.group == gi then
               unless elimD[gi]!.contains wk do
                 errors := errors.push s!"{n}: the group demands itself at a new eliminating universe"
             else elimD := elimD.set! i.group (addNat elimD[i.group]! wk)
-  rep := { rep with defaulted }
+  -- **What the keying could not decide, named.** A model group the cascade
+  -- never reached has no `σ` of its own and is emitted at none: the pass says
+  -- which, rather than inventing one and leaving the file quietly wrong.
+  for gi in [0 : groups.size] do
+    if keying.owner[gi]!.isSome && !carried.contains gi && demand[gi]!.isEmpty then
+      errors := errors.push
+        s!"{x.decls[groups[gi]!.decl]!.names[0]!}: a model the sweep never keyed"
+  for gi in late do
+    errors := errors.push
+      s!"{x.decls[groups[gi]!.decl]!.names[0]!}: a model reached after the sweep passed it"
+  errors := errors ++ keying.declined
+  rep := { rep with defaulted, modelGroups, modelLoose, modelDeclined := keying.declined.size }
   -- The sweep is the last reader of `refs` — the carriers and emission below
   -- ask `info` and `demand`, never this — and releasing it here explicitly was
   -- tried and **measured at nothing**: 1,797,792 KB against 1,796,272 KB on the

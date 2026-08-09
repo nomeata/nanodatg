@@ -612,21 +612,24 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
 /-! ## The composition: `modelgen`, then `monomorph`
 
 This is the only place the two tools meet inside one process, and it is here
-because the property it pins is invisible to everything else in either suite:
-`monomorph`'s marker encodes `|σ|`, so if the nine families of a model do not
-agree on their level-parameter arity, one model comes out under two markers and
-a consumer that derives the family from the type's name finds part of it. No
-kernel sees that — the fixture's output replays with **0 rejected** either way
+because the two properties it pins are invisible to everything else in either
+suite. **One is about the marker**: it encodes `|σ|`, so if the nine families of
+a model do not agree on their level-parameter arity, one model comes out under
+two markers and a consumer that derives the family from the type's name finds
+part of it. **The other is about demand**: nothing in the file *references* a
+model, so left to the backward sweep every model group takes `--default` and
+`T`'s second and third copies have no model at all. No kernel sees either — the
+fixture's output replays with **0 rejected** in both states
 (`MONOMORPH.md` §1.3).
 
 `poly_nested_used` is the fixture because it is the one where the composition
-can be measured at all: `PTree.{u}` is *used* at universes 0, 1 and 2, so a
-group comes out at three copies. On a file where every group lands at exactly
-one instantiation, "the model came out at the instantiation its declaration
-did" and "everything defaulted and the defaults agreed" are the same
-observation, and a previous seat's claim that the composition worked was
-vacuous for precisely that reason. `copies per group` is the check that says
-so, and it is the first one below. -/
+can be measured at all: `PTree.{u}` is *used* at universes 0, 1 and 2, so thirty
+of its thirty-six groups come out at three copies. On a file where every group
+lands at exactly one instantiation, "the model came out at the instantiation its
+declaration did" and "everything defaulted and the defaults agreed" are the same
+observation, and a previous seat's claim that the composition worked was vacuous
+for precisely that reason. `copies per group` is the check that says so, and it
+is the first one below. -/
 def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
   let text ← IO.FS.readFile s!"{root}/modelgen/tests/poly_nested_used.ndjson"
   let .ok x := Modelgen.parse text | return check a false "poly_nested_used does not parse"
@@ -643,42 +646,77 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
       Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Mono.monomorphize modelled opts)) ctx { env }
     a := check a rep.refused.isNone s!"compose[{tag}]: refused: {rep.refused}"
     a := check a (rep.rejected == 0) s!"compose[{tag}]: the kernel rejected {rep.rejected}"
-    -- **Not vacuous.** Three universes, so one group is at three copies; the
-    -- rest are at one. A composition measured on a file without this row is
+    -- **Not vacuous, and this is the row that says so.** Three universes, so
+    -- `PTree`'s group is at three copies — and so, now, is every one of the 29
+    -- groups its model is made of. The six at one copy are `Eq` and `List`
+    -- (carried), `N`, and the three `atK` that do the using. A composition
+    -- measured on a file whose every group lands at one instantiation is
     -- measuring the defaults agreeing with themselves.
     --
-    -- The one-copy count is **35** and was 21: `MODELGEN.md` §1.7 puts a second
-    -- model in the file — the simple model of the block `PTree`'s model *is* —
-    -- and its fourteen declarations are fourteen more groups at one
-    -- instantiation each. The three-copy row is untouched, which is the row
-    -- this check exists for.
-    a := check a (rep.hist == #[(1, 35), (3, 1)])
-      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 35), (3, 1)]"
-    -- **One marker per model.** Every name with a `_model` component, split at
-    -- §1.1's marker, grouped by the model it belongs to. `T._model.funext` is
-    -- excluded: a spliced prelude theorem (`MODELGEN.md` §1.5) is polymorphic
-    -- in universes that are nobody's motive, nothing derives its name, and it
-    -- is not one of the nine families.
+    -- It was `#[(1, 35), (3, 1)]`: one three-copy row, the type, and the model
+    -- defaulted to a single copy beside it (`MONOMORPH.md` §1.3 item 1).
+    a := check a (rep.hist == #[(1, 6), (3, 30)])
+      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 6), (3, 30)]"
+    a := check a (rep.modelGroups == 29)
+      s!"compose[{tag}]: {rep.modelGroups} model groups keyed, expected 29"
+    a := check a (rep.modelDeclined == 0)
+      s!"compose[{tag}]: the keying declined {rep.modelDeclined} model groups"
+    -- **One model per copy of `PTree`, and the same model under each.** Every
+    -- name is split at §1.1's marker; a name whose remainder has a `_model`
+    -- component is a model's, and it is filed under the marker it carries.
+    -- `T._model.funext` is excluded: a spliced prelude theorem (`MODELGEN.md`
+    -- §1.5) is polymorphic in universes that are nobody's motive, nothing
+    -- derives its name, and it is not one of the nine families.
+    --
+    -- Two things are then checked, and the second is what reaches the *second*
+    -- layer of the composed naming. The marker set the model's names use must
+    -- be exactly the marker set `PTree` itself uses — three, not one, and not
+    -- four. And the **suffixes** filed under each marker must be the same set:
+    -- `PTree._model.0._model.self` is a suffix like any other, so a copy that
+    -- got the outer model and not the inner one fails here by name.
+    -- §1.2 property 3's inversion: the trailing `._elim.⟨w⟩` comes off first.
+    -- Mode B folds the *motive's* universe into it, and that numeral is a
+    -- property of the copy, so the suffix sets would differ by construction if
+    -- it stayed on — `PTree._model.1.rec._elim.1` under one marker against
+    -- `._elim.3` under another is the same family member.
+    let split (n : Name) : String × List String :=
+      let ps0 := n.componentsRev.reverse.map toString
+      let ps := match ps0.reverse with
+        | w :: "_elim" :: r => if w.toNat?.isSome then r.reverse else ps0
+        | _ => ps0
+      match ps with
+      | "_at" :: k :: r =>
+        match k.toNat? with
+        | some i => (".".intercalate ("_at" :: k :: r.take i), r.drop i)
+        | none => ("", ps)
+      | _ => ("", ps)
     let mut per : Std.HashMap String (Array String) := {}
+    let mut ptreeMarks : Array String := #[]
     for d in y.decls do
       for n in d.names do
-        let ps := n.componentsRev.reverse.map toString
-        let (mk, rest) :=
-          match ps with
-          | "_at" :: k :: r =>
-            match k.toNat? with
-            | some i => (".".intercalate ("_at" :: k :: r.take i), r.drop i)
-            | none => ("", ps)
-          | _ => ("", ps)
+        let (mk, rest) := split n
+        if rest == ["PTree"] then
+          unless ptreeMarks.contains mk do ptreeMarks := ptreeMarks.push mk
         let some i := rest.findIdx? (· == "_model") | continue
         if rest.drop (i + 1) == ["funext"] then continue
-        let owner := ".".intercalate (rest.take (i + 1))
-        let seen := per.getD owner #[]
-        unless seen.contains mk do per := per.insert owner (seen.push mk)
-    a := check a (per.size == 1) s!"compose[{tag}]: {per.size} models, expected 1"
-    for (owner, marks) in per.toArray do
-      a := check a (marks.size == 1)
-        s!"compose[{tag}]: {owner} is split across {marks.size} markers: {marks}"
+        let seen := per.getD mk #[]
+        let suffix := ".".intercalate rest
+        unless seen.contains suffix do per := per.insert mk (seen.push suffix)
+    a := check a (ptreeMarks.size == 3)
+      s!"compose[{tag}]: PTree is at {ptreeMarks.size} markers, expected 3: {ptreeMarks}"
+    for mk in ptreeMarks do
+      a := check a (per.contains mk) s!"compose[{tag}]: no model under {mk}"
+    a := check a (per.size == ptreeMarks.size)
+      s!"compose[{tag}]: models under {per.size} markers, PTree at {ptreeMarks.size}: \
+        {per.toArray.map (·.1)}"
+    let ref := (per.getD (ptreeMarks.getD 0 "") #[]).qsort (· < ·)
+    a := check a (ref.size == 44)
+      s!"compose[{tag}]: {ref.size} model names under one marker, expected 44"
+    for (mk, ns) in per.toArray do
+      let ns := ns.qsort (· < ·)
+      a := check a (ns == ref)
+        s!"compose[{tag}]: the model under {mk} differs: \
+          {ns.filter (!ref.contains ·)} / {ref.filter (!ns.contains ·)}"
   return a
 
 def main (args : List String) : IO UInt32 := do

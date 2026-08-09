@@ -73,8 +73,10 @@ The one-sentence sequencing verdict: **three of the four work packages are
 safe to start today** — the stage-1 scope wiring with the strengthened memo
 key, the inductive-coverage port into `tg.rs`'s general path, and mono-input
 consumption in mode A — and the fourth, end-to-end nested declarations
-through the pipeline, waits on #116 in `monomorph`, not on anything in
-`checker/` or `mini/`.
+through the pipeline, waited on #116 in `monomorph` rather than on anything in
+`checker/` or `mini/`. **#116 is closed** (`MONOMORPH.md` §1.2 property 4 and
+§1.3), so all four are open; the paragraphs below that state the wait are kept
+for the shape of the problem and are marked where they are now history.
 
 ## 0. Where the brief is wrong or needs narrowing, stated first
 
@@ -168,9 +170,10 @@ the evidence plumbing going through stage-1 scopes instead of `lenv`, and
 mini's files remaining in place as the executable reference (§6). The two
 modules that are **not** primarily wiring: `nested_splice` (recognises and
 splices `modelgen` output — its keying by *constructed* name makes the mono
-root marker transparent to it, MONOMORPH §1.3's last paragraph, but the same
-§1.3 records that `rec_k`/`iota_k_j` land under a *different* marker, so the
-keying only works end-to-end once #116 fixes the pass) and `mutual_aux`
+root marker transparent to it, MONOMORPH §1.3's last paragraph; the same §1.3
+used to record that `rec_k`/`iota_k_j` land under a *different* marker and that
+only one copy of `T` had a model at all, and **#116 closed both**, so the keying
+works end-to-end now) and `mutual_aux`
 (encodes a mutual block into Lean-world syntax — representation-level, needs
 the fullest rewrite).
 
@@ -425,15 +428,17 @@ nothing — PROFILE §2 runs the same fixture as "no tower".)
 
 **Waits, with the blocking fact named:**
 
-* **Nested declarations end-to-end** wait on **#116, in `monomorph`**: a
-  model does not survive the pass — one model for three copies (demand:
-  nothing references a model, so its groups take `--default`), and the one
-  model split across two markers (`rec_k`/`iota_k_j` carry the motive
-  universe, so `|σ|` differs and the marker differs — MONOMORPH §1.3).
-  The fix is the one §1.3 states: key a model's declarations off **the
-  declaration they model**, for instantiation and marker both. Nothing in
-  `checker/` or `mini/` can compensate; `nested_splice` constructs names,
-  and seven-of-nine reachable families is a broken model.
+* ~~**Nested declarations end-to-end** wait on **#116, in `monomorph`**~~ —
+  **closed**, and this is what it was: a model did not survive the pass — one
+  model for three copies (demand: nothing references a model, so its groups
+  took `--default`), and the one model split across two markers
+  (`rec_k`/`iota_k_j` carry the motive universe, so `|σ|` differed and the
+  marker differed — MONOMORPH §1.3). The fix was the one §1.3 stated: key a
+  model's declarations off **the declaration they model**, for instantiation
+  and marker both. Nothing in `checker/` or `mini/` could have compensated;
+  `nested_splice` constructs names, and seven-of-nine reachable families is a
+  broken model. `MONOMORPH.md` §1.2 property 4 is now the contract, and
+  §1.3's two items both read *closed*.
 * **Mode B consumption** waits on the recursor instantiate-and-compare
   change (§2.3) — until then the σ deletion leaves the mode A residue.
 * **The full `instantiations.rs` deletion** waits on the decision that the
@@ -520,12 +525,12 @@ deliberately, so the protection inverts:
   silently as gaps. Detector: the `TyGap` rows and the "at levels still
   mentioning a parameter" audit line — keep that counter alive precisely
   because it must read zero on pipeline input.
-* **#116's shape is worse than its ticket.** The marker split is *intrinsic*
-  to putting `|σ|` in the name (MONOMORPH §1.3: "neither is a property of
-  §1.1's marker"), so the fix is a real design change in `monomorph`
-  (model declarations keyed off the modelled declaration), not a rename.
-  If it stalls, the pivot still lands everything except nested-through-
-  the-pipeline — mini's splice continues to carry nested on the oracle.
+* ~~**#116's shape is worse than its ticket.**~~ It was, and the reading held:
+  the marker split was *intrinsic* to putting `|σ|` in the name (MONOMORPH
+  §1.3: "neither is a property of §1.1's marker"), so the fix was a real
+  design change in `monomorph` — model declarations keyed off the modelled
+  declaration — and not a rename. Both halves have landed and the risk is
+  spent.
 * **The performance hope is an extrapolation.** §4's 322× is confounded and
   the ~30–60× full-coverage estimate is derived from mini-side duplication
   numbers. If checker-tg at full coverage lands at 10× instead, the pivot

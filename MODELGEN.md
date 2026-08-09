@@ -161,6 +161,18 @@ For `r = 1` that is `T.rec`, `T.rec_1`, … against `T._model.rec_0`,
    §1.6's construction too, where the carrier is the only name the two
    constructions agree on (there is no `T._model.0` there).
 
+   **And it reads the same prefix once more, for the instantiation** — this is
+   what `MONOMORPH.md` §1.2 property 4 rests on. `T._model.x` is keyed to `T`
+   and emitted at exactly `T`'s set of instantiations, because nothing in the
+   file references a model and a reference is all the sweep otherwise has. A
+   third consequence follows for anything changing the shapes above: a
+   declaration a model introduces must keep hanging off `T._model` for a `T`
+   the file **declares**, and must keep carrying `ℓ⃗` in `T`'s own order. A
+   declaration that does neither is not wrong — a spliced `T._model.funext`
+   (§1.5) carries universes that are nobody's motive and is monomorphized by
+   its use sites like anything else — but it is outside the property, and
+   `monomorph` tells them apart by arity and by nothing else.
+
 Both 1 and 2 are *checked by the tool itself*, against the recursors the kernel
 mints for `T`, and reported by the `statements: N compared …, 0 differ` line.
 The check is a port of `mini/tests/nested.rs`'s `check_recursors` and

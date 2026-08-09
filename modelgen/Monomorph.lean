@@ -72,6 +72,8 @@ def run (o : Opts') : IO UInt32 := do
         ({rep.recordsIn} → {rep.recordsOut} records), {rep.groups} groups, \
         {rep.carried.size} carried, {rep.defaulted} defaulted"
       IO.println s!"  copies per group: {rep.hist.toList}"
+      IO.println s!"  model groups keyed to what they model: {rep.modelGroups}; \
+        of their own arity: {rep.modelLoose}; declined: {rep.modelDeclined}"
       IO.println s!"  carried: {rep.carried.toList}"
       IO.println s!"  recursors the kernel minted differently: {rep.recRegen}; \
         declarations the replay rejected: {rep.rejected}"

@@ -143,6 +143,34 @@ saying the pipeline works.
    lives, not whether it is private, not whether it is a constructor. That is
    the same property, read from the other end.
 
+4. **A `modelgen` model is copied with the declaration it models.** If `T` is in
+   the output at the instantiations `Σ`, then every declaration under
+   `T._model` is in the output at **exactly `Σ`** — the same set, no more and
+   no less — and `mono(T._model.x, σ)` is spelled `mono(T, σ) ++ _model ++ x`,
+   because the marker is a root prefix (§1.1) and `T` is a prefix of
+   `T._model.x`. So a consumer that has a copy of `T` and wants its model
+   constructs the name off the copy and finds it, at every copy.
+
+   **This property is not a consequence of the other three, and it is the one
+   the pipeline needs.** Nothing in the file *references* a model: `mini` finds
+   `T._model.self` by building the name off `T`, not through a use site
+   (`MODELGEN.md` §1). The sweep of §2 is driven entirely by references, so left
+   to itself it sees no demand on a model at all and every model group takes
+   `--default` — one model, however many copies of `T` there are. What supplies
+   the missing edge is `Mono.modelKeying`, and it is a *lookup* like §1.1's,
+   over the same innermost `_model` prefix: a declaration under `T._model` is
+   keyed to `T` and instantiated at `T`'s `σ` set, transitively, so that the
+   model of a model — `T._model.0._model.…`, which `MODELGEN.md` §1.7 produces
+   because the block a nested model *is* is mutual — reaches the same set
+   through the first layer.
+
+   **It applies to the nine families and says nothing about the tenth.** A
+   spliced `T._model.funext` (`MODELGEN.md` §1.5) is polymorphic in universes
+   that are nobody's motive, so `T`'s `σ` does not describe its own; it is
+   detected by its level-parameter arity, left to the demand its use sites
+   generate like any other declaration, and named in the report if it ever
+   reaches a default instead.
+
 ## 1.3 What the contract does **not** say
 
 * **Nothing about the order of the copies.** All copies of one group are
@@ -165,21 +193,43 @@ saying the pipeline works.
   reads the field — the point is that the file does not lie.
 * **Acceptance by `monomorph` is not a claim about the input.** The input is
   trusted, and §7 names two `bad/` files whose defect the pass *erases*.
-* **A `modelgen` model still does not survive this pass, and task #116 has to
-  fix it before the pipeline runs end to end.** There were two failures here,
-  both measured on `modelgen/tests/poly_nested_used.ndjson` — a nested
-  `PTree.{u}` *used* at universes 0, 1 and 2 — put through `modelgen` and then
-  `monomorph`. **One of them is closed and one is open.**
+* **A `modelgen` model survives this pass, and that is §1.2's fourth property
+  rather than something the contract is silent about.** It did not, and task
+  #116 is the two failures that stopped it. Both were measured on
+  `modelgen/tests/poly_nested_used.ndjson` — a nested `PTree.{u}` *used* at
+  universes 0, 1 and 2 — put through `modelgen` and then `monomorph`. **Both are
+  now closed**, and what follows is what they were, because a reader who only
+  sees the working pass cannot tell which of its parts are load-bearing.
 
-  1. **Open: one model for three copies.** `PTree` comes out three times
-     (`_at.1.0.PTree`, `_at.1.1.PTree`, `_at.1.2.PTree`) and the model comes out
+  1. **Closed: one model for three copies.** `PTree` came out three times
+     (`_at.1.0.PTree`, `_at.1.1.PTree`, `_at.1.2.PTree`) and the model came out
      **once**. Nothing in the file *references* a model — `mini` finds it by
-     constructing the name, not through a use site — so the backward sweep sees
-     no demand on the model's groups and they take `--default`. `_at.1.1.PTree`
-     and `_at.1.2.PTree` have no model at all. This is about demand, not naming,
-     and it is not a property of §1.1's marker: what it needs is for `monomorph`
-     to key a model's declarations off **the declaration they model**, so that a
-     model is emitted once per instantiation of it.
+     constructing the name, not through a use site — so the backward sweep saw
+     no demand on the model's groups and they took `--default`. `_at.1.1.PTree`
+     and `_at.1.2.PTree` had no model at all. That is about demand, not naming,
+     and it is not a property of §1.1's marker: what it needed was for
+     `monomorph` to key a model's declarations off **the declaration they
+     model**, so that a model is emitted once per instantiation of it.
+
+     `Mono.modelKeying` is that key, and §2.3 is how the sweep carries it. On
+     the fixture, `copies per group` goes from `[(1, 35), (3, 1)]` to
+     `[(1, 6), (3, 30)]`: the one three-copy row was `PTree`'s own block, and
+     the thirty are that block and the **29 groups its model is made of**, both
+     layers of `MODELGEN.md` §1.7's composition included. The six that stay at
+     one copy are `Eq` and `List` (carried), `N`, and the three `atK` doing the
+     using.
+
+     **`copies per group` is the diagnostic, and it is the one that catches a
+     vacuous claim.** `poly_nested` — the same shapes, *unused* — reports
+     `[(1, 74)]` before and after, because there every group lands at one
+     instantiation and "the model came out at its declaration's `σ`" and
+     "everything defaulted and the defaults agreed" are the same observation. A
+     previous seat measured this composition on that file and reported it
+     working. `poly_nested_used` exists because of that episode, and its
+     three-copy row is the whole reason the fixture is in the tree. (On
+     `poly_nested` the change is visible in a *different* number: `defaulted`
+     falls from 22 to 2, since 20 model groups are now keyed rather than
+     defaulted to the same answer.)
 
   2. **Closed: the marker is uniform across the model's families.** It was not.
      The nine families did not share a level-parameter arity — `self`, `pack_i`,
@@ -206,12 +256,17 @@ saying the pipeline works.
      (§`MODELGEN.md` 1.5) is genuinely polymorphic in universes that are nobody's
      motive, and it lands at its own marker. It is not one of the nine, nothing
      derives its name, and its uses are rewritten like any other reference.
+     **The keying of (1) reads the same fact the same way** — its arity is not
+     its owner's, so there is no positional `σ` map to make and it is left to
+     its own demand. `modelgen/tests/infinitary.ndjson` is the fixture with one:
+     three `_model.funext` groups, `loose=3`, and each demanded by the model
+     that spliced it.
 
   Neither failure was visible to a kernel: that fixture's output replays under
-  `--check` with **0 rejected** over all 51 declarations, before and after,
+  `--check` with **0 rejected** — over 51 declarations before and 161 after —
   because a model is a `mini`-level artefact and nothing type-checks it against
-  the copy it is supposed to model. So (1) is measured and not caught, and a
-  green `--check` on that fixture must not be read as the blocker being closed.
+  the copy it is supposed to model. So (1) was measured and not caught, and a
+  green `--check` on that fixture never was evidence about it either way.
 
   The one thing that is not a hazard here: `mini` looks a model up by
   *construction* rather than by matching a name prefix, so the root marker is
@@ -293,6 +348,44 @@ a consumer keying off a padded *schedule* rather than off the file's own
 declarations; `monomorph`'s output has no schedule to key off. The demand set is
 the names in the file, and a defaulted declaration is one copy with `_at.0` in
 its name like any other.
+
+## 2.3 The one edge the file does not contain
+
+Everything above is driven by references, and a `modelgen` model has none
+pointing at it (§1.2 property 4). The sweep is given that edge separately:
+`Mono.modelKeying` maps each model group to the group of the declaration it
+models, and `Mono.pushInst` — the only place demand is added, whether from a
+reference or from §2.2's default — walks the **reverse** map as it goes, so that
+`σ` arriving at `T` arrives at `T._model.…` in the same step, and at
+`T._model.0._model.…` in the step after that.
+
+**A model group does not default.** Its `σ` set is its owner's, whatever that
+turns out to be, including the owner's own default. That is the whole of the
+fix: a default taken by a model group is one model for `n` copies, which is
+§1.3 item 1.
+
+**This is still not a fixpoint, and the reason is a measurement rather than an
+argument.** The cascade runs *against* the file's order — a model's groups can
+sit either side of what they model, and `MODELGEN.md` §1.7's second layer sits
+on the far side from the first — so nothing structural says a cascade lands on a
+group the backward sweep has yet to reach. What is done about it is what §2 does
+about topological sortedness: the pass **counts the violations** rather than
+assuming there are none. A cascade onto an already-visited group is collected
+and reported by name, because such a group has an instantiation whose own
+references were never explored, and the output could then name a copy nobody
+emitted. Measured at **zero** over `modelgen/tests` (every fixture through both
+tools, both modes), `modelgen/monotests`, `vendor/arena-tests` and Mathlib.
+
+**The eliminating universe is deliberately not cascaded, and that was measured
+too.** Keying `elimD` the same way is the same idea and it is *structurally*
+late: a block's set of eliminating universes is discovered from its users, which
+on `poly_nested_used` include the model groups themselves, so the block's set is
+final only at the block — after every model of it has been visited. Cascading it
+put 13 of the fixture's 29 model groups in the late report for no gain: mode A
+keeps the motive's universe a parameter and never keys a copy on it, and mode B
+recovers the numerals from the output's own use sites (`Mono.elimUses`), not
+from `elimD`. So `elimD` stays what it was — a demand-exploration aid — and
+`σ` is what the keying carries.
 
 ---
 
@@ -680,7 +773,7 @@ whole file now goes through the **unpatched** binary in 741.14 s at 35.3 GB,
 with `nanoda` accepting all 776,723 output declarations (§9.7). Every number
 below is from the commands named; §9.7 lists what was not run. §9.10 is the
 **composition with `modelgen`** at this scale, which is where `#116`'s marker
-half is measured closed.
+half is measured closed, and **§9.12** is where its instantiation half is.
 
 ## 9.1 The input, and how it was made
 
@@ -1524,13 +1617,12 @@ unpatched, both under a `ulimit -v` cap.
 > since made it 92**, by running the mutual construction on the block each
 > nested model *is*. On the same file that is now **92 models, 3,170
 > declarations, 0 declined** and **1,365** ι statements comparing clean, and the
-> output grows by 1,328 declarations (+0.13 % of its bytes). **The `monomorph`
-> half below was not re-run** — it is 846 s at 33 GB and it is this section's
-> measurement rather than §1.7's — so every `monomorph` number here, and every
-> owner and marker count read off its output, is the one for a 51-model input.
-> What §1.7 adds to that input is more of exactly the shapes the section is
-> about: a second `X._model.self`-rooted owner per nested declaration, of the
-> same form. Re-running it is the way to find out, and nobody has.
+> output grows by 1,328 declarations (+0.13 % of its bytes). **Every `monomorph`
+> number in this section, and every owner and marker count read off its output,
+> is still the one for a 51-model input.** §9.12 is the run on the 92-model one,
+> and the guess made here was right about the shape: §1.7 adds a second
+> `X._model.self`-rooted owner per nested declaration, of the same form —
+> **82 owners become 259**, and the extra ones are models of models.
 
 
 
@@ -1777,3 +1869,98 @@ takes **70.3 s** and its `seen` set is a **1.77 GB transient** above the live
 tables it leaves behind (hwm 11,943,540 KB against 10,177,012 KB resident), over
 **14,773,359 shared nodes**. That transient does not set the peak — emission is
 8.5 GB above it — which is the only reason it is a footnote and not a fix.
+
+## 9.12 Keying the models — §1.3 item 1 at scale, and why the scale says little
+
+§1.3 item 1 is closed by `Mono.modelKeying` (§2.3), and this is what that costs
+and what Mathlib can and cannot say about it. **The headline is the second
+sentence, not the first: on this population the property is degenerate**, and
+the measurement that says so is here rather than in a footnote, because the
+episode that produced `poly_nested_used` was a seat reporting a vacuous
+observation about this exact composition.
+
+### The population cannot exercise the property
+
+Over the mode A output's 781,496 declaration names, inverting §1.1's marker on
+each and grouping by what the marker was stripped from:
+
+```
+model owners (a `T._model.self` in the output)   259
+  … of which level-polymorphic (|σ| > 0)          45
+copies of T                                        1 → 259
+copies of T._model.self                            1 → 259
+owners at more than one instantiation              0
+```
+
+**Every model owner in Mathlib is used at exactly one instantiation** — the 45
+polymorphic ones included, each at a single all-zero `σ`. So a model emitted at
+its owner's `σ` set and a model emitted at `--default` are the *same file*, and
+the fix is unobservable here by copy count. That is measured and not inferred:
+the before and after outputs, on both inputs below, are **byte for byte
+identical** (`cmp`, 5,837,093,504 bytes).
+
+`modelgen/tests/poly_nested_used.ndjson` is therefore the only population in the
+tree where §1.2 property 4 has a witness at all, and that is the whole reason a
+hand-written three-universe fixture sits beside a 5.6 GB export. **A green
+Mathlib run is not evidence that the keying works**; it is evidence that it does
+not break anything and does not cost anything.
+
+What Mathlib *does* say is the other three things: that the keying fires at
+scale, on both layers; that nothing declines; and what it costs.
+
+### It fires on both layers, and nothing declines
+
+| | 51-model input | 92-model input |
+| --- | ---: | ---: |
+| model groups keyed to the declaration they model | 1,842 | **3,170** |
+| of their own arity (§1.3's tenth family) | 0 | 0 |
+| declined | 0 | 0 |
+| reached after the sweep had passed them | 0 | 0 |
+| groups that took `--default`, before | 165,154 | 165,600 |
+| groups that took `--default`, after | 164,481 | 164,481 |
+
+The two columns are two `modelgen` outputs of the *same* export.
+`marker-data/mathlib.model.ndjson` predates `MODELGEN.md` §1.7: **51 models, 742
+ι statements, 82 owners, and no second layer at all**. The file regenerated for
+this section — `modelgen mathlib.ndjson`, 293.44 s, 23,902,168 KB, 3.128e12
+instructions — is **92 models, 1,365 ι statements comparing clean, 3,170 model
+declarations in 259 owners**. The extra 177 owners *are* the second layer:
+`IO.AsyncList` and `IO.AsyncList._model.0` are both owners in it, and the second
+is keyed to a declaration that is itself a model. That layer is the half of the
+propagation most likely to be got half-right, so the run that matters is the one
+on the input that has it.
+
+**The `--default` count is the observable, since the copies are not.** On the
+51-model input, 673 of the 1,842 keyed groups had no demand at all and used to
+take the default; the other 1,169 already had demand, from the model's own
+declarations referring to one another. On the 92-model input the same figure is
+1,119 of 3,170. Both inputs land at the *same* 164,481 defaulted groups
+afterwards, which is what "a model is never defaulted" looks like from outside:
+the residue is the file's genuinely unused declarations and nothing else.
+
+### What it costs
+
+Mode A, `-o`, `ulimit -v 40000000`, `perf stat -e instructions`, one run each:
+
+| input | binary | instructions | peak RSS | wall |
+| --- | --- | ---: | ---: | ---: |
+| 51-model | before | 5.0615e12 | 20,406,220 KB | 727.63 s |
+| 51-model | keyed | 5.0680e12 (+0.13 %) | 20,417,332 KB (+0.05 %) | 690.00 s |
+| 92-model | before | 5.2162e12 | 20,366,368 KB | 816.26 s |
+| 92-model | keyed | 5.1276e12 (−1.70 %) | 20,438,520 KB (+0.35 %) | 698.52 s |
+
+**The two deltas have opposite signs, and that is the finding.** The outputs are
+byte-identical in both pairs, so the emission — 43 % of the run — does *exactly*
+the same work before and after; the only added work is one forward pass over
+657,674 groups reading one name each, plus a tuple where `addInst` used to be.
+A change whose measured effect is +0.13 % on one input and −1.70 % on another,
+with identical output, has a cost inside the run-to-run spread rather than a
+cost this can resolve. What the pair does establish is the **bound**: under 2 %
+of 5.1e12 on the worst reading, and 0 by construction for emission and for the
+write. Peak RSS moves +11 MB and +72 MB on a 20.4 GB peak — the keying's own
+tables are three arrays of one word per group, ~5 MB at this size, and the rest
+is where the allocator happened to be.
+
+Wall times are a comment, as always: they run 727/690 and 816/698 across a pair
+whose instruction counts differ by under 2 %, which is the standing rule
+demonstrating itself.
