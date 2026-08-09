@@ -117,3 +117,154 @@ impl Interp {
         self.nat.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{Declaration, Environment};
+    use crate::expr::{forall, konst, sort, Level, Name};
+
+    fn no_levels() -> std::rc::Rc<[Level]> { Vec::new().into() }
+    use crate::kernel::Checker;
+
+    fn nm(s: &str) -> Name { Name::simple(s) }
+
+    /// `Nat` as the exports declare it: two constructors, no parameters, no
+    /// indices, resultant sort `Type 0`.
+    fn nat_env() -> Environment {
+        let n = nm("Nat");
+        let one = Level::zero().succ();
+        let ty = sort(one);
+        let zero_ty = konst(n, no_levels());
+        let succ_ty = forall(konst(n, no_levels()), konst(n, no_levels()));
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: n,
+                lparams: vec![],
+                num_params: 0,
+                ty,
+                ctors: vec![
+                    (Name::str(&n, "zero"), zero_ty),
+                    (Name::str(&n, "succ"), succ_ty),
+                ],
+            },
+        )
+        .expect("Nat is accepted");
+        env
+    }
+
+    /// `⟦Nat⟧` is `ω`, `⟦Nat.zero⟧` is `0`, and both typings are the
+    /// apparatus's own — the *same terms*, not ones that print alike.
+    #[test]
+    fn the_carrier_is_omega_and_zero_is_the_empty_set() {
+        let env = nat_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let n = nm("Nat");
+
+        let t = c.infer_type(&konst(n, no_levels())).expect("infer ⟦Nat⟧");
+        let carrier = t.tm.clone().expect("⟦Nat⟧ has a term");
+        let z = c.infer_type(&konst(Name::str(&n, "zero"), no_levels())).expect("infer ⟦Nat.zero⟧");
+        let zero = z.tm.clone().expect("⟦Nat.zero⟧ has a term");
+
+        let nc = c.interp().expect("threaded").nat_clause().expect("the ω apparatus");
+        assert_eq!(carrier, nc.nat.omega(), "⟦Nat⟧ is not this Interp's ω");
+        assert_eq!(zero, nc.nat.zero(), "⟦Nat.zero⟧ is not 0");
+        assert!(t.ev.thm().is_some(), "⟦Nat⟧ has no typing: {:?}", t.ev);
+        assert!(z.ev.thm().is_some(), "⟦Nat.zero⟧ has no typing: {:?}", z.ev);
+    }
+
+    /// **The literal is binary, at widths that can tell.**
+    ///
+    /// `0` and `1` cannot separate the two encodings — one node either way —
+    /// so the pins that carry the claim are `11`, the first value the retired
+    /// `natLit > 10` guard refused, and `2⁶⁴ − 1`, the largest a `u64` holds.
+    /// Unary would be `2n+1` nodes: 23 and 3.7 × 10¹⁹.
+    #[test]
+    fn a_literal_is_interpreted_through_the_binary_view() {
+        let env = nat_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        for (n, nodes) in [(0u64, 1u64), (1, 2), (11, 5), (u64::MAX, 65)] {
+            let t = c.infer_type(&crate::expr::nat_lit(n)).expect("infer a literal");
+            let tm = t.tm.clone().unwrap_or_else(|| panic!("⟦natLit {n}⟧ has no term"));
+            let mem = t
+                .ev
+                .thm()
+                .unwrap_or_else(|| panic!("⟦natLit {n}⟧ has no typing: {:?}", t.ev))
+                .clone();
+            let nc = c.interp().expect("threaded").nat_clause().expect("the ω apparatus");
+            assert_eq!(tm, nc.numeral(u128::from(n)), "⟦natLit {n}⟧ is not num({n})");
+            assert_eq!(
+                *mem.concl(),
+                kernel::Formula::mem(tm, nc.nat.omega()),
+                "⟦natLit {n}⟧ is not typed in ω"
+            );
+            assert_eq!(
+                derived::nat::numeral_size(u128::from(n)),
+                nodes,
+                "num({n}) is not {nodes} nodes — the encoding moved"
+            );
+        }
+    }
+
+    /// **`whnf` peels one `succ`, with a certificate, at a width unary cannot
+    /// reach.**
+    ///
+    /// This is the measurement the whole clause exists for. At `2⁶⁴ − 1` the
+    /// successor path does not merely cost more — `NAT-REPRESENTATION.md`
+    /// §1.3.2 measured a *55296*-deep tower producing no verdict in 600 s — so
+    /// a fallback to it would present as a hang and this test would time out
+    /// rather than fail. The `Ev::Proved` assertion is what makes it fail
+    /// instead: an acceptance-only reduction would still return the right
+    /// expression.
+    #[test]
+    fn whnf_peels_a_successor_off_a_literal_with_a_certificate() {
+        let env = nat_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        for n in [1u64, 11, u64::MAX] {
+            let e = crate::expr::nat_lit(n);
+            let t = c.infer_type(&e).expect("infer the literal");
+            let tm = t.tm.clone().expect("the literal has a term");
+            let (to, conv) =
+                c.whnf_conv(&e, Some(tm.clone()), &crate::ev::Gap::NoEndpoint).expect("whnf");
+
+            // The reduct is `Nat.succ (natLit (n−1))`, syntactically.
+            let want = crate::expr::app(
+                konst(Name::str(&nm("Nat"), "succ"), no_levels()),
+                crate::expr::nat_lit(n - 1),
+            );
+            assert_eq!(to, want, "whnf on natLit {n} did not peel one succ");
+
+            // …and the leg is a *theorem*, not an absence.
+            let thm = conv
+                .ev
+                .thm()
+                .unwrap_or_else(|| panic!("natLit {n} reduced without a certificate: {:?}", conv.ev))
+                .clone();
+            let nc = c.interp().expect("threaded").nat_clause().expect("the ω apparatus");
+            let (lhs, _) = thm.concl().as_eq().expect("the leg is an equation");
+            assert_eq!(lhs, nc.numeral(u128::from(n)), "the leg is not about num({n})");
+        }
+    }
+
+    /// **Zero is the one width where the step is still reflexivity**, and that
+    /// is a fact about the clause rather than a special case in it: `num(0)`
+    /// *is* `0` and `⟦Nat.zero⟧` *is* `0`, because one clause put both there.
+    #[test]
+    fn the_literal_zero_and_the_constructor_are_one_term() {
+        let env = nat_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let lit = c.infer_type(&crate::expr::nat_lit(0)).expect("infer natLit 0");
+        let ctor = c
+            .infer_type(&konst(Name::str(&nm("Nat"), "zero"), no_levels()))
+            .expect("infer ⟦Nat.zero⟧");
+        assert_eq!(lit.tm, ctor.tm, "⟦natLit 0⟧ and ⟦Nat.zero⟧ are different terms");
+    }
+}

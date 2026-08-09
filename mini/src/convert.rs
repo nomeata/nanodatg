@@ -725,11 +725,13 @@ impl Cv {
                 let n = literal_value(&s)?;
                 facts.nat_lits += 1;
                 facts.max_nat_lit = facts.max_nat_lit.max(n);
-                if n > 10 {
-                    return Err(declined(
-                        "The mini kernel does not support nat literals larger than 10",
-                    ))
-                }
+                // *(The `> 10` decline that stood here was mini-lean's
+                // `parseExprNatLit` guard. What made it load-bearing was that
+                // `⟦natLit n⟧` was the interpretation of an `n`-deep successor
+                // tower; the binary clause replaced that with `num(n)`, 66
+                // nodes at `2⁶⁴`, and `kernel::nat_unfold`'s copy of the guard
+                // went with it. `literal_value` above is the remaining bound
+                // and it is a real one: mini's literal is a `u64`.)*
                 E(p)
             }
             CExpr::StringLit { .. } => {

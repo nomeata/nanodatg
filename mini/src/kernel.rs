@@ -1602,20 +1602,26 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // Note the original drops `stack` on this branch — a nat
                     // literal is never in head position of an application.
                     //
-                    // **The unfolding is reflexivity, and now it is reflexivity
-                    // at the term level too.** §7's choice of `⟦natLit n⟧` is
-                    // the interpretation of this very expansion
-                    // ([`Checker::nat_unfold`]), so `⟦natLit n⟧` and
-                    // `⟦Nat.succ (natLit (n-1))⟧` are the *same* term and this
-                    // step owes no `step!` at all.
+                    // **The unfolding used to be reflexivity, and is not any
+                    // more.** While `⟦natLit n⟧` was *defined* as the
+                    // interpretation of this very expansion, `⟦natLit n⟧` and
+                    // `⟦Nat.succ (natLit (n−1))⟧` were the same term and the
+                    // step owed nothing. Under the binary clause `⟦natLit n⟧`
+                    // is `num(n)`, built from `double`/`double1`, and the
+                    // reduct's interpretation is `app(⟦Nat.succ⟧, num(n−1))`.
+                    // Those are two terms and the step owes the equation
+                    // between them — [`Checker::natlit_succ_leg`].
                     //
-                    // *(This comment read "what is missing is `Nat`'s
-                    // interpretation, which is what `cur_tm` being `None`
-                    // already says." `Nat` is an ordinary inductive and has
-                    // translated for some time; what was missing was the
-                    // literal's own clause, and the label said `Nat` because
-                    // the literal's declared type is `Nat`.)*
-                    done!(Self::nat_unfold(*n)?)
+                    // **At `n = 0` it is still reflexivity**, and not by
+                    // accident: `num(0)` *is* `0` and `⟦Nat.zero⟧` *is* `0`,
+                    // the same term, because the clause that put the numeral
+                    // here is the clause that put the constructor there.
+                    let to = Self::nat_unfold(*n)?;
+                    if *n > 0 {
+                        let leg = self.natlit_succ_leg(*n, &cur_tm);
+                        step!(leg);
+                    }
+                    done!(to)
                 }
                 _ => done!(app_n(node, &stack)),
             }
@@ -2460,8 +2466,30 @@ impl<'e, 'i> Checker<'e, 'i> {
             // — and each step drops one.
             Expr::NatLit(n) => {
                 let ty = konst(Name::simple("Nat"), no_levels());
-                let t = self.infer_type(&Self::nat_unfold(*n)?)?;
-                Ok(Typing { ty, tm: t.tm, ev: t.ev })
+                // **The literal is interpreted through the binary view.**
+                // `⟦natLit n⟧ = num(n)` — `double`/`double1` on `ω`, 66 nodes
+                // at `2⁶⁴` — and `Eval::mem` is its membership, Θ(bits) and
+                // memoised on the value. The recursion this replaced was
+                // `infer_type` on `Nat.succ (natLit (n−1))`, `n` levels deep;
+                // it is the reason the guard two lines up used to say ten.
+                //
+                // **`⟦Nat⟧` must be `ω` for this to typecheck at all**, which
+                // is what `direct::Clause::Nat` is for. The membership is
+                // compared against the stored carrier rather than assumed to
+                // land in it, so an export whose `Nat` did not take the clause
+                // reaches a gap here and not a wrong theorem.
+                let Some(ip) = self.ip() else {
+                    return Ok(Typing { ty, tm: None, ev: Ev::missing(Gap::SymbolicLevel) })
+                };
+                let Some(nc) = ip.nat_clause() else {
+                    return Ok(Typing { ty, tm: None, ev: Ev::missing(Gap::IndApparatus) })
+                };
+                let tm = nc.numeral(u128::from(*n));
+                let ev = match nc.mem(&mut ip.env, u128::from(*n)) {
+                    Some(m) => Ev::Proved(m),
+                    None => Ev::missing(Gap::IndApparatus),
+                };
+                Ok(Typing { ty, tm: Some(tm), ev })
             }
             Expr::StrLit(_) => Ok(Typing {
                 ty: konst(Name::simple("String"), no_levels()),
@@ -2471,25 +2499,80 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
     }
 
-    /// One level of `Nat.succ^n Nat.zero` — `whnf`'s step **and** the
-    /// literal's own interpretation, from one place.
+    /// One level of `Nat.succ^n Nat.zero` — `whnf`'s **syntactic** step.
     ///
-    /// Shared rather than written twice because the two must agree exactly: the
-    /// reduction owes no conversion certificate precisely when `⟦natLit n⟧` is
-    /// the interpretation of *this* expansion, and two spellings that could
-    /// drift is the defect `MINI-HANDOFF.md` §12 records the project paying for
-    /// elsewhere.
+    /// *(It used to be the literal's interpretation too, and the two were
+    /// deliberately one function so they could not drift. They are no longer
+    /// the same thing: `⟦natLit n⟧` is `num(n)` and this is the Lean-side
+    /// reduct, so what keeps them in step is now an equation —
+    /// [`Checker::natlit_succ_leg`] — rather than a shared spelling.)*
     ///
-    /// Refuses above 10 — mini-lean's `parseExprNatLit` guard, which
-    /// [`crate::convert`] applies first, so this is a second line of defence
-    /// rather than the reachable one. It is an `Err` and not a `Gap` because
-    /// `whnf` has always answered that way for the same input, and an
-    /// interpretation that declined where the reduction rejects would put the
-    /// two axes out of step.
-    fn nat_unfold(n: u64) -> R<E> {
-        if n > 10 {
-            return Err("The mini kernel does not support nat literals larger than 10".into())
+    /// **The `> 10` refusal is gone.** It was mini-lean's `parseExprNatLit`
+    /// guard, and what made it load-bearing was that the *interpretation*
+    /// recursed `n` levels through this expansion. It no longer does, and the
+    /// reduct here is one node whatever `n` is.
+    /// `Γ ⊢ ⟦natLit n⟧ = ⟦Nat.succ (natLit (n−1))⟧`, for `n > 0`.
+    ///
+    /// The certificate `whnf`'s literal arm owes once the literal is a binary
+    /// numeral. It is two facts composed, and **neither is new**:
+    ///
+    /// ```text
+    /// app(⟦Nat.succ⟧, num(n−1)) = succ(num(n−1))     Interp::beta_spine
+    ///        succ(num(n−1))     = num(n)             derived::nat::Eval::succ
+    /// ```
+    ///
+    /// read backwards. The first is the stored constructor nest's own β-rule —
+    /// which is why the `Nat` clause has to own `⟦Nat.succ⟧`: no other nest
+    /// β-reduces to the symbol `succ`. The second is the evaluator's, and it is
+    /// **2 kernel inferences on an even numeral, flat from 2¹⁶ to 2¹⁰⁰**,
+    /// `13·bits + 1` when every digit carries.
+    ///
+    /// That cost is the whole reason this is a step and not a program. A `succ`
+    /// whose cost depended on the *value* would make one `whnf` call on
+    /// `UInt32.size` a non-terminating one, and it would look fast on every
+    /// literal small enough to write in a test.
+    fn natlit_succ_leg(&mut self, n: u64, cur_tm: &Option<Term>) -> Ev {
+        let Some(from) = cur_tm.clone() else { return Ev::missing(Gap::NoEndpoint) };
+        let succ_name = Name::str(&Name::simple("Nat"), "succ");
+        // **`⟦Nat.succ⟧` is *asked for*, not read out of the store.** The
+        // reduct's head is that constant, but the caller only infers the
+        // reduct *after* this leg is built, so on the first literal in a file
+        // the store does not have it yet — which is a gap on every such
+        // literal, and it is what a store read produced.
+        let Ok(st) = self.infer_type(&konst(succ_name, no_levels())) else {
+            return Ev::missing(Gap::NoEndpoint)
+        };
+        let Some(former) = st.tm else { return Ev::missing(st.ev.reason(Gap::NoEndpoint)) };
+        let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
+        let Some(nc) = ip.nat_clause() else { return Ev::missing(Gap::IndApparatus) };
+        let prev = u128::from(n - 1);
+        // **The caller's endpoint must be the numeral this clause would build.**
+        // Compared rather than assumed: a `cur_tm` that is not `num(n)` means
+        // the literal was interpreted by something else, and composing this
+        // equation onto it would be composing across two interpretations.
+        if from != nc.numeral(u128::from(n)) {
+            return Ev::missing(Gap::ConvCompose("natlit-endpoint"))
         }
+        let prev_tm = nc.numeral(prev);
+        let Some(prev_mem) = nc.mem(&mut ip.env, prev) else {
+            return Ev::missing(Gap::IndApparatus)
+        };
+        let Some((_, beta)) = ip.beta_spine(&former, &[prev_tm], &[prev_mem]) else {
+            return Ev::missing(Gap::ConvCompose("natlit-succ-beta"))
+        };
+        let Ok(bump) = nc.eval().succ(&mut ip.env, prev) else {
+            return Ev::missing(Gap::ConvCompose("natlit-succ-eval"))
+        };
+        let Some(fwd) = derived::eq_trans(&mut ip.env, &beta, &bump) else {
+            return Ev::missing(Gap::ConvCompose("natlit-succ-compose"))
+        };
+        match derived::eq_symm(&mut ip.env, &fwd) {
+            Some(t) => Ev::Proved(t),
+            None => Ev::missing(Gap::ConvCompose("natlit-succ-symm")),
+        }
+    }
+
+    fn nat_unfold(n: u64) -> R<E> {
         let nat = Name::simple("Nat");
         Ok(if n == 0 {
             konst(Name::str(&nat, "zero"), no_levels())

@@ -3016,7 +3016,20 @@ fn tutorial_conversion_split() {
     // what stopped is certificate work with no consumer. Measured with the arm
     // toggled by an environment variable in one binary, so both numbers come
     // off the same build.)*
-    assert_eq!(g("moved"), 3454, "the non-trivial conversion population changed");
+    // *(…and 3454 → **3461**, +7, when the `Nat` clause made `⟦natLit n⟧` a
+    // binary numeral. **The sixth move of the *adding* kind, and the only one
+    // so far that adds because a step stopped being reflexivity.** While
+    // `⟦natLit n⟧` was the interpretation of `Nat.succ (natLit (n−1))` the two
+    // sides of `whnf`'s literal step were one term and the step was trivial;
+    // `num(n)` and `app(⟦Nat.succ⟧, num(n−1))` are two terms and it is not.
+    //
+    // All seven are `098_natLitEq`'s — the corpus's only literal above zero,
+    // and it is `3`, unfolded across the file's two σ. `097_aNatLit` adds none
+    // because its literal is `0`, where `num(0)` and `⟦Nat.zero⟧` are still the
+    // same term. Every one of the seven is hypothesis-free, which is why
+    // `moved − movedSealed` below is **unchanged**: a closed literal's step has
+    // no scope to carry, and if it acquired one that would be the defect.)*
+    assert_eq!(g("moved"), 3461, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -3058,8 +3071,13 @@ fn tutorial_conversion_split() {
     // for the same reason: a congruence built out of an application's two
     // halves is built *under* whatever binders the pair was opened at, so what
     // this arm stops building is overwhelmingly hypothetical.)*
+    // The `Nat` clause's seven literal legs are all on the hypothesis-free
+    // side, so this difference does **not** move and `movedSealed` takes the
+    // whole `+7`. Stated as a difference for exactly this reason: it is the
+    // half that says something about scope discipline, and a change here would
+    // mean a closed literal's reduction had picked up a `Γ`.
     assert_eq!(g("moved") - g("movedSealed"), 2546, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 908, "the hypothesis-free count changed");
+    assert_eq!(g("movedSealed"), 915, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
