@@ -3081,9 +3081,186 @@ a green cell that could not fail.
 `$CORPUS/bad` without `-L`; that works through a symlinked corpus root because
 `good` and `bad` are real directories after it (measured: 102 files), and adding
 `-L` would change the file set the `bad/` ratchet is computed over for no
-demonstrated benefit. `ci/check-boundary.sh:234` is the same *silent-zero*
-shape in a different place — `derived_scan` returns 0 (pass) for an absent
-directory and its `find` has no counted-N guard — but every directory it scans
-is committed, so no worktree can trip it; it is recorded here rather than
-changed, because the boundary check guards the TCB and deserves its own change
-with its own cell in `ci/test-boundary.sh`.
+demonstrated benefit.
+
+**Deferred, then done.** `ci/check-boundary.sh:234` was the same *silent-zero*
+shape in a different place — `derived_scan` returned 0 (pass) for an absent
+directory and its `find` had no counted-N guard — and it was left alone here on
+the grounds that every directory it scans is committed, so no worktree can trip
+it, and that the boundary check guards the TCB and deserves its own change with
+its own cell. That change is the next entry.
+
+## 2026-08-09 — The boundary check counts what it scanned, and every cell that asserts so is message-pinned
+
+**Chosen.** Every scan in `ci/check-boundary.sh` now fails when its input is
+absent **and** when it matched zero files, and `ci/test-boundary.sh` gains nine
+cells that point each scan at an absent and at an empty directory and require a
+red. This is the script that enforces the `kernel/`↔`derived/` boundary, so it
+is the one place where a check that silently examines nothing is worst.
+
+**Measured before the change**, which is why it is a change and not a comment:
+
+| input | before |
+| --- | --- |
+| `DERIVED_DIR` absent | `ok: derived/ introduces hypotheses only in src/discharge.rs`, exit 0 |
+| `DERIVED_DIR` an empty directory | same line, exit 0 |
+| `WS_MANIFEST` with no parseable `members` | `kernel boundary OK`, exit 0, **not one** `ok: workspace member` line |
+| `KERNEL_DIR` absent | exit 1 — but five of the six kernel rules printed `ok:` over nothing, and the one failure named a missing `#![forbid(unsafe_code)]` |
+| `CHECKER_DIR` absent | exit 1 — naming three violations that did not exist, e.g. `` `Thm::gen(` is called in checker/ `` over an empty hit list |
+| a kernel whose type is called `Sequent` | exit 0, with **no mention of rule 3 at all** |
+| `pub leak: u32` on a `Thm` in `src/sub/hidden.rs` | `ok: Thm has no public fields`, exit 0 |
+
+**Three claims were checked before building, and one of them was wrong.**
+
+*Every scanned directory is committed* — **holds**. `kernel/`, `derived/`,
+`checker/` and `mini/` are 12, 446, 44 and 159 tracked files; `.gitignore` names
+only `/target`, `/.direnv`, `/vendor`, `/target-tg`, `/target-prof` and
+`.claude/worktrees/`, and no boundary rule reads any of them. So no worktree can
+trip this and it is prevention, exactly as the previous entry judged.
+
+*The scan is reached and does work* — **holds**. It scans 349 `derived/` files,
+28 `checker/` files and 3 kernel files, and those counts are printed now.
+
+*`derived_scan`'s `|| return 0` is the only instance* — **wrong**, and this is
+what made the task bigger than one line. Six more in the same file. `crate_scan`
+opens with the identical line. The coverage loop's `members` came from an `awk`
+whose silence read as a fully covered workspace. Rule 2's dependency `awk` needs
+the `[dependencies]` header to find anything, so a manifest it never parsed read
+as `no external dependencies`. The *non-vacuity* check for `derived/` — the one
+that exists so an allowlist cannot rot into a no-op — was itself wrapped in
+`if [[ -f "$D/src/lib.rs" ]]`, skipping silently on exactly the input it most
+needed to reject; that one was conditional **because** the self-test's clean
+baseline was an empty directory, so the fixture is what changed. The baseline is
+now a real one-file `derived/` and the check is unconditional like `checker/`'s.
+And the whole of rule 3 was wrapped in "if a `Thm` type exists at all", so
+renaming the type the entire boundary is *about* would retire the public-field
+and tuple-struct checks in silence.
+
+**The seventh is a hole, not a vacuity, and it is the find worth the task.**
+Rules 3 and 5 read a file *list*, and that list was the glob `"$K/src"/*.rs` —
+top level only — while rules 1 and 4 sitting beside them use `grep -rInE` and
+recurse. So a `pub struct Thm` with a public field in `kernel/src/sub/hidden.rs`
+was **not** caught: measured, `ok: Thm has no public fields`, exit 0, with the
+field right there. The size budget had the same gap and counted 2 lines where
+there were 4 — a budget a `mkdir` gets you out of. Nothing escaped in fact,
+because `kernel/src` is flat (three files) and always has been, so this is still
+prevention; but it is prevention against a hole that was open, not against a
+green tick over an empty set. Both now read a `find`. This is what an audit
+prompted by a *different* shape is for — the brief asked for two shapes and the
+third was underneath them.
+
+**Rejected — an existence test without a count.** `[[ -d "$D" ]]` is the obvious
+fix and it misses the sharpest case: a `derived/` that exists and holds *only*
+the allowlisted `src/discharge.rs`. The directory is there, the crate looks real,
+an `src/lib.rs`-shaped guard would be satisfied, and the scan still reads zero
+files because `$DERIVED_SCOPE` is excluded from its own `find`. That is a cell of
+its own, and deleting the count guard is what reds it.
+
+**Rejected — leaving the kernel and checker scans alone because they already
+fail closed.** An absent `kernel/src` did exit 1, and an absent `checker/` exited
+1 three times over, so the argument that nothing needs doing is available. It is
+wrong twice. The property that made them red was incidental — a grep for
+`#![forbid(unsafe_code)]` in a file that happened to be gone — so it would
+evaporate the moment that rule moved, with five green `ok:` lines still printed
+over an empty directory. And a red that names a violation which does not exist is
+the 2026-08-09 lesson from the corpus work: a step that contradicts reality
+teaches the reader that reds here are noise. `crate_scan` still reports an absent
+directory as a violation, but prints the absence instead of a phantom hit list.
+
+**Rejected — cells that check only the exit status.** This is the trap the corpus
+seat hit at `4b463f1` and it was live here: an absent `kernel/src` reds for the
+`forbid` grep whether or not the new guard exists, so a status-only cell is green
+with its own guard deleted and proves nothing. All nine cells use
+`expect_fail_because`, which requires the run to fail **and** to say why. Writing
+them exposed a second instance of the same trap in the pins themselves: the
+absent-kernel message was originally a *prefix* of the empty-kernel message, so
+deleting the `-d` branch left the count branch satisfying the pin. The two
+messages are disjoint now.
+
+**The guards were watched failing.** Each was neutralised in turn in a copy of
+`check-boundary.sh` — `ci/test-boundary.sh` takes `BOUNDARY_CHECK` for exactly
+this — and the self-test re-run:
+
+| guard removed | cells that go red |
+| --- | --- |
+| `derived/` absent branch | absent derived/ (wrong reason) |
+| `derived/` file count | empty derived/ (wrong reason); only-the-allowlisted-module (**not detected at all**) |
+| `kernel/src` absent branch | absent kernel/src (wrong reason) |
+| `kernel/src` file count | kernel/src with no sources (wrong reason) |
+| `[dependencies]` header check | manifest with no table (**not detected at all**) |
+| `checker/` file count | empty checker/; absent checker/ |
+| `members` non-empty branch | members do not parse (**not detected at all**) |
+| `WS_MANIFEST` `-f` branch | missing manifest (wrong reason) |
+| `derived/` non-vacuity, made unconditional | an allowlisted discharge.rs that no longer assumes |
+| rule 3's "a Thm exists" wrapper restored | a kernel declaring no Thm (**not detected at all**) |
+| rule 3's `find` put back to the glob | a public field on Thm in a subdirectory (**not detected at all**) |
+| rule 5's `find` put back to the glob | a budget overrun in a subdirectory (**not detected at all**) |
+
+Each row reds its own cells and no others — including the ten pre-existing
+`expect_pass` cells, which is the check that a guard has not become a false
+positive. The first attempt at this matrix put the modified copies under
+`target/`, which moved `$ROOT` and made `WS_MANIFEST` absent, so the new manifest
+guard fired on *every* run and masked the cell under test; the copies live beside
+the original now. A falsifier harness can be vacuous too.
+
+**A third way a cell cannot fail: the fixture, not the guard.** The
+subdirectory-public-field cell was green against the *fixed* checker for the
+wrong reason — its fixture said `pub struct Thm { pub leak: u32 }` on one line,
+and the rule matches a field declaration on a line of its own, which is what
+rustfmt produces. Recursion had nothing to do with it. Spelled over three lines
+the cell passes, and putting the glob back reds it. Status pins, message pins,
+and a falsifier all failed to catch that one; only running the cell against the
+fix and asking *why* it passed did.
+
+**One branch is deliberately untested.** Turning `crate_scan`'s missing-directory
+`return 0` into `return 1` reds no cell, because the file-count guard above it
+already catches an absent `checker/` and is what the cell pins. It stays as belt
+and braces, and the header says so rather than leaving a reader to add a cell
+that cannot fail.
+
+**Elsewhere in `ci/`: audited, reported, not fixed here.** All twelve other
+files were swept for the same two shapes and each candidate was *run* with its
+input pointed somewhere absent or empty rather than reasoned about. Three are
+exploitable — a whole check leg examines nothing and the script still exits 0 —
+and they share one root cause, a **single shared counter** guarding several
+independent legs, so one healthy leg holds the total above zero while another
+goes to nothing:
+
+* `ci/check-test-inputs.sh:316` — with `SCAN_DIRS` unresolvable, leg C's `while`
+  loop runs zero times and the `checker/tests/tg_tutorial.rs: behind \`tg\``
+  premise — the exact 28-test hole the script's header says it exists for —
+  disappears. Observed: `5 feature-matrix premises checked` against a baseline
+  of 6, `every optional input is present and required`, rc=0. Symmetrically at
+  `:219` and `:278`, an unresolvable `MEMBER_DIRS` drops legs A and B to zero
+  manifests: `1 feature-matrix premises checked`, rc=0. Only the *total*
+  wipe-out is caught (`matrix == 0` at `:318`), and the self-test covers only
+  that total case. Wants three counters, one per leg.
+* `ci/check-test-guards.sh:171` — `sources()` does `[[ -d "$d" ]] || continue`
+  over four directories, and `MIN_SITES` is a global floor. Observed: with three
+  of the four absent, `skip guards OK (17 call sites)`, rc=0, while
+  `checker/tests`, `derived/tests` and `kernel/tests` — 104 of 111 files — were
+  never scanned. Total absence *is* fail-closed (`0 guard call sites`, rc=1);
+  partial absence is not. Wants a per-directory existence assertion.
+* `ci/check-test-inputs.sh:327` — `sites` is counted, printed, and never
+  compared to anything. Its sibling floor is `check-test-guards.sh`'s
+  `MIN_SITES`, which is the finding above, so the two vacuity guards are not
+  independent.
+
+Left alone with reasons: `ci/check-mini-scope.sh` prints three false `ok:`s on a
+missing tree but is fail-closed by its own two non-vacuity guards (rc=1,
+verified) — it has no file count, which is the same residual this entry fixes in
+`check-boundary.sh`, and is the obvious next task. `check-arena.sh`,
+`check-mini-vs-nanoda.sh`, `check-modelgen.sh`, `check-feature-inert.sh` and
+`check-test-inputs.sh` return **77** on an absent input, which is SKIP and is
+reported as SKIP by name — Shape A in form, not in effect. `check-uplift.sh` and
+`corpus-dir.sh` carry real counted-N guards and are clean.
+
+**One systemic note that is nobody's single file.** `ci/check.sh:227` reads
+`if (( ${#skipped[@]} )); then echo "all checks that ran passed"; exit 0`. A run
+in which every corpus- and toolchain-dependent step skipped exits **0**. The
+skip is announced loudly on the way past, and the whole 2026-08-08 discipline
+holds inside the process — but any CI that keys on the exit status alone cannot
+tell "all checks passed" from "all checks that ran passed". That is the one
+place in this set where SKIP-is-not-PASS stops at the process boundary, and it
+is recorded rather than changed because the fix is a policy choice about what a
+machine without a Lean toolchain should do, not a defect in a check.

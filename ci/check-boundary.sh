@@ -31,6 +31,31 @@ grep_code() {
 
 echo "checking kernel boundary in $K"
 
+# ── 0. Every scan below must have something to scan ──────────────────────────
+# Rules 1, 3, 4 and 5 are greps over `$K/src`, all of them with `2>/dev/null` on
+# the grep and `|| true` semantics from the enclosing `if`. Point `$K` at a
+# directory that is not there and five of the six report `ok:` over nothing;
+# measured, the only thing that stopped an absent kernel from passing outright
+# was the `#![forbid(unsafe_code)]` grep, which fails for an unrelated reason
+# and prints a misleading message while doing it. That is the shape this
+# project has now been bitten by five times (`DECISIONS.md` 2026-08-08, "SKIP
+# is not PASS"): a check that examines nothing is indistinguishable from a
+# check that examined everything and found nothing wrong.
+#
+# So the scan is counted, the way `ci/check-test-guards.sh`'s rule C counts its
+# call sites. Not a ratchet on the exact number — the kernel is allowed to grow
+# and shrink — but zero means the scan is wired to nothing.
+if [[ ! -d "$K/src" ]]; then
+  fail "the kernel source directory ($K/src) does not exist — rules 1-5 would scan nothing"
+else
+  kernel_files=$(find "$K/src" -name '*.rs' -type f 2>/dev/null | wc -l)
+  if (( kernel_files < 1 )); then
+    fail "no .rs files under $K/src — rules 1-5 would scan nothing and report ok"
+  else
+    ok "rules 1-5 scan $kernel_files kernel source file(s)"
+  fi
+fi
+
 # ── 1. No `unsafe` ───────────────────────────────────────────────────────────
 # Match `unsafe` as a word, but not the `#![forbid(unsafe_code)]` attribute or
 # the token `unsafe_code` itself.
@@ -56,7 +81,18 @@ ALLOWED_DEPS_RE='^(num-bigint)$'
 # Comments are stripped first: a `#` line inside the table that happens to
 # contain an `=` is prose, not a dependency, and reading it as one produced a
 # spurious violation.
-deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f {sub(/#.*/,"")} f && /=/{split($0,a,"="); gsub(/[ \t]/,"",a[1]); if (a[1] != "") print a[1]}' "$K/Cargo.toml")
+#
+# The awk needs the `[dependencies]` header to find anything, so its silence has
+# two readings — an empty table, or a manifest it never parsed. A missing
+# manifest, or one with no such table, is therefore a failure rather than the
+# `ok: no external dependencies` it used to produce: the reading that matters
+# for soundness is "the table is empty", and only a parsed table can say that.
+if [[ ! -f "$K/Cargo.toml" ]]; then
+  fail "$K/Cargo.toml is missing — the dependency scan would parse nothing"
+elif ! grep -q '^\[dependencies\]' "$K/Cargo.toml"; then
+  fail "$K/Cargo.toml has no [dependencies] table — the dependency scan would parse nothing"
+fi
+deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f {sub(/#.*/,"")} f && /=/{split($0,a,"="); gsub(/[ \t]/,"",a[1]); if (a[1] != "") print a[1]}' "$K/Cargo.toml" 2>/dev/null)
 if [[ -n "$deps" ]]; then
   while IFS= read -r d; do
     [[ -z "$d" ]] && continue
@@ -77,7 +113,25 @@ fi
 # ── 3. No public constructor for `Thm`; no public fields ─────────────────────
 # `Thm`'s integrity is the whole LCF argument: if a client can build one without
 # going through an inference rule, the system proves nothing.
-if grep -rInE 'pub\s+(struct|enum)\s+Thm\b' --include='*.rs' "$K/src" | grep -q .; then
+#
+# The awk below reads a file *list*, and that list used to be the glob
+# `"$K/src"/*.rs` — top level only — while rules 1 and 4 beside it use
+# `grep -rInE` and recurse. Measured: a `pub struct Thm { pub leak: u32 }` in
+# `$K/src/sub/hidden.rs` printed `ok: Thm has no public fields`. That is not a
+# vacuous *scan*, it is a scan that reads less than its name says, and it is the
+# same defect wearing a third hat. `kernel/src` is flat today (three files), so
+# nothing escaped in fact; the glob is a `find` now so that adding a
+# subdirectory cannot quietly open the hole.
+kernel_srcs() { find "$K/src" -name '*.rs' -type f -print0 2>/dev/null; }
+
+# The whole rule is conditional on a `Thm` type existing, and a kernel that
+# declares none silently skipped every check inside it — measured: a kernel
+# whose type is called `Sequent` exits 0 with no mention of rule 3 at all. The
+# type this entire boundary is *about* must be findable, so its absence is a
+# failure rather than an exemption.
+if ! grep -rIqE 'pub\s+(struct|enum)\s+Thm\b' --include='*.rs' "$K/src" 2>/dev/null; then
+  fail "the kernel declares no \`pub struct/enum Thm\` — rule 3 would check nothing"
+else
   # Having a public `Thm` type is expected; what must not exist is public
   # *fields* on it or a public constructor.
   if grep -rInE 'pub\s+struct\s+Thm\s*\(' --include='*.rs' "$K/src" | grep -qvE '\(\s*\)'; then
@@ -85,7 +139,7 @@ if grep -rInE 'pub\s+(struct|enum)\s+Thm\b' --include='*.rs' "$K/src" | grep -q 
   fi
   # Any `pub` field inside the Thm struct body. The trailing `:` is what makes
   # this a field declaration rather than the `pub struct Thm {` header line.
-  if awk '/pub struct Thm/,/^}/' "$K/src"/*.rs 2>/dev/null \
+  if kernel_srcs | xargs -0 -r awk '/pub struct Thm/,/^}/' 2>/dev/null \
        | grep -qE '^[[:space:]]*pub[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]*:'; then
     fail "Thm has public field(s)"
   else
@@ -100,7 +154,7 @@ ESCAPE='pub[[:space:]]+(unsafe[[:space:]]+)?fn[[:space:]]+(new|new_unchecked|fro
 if grep_code "${ESCAPE}[^;]*->[[:space:]]*Thm\b" | grep -q .; then
   fail "public escape-hatch constructor returning Thm"
   grep_code "${ESCAPE}[^;]*->[[:space:]]*Thm\b" >&2
-elif awk '/^impl([[:space:]]|<).*Thm/,/^}/' "$K/src"/*.rs 2>/dev/null \
+elif kernel_srcs | xargs -0 -r awk '/^impl([[:space:]]|<).*Thm/,/^}/' 2>/dev/null \
        | grep -qE "${ESCAPE}[^;]*->[[:space:]]*(Self|Thm)\b"; then
   fail "public escape-hatch constructor returning Self inside impl Thm"
 else
@@ -133,8 +187,12 @@ fi
 # not a boundary, it is a number nobody has to think about; at 700 the next
 # addition to the trusted surface has to be small, or deliberate enough to raise
 # this line and say why in `kernel/README.md`.
+#
+# `kernel_srcs` and not the glob `"$K/src"/*.rs`, for the reason given at rule 3:
+# the glob is top level only, so a subdirectory's lines were free. A budget that
+# a `mkdir` gets you out of is not a budget.
 BUDGET=700
-code_lines=$(cat "$K/src"/*.rs 2>/dev/null | grep -vE '^\s*(//|$)' | wc -l)
+code_lines=$(kernel_srcs | xargs -0 -r cat 2>/dev/null | grep -vE '^\s*(//|$)' | wc -l)
 echo "  kernel non-comment lines: $code_lines"
 if (( code_lines > BUDGET )); then
   fail "kernel exceeds $BUDGET non-comment lines ($code_lines) — something has leaked in"
@@ -209,9 +267,24 @@ HYP_RE='Thm::assume|Thm::implies_intr'
 
 # grep a crate's shipped sources, skipping comments. Integration tests (under a
 # `tests/` directory) are excluded from the *`gen`* scan only; I1 covers them.
+#
+# A missing directory is reported as "violations found" (return 0) rather than
+# "clean", so a crate that vanishes cannot buy itself a pass — but the caller
+# then prints a hit list, and an empty one under a message like "Thm::assume
+# outside checker/src/scope.rs" is a lie about why. The absence is printed
+# instead, so the diagnostic matches the reason.
+#
+# This branch is belt and braces, not the tested guarantee: the counted-file
+# guard below reds an absent `$C` on its own, which is why the self-test cell
+# for an absent checker/ pins that guard's message. Turning this `return 0`
+# into a `return 1` reds no cell — deliberately, because a cell that cannot
+# fail is worse than no cell.
 crate_scan() { # crate_scan <dir> <regex> [<path-substring to allow>]
   local d="$1" re="$2" allow="${3:-}"
-  [[ -d "$d" ]] || return 0
+  if [[ ! -d "$d" ]]; then
+    echo "  (no such directory: $d — an unscannable crate is a violation, not a pass)"
+    return 0
+  fi
   local hits
   hits=$(grep -rInE "$re" --include='*.rs' "$d" 2>/dev/null \
          | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|#!\[)')
@@ -231,9 +304,15 @@ crate_scan() { # crate_scan <dir> <regex> [<path-substring to allow>]
 # because it has a sanctioned test entry point (`scope::test_support`) and I1 is
 # therefore a single-*file* property there rather than a single-file-plus-cfg one.
 DERIVED_SCOPE="${DERIVED_SCOPE:-src/discharge.rs}"
+# The file list and the scan over it are separate, because the count is the
+# thing that says the scan happened. `derived_files -print` counts; `-print0`
+# feeds the scan. Both apply the same exclusions, so the number printed is the
+# number of files the rule actually reads.
+derived_files() { # derived_files <-print|-print0>
+  find "$D" -name '*.rs' -type f -not -path '*/tests/*' -not -path "*/$DERIVED_SCOPE" "$@" 2>/dev/null
+}
 derived_scan() {
-  [[ -d "$D" ]] || return 0
-  find "$D" -name '*.rs' -type f -not -path '*/tests/*' -not -path "*/$DERIVED_SCOPE" -print0 2>/dev/null \
+  derived_files -print0 \
     | xargs -0 -r awk -v re="$HYP_RE" '
         FNR == 1 { skip = 0 }
         # A test-only item in column 0; rustfmt closes such an item with a `}`
@@ -252,30 +331,65 @@ derived_scan() {
         $0 ~ re { printf "%s:%d:%s\n", FILENAME, FNR, $0 }
       '
 }
-if derived_scan | grep -q .; then
+#
+# **The scan must find something to scan.** This function opened with
+# `[[ -d "$D" ]] || return 0` — an absent directory was a *pass* — and its
+# `find` had no counted-N guard either, so a scan matching no files was
+# indistinguishable from a scan that read every file and found nothing wrong.
+# Measured before the fix: `DERIVED_DIR=/nonexistent` and `DERIVED_DIR=<empty
+# dir>` both printed `ok: derived/ introduces hypotheses only in
+# src/discharge.rs` and exited 0. No worktree can trip it today — every
+# directory named here is committed, `vendor/` is the only gitignored input in
+# this repository and no boundary rule reads it — so this is prevention. It is
+# still worth writing: this is the fifth time the same shape has produced an
+# incident here (`ci/check.sh` missing its modelgen step; monotest's 107 tests
+# unrun; mini-vs-nanoda passing a crash; 41 Rust tests reporting `ok` with no
+# corpus, twice, most recently at `4b463f1`), and the standing rule from
+# `DECISIONS.md` 2026-08-08 is that SKIP is not PASS.
+#
+# The third case is the one a `-d` test alone would miss: a `derived/` that
+# exists and holds only the allowlisted `$DERIVED_SCOPE`. The directory is
+# there, the crate looks real, and the scan still reads zero files.
+if [[ ! -d "$D" ]]; then
+  fail "derived/ ($D) does not exist — I1's scan would have nothing to scan"
+elif (( $(derived_files -print | wc -l) < 1 )); then
+  fail "I1's scan matched no .rs files under $D (excluding tests/ and $DERIVED_SCOPE) — the rule would pass over nothing"
+elif derived_scan | grep -q .; then
   fail "\`Thm::assume\`/\`Thm::implies_intr\` outside derived/$DERIVED_SCOPE"
   derived_scan >&2
   echo "  derived/$DERIVED_SCOPE is the one sanctioned introduction point. Route the" >&2
   echo "  derivation through \`discharge::under\`, which pairs the assumption with its" >&2
   echo "  discharge, rather than calling the kernel rules here." >&2
 else
-  ok "derived/ introduces hypotheses only in $DERIVED_SCOPE"
+  ok "derived/ introduces hypotheses only in $DERIVED_SCOPE ($(derived_files -print | wc -l) file(s) scanned)"
 fi
 # The allowlist must not be vacuous: a module that never assumes would let I1
 # pass while the rule protects nothing, which is how this check would rot.
-# Guarded on the crate actually existing: `ci/test-boundary.sh` points
-# DERIVED_DIR at an empty directory to check the clean case, and a rule that
-# demanded an introduction module there would fail on a crate that has none to
-# introduce from.
-if [[ -f "$D/src/lib.rs" ]]; then
-  if grep -q 'Thm::assume' "$D/$DERIVED_SCOPE" 2>/dev/null; then
-    ok "derived/$DERIVED_SCOPE is the introduction point"
-  else
-    fail "derived/$DERIVED_SCOPE does not call Thm::assume — I1 is now vacuous"
-  fi
+#
+# This used to run only `if [[ -f "$D/src/lib.rs" ]]`, because `ci/test-boundary.sh`
+# pointed DERIVED_DIR at an empty directory for its clean baseline and a rule
+# demanding an introduction module would have failed there. That made the
+# non-vacuity check itself vacuous on exactly the input it most needed to
+# reject, and the self-test's baseline is now a real one-file `derived/`
+# fixture (`mk_derived`) instead — the guard's premise was the fixture, so the
+# fixture is what changed. It is unconditional now, matching checker/'s.
+if grep -q 'Thm::assume' "$D/$DERIVED_SCOPE" 2>/dev/null; then
+  ok "derived/$DERIVED_SCOPE is the introduction point"
+else
+  fail "derived/$DERIVED_SCOPE does not call Thm::assume — I1 is now vacuous"
 fi
 
 # ── I1, checker/: exactly one introduction module ───────────────────────────
+# Counted first, for the same reason as the kernel and derived scans: I1 and I3
+# below are greps, and a grep over no files is silent in the same way a grep
+# over clean files is. `crate_scan` fails closed on an absent directory, so this
+# is about the *empty* case, which it cannot see.
+checker_files=$(find "$C" -name '*.rs' -type f 2>/dev/null | wc -l)
+if (( checker_files < 1 )); then
+  fail "no .rs files under $C — I1 and I3 would scan nothing and report ok"
+else
+  ok "checker/ I1/I3 scan $checker_files file(s)"
+fi
 CHECKER_SCOPE="${CHECKER_SCOPE:-src/scope.rs}"
 if crate_scan "$C" "$HYP_RE" "/${CHECKER_SCOPE}:" >/dev/null; then
   fail "\`Thm::assume\`/\`Thm::implies_intr\` outside checker/$CHECKER_SCOPE"
@@ -328,7 +442,19 @@ declare -A COVERED_ELSEWHERE=( [mini]="ci/check-mini-scope.sh" )
 # fixture workspace and assert that an unscanned member is caught.
 WS_MANIFEST="${WS_MANIFEST:-$ROOT/Cargo.toml}"
 CHECK_SH="${CHECK_SH:-$ROOT/ci/check.sh}"
-members=$(awk '/^members[[:space:]]*=/{gsub(/.*\[|\].*/,""); gsub(/[",]/," "); print}' "$WS_MANIFEST")
+members=$(awk '/^members[[:space:]]*=/{gsub(/.*\[|\].*/,""); gsub(/[",]/," "); print}' "$WS_MANIFEST" 2>/dev/null)
+# …and the enumeration must enumerate. A missing manifest, or one whose
+# `members` line this awk does not match, left `$members` empty and the loop
+# below ran zero times — printing no `ok:` lines, raising no failure, and
+# reporting a fully covered workspace. Measured: `WS_MANIFEST` pointing at a
+# manifest with no parseable `members` exited 0 with "kernel boundary OK". The
+# check that exists *because* rule 6 silently stopped covering a crate could
+# itself silently stop covering every crate.
+if [[ ! -f "$WS_MANIFEST" ]]; then
+  fail "the workspace manifest ($WS_MANIFEST) is missing — the coverage check would enumerate nothing"
+elif [[ -z "${members//[[:space:]]/}" ]]; then
+  fail "no workspace members parsed from $WS_MANIFEST — the coverage check would enumerate nothing"
+fi
 for m in $members; do
   m="${m##*/}"
   if [[ -n "${COVERED_HERE[$m]:-}" ]]; then
