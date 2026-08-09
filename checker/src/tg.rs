@@ -16058,6 +16058,9 @@ mod tests {
     /// agree numerically and in type, and must still be two variables — the
     /// separation the retired `(1 << 32)` bit used to encode, now structural
     /// in [`LocalKey`]'s constructors.
+    ///
+    /// [`a_reused_level_at_a_new_type_is_a_new_variable`] is the same contract
+    /// exercised through the constructors the checker actually uses.
     #[test]
     fn a_level_local_is_identified_by_level_and_type() {
         crate::tests::util::test_export_file(None, |export| {
@@ -16109,6 +16112,75 @@ mod tests {
                 // And the memo is a memo: a second interpretation of the same
                 // local is the same variable, not a fresh one.
                 assert_eq!(t3a, be.interp(ctx, l3a), "re-interpreting a local must hit its variable");
+            })
+        })
+        .unwrap()
+    }
+
+    /// **The live route to a level collision, exercised end to end.**
+    ///
+    /// `mk_dbj_level` opens a binder at the context's counter and
+    /// [`TcCtx::replace_dbj_level`] hands the level back on close — the
+    /// counter is documented *non-monotonic* (`util.rs`), and
+    /// `def_eq_binder_aux` gives back whole frames at once. So sequential
+    /// sibling binders in one declaration share a level, at whatever types
+    /// they declare, inside one backend. This is not a corner: probe-measured
+    /// on this branch, a level was re-minted at a type already-seen levels did
+    /// not have **5659 times over `good/init-prelude.ndjson`** and 354 times
+    /// across 58 of the 91 tutorial exports. Under the level-only key every
+    /// one of those was the *same* kernel variable as its differently-typed
+    /// predecessor.
+    ///
+    /// Three openings, deliberately — `A`, then `B`, then `A` again: the
+    /// middle one pins the split and the outer pair pins that the split is
+    /// *by type*, not "fresh per opening", which a two-opening test cannot
+    /// distinguish. Mutation-verified together with
+    /// [`a_level_local_is_identified_by_level_and_type`]: the level-only key
+    /// turns the middle assertion red.
+    #[test]
+    fn a_reused_level_at_a_new_type_is_a_new_variable() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+
+                let x = ctx.str1("x");
+                let zero = ctx.zero();
+                let one = ctx.succ(zero);
+                let (ty_a, ty_b) = (ctx.mk_sort(zero), ctx.mk_sort(one));
+                let style = crate::expr::BinderStyle::Default;
+
+                // Open `x : A`, interpret it, close the binder.
+                let first = ctx.mk_dbj_level(x, style, ty_a);
+                let t_first = be.interp(ctx, first);
+                ctx.replace_dbj_level(first);
+
+                // Open `x : B`. The premise of this whole test is that the
+                // counter handed the level back; assert it, so that a future
+                // monotonic counter turns this test into a loud question
+                // rather than a silent vacuity.
+                let second = ctx.mk_dbj_level(x, style, ty_b);
+                match (ctx.read_expr(first), ctx.read_expr(second)) {
+                    (Expr::Local { id: i1, .. }, Expr::Local { id: i2, .. }) => {
+                        assert_eq!(i1, i2, "close must hand the level back — the live route's premise")
+                    }
+                    _ => panic!("mk_dbj_level did not build locals"),
+                }
+                let t_second = be.interp(ctx, second);
+                assert_ne!(
+                    t_first, t_second,
+                    "a reused level at a new type must be a new variable"
+                );
+
+                // Reopen at `A`: same level, same type — the same variable
+                // again, so the split above is by type and not per opening.
+                ctx.replace_dbj_level(second);
+                let third = ctx.mk_dbj_level(x, style, ty_a);
+                assert_eq!(
+                    t_first,
+                    be.interp(ctx, third),
+                    "the same level at the same type must be the same variable across reopenings"
+                );
             })
         })
         .unwrap()
