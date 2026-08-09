@@ -119,20 +119,15 @@ impl Interp {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests_support {
     use crate::env::{Declaration, Environment};
     use crate::expr::{forall, konst, sort, Level, Name};
 
-    fn no_levels() -> std::rc::Rc<[Level]> { Vec::new().into() }
-    use crate::kernel::Checker;
+    pub(crate) fn no_levels() -> std::rc::Rc<[Level]> { Vec::new().into() }
 
-    fn nm(s: &str) -> Name { Name::simple(s) }
-
-    /// `Nat` as the exports declare it: two constructors, no parameters, no
-    /// indices, resultant sort `Type 0`.
-    fn nat_env() -> Environment {
-        let n = nm("Nat");
+    /// `Nat` as the exports declare it.
+    pub(crate) fn nat_env() -> Environment {
+        let n = Name::simple("Nat");
         let one = Level::zero().succ();
         let ty = sort(one);
         let zero_ty = konst(n, no_levels());
@@ -154,6 +149,17 @@ mod tests {
         .expect("Nat is accepted");
         env
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::tests_support::{nat_env, no_levels};
+    use crate::expr::{konst, Name};
+    use crate::kernel::Checker;
+
+    fn nm(s: &str) -> Name { Name::simple(s) }
+
 
     /// `⟦Nat⟧` is `ω`, `⟦Nat.zero⟧` is `0`, and both typings are the
     /// apparatus's own — the *same terms*, not ones that print alike.
@@ -266,5 +272,81 @@ mod tests {
             .infer_type(&konst(Name::str(&nm("Nat"), "zero"), no_levels()))
             .expect("infer ⟦Nat.zero⟧");
         assert_eq!(lit.tm, ctor.tm, "⟦natLit 0⟧ and ⟦Nat.zero⟧ are different terms");
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::tests_support::*;
+    use crate::expr::{konst, Name};
+    use crate::kernel::{Checker, Lhs, DEFEQ_MAX_DEPTH};
+    use crate::interp::Interp;
+
+    /// **A literal pair is decided by value, not by peeling.**
+    ///
+    /// `whnf` turns `natLit n` into `Nat.succ (natLit (n−1))`, so a `def_eq`
+    /// that reduces first meets the two literals again one smaller, and
+    /// `assert_def_eq_as` ↔ `def_eq_struct` recurse **one stack frame per unit
+    /// of the literal**. At `55296` — `Nat.isValidChar`'s, and `init-prelude`'s
+    /// declaration 96 — that is a stack overflow in seconds.
+    ///
+    /// The widths are chosen to separate: `0` and `1` are decided by *any*
+    /// implementation, and `55296` is decided only by one that does not peel.
+    /// The unequal pair matters as much as the equal one — peeling decides it
+    /// after `min(a,b)` levels, so a fast path that only short-circuits
+    /// *equal* literals would still die here.
+    #[test]
+    fn a_literal_pair_is_decided_by_value_and_not_by_peeling() {
+        let env = nat_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        for n in [0u128, 1, 11, 55296, 1u128 << 64] {
+            let e = crate::expr::nat_lit(n);
+            c.assert_is_def_eq(&e, &e).unwrap_or_else(|m| panic!("natLit {n} ≠ itself: {m}"));
+        }
+        // …and distinct literals are refused, also without peeling.
+        for (a, b) in [(0u128, 1u128), (11, 12), (55296, 55295), (1u128 << 64, 1u128 << 63)] {
+            let (ea, eb) = (crate::expr::nat_lit(a), crate::expr::nat_lit(b));
+            assert!(
+                c.assert_is_def_eq(&ea, &eb).is_err(),
+                "natLit {a} and natLit {b} were accepted as definitionally equal"
+            );
+        }
+    }
+
+    /// **The recursion is bounded, and the bound is a rejection.**
+    ///
+    /// A stack overflow is the one failure mode neither `timeout` nor
+    /// `ulimit -v` catches — it aborts with no verdict and no counter, and it
+    /// took a core dump to find out which two functions were on the stack. So
+    /// the depth is bounded and the bound reports.
+    ///
+    /// The fixture is a right-nested spine deeper than the bound, compared
+    /// with itself: there is no identity short-circuit, so the `App`/`App` arm
+    /// descends every level. `Lhs::Type` keeps `infer_type` out of it, so what
+    /// is measured is the `def_eq` recursion and nothing else.
+    #[test]
+    fn def_eq_recursion_is_bounded_and_says_so() {
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let env = nat_env();
+                let mut ip = Interp::new();
+                let mut c = Checker::threaded(&env, &mut ip);
+                let f = konst(Name::str(&Name::simple("Nat"), "succ"), no_levels());
+                let mut deep = konst(Name::str(&Name::simple("Nat"), "zero"), no_levels());
+                for _ in 0..(DEFEQ_MAX_DEPTH + 50) {
+                    deep = crate::expr::app(f, deep);
+                }
+                c.assert_def_eq_as(&deep, None, &deep, None, Lhs::Type).err()
+            })
+            .expect("spawn")
+            .join()
+            .expect("the guard must not abort the process");
+        let msg = handle.expect("a term past the bound must be rejected, not accepted");
+        assert!(
+            msg.contains(&DEFEQ_MAX_DEPTH.to_string()),
+            "the rejection does not name the bound: {msg}"
+        );
     }
 }
