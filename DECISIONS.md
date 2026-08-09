@@ -2703,7 +2703,9 @@ alone, and this machine kills the whole user session past ~50 GB across seats.
 **Cost**, measured at `CARGO_BUILD_JOBS=2`: ~60 s for the release build (a
 *third* cargo profile — `ci/check.sh` otherwise builds only `dev` and `test`, so
 it does not amortise), ~0.02 s warm; ~4 s for the 154-file run; ~1 s for the
-self-test. Against ~45 min that is ~2.4% cold, ~0.2% warm.
+self-test. Against the ~45 min `ci/check.sh` of that day, ~2.4% cold and ~0.2%
+warm; the script has since been measured at 986 s (MEASUREMENTS.md,
+2026-08-09), which puts it nearer 6.5%/0.6%.
 
 **The self-test drives the four cells against a synthetic five-file corpus and
 a fake checker**, through `arena.sh`'s existing `ARENA_BIN` / `ARENA_CORPUS` /
@@ -2752,7 +2754,10 @@ its committed-fixture coverage, which `README.md` promises.
 *absent*, and cargo prints `running 0 tests … ok`. Nothing but the
 `--features tg` step in `ci/check.sh` stands between them and a silent zero, so
 `ci/check-test-inputs.sh` now greps for that step — the same rule
-`ci/check-boundary.sh` already applies to its own delegation.
+`ci/check-boundary.sh` already applies to its own delegation. (Once the feature
+steps stopped being `--workspace`, the step's *existence* stopped being enough:
+the check now resolves each member's package name and requires the step to
+**select** the package the gated suite lives in. See 2026-08-09.)
 
 ## 2026-08-08 — `perf stat -e instructions` for any comparison a decision rests on; wall time is commentary
 
@@ -2805,6 +2810,68 @@ sound, and it should be written that way.
 here already rest on counters and are unaffected; a good part of the rest has a
 counter twin that carries the claim without its clock. The census tabulates
 both.
+
+## 2026-08-09 — The feature matrix runs `-p nanoda_lib`, and the premise that lets it is enforced at runtime
+
+**Chosen.** `ci/check.sh`'s two feature sweeps are `cargo test -p nanoda_lib
+--features stepcount` and `… --features tg`, not `cargo test --workspace
+--features …`. The plain sweep is split into `cargo test -p nanoda_lib` and
+`env NANODATG_ASSERT_FEATURE_INERT=1 cargo test --workspace --exclude
+nanoda_lib`, which between them run exactly the test binaries the single
+`--workspace` sweep ran.
+
+**Measured.** 107 901 091 763 823 → 36 722 573 641 991 instructions for the
+whole script, **71.18 T saved, 66.0 %**, 47.1 min → 16.4 min. Test invocations
+3 911 → 1 431. Both runs `all checks passed`. MEASUREMENTS.md, 2026-08-09, has
+the conditions and the inventory.
+
+**No coverage was dropped, and that is checked rather than argued.** Zipping
+cargo's `Running …` (stderr) against libtest's results (stdout) gives an
+inventory of (target, test, outcome); the two runs produce **1 343 triples each
+and the sorted inventories are identical**. Only multiplicities move: 1 240
+triples go from three executions to one, across 108 test targets, **none of
+which is `nanoda_lib`, `corpus.rs` or `tg_tutorial.rs`**; 44 stay at three; the
+59 `tg`-only tests stay at one.
+
+**Why it is sound.** `cargo tree -e all` over the 135-node graph differs in
+exactly one node between the plain and each featured resolution — `nanoda_lib` —
+so no dependency's `cfg` carries either feature anywhere else. `kernel` and
+`derived` do not link `nanoda_lib`. `mini` does, for the export parser and the
+level pre-pass, and every item the features gate lives in `certify.rs`,
+`stepcount.rs`, `tg.rs` or the checker binary's `main.rs`, all of it reachable
+only through a `TypeChecker` — `quot.rs`, `inductive.rs` and `pretty_printer.rs`
+reach it only as `tc.assert_def_eq_only` / `tc.infer_then_whnf`. So
+`certify::new_backend` is the single door.
+
+**Rejected — proving the premise by a static reachability grep.** It was tried
+and it does not work at module granularity: seeded from the modules containing
+`cfg(feature)` and closed under textual reference, the taint reaches 20 of
+`checker/src`'s 23 modules, because every module *mentions* `certify` in a doc
+comment or imports the un-gated `Dropped` / `Admit` enums from it. A check that
+says everything is tainted says nothing.
+
+**So the premise is a runtime assertion instead.** `certify::new_backend`
+panics under `NANODATG_ASSERT_FEATURE_INERT`, and `ci/check.sh` runs everything
+except the checker under it. The moment `mini` starts driving the checker, the
+*plain* sweep goes red and names the matrix as the thing to widen — the coverage
+cannot be lost quietly. It costs one cached relaxed load per declaration
+checked, and unset / empty / `0` are all off, matching `NANODATG_REQUIRE_CORPUS`.
+
+**And the guard is watched failing on every run.** `ci/check-feature-inert.sh`
+runs `nanoda_bin` on a committed fixture under the variable and **requires the
+abort**, plus a control run without it that must succeed, plus the two off
+spellings; it counts its cells and is BROKEN on zero. A guard nobody has seen
+fail is not known to work — three real gates in this repo were found unrun by
+accident on 2026-08-08.
+
+**The static half is a ratchet in `ci/check-test-inputs.sh`.** Three premises,
+each with a self-test cell that watches it fire: every feature a member declares
+must be run by a step that **selects that member** (a step naming `--features
+tg` but selecting the wrong package is now BROKEN, which the old word-grep let
+through); no member that declares no features may carry a `cfg(feature = …)` of
+its own, so an added `cfg` in `mini` fails the build rather than quietly losing
+coverage; and every `#![cfg(feature = "X")]` suite must live in a package some
+`--features X` step selects. Eleven self-test cells, seven of them new.
 
 ## 2026-08-09 — `dev` and `test` carry identical settings, because they share one uplift path
 

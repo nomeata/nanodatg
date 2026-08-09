@@ -5540,8 +5540,10 @@ perf stat -e instructions  cargo test --test nested -- --test-threads=1
   17 760 968 447 568 instructions      20 passed, 2 ignored, 1 207.27 s serial
 ```
 
-`ci/check.sh` runs the workspace three times — plain, `--features stepcount`,
-`--features tg` — so this **one file is 53.3 T instructions per check run**.
+`ci/check.sh` ran the workspace three times when this was taken — plain,
+`--features stepcount`, `--features tg` — so this **one file was 53.3 T
+instructions per check run**. It is 17.76 T now: the two feature runs are
+`-p nanoda_lib`, and `mini` is not in them (2026-08-09, below).
 
 Every wall figure previously attached to it is uncomparable and must not be
 chained: 285.7 s (`6b11c94`), 309.50 s (`9a8702f`, PROFILE §5, at 15 tests),
@@ -5600,7 +5602,8 @@ A second, milder collision on the same path remains and is *cost*, not
 correctness: `nanoda_lib`'s dev-dependencies are in the graph whenever its own
 test targets are, which under resolver 2 changes `num-bigint`'s features and so
 `mini`'s bytes (61 238 368 with them, 61 056 280 without). Both binaries are the
-same source at the same opt-level.
+same source at the same opt-level. `ci/check.sh` keeps its build and test halves
+on the same side of that line so nothing is compiled twice.
 
 ### `init-prelude`, past its first two blockers (#87)
 
@@ -5619,3 +5622,49 @@ first line of output. That is the first observation of init-prelude's cost at
 all, every previous run having died at `convert::load`, and 14.8 GB is already
 past the 4 GB a seat runs under. Note there is no cheap split available:
 `--acceptance-only` changes the exit code, not the work.
+
+## `ci/check.sh` end to end, and what the feature matrix cost — 2026-08-09
+
+The whole script had been "~45 min" all day and nobody had counted it. Both runs
+below are `perf stat -e instructions -- <script>` on the same warm tree in one
+sitting, `CARGO_BUILD_JOBS=12`, with `modelgen` and the release profile
+pre-warmed so neither run pays a cold `lake build` or a cold `lto` link the
+other does not. Another seat's `mini` corpus runs were on the box for part of
+the first; that moves the wall column and not the instruction column, which is
+the whole reason `47b262b` says counters decide.
+
+| | instructions | wall | test invocations |
+| --- | ---: | ---: | ---: |
+| three `cargo test --workspace` sweeps (before) | **107 901 091 763 823** | 2 824 s | 3 911 |
+| plain sweep + two `-p nanoda_lib` sweeps (after) | **36 722 573 641 991** | 986 s | 1 431 |
+
+**71.18 T saved, 66.0 %**, and 47.1 min → 16.4 min. Both runs ended
+`all checks passed`.
+
+**The coverage is the same set of tests, and that is checked rather than
+argued.** `Running …` on stderr and libtest's results on stdout are both ordered
+and 1:1, so they zip into an inventory of (test target, test name, outcome). The
+two runs produce **1 343 such triples each and the sorted inventories are
+identical** — same targets, same names, same outcomes. Only the multiplicities
+move:
+
+* **1 240** triples go from three executions to one. Not one of them belongs to
+  the checker: 108 test targets are affected and none is `nanoda_lib`,
+  `corpus.rs` or `tg_tutorial.rs`.
+* **44** stay at three — `nanoda_lib`'s own unit tests (38) and `corpus.rs` (6),
+  which are what the two features can actually change.
+* **59** stay at one: the `tg`-only tests, 31 in `nanoda_lib`'s unit tests
+  behind `cfg(all(test, feature = "tg"))` and 28 in `tg_tutorial.rs`, which
+  exist in the `tg` build alone and always did.
+
+**Why it was safe to narrow.** `cargo tree -e all` over the whole 135-node graph
+differs in exactly one node between the plain resolution and each feature
+resolution — `nanoda_lib` — so no dependency's `cfg` can carry either feature
+anywhere else. `kernel` and `derived` do not link `nanoda_lib` at all. `mini`
+does, for the export parser and the level pre-pass, and every item the two
+features gate is reachable only through a `TypeChecker`, which builds its
+backend in its constructor: `certify::new_backend` is the single door. That is
+now enforced rather than asserted — `ci/check.sh` runs everything except the
+checker under `NANODATG_ASSERT_FEATURE_INERT`, which makes that constructor
+panic, and `ci/check-feature-inert.sh` watches the panic happen against a
+process that certainly does build one.

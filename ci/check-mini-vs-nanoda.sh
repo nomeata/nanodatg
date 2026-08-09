@@ -63,12 +63,14 @@
 #                   rather than checking.
 #   --self-test     ~1 s, and needs neither corpus nor toolchain.
 #
-# Against `ci/check.sh`'s ~45 min that is **~5.5 % cold and ~1.2 % warm**, or
-# ~4 % cold counting only the marginal build. `check-arena.sh` came in at
-# ~2.4 %/~0.2 %, so this is the more expensive of the two but not by an order:
-# it needs **no special placement and no gate**. It goes after the arena steps
-# and before the three `cargo test` profiles, so a corpus divergence is reported
-# before the ~40 minutes of tests rather than after them.
+# Those shares were taken against a `ci/check.sh` of ~45 min: **~5.5 % cold and
+# ~1.2 % warm**, or ~4 % cold counting only the marginal build. `check-arena.sh`
+# came in at ~2.4 %/~0.2 %, so this is the more expensive of the two but not by
+# an order: it needs **no special placement and no gate**. The script has since
+# been measured at **986 s** (2026-08-09), which roughly triples both shares
+# without changing that conclusion. It goes after the arena steps and before the
+# `cargo test` steps, so a corpus divergence is reported before the ~13 minutes
+# of tests rather than after them.
 #
 # (The 123 s previously recorded for the run does not reproduce; two
 # back-to-back runs measured 30 s each on a machine under load 11, with the

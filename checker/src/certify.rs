@@ -639,6 +639,70 @@ pub type Backend<'x, 't, 'p> = NullCertifier;
 #[cfg(feature = "tg")]
 pub type Backend<'x, 't, 'p> = crate::tg::TgBackend<'x, 't, 'p>;
 
+/// The variable under which a process declares that it must not execute any
+/// code the `stepcount` or `tg` features can change.
+///
+/// # Why a runtime assertion and not a comment
+///
+/// `ci/check.sh` used to run `cargo test --workspace` three times — plain,
+/// `--features stepcount`, `--features tg` — and two thirds of that was spent
+/// on crates the two features cannot reach. `kernel` and `derived` do not link
+/// `nanoda_lib` at all; `mini` links it for the parser and the level pre-pass
+/// and for nothing else. So the matrix is now `-p nanoda_lib` for the two
+/// feature runs, which is only sound while this holds:
+///
+/// > Every item `stepcount` or `tg` gates lives in `certify.rs`,
+/// > `stepcount.rs`, `tg.rs` or the binary's `main.rs`; and every one of them
+/// > that is reachable from library code is reachable only through a
+/// > [`crate::tc::TypeChecker`], which builds its backend right here, in its
+/// > constructor.
+///
+/// That is a claim about the call graph, and a claim about a call graph decays
+/// the moment somebody adds an edge. So it is enforced instead of asserted:
+/// `ci/check.sh` runs the non-`checker` half of the workspace with this
+/// variable set, and building a backend under it **panics**. The first `mini`
+/// test that starts driving the checker turns the *plain* run red and says the
+/// matrix has to widen again — rather than the coverage being lost in silence,
+/// which is the failure mode the whole SKIP-is-not-PASS design exists to stop.
+///
+/// It costs one relaxed atomic load per backend built, which is once per
+/// declaration checked; the environment is read once.
+pub const FEATURE_INERT_VAR: &str = "NANODATG_ASSERT_FEATURE_INERT";
+
+/// Cached reading of [`FEATURE_INERT_VAR`]. Unset, empty and `0` are all off,
+/// matching how `ci/check.sh` treats `NANODATG_REQUIRE_CORPUS`.
+static FEATURE_INERT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cold]
+#[inline(never)]
+fn feature_inert_violated() -> ! {
+    panic!(
+        "{FEATURE_INERT_VAR} is set and a checker proof backend was built anyway.\n\
+         \n\
+         This process was run as part of the half of the workspace that \
+         `ci/check.sh` does *not* re-run under `--features stepcount` and \
+         `--features tg`, on the argument that it never executes any code \
+         those features change. Building a backend is exactly that code. \
+         Either undo the edge that reached `TypeChecker`, or widen the two \
+         feature steps in `ci/check.sh` back to the crates that now need them \
+         — but do not silence this, because silencing it is the lost coverage."
+    )
+}
+
+/// Panic if this process promised not to execute feature-varying code.
+#[inline]
+fn assert_feature_inert() {
+    let on = *FEATURE_INERT.get_or_init(|| {
+        match std::env::var_os(FEATURE_INERT_VAR) {
+            None => false,
+            Some(v) => !v.is_empty() && v != "0",
+        }
+    });
+    if on {
+        feature_inert_violated()
+    }
+}
+
 /// Build the active backend.
 ///
 /// The `Env` is what lets the TG backend resolve a constant to its *value*, so
@@ -648,12 +712,14 @@ pub type Backend<'x, 't, 'p> = crate::tg::TgBackend<'x, 't, 'p>;
 /// to. The null backend ignores it.
 #[cfg(feature = "tg")]
 pub fn new_backend<'x, 't: 'x, 'p: 't>(env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
+    assert_feature_inert();
     crate::tg::TgBackend::new(env)
 }
 
 /// Build the active backend (null variant; the environment is unused).
 #[cfg(not(feature = "tg"))]
 pub fn new_backend<'x, 't: 'x, 'p: 't>(_env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
+    assert_feature_inert();
     NullCertifier::new()
 }
 

@@ -44,9 +44,11 @@ What was found instead is the same three shapes as last time, redistributed:
 The first audit's F1, F2, F3, and F6 are **verified closed** by `cabf0be` (details at the end);
 its F4 list is four-sixths fixed, with `ext/dprod.rs` and `ext/dprod_universe.rs` still open.
 
-One framing correction to the brief: `ci/check.sh` runs all three test sweeps (`cargo test
---workspace`, `--features stepcount`, `--features tg`) in the **debug** profile, so `debug_assert`
-pins do fire in CI. The path where they vanish is the release measurement binary
+One framing correction to the brief: every test sweep `ci/check.sh` runs is in the **debug**
+profile, so `debug_assert` pins do fire in CI. (At the time of the audit that was three sweeps of
+the whole workspace — `cargo test --workspace`, `--features stepcount`, `--features tg`; the two
+feature sweeps are now `-p nanoda_lib`, since `derived` neither declares those features nor links
+the crate that does, so nothing here changes.) The path where they vanish is the release measurement binary
 (`cargo build --release --features stepcount`, MEASUREMENTS.md) and any hand-run
 `cargo test --release`. F4-class items are therefore untested exactly on the headline-number path,
 as the brief said, but not untested everywhere.

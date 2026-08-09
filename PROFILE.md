@@ -344,8 +344,9 @@ tower.
 | `mini/tests/nested.rs`, `MINI_FRAME_ALL=1 MINI_FASTHASH=1` | **124.21 s** | 15 passed |
 
 2.49×, with every assertion in the file — including the export oracle and the
-generated-recursor comparison — still passing. It runs three times per CI run,
-so that is ~9 minutes.
+generated-recursor comparison — still passing. It ran three times per CI run
+when this was written, so ~9 minutes; since the feature matrix was narrowed to
+`-p nanoda_lib` it runs **once**, so the same 2.49× is worth ~3 minutes.
 
 **The build profile is not part of the story, and `opt-level = 3` builds when
 there is room for it.** `CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_BUILD_JOBS=1
@@ -497,9 +498,10 @@ already specifies. **That, and not arity, interning, or the TG kernel, is where
 the next factor lives.**
 
 **What this is worth to CI (`#110`).** `mini/tests/nested.rs` — the binary that
-runs these towers, three times per CI run — is **309.50 s baseline and
-124.21 s with experiment A + G**, 15 tests passing either way. 2.49×, 185 s
-saved per invocation, ~9 minutes per CI run.
+runs these towers — is **309.50 s baseline and 124.21 s with experiment A + G**,
+15 tests passing either way. 2.49×, 185 s saved per invocation. It ran three
+times per CI run when this was written, so ~9 minutes; the feature matrix has
+since been narrowed to `-p nanoda_lib` and it runs once, so ~3 minutes.
 
 ## 9. Not measured
 
@@ -507,8 +509,10 @@ saved per invocation, ~9 minutes per CI run.
   C++ was not available and is not asserted. Only Lean's wall clock is
   evidence here.
 * **The rest of CI.** Only `mini/tests/nested.rs` was timed end to end
-  (§5); `ci/check.sh` is ~45 minutes and was not run, because this study lands
-  no behaviour change.
+  (§5); `ci/check.sh` was ~45 minutes at the time and was not run, because this
+  study lands no behaviour change. (It has since been measured directly:
+  2 824 s before the feature matrix was narrowed and 986 s after —
+  MEASUREMENTS.md, 2026-08-09.)
 * **Whether the frame memo may keep `Gap` entries in production.** Experiment A
   is sound by `Frame`'s own argument and changed no output in any run here, but
   it degrades `blocker`'s first-blocker trail by construction (that is what the

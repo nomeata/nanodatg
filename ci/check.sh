@@ -93,7 +93,17 @@ step "mini-vs-nanoda self-test"  ./ci/check-mini-vs-nanoda.sh --self-test
 step "dev/test uplift"           ./ci/check-uplift.sh
 step "uplift self-test"          ./ci/check-uplift.sh --self-test
 
-step "workspace builds"          cargo build --workspace --all-targets
+# Everything compiles — in the same two halves the test steps below use, and for
+# a reason that is not cosmetic. `nanoda_lib`'s dev-dependencies (`rand`, and
+# `num-bigint` with `rand` turned on) are in the graph whenever its own test
+# targets are, and under resolver 2 that changes the features `num-bigint` is
+# built with, hence `nanoda_lib`, hence `mini`. Measured here: `mini` is
+# 61 238 368 bytes when the checker's tests are in the graph and 61 056 280 when
+# they are not. So `cargo build --workspace --all-targets` followed by
+# `cargo test --workspace --exclude nanoda_lib` compiles `mini` and all seven of
+# its integration-test binaries *twice*. Matching the halves keeps it to once.
+step "builds (rest)"             cargo build --workspace --exclude nanoda_lib --all-targets
+step "builds (checker)"          cargo build -p nanoda_lib --all-targets
 
 # ── SKIP is not PASS, one layer down ────────────────────────────────────────
 # Everything above is the shell half of that rule. The Rust suites had the same
@@ -119,7 +129,12 @@ step "corpus-dependent tests"    ./ci/check-test-inputs.sh
 # step: `checker/tests/tg_tutorial.rs` opens `#![cfg(feature = "tg")]`, so
 # without the feature its 28 tests are not skipped but *absent* —
 # `running 0 tests … ok`. Dropping `--features tg` from the step below would
-# retire them in silence, so that step's existence is now grepped for.
+# retire them in silence. Since the feature steps are now `-p nanoda_lib` and
+# not `--workspace`, the step's *existence* is no longer enough to look for:
+# `check-test-inputs.sh` resolves each package's name from its manifest and
+# requires the step to select the package the gated suite lives in, and to
+# select the package that declares the feature. It also refuses a
+# `cfg(feature)` in any crate the narrowed steps no longer build.
 step "test-input self-test"      ./ci/check-test-inputs.sh --self-test
 # The ratchet, and the self-test proving it can fail — eight planted violations
 # and the two clean cases that must still pass, one of them a comment that
@@ -130,12 +145,41 @@ step "test-input self-test"      ./ci/check-test-inputs.sh --self-test
 step "skip guards"               ./ci/check-test-guards.sh
 step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
 
-step "tests"                     cargo test --workspace
+# ── The feature matrix, over the crates the features can reach ──────────────
+# This used to be `cargo test --workspace` three times: plain,
+# `--features stepcount`, `--features tg`. Measured, `mini/tests/nested.rs`
+# alone is 17.76 T instructions, so that one file cost 53.3 T per run of this
+# script — and two thirds of it bought nothing. `stepcount` and `tg` are
+# `nanoda_lib`'s features; `kernel` and `derived` do not link `nanoda_lib` at
+# all, and `mini` links it for the export parser and the level pre-pass and
+# never enters `tc.rs`. So the feature runs are `-p nanoda_lib`.
+#
+# Narrowing a matrix is how coverage is lost, so the premise is checked rather
+# than believed, in three places:
+#
+#   * `ci/check-test-inputs.sh` refuses a feature that no step builds, a step
+#     that names a feature without selecting the crate that declares it, and a
+#     `cfg(feature)` appearing in any crate the feature steps no longer build;
+#   * the plain run below is split so that everything except the checker runs
+#     under `NANODATG_ASSERT_FEATURE_INERT`, which makes
+#     `certify::new_backend` panic — the moment `mini` starts driving the
+#     checker, the plain run goes red and says the matrix has to widen;
+#   * `ci/check-feature-inert.sh` watches that panic actually happen, because a
+#     guard nobody has seen fail is not known to work.
+#
+# The split costs nothing: the two halves run the same test binaries the single
+# `--workspace` run did, and between them they run all of them.
+step "tests (checker)"           cargo test -p nanoda_lib
+step "tests (rest, feature-inert)" \
+     env NANODATG_ASSERT_FEATURE_INERT=1 cargo test --workspace --exclude nanoda_lib
+# …and the guard that holds the two steps below to `-p nanoda_lib`, watched
+# firing against a process that certainly does build a backend.
+step "feature-inert guard"       ./ci/check-feature-inert.sh
 # The step-counting probe must not change behaviour, only observe it.
-step "tests (stepcount)"         cargo test --workspace --features stepcount
+step "tests (stepcount)"         cargo test -p nanoda_lib --features stepcount
 # The real Tarski-Grothendieck backend: builds actual kernel derivations, and
 # must not change what the checker accepts.
-step "tests (tg backend)"        cargo test --workspace --features tg
+step "tests (tg backend)"        cargo test -p nanoda_lib --features tg
 
 echo
 if (( ${#skipped[@]} )); then

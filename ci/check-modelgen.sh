@@ -49,8 +49,9 @@
 #
 # ~1.0 s and ~0.4 s to run, plus `lake build`: about 80 s from cold (most of it
 # `Modelgen.Model:c.o`) and nothing when `modelgen/.lake` is warm. `ci/check.sh`
-# is ~45 min, of which `mini/tests/nested.rs` alone is ~10 min × 3 profiles, so
-# this is well under a percent of the total even on a cold build.
+# is **986 s measured** (2026-08-09; it was ~2 824 s while the feature matrix
+# still ran the whole workspace three times), so this is well under a percent of
+# the total even on a cold build.
 #
 # `--self-test` runs the count guard against canned output — a suite that
 # reports zero, and one that reports nothing — because "report BROKEN on zero"

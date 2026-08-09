@@ -42,9 +42,12 @@
 #   154-file run    ~4 s (init-prelude's 2059 declarations are under a second)
 #   --self-test     ~1 s, and needs neither corpus nor toolchain
 #
-# Against `ci/check.sh`'s ~45 min — of which `mini/tests/nested.rs` alone is
-# ~10 min in each of three profiles — that is **~2.4% cold and ~0.2% warm**, so
-# it goes in the ordinary run and needs no special placement.
+# Those shares were taken against a `ci/check.sh` of ~45 min — of which
+# `mini/tests/nested.rs` alone was ~10 min in each of three profiles — giving
+# **~2.4% cold and ~0.2% warm**. The script is now **986 s measured**
+# (2026-08-09) because the two feature sweeps are `-p nanoda_lib` and no longer
+# re-run `mini`, so the shares are nearer 6.5%/0.6%; it still goes in the
+# ordinary run and still needs no special placement.
 #
 # The build is the whole cost, and it is a cost only because the release
 # profile (`lto = true`, `opt-level = 3`) is a *third* profile: `ci/check.sh`
