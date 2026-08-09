@@ -56,6 +56,13 @@ curl -sSL https://arena.lean-lang.org/lean-arena-tests.tar.gz \
 ./scripts/arena.sh    # 102 good + 55 bad export files
 ```
 
+Fetch it **once**, in the main checkout. `vendor/` is gitignored, so a
+`git worktree` does not get it — but `ci/corpus-dir.sh` looks in the main
+checkout too (`git rev-parse --git-common-dir`) and `ci/check.sh` symlinks it
+into the worktree, so one copy serves all of them and no worktree needs its own.
+`NANODATG_NO_CORPUS_LINK=1` turns the symlink off, at the price of the worktree
+SKIPping the corpus steps.
+
 `ci/check.sh` runs this too, as `ci/check-arena.sh`, and **SKIPs loudly** rather
 than passing when the corpus is not there. `good/` must be accepted. `bad/` is a
 **ratchet**, not a blanket must-reject: a `bad/` file we accept fails unless it

@@ -3000,3 +3000,90 @@ pays with the only external check we have on the files we are about to certify
 at scale — measured: `nanoda` accepts 91/91 mode-A tutorial exports and panics
 on 50 of 91 mode-B ones, and Lean finds 0 of `init-prelude`'s 139 mode-A
 recursors differing from its own against 254 of 260 under mode B.
+
+## 2026-08-09 — The corpus is found from a worktree, because that is the only place anyone works
+
+`vendor/` is gitignored (`.gitignore:3`; the arena corpus is 17 MB, 12 MB of it
+performance data), so `git worktree add` does not carry it. Every seat on this
+project works in a worktree. Three CI steps defaulted their corpus to
+`$ROOT/vendor/arena-tests` with `$ROOT` being that worktree, and
+`ci/check.sh` decided `NANODATG_REQUIRE_CORPUS` the same way.
+
+Measured in a pristine worktree of 3a1a2da on a machine whose main checkout
+holds all 157 exports:
+
+| step | before |
+| --- | --- |
+| `arena corpus` | SKIP (77) |
+| `mini vs nanoda` | SKIP (77) |
+| `corpus-dependent tests` | SKIP (77) |
+| `test-input self-test` | **FAIL (1)** |
+| `NANODATG_REQUIRE_CORPUS` | unset, so 41 corpus tests report `ok` having read nothing |
+
+The FAIL is its own small lesson: `ci/check-test-inputs.sh`'s self-test had a
+cell that needed a *present* corpus and pointed it at
+`$ROOT/vendor/arena-tests`, so it got a SKIP where it wanted a BROKEN. A
+self-test that only holds where the optional input happens to be installed is
+the exact shape the script exists to forbid. The three present-corpus cells now
+build a synthetic corpus in `mktemp -d`, and hold on any machine.
+
+**This is 2026-08-08's "SKIP is not PASS" wearing a different hat.** A step that
+cannot see its input in the one environment everybody uses reports SKIP
+truthfully and is still worthless — and the second-order cost is worse than the
+first, because two seats independently diagnosed this as environmental on the
+same day. Discounting a red is the habit that eventually launders a real one.
+
+**The fix is discovery, not a workaround.** `git rev-parse --git-common-dir`
+names the shared `.git` from inside a worktree as well as from the main
+checkout, and its parent is the main checkout. `ci/corpus-dir.sh` prefers the
+local path — so nothing changes where the corpus is already there — and falls
+back to the main checkout's copy. One 17 MB copy serves every worktree.
+
+**A symlink, not `cp -al`.** Both seats reached for a hardlink tree. Measured, a
+symlink is enough for every consumer: `scripts/arena.sh` globs `$CORPUS/good`
+and `$CORPUS/bad`, which resolve through it, and the Rust suites use ordinary
+path resolution. The one consumer it was not enough for was `find` **without
+`-L`**, which does not descend a symlink named on its command line:
+`ci/check-test-inputs.sh` counted 0 where `find -L` counted 157, and so called
+BROKEN on a corpus the suites running beside it were reading perfectly well. A
+step that contradicts the tests next to it is worse than a step that is missing;
+it teaches the reader that reds here are noise. The count is `find -L` now, and
+zero remains a hard failure.
+
+**`--link`, and not merely an exported path.** The shell steps take a corpus
+path, so discovery alone would do for them. The Rust suites do not:
+`checker/tests/{corpus,tg_tutorial}.rs` and `mini/tests/{tutorial,dump,mutual}.rs`
+build the path from `CARGO_MANIFEST_DIR` and can only see a corpus at the
+worktree's own `vendor/arena-tests`. `NANODATG_REQUIRE_CORPUS` is a promise
+about *those* tests, so setting it off a corpus they cannot reach would convert
+41 honest skips into 41 panics; leaving it unset while the shell steps run off a
+discovered corpus makes `check-test-inputs.sh` correctly report BROKEN.
+Materialising the path is the only consistent answer, so `ci/check.sh` runs
+`ci/corpus-dir.sh --link` once at the top. It never overwrites an occupied path,
+and `NANODATG_NO_CORPUS_LINK=1` turns it off — a worktree then SKIPs like any
+other unequipped machine.
+
+**Both halves are self-tested against a real worktree.**
+`ci/corpus-dir.sh --self-test` builds a throwaway repository *and a real
+`git worktree` of it*, because the worktree is the whole defect and a self-test
+that only describes one cannot see it; nine cells, and the falsifiers were run —
+deleting the fallback branch reds three of them, deleting the `ln -s` reds two,
+and replacing the non-destructive guard with an `rm -rf` reds one.
+`ci/check-test-inputs.sh --self-test` gains three cells: a symlinked corpus is
+counted rather than reported empty, a symlink to an empty corpus is still
+BROKEN, and the count through a link equals the count in the directory. Removing
+the `-L` reds two of the three; removing the zero guard reds two. The
+present-but-empty cell now sets `NANODATG_REQUIRE_CORPUS=1`, without which it
+exited 1 down at the variable check and passed with the count guard deleted —
+a green cell that could not fail.
+
+**Audited and left alone.** `scripts/arena.sh` globs `$CORPUS/good` and
+`$CORPUS/bad` without `-L`; that works through a symlinked corpus root because
+`good` and `bad` are real directories after it (measured: 102 files), and adding
+`-L` would change the file set the `bad/` ratchet is computed over for no
+demonstrated benefit. `ci/check-boundary.sh:234` is the same *silent-zero*
+shape in a different place — `derived_scan` returns 0 (pass) for an absent
+directory and its `find` has no counted-N guard — but every directory it scans
+is committed, so no worktree can trip it; it is recorded here rather than
+changed, because the boundary check guards the TCB and deserves its own change
+with its own cell in `ci/test-boundary.sh`.
