@@ -157,6 +157,43 @@ line. `convert::literal_value` now declines it by name instead, ahead of the
 guard being lifted and independently of it; §1.4's table is otherwise
 unchanged and its `2⁶⁴` entry is the correct one.
 
+#### 1.3.3 With the clauses in — 96 declarations, and the trap §7 predicted
+
+`direct::Clause::Nat`, the binary literal and `whnf`'s certified successor step
+are all in. Re-measured, and the wall moved three times in one sitting:
+
+| what was in | outcome |
+|---|---|
+| the clauses, no flags | `decline: Nested inductive Lean.Syntax` — the load gate, unchanged |
+| `--nested --mutual` | `decline: nat literal 18446744073709551616 does not fit in the 64 bits mini's Expr::NatLit has` |
+| …and `Expr::NatLit` widened to `u128` | **stack overflow at declaration 96 of 2059, `Nat.isValidChar`** |
+
+The middle row is this arc's own decline, installed one commit before it fired:
+`UInt64.size` is 2⁶⁴, the *first* value past a `u64`. It is the reason
+`Expr::NatLit` is now a `u128` — the width was a limit of the representation
+and never of the arithmetic, `num(2⁶⁴)` being 66 nodes.
+
+**The last row is the answer, and it is the trap.** `Nat.isValidChar` is
+`n < 55296 ∨ (57343 < n ∧ n < 1114112)`, and deciding it runs `Nat.lt` — which
+the prelude compiles through `Nat.rec` — on a literal. The literal now peels one
+`succ` at a time, cheaply and with a certificate; the *recursor* then asks for
+the next one, 55296 times. That is exactly what §7's step 3 was warned about:
+peeling one successor is a step, peeling `n` of them is a program.
+
+**It presents as a stack overflow, in seconds, on a 256 MB worker stack** — not
+as the memory exhaustion this document's earlier sections were written against,
+and not as a timeout either. Three probes place it: `whnf_conv` never reaches
+depth 2000 and `infer_type` never reaches 3000, so the recursion is neither of
+those two counted at their entry; a per-declaration trace puts it inside
+`kernel::add` on declaration 96. The overflow is also a **behaviour change worth
+naming**: on this file `mini` used to decline and now aborts. Nothing in the
+corpus can reach it — the largest tutorial literal is 3 — but the file that can
+is the one the project is aiming at.
+
+So the order in §7's list is not a preference. **The accelerated operations are
+not an optimisation over the successor path; they are what makes step 3 usable
+at all**, and `Nat.isValidChar` is 96 declarations in.
+
 ### 1.4 What `init-prelude` actually contains — measured statically
 
 35 literals; the distribution over `init-prelude` ∪ `grind-ring-5`:
@@ -967,6 +1004,12 @@ engineering: the two bottoms are `[φ]`/`•`-shaped and need a second route.
 the superseded §6 recommendation's answer and is now the wrong one: with one
 carrier, the literal clause is only expressible if `⟦Nat⟧` **is** `ω`, so the
 interpretation axis is exactly where the change starts.)*
+
+**Built.** All twelve rows are in, `mini/src/nat_clause.rs` and
+`mini/src/rec_nat.rs` are the two new modules, and the corpus is unmoved at
+accept 89 / decline 2 / reject 0, constEv 218/218, unsealed 0, gapped 0. What
+is *not* built is §7's step 4, the accelerated operations, and §1.3.3 is the
+measurement that says it is the next thing and not an optimisation.
 
 Twelve edits, verified against the tree at `8e2e45b`. `derived/` owes **none**
 of them: `nat::Nat` has the carrier, both ι rules and `ω ∈ U₁`, `nat::Eval` has
