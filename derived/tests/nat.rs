@@ -195,6 +195,14 @@ fn the_certificate_scales_with_bit_length_and_not_with_value() {
 
     assert_eq!(numeral_size(1u128 << 64), 66, "the numeral for 2⁶⁴ is 66 nodes");
     assert_eq!(numeral_size(u64::MAX as u128), 65);
+    // **The widths that separate.** `0` and `1` cannot tell the binary encoding
+    // from the unary one — both are one node either way — so the pins that
+    // carry the claim are `11`, the first value the old `natLit > 10` guard
+    // refused, and `2⁶⁴`. Unary would be 12 and 1.8 × 10¹⁹ nodes.
+    assert_eq!(numeral_size(0), 1, "num(0) is the term `0`");
+    assert_eq!(numeral_size(1), 2);
+    assert_eq!(numeral_size(11), 5, "num(11) = double1(double1(double(double1(0))))");
+    assert_eq!(numeral_size(10), 5);
 
     // Two 64-bit numerals, all ones on both sides: every level carries.
     let (a, b) = (u64::MAX as u128, u64::MAX as u128);

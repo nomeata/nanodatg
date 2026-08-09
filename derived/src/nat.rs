@@ -10,6 +10,7 @@
 //! | [`add`] | [`Add`] — `add` by iteration, its two Peano equations, and the ring facts the binary view runs on |
 //! | [`mul`] | [`Mul`] — `mul` by parametric recursion, distributivity, and the two binary equations |
 //! | [`prim`] | [`prim_rec`] — primitive recursion with a parameter, which the ambient recursion theorem's fixed unary step cannot express |
+//! | [`typing`] | [`natrec_mem`] — the recursor's value lands in the motive's fibre, by one induction over the two ι rules |
 //! | [`unique`] | [`uniqueness`] — any operation satisfying the two Peano equations *is* `add`, and [`transfer`] fires it |
 //! | [`eval`] | [`Eval`] — the certified evaluator for `succ`/`add`/`addc` at numerals, with an exact kernel-inference meter |
 //! | [`binary`] | [`Binary`] — `double`, `double1`, `addc`, the numeral encoding, and the eight binary recursion equations |
@@ -82,6 +83,7 @@ pub mod glue;
 pub mod mul;
 pub mod prim;
 pub mod sub;
+pub mod typing;
 pub mod unique;
 
 pub use add::Add;
@@ -92,5 +94,6 @@ pub use sub::Sub;
 pub use eval::{numeral_size, Eval, Meter};
 pub use mul::Mul;
 pub use prim::{prim_rec, PrimRec};
+pub use typing::natrec_mem;
 pub use unique::{transfer, uniqueness, uniqueness_pointwise, Spec};
 pub use glue::{congr1, congr2_l, congr2_r, congr_tmpl, induct, induct_step, Chain};
