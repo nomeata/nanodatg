@@ -207,7 +207,10 @@ EOF
 fi
 
 # ── the real thing ──────────────────────────────────────────────────────────
-CORPUS="${ARENA_CORPUS:-$ROOT/vendor/arena-tests}"
+# `vendor/` is gitignored, so a `git worktree` has no corpus at `$ROOT` even on
+# a machine that has one — which is every seat on this project. `corpus-dir.sh`
+# falls back to the main checkout; see its header.
+CORPUS="${ARENA_CORPUS:-$("$ROOT/ci/corpus-dir.sh")}"
 if [[ ! -d "$CORPUS/good" || ! -d "$CORPUS/bad" ]]; then
   echo "  NOTICE: no arena corpus at $CORPUS." >&2
   echo "  It is gitignored for size. README.md \"Corpus tests\":" >&2
@@ -231,7 +234,11 @@ if ! ( cd "$ROOT" && cargo build --release -p nanoda_lib --bin nanoda_bin ); the
   exit 1
 fi
 
-run_corpus "arena corpus" "$ROOT/scripts/arena.sh"
+# `ARENA_CORPUS` explicitly: `scripts/arena.sh` defaults to its *own*
+# `$ROOT/vendor/arena-tests`, so without this it would look somewhere else than
+# the directory checked above the moment the two differ — which is exactly what
+# a worktree makes happen.
+run_corpus "arena corpus" env ARENA_CORPUS="$CORPUS" "$ROOT/scripts/arena.sh"
 
 echo
 if (( fails )); then

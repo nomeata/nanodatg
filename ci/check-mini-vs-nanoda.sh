@@ -271,7 +271,11 @@ EOF
 fi
 
 # ── the real thing ──────────────────────────────────────────────────────────
-CORPUS="${MVN_CORPUS:-$ROOT/vendor/arena-tests}"
+# `vendor/` is gitignored, so a `git worktree` has no corpus at `$ROOT` even on
+# a machine that has one — which is every seat on this project. `corpus-dir.sh`
+# falls back to the main checkout; see its header. The run below already passes
+# `MVN_CORPUS` down explicitly, so nothing else has to change.
+CORPUS="${MVN_CORPUS:-$("$ROOT/ci/corpus-dir.sh")}"
 if [[ ! -d "$CORPUS/good/tutorial" || ! -d "$CORPUS/bad/tutorial" ]]; then
   echo "  NOTICE: no arena corpus at $CORPUS." >&2
   echo "  It is gitignored for size. README.md \"Corpus tests\":" >&2

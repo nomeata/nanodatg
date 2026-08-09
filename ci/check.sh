@@ -24,6 +24,27 @@ step() {
   esac
 }
 
+# ── The gitignored corpus, before anything looks for it ─────────────────────
+# `vendor/` is gitignored (17 MB), so `git worktree add` does not carry the
+# arena corpus into a worktree — and every seat on this project works in one.
+# Three steps below default their corpus to `$ROOT/vendor/arena-tests`, so on a
+# machine that *has* the corpus a worktree got three SKIPs and one FAIL, and two
+# seats independently spent a day filing it as environmental. A step that cannot
+# see its input in the one environment everybody uses is the 2026-08-08 "SKIP is
+# not PASS" defect wearing a different hat, and it trains the reader to discount
+# a red, which is how a real one eventually gets laundered.
+#
+# `ci/corpus-dir.sh --link` resolves it once, here, before any step: it finds
+# the main checkout's copy (`git rev-parse --git-common-dir`) and symlinks it to
+# the local path. A path and not merely an exported variable, because the Rust
+# suites build theirs from `CARGO_MANIFEST_DIR` and cannot be handed one — and
+# `NANODATG_REQUIRE_CORPUS` below is a promise about *them*, so setting it off a
+# corpus they cannot reach would turn 41 honest skips into 41 panics.
+# `NANODATG_NO_CORPUS_LINK=1` opts out; a worktree then SKIPs like any other
+# unequipped machine. Nothing changes in the main checkout, where the corpus is
+# already at the local path and `--link` is a stat.
+if ./ci/corpus-dir.sh --link >/dev/null; then corpus_present=1; else corpus_present=0; fi
+
 # The trusted boundary, and the self-test proving the boundary check can fail.
 step "kernel boundary"           ./ci/check-boundary.sh
 step "boundary check self-test"  ./ci/test-boundary.sh
@@ -63,8 +84,15 @@ step "modelgen count self-test"  ./ci/check-modelgen.sh --self-test
 # The Lean Kernel Arena corpus. `scripts/arena.sh` has been a real pass/fail
 # gate since 2026-07-30 and no step ran it. `bad/` is a *ratchet* against
 # `scripts/arena-accept.txt`, not a blanket must-reject — see that script's
-# header. SKIPs when `vendor/arena-tests` is absent (it is gitignored for size).
+# header. SKIPs when no corpus is reachable — it is gitignored for size, and
+# `ci/corpus-dir.sh` above has already looked in the main checkout as well as
+# in this one, so a SKIP here means the machine really has not fetched it.
 # ~60 s for the release build the first time, ~4 s for the run.
+# …and first the self-test for the discovery the three corpus steps now share.
+# It builds a throwaway repository and a real `git worktree` of it, so the cell
+# that matters — a worktree with no `vendor/` finding the main checkout's copy —
+# is exercised rather than asserted. Needs no corpus and no toolchain, ~0.3 s.
+step "corpus discovery self-test" ./ci/corpus-dir.sh --self-test
 step "arena corpus"              ./ci/check-arena.sh
 # …and the self-test for its four ratchet cells and its count guard, which
 # needs neither the corpus nor a toolchain and so runs where the step SKIPs.
@@ -121,7 +149,16 @@ step "builds (checker)"          cargo build -p nanoda_lib --all-targets
 # `README.md` promises it a useful `cargo test` off the committed fixtures — so
 # `check-test-inputs.sh` reports that case as a SKIP instead, and the summary
 # ends "all checks that ran passed".
-if [[ -d vendor/arena-tests ]]; then export NANODATG_REQUIRE_CORPUS=1; fi
+#
+# "Genuinely there" used to be `[[ -d vendor/arena-tests ]]`, which is false in
+# every `git worktree` — `vendor/` is gitignored, so `git worktree add` does not
+# carry it — and every seat on this project works in one. That turned a machine
+# that *has* the corpus into an unequipped one three steps running, and two
+# seats spent a day each concluding it was environmental.
+#
+# `corpus-dir.sh --link` at the top of this script is what fixes it, and the
+# answer it reached is `$corpus_present` here.
+if (( corpus_present )); then export NANODATG_REQUIRE_CORPUS=1; fi
 if [[ -x modelgen/.lake/build/bin/modelgen ]]; then export NANODATG_REQUIRE_MODELGEN=1; fi
 step "corpus-dependent tests"    ./ci/check-test-inputs.sh
 # …and its self-test, which needs no inputs and so runs where it SKIPs. It also
