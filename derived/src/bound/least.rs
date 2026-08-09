@@ -14,8 +14,14 @@
 //! Not because it cannot be. `is_universe(U(c))` is a theorem
 //! ([`crate::universe::least_universe_is_universe`]), so [`super::closure`]'s
 //! antecedent discharges at `U(c)` and the instance is exactly the statement
-//! above. The derivation here transfers the closure property instead of
-//! instantiating it, and has not been re-derived against the theorem. The
+//! above — `tests/is_universe_route_cost.rs` pins the two conclusions equal as
+//! `Formula`s. The transfer is kept because it is cheaper where this runs:
+//! measured there, it costs 989 kernel calls (17.8 M instructions) from the
+//! axiom alone, while the instantiation costs 76 (1.4 M) only *after* a
+//! 35,822-call (247 M) derivation of the theorem — `Csb` plus
+//! `least_universe_inaccessible` — which nothing holding a
+//! [`crate::bound::Bound`] has performed by this point: `cumul::Paths` derives
+//! it later, and `inductive::Machine::new` never does. The
 //! transfer is the one [`crate::universe::least_universe_pairing`] makes — a
 //! property that holds in *every* universe holds in `U(c)`, because `U(c) ⊆ u`
 //! for every universe `u ∋ c` — and it needs nothing about `U(c)` but that

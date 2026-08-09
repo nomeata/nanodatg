@@ -20,7 +20,13 @@
 //! [`crate::universe::least_universe_closed_sub`] and
 //! [`crate::universe::least_universe_closed_pow`] supply — and those two
 //! clauses are all the argument ever used, so it is rerun against them.
-//! Neither entry has been re-derived against the whole predicate.
+//! The instantiation was measured (`tests/is_universe_route_cost.rs`) and
+//! loses even with the theorem already in hand: [`pow_closed`] at `U(x)`
+//! costs 306 kernel calls against 672 for deriving
+//! [`crate::universe::universe_power_closed`] and instantiating it there;
+//! [`sub_closed`] costs 10 against 399 via
+//! [`crate::universe::universe_sub_mem`] — whose discharged instance is the
+//! *uncurried* shape, which no consumer chains.
 //!
 //! Neither clause suffices alone for [`pow_closed`]: `C₃` puts *some* `p ∈ u`
 //! above every subset of `y`, so `𝒫y ⊆ p`; `C₂` then pulls `𝒫y`, a subset of the

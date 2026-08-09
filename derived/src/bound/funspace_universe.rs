@@ -49,8 +49,13 @@ use super::least::least_universe_subset;
 /// Reached by transfer, not by instantiation — though instantiation would now
 /// work: `is_universe(U(c))` is a theorem
 /// ([`crate::universe::least_universe_is_universe`]) and discharges
-/// [`crate::bound::funspace_mem_universe`]'s antecedent at `u := U(c)`. This
-/// derivation predates that and has not been re-derived against it. What it
+/// [`crate::bound::funspace_mem_universe`]'s antecedent at `u := U(c)` to the
+/// identical statement (`tests/is_universe_route_cost.rs` pins the two
+/// conclusions equal). The transfer stays because it is cheaper where this
+/// runs: 542 kernel calls (13.8 M instructions) from the axiom alone, against
+/// 76 (1.4 M) for the instance *plus* the 35,822 (247 M) the theorem itself
+/// costs — which nothing holding a [`crate::bound::Bound`] has paid by this
+/// point. What it
 /// does: for each universe `u ∋ c` we have `x ∈ u` and `U(c) ⊆ u`, so
 /// [`crate::wtype::fs_mono`] re-aims `f` at `u` and
 /// [`crate::bound::funspace_mem_universe`] applies there.

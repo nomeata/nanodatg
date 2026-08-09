@@ -51,8 +51,13 @@
 //! [`least_universe_closed`] is not derived as [`universe_closed`] at
 //! `u := U(c)`, although it could be: `is_universe(U(c))` is a theorem
 //! ([`crate::universe::least_universe_is_universe`]), so that instance's
-//! antecedent discharges. The derivation below takes the other route and has
-//! not been re-derived against the theorem. It is the same transfer through the
+//! antecedent discharges to the identical statement. The derivation below
+//! takes the other route because it is cheaper where it runs — measured in
+//! `tests/is_universe_route_cost.rs`: the transfer costs 989 kernel calls from
+//! the axiom alone, the instance 76 only *after* the theorem's own 35,822,
+//! which nothing holding a [`Bound`] has derived by this point
+//! (`cumul::Paths` derives it later; `inductive::Machine::new` never does).
+//! It is the same transfer through the
 //! intersection that [`crate::universe::least_universe_pairing`] makes: a
 //! closure property that holds in *every* universe holds in `U(c)`, because
 //! `U(c) ⊆ u` for every universe `u ∋ c` and [`crate::wtype::fs_mono`] moves a
