@@ -2399,3 +2399,176 @@ the composed fixtures with `mutual_aux` doing the work, and everything
 certifies: `nested_iota_arm` at 63 pairs / 63 `constEv` / 63 `typeEv`, waiting
 empty, `gapped` 0. Those are the numbers the recogniser has to reproduce, and
 they are pinned in `mini/tests/nested.rs` today.
+
+# 8. The third construction: models from five primitives (`--prim-models`)
+
+**Off by default, behind `--prim-models`.** Where §1's constructions remove
+*nesting* and *mutuality*, this one removes the inductive declaration itself:
+a plain — non-mutual, non-nested, non-indexed, non-recursive — inductive's
+carrier, constructors, recursor and ι rules come out as ordinary `def`s and
+`theorem`s over a fixed basis of primitive inductives,
+
+    Eq   False   PSigma   Nat   Acc
+
+each spliced into the output at Lean's own shape if the input lacks it,
+exactly as §1.5 splices `Eq` and the quotient. The interface is §1's four
+names unchanged — `T._model.self`, `ctor_j`, `rec_0`, `iota_0_j` — and there
+are **no internal declarations at all**: every helper the construction needs
+is an inline subterm, so a model is exactly `2 + 2c` declarations for `c`
+constructors, plus whichever basis members had to be spliced.
+
+The commission named the basis `{Eq, False, Sigma, Acc, Nat}` and asked for
+it to be verified rather than inherited. Two corrections came out of that,
+both compiled at the pinned toolchain in `scripts/prim-basis/Derivations.lean`:
+
+* **the Σ must be `PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
+  Sort (max 1 u v)`. `Subtype`, every structure with a `Prop` field, and
+  every `Prop`-fibred pair in the encoding need a Σ over `Sort`; Lean's
+  `Type`-only `Sigma` cannot give them without `PLift`, a sixth inductive.
+  (`init-prelude` declares no `PSigma`, so on the corpus below it is spliced
+  — the one basis splice that run needs.)
+* **level pads are definitionally canonical, and the derivation table's
+  machinery collapses.** The commission's table reached `Bool` through
+  `Σ (n : Nat), n < 2` and proof irrelevance; what is actually emitted is
+  simpler and stronger. `D 1 := Σ'(_ : ⊤), ⊤` with `⊤ := ∀ C : Prop, C → C`
+  has every element *definitionally* equal to its canonical one — structure
+  eta turns an element into a `mk` of two proofs and proof irrelevance
+  closes the components — and the property survives `D (a+1) := (α : Sort a)
+  → D 1` and `D (max a b) := Σ'(_ : D a), D b`. So a pad never needs a
+  transport, the whole non-recursive Type route consumes **no `funext`, no
+  `Quot`, and no `Eq.rec`**, and every ι theorem is `Eq.refl`.
+
+## 8.1 The two routes
+
+**Type route** — carrier sort `w` never zero. The carrier is a `Nat`-tagged
+sum of `PSigma` chains:
+
+```text
+T._model.self p⃗ := Σ'(n : Nat), F n
+F ȷ̄  = constructor j's field telescope as a right-nested Σ', padded to
+       exactly Sort w by a D when the levels demand it
+F n  = Σ'(h : False), False.rec h   — empty, at Sort w — for n ≥ c
+```
+
+`F` is a `Nat.rec` cases tower, and the recursor is `PSigma.rec`, a
+`Nat.rec` tower over the tag — **the large elimination the basis buys, and
+the reason `Nat` is in it** — then `PSigma.rec` down the chain. On a
+constructor application everything reduces by δβι, so ι is `Eq.refl`. The
+pad level is `1` when `max 1 ℓ⃗ ≡ w` already (a `Prop` field under a `Type`
+carrier — `Decidable`'s shape) and `w` itself when the carrier is
+deliberately raised and `w`'s normal form is built from successors and
+`max`es of such; a bare level parameter in the gap has no pad and declines
+(`PULift`, `Trans`).
+
+**Prop route** — carrier sort `0`. The impredicative Church encoding
+`∀ C : Prop, (∀ f⃗₀, C) → … → C`. At a `Prop` motive the dependent recursor
+is the fold itself: the motive's proof argument is definitionally
+irrelevant. When the export's recursor is large-eliminating, the
+subsingleton rule that minted it says every field is a proposition
+(non-indexed, so nothing can appear in the output type), and the recursor
+extracts each field by instantiating the encoding at the field's own type —
+sequentially, a later field's type instantiated at the earlier extractions,
+with proof irrelevance closing the gap. ι is `Eq.refl` on both routes.
+
+## 8.2 Coverage, measured on `init-prelude`
+
+`vendor/arena-tests/good/init-prelude.ndjson` has 126 inductive types. One
+(`Lean.Syntax`) is nested and is §1's business. Of the 125 simple ones,
+**112 model and 13 decline**, each decline with its printed reason:
+
+| declined | count | reason |
+|---|---|---|
+| `Eq`, `Nat`, `False` | 3 | the basis itself — the exemption that makes the construction well-founded |
+| `Nat.le`, `HEq`, `Nat.le.below` | 3 | indexed families (thesis §5.2's skeleton-plus-`good`, not implemented) |
+| `PUnit`, `PEmpty` | 2 | `Sort u` carriers that reach `Prop` at some instantiations — no uniform model in the fragment; **`monomorph` resolves the variable** |
+| `List`, `Lean.Name`, `Lean.ParserDescr` | 3 | recursive `Type`-valued — the carrier needs the W/path construction (§8.4) |
+| `PULift`, `Trans` | 2 | a level gap over a bare parameter, which has no pad; `monomorph` resolves these too |
+
+Every generated declaration goes through `Environment.addDeclCore` with
+checking on, and §4's statement oracle runs on all of it: **257 statements
+compared against the installed recursors' own rules, 0 differ**. Replaying
+the whole output export with kernel checking on accepts all 2297
+declarations. The run splices exactly one basis member (`PSigma`) and reports
+it. Filtering the output again with the flag on declines 115 times at the
+name guard and returns the file byte-identical — idempotence, §1.5's
+mechanism unchanged.
+
+Fixtures: `modelgen/tests/prim_shapes.lean` is one positive occupant per
+route variant, `modelgen/tests/prim_declines.lean` one per refusal path with
+its reason pinned by prefix, both in `Test.lean`'s table.
+
+## 8.3 Composition: nested → mutual → primitives, and where it stops today
+
+The chain §1.7 established gains a third step: the mutual model's own single
+inductives — `T._model.tag` and `T._model.aux` — are declarations of the
+output like any other, so the flag runs the construction on them too, from
+both call sites (an input's plain mutual block, and the block a nested
+model leaves behind). On `Lean.Syntax` the tag models — it is a plain
+enumeration — and **`aux` declines as indexed**, which it always is: the tag
+is its index. So the claim "layer 3 composes at the end of the chain" is
+**confirmed in mechanism and bounded in coverage**: it will be whole exactly
+when indexed families are (§8.4), and the decline is recorded per run rather
+than asserted here.
+
+## 8.4 Plan A against plan B — what is settled and what remains
+
+The commission's first question was whether plan A — reach the inductive
+from the primitives directly, recursor as `Acc.rec` on the subterm relation
+— actually differs from plan B, building W. Settled as follows.
+
+* **For everything non-recursive, plan A is real and is what shipped**: no
+  W, no `Acc`, and (a sharpening nobody asked for) no `funext` either. This
+  is 112 of `init-prelude`'s 125 simple inductives.
+* **For recursive carriers the two plans coincide at infinite branching.**
+  A constructor field `f : I → T` with `I` infinite forces the carrier to
+  hold every well-founded `I`-branching tree; any type the primitives build
+  with a dependent eliminator over those trees *is* a W-type, however it is
+  spelled, and the depth route fails exactly as the commission predicted —
+  a tree of unbounded finite depths has no `Nat`-indexed approximant. The
+  primitives' route to such a carrier is the path encoding
+  (`derived/src/wpath.rs`'s precedent; Kha's `LFP.lean` is the Lean-side
+  worked form): paths are lists, `List` is `Σ'(n : Nat), Fin n → ·` from
+  the basis, `Good` is an impredicative `lfp`, and the recursor is `Acc.rec`
+  on the immediate-subtree relation — which is where `Acc`, so far unused,
+  enters the basis.
+* **At finite branching plan A differs from plan B only in clothing.** The
+  measured corpus is entirely finitely-branching (`init-prelude` has no
+  reflexive inductive), and there a generic W can be avoided: every
+  finitely-branching skeleton is countable and Gödel-codes into `Nat`, with
+  well-formedness by `Nat`-strong-recursion. But that is `Nat` serving as a
+  W-universe at countable branching — the skeleton type *is* the initial
+  algebra, merely coded — at per-shape arithmetic of strictly greater
+  generator complexity than one path-W instantiated per inductive, and with
+  no shape covered that the path construction does not cover.
+
+**Verdict: plan A was not impossible on the measured corpus; it is W in
+disguise plus bookkeeping.** The recursive class therefore declines today
+with plan B named as the continuation, and the honest cost of that
+continuation is the one `W-FROM-LFP.md` §4 already priced: building the
+gist's tactic-elaborated proof terms — `Acc.fix_eq`, the casts, the
+propositional ι — as raw `Expr`s. The remaining classes are the indexed
+families (thesis §5.2 skeleton-plus-`good`, which §8.3's composition also
+waits on), recursive `Prop`s (the Church induction derivation — the
+strong-induction predicate `S m := T' m ∧ motive m`, mechanical but real),
+and nothing else: sort-variable carriers and bare-parameter level gaps are
+not constructible in the fragment and belong to `monomorph`.
+
+## 8.5 Cost, measured
+
+`perf stat -e instructions`, `init-prelude`, two runs each, deterministic to
+0.04 %:
+
+| | instructions | output bytes |
+|---|---|---|
+| `modelgen` (layers 1+2) | 2.576 × 10⁹ | 3,857,568 |
+| `modelgen --prim-models` | 3.146 × 10⁹ | 4,624,683 |
+
+**+22 % instructions and +20 % output bytes for 113 models** (112 input
+inductives and one composed tag) — about 5 × 10⁶ instructions per model.
+Reproduce with:
+
+```bash
+cd modelgen && lake build
+perf stat -e instructions ./.lake/build/bin/modelgen \
+  ../vendor/arena-tests/good/init-prelude.ndjson -o /dev/null --prim-models --quiet
+```

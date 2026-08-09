@@ -36,7 +36,8 @@ delete a further ~500 lines of level scheduling.
 ```bash
 cd modelgen && lake build
 
-.lake/build/bin/modelgen  IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]
+.lake/build/bin/modelgen  IN.ndjson [-o OUT.ndjson|-] [--check-recursors]
+                                    [--prim-models] [--quiet]
 .lake/build/bin/monomorph IN.ndjson [-o OUT.ndjson] [--mono-recursors]
                                     [--default N[,N...]] [--check] [--quiet]
 ```
@@ -62,8 +63,8 @@ not participate in any surrounding build.
 
 ## `modelgen`
 
-There are **two constructions**, because there are two kinds of declaration
-whose recursors the kernel constructs:
+There are **two constructions always on**, because there are two kinds of
+declaration whose recursors the kernel constructs:
 
 * **Nested inductive** (`Modelgen/Model.lean`) — specialised into a mutual block
   with one extra *mimic* member per nested occurrence, with the export's own
@@ -76,9 +77,19 @@ They are not one construction at two settings: a nested model *keeps*
 mutuality, a mutual model *removes* it, so the second at zero mimics would be
 the identity.
 
+A **third construction is opt-in** (`--prim-models`, `Modelgen/Simple.lean`):
+a plain — non-mutual, non-nested, non-indexed, non-recursive — inductive is
+modelled as ordinary `def`s and `theorem`s over five primitive inductives,
+`Eq`, `False`, `PSigma`, `Nat`, `Acc`, each spliced at Lean's shape if the
+input lacks it. Same four interface names, no internal declarations at all,
+every ι theorem `Eq.refl`. `MODELGEN.md` §8 carries the construction, its
+measured coverage (112 of `init-prelude`'s 125 simple inductives; every
+decline with a printed reason), and its cost (+22 % instructions there).
+
 **They compose in one pass.** A nested declaration's model *is* a mutual block,
-so the second construction runs on it too. Every mutual block in the output has
-a model beside it — including the ones the tool just wrote.
+so the second construction runs on it too — and with `--prim-models` the third
+runs on the single inductives the second writes. Every mutual block in the
+output has a model beside it — including the ones the tool just wrote.
 
 A model is emitted **beside** what it models, never in place of it. The original
 declarations are untouched.
@@ -205,11 +216,14 @@ claim about the input.
 
 ## Coverage
 
-There is no shape Lean accepts that `modelgen` refuses. That claim is worth
-exactly what it is measured against, so: it comes from a sweep of what Lean's
-`inductive` command actually admits, and **every refusal path has a fixture**.
-Three shapes remain that *Lean itself* rejects, recorded with the error Lean
-gives.
+For the two always-on constructions there is no shape Lean accepts that
+`modelgen` refuses. That claim is worth exactly what it is measured against,
+so: it comes from a sweep of what Lean's `inductive` command actually admits,
+and **every refusal path has a fixture**. Three shapes remain that *Lean
+itself* rejects, recorded with the error Lean gives. `--prim-models` is
+narrower by design — recursive and indexed carriers decline with the reason
+printed, `MODELGEN.md` §8.2's table is the census, and its refusal paths have
+fixtures too (`tests/prim_declines.lean`).
 
 On Mathlib (5.6 GB export, 670,630 declarations):
 
