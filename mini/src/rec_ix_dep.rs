@@ -290,7 +290,8 @@ pub(crate) fn premise_at(
         let (base, fam) = (tr.base.clone(), &tr.ii);
         let key = (site.ind, site.inst.clone());
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.indexed_dep_recursor(kenv, &key, &base, fam)
             .ok_or(Gap::Recursor(site.ind, RULE, Cause::Library))?
     };
@@ -356,10 +357,11 @@ pub(crate) fn premise_at(
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
             let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
             let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-            let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let kenv = &mut *kenv;
             let atoms = minor_atoms_general(
                 kenv,
-                &app.mach,
+                &app.mach.borrow(),
                 &tr.base,
                 &tr.ii.spec,
                 &tr.ii.carrier,
@@ -466,7 +468,8 @@ fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm)
     // ── the term, under a name of mini's own ────────────────────────────────
     let raw = ap.apply(derived::subst_term(&dr.rec, sub), at.t_tm.clone());
     let (sym, ax) = {
-        let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
     };
     let unfold = derived::inst_all(&ax, &at.all).ok_or_else(|| bad(TERM))?;
@@ -528,14 +531,14 @@ fn icod_at_rung(
     let mut xvs: Vec<kernel::FreeVar> = Vec::with_capacity(site.ni);
     let mut cur = c_in_rung;
     for _ in 0..site.ni {
-        let v = ip.env.fresh_var();
+        let v = ip.fresh_var();
         xvs.push(v);
         cur = app_in_rung(ip, &rung.app, &cur, &Term::var(v))?;
     }
 
     // …then the two bounded ones, which are scopes.
     let mut scopes = Scopes::new();
-    let tok_z = scopes.open(&mut ip.env, derived::subst_term(&site.fam.class_t().expect("class (T)").base.wty, sub));
+    let tok_z = scopes.open(&mut ip.env_mut(), derived::subst_term(&site.fam.class_t().expect("class (T)").base.wty, sub));
     let (zt, _) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -543,7 +546,7 @@ fn icod_at_rung(
     let spine = app_in_rung(ip, &rung.app, &cur, &zt)?;
     let set = spine.concl().as_mem()?.0;
 
-    let tok_y = scopes.open(&mut ip.env, set.clone());
+    let tok_y = scopes.open(&mut ip.env_mut(), set.clone());
     let (yt, ym) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -615,7 +618,7 @@ mod tests {
             let (site, _) =
                 ip.as_lam(&cur).unwrap_or_else(|| panic!("not a λ at level {lv}"));
             let (skel, holes) = (site.skel.clone(), site.holes.clone());
-            let x = Term::var(ip.env.fresh_var());
+            let x = Term::var(ip.fresh_var());
             cur = ip.rebuild(&skel, &holes, &x);
         }
     }

@@ -296,7 +296,7 @@ pub(crate) fn fire(
     if ceq_lhs != major_tm {
         return Err(bad(CTOR))
     }
-    let cong = derived::congr(&mut ip.env, ap_sym, &[Thm::eq_refl(drec_at.clone()), ceq.clone()])
+    let cong = derived::congr(&mut ip.env_mut(), ap_sym, &[Thm::eq_refl(drec_at.clone()), ceq.clone()])
         .ok_or_else(|| bad(CTOR))?;
     let step2 = eq_trans(ip, &step1, &cong).ok_or_else(|| bad(CTOR))?;
 
@@ -333,7 +333,7 @@ pub(crate) fn fire(
                     .and_then(|f| f.get(ys.len()))
                     .and_then(|t| derived::inst_all(t, &a))
                     .ok_or_else(|| bad(ATOM))?;
-                let back = derived::eq_symm(&mut ip.env, &fa).ok_or_else(|| bad(ATOM))?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &fa).ok_or_else(|| bad(ATOM))?;
                 y_mems.push(ip.retarget_set(&mem, &back).ok_or_else(|| bad(ATOM))?);
                 ys.push(tm);
             }
@@ -399,18 +399,20 @@ pub(crate) fn fire(
     // here, so that a use site and the eliminator's own clause cannot disagree
     // about what the ι rule concludes.
     let vs = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let comp = app.wrec(kenv).ok_or_else(|| bad(RULE))?.rc.comp;
         cx.ind
-            .minor_ihs(&app.mach, comp, &drec_at, i, &ts)
+            .minor_ihs(&app.mach.borrow(), comp, &drec_at, i, &ts)
             .ok_or_else(|| bad(RULE))?
     };
     let (a_ts, a_vs) = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let a_ts =
-            cx.ind.minor_args(kenv, &app.mach, i, &ts).ok_or_else(|| bad(RULE))?;
+            cx.ind.minor_args(kenv, &app.mach.borrow(), i, &ts).ok_or_else(|| bad(RULE))?;
         let a_vs =
-            cx.ind.minor_args(kenv, &app.mach, i, &vs).ok_or_else(|| bad(RULE))?;
+            cx.ind.minor_args(kenv, &app.mach.borrow(), i, &vs).ok_or_else(|| bad(RULE))?;
         (a_ts, a_vs)
     };
     let landed = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &a_ts, &a_vs);
@@ -457,12 +459,12 @@ pub(crate) fn fire(
                         .ok_or_else(|| bad(RHS))?;
                         let fs = fs_mems[r].as_ref().ok_or_else(|| bad(RHS))?;
                         let trip = Thm::mp(&rule, fs).ok_or_else(|| bad(RHS))?;
-                        derived::eq_symm(&mut ip.env, &trip).ok_or_else(|| bad(RHS))?
+                        derived::eq_symm(&mut ip.env_mut(), &trip).ok_or_else(|| bad(RHS))?
                     }
                 }
             }
         };
-        acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
+        acc = derived::congr(&mut ip.env_mut(), ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
     }
     for j in 0..m {
         let leg = match cross.get(j).and_then(|c| c.as_ref()) {
@@ -499,9 +501,9 @@ pub(crate) fn fire(
                 .ok_or_else(|| bad(RHS))?
             }
         };
-        acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
+        acc = derived::congr(&mut ip.env_mut(), ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
     }
-    let back = derived::eq_symm(&mut ip.env, &acc).ok_or_else(|| bad(RHS))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &acc).ok_or_else(|| bad(RHS))?;
     let out = eq_trans(ip, &step3, &back).ok_or_else(|| bad(RHS))?;
     if out.concl().as_eq().map(|(_, r)| r) != Some(want.clone()) {
         return Err(bad(RHS))
@@ -567,18 +569,19 @@ fn ih_leg(
         return None
     }
     let comp_app = {
-        let (kenv, app, _) = ip.ind_parts()?;
+        let (mut kenv, app, _) = ip.ind_parts()?;
+        let kenv = &mut *kenv;
         let w = app.wrec(kenv)?;
         derived::wrec_typing::composite_app(kenv, &s.ap, w.rc.comp, &w.rc.comp_ax)?
     };
 
     let mut sc = Scopes::new();
-    let tok = sc.open(&mut ip.env, cr.gamma.clone());
+    let tok = sc.open(&mut ip.env_mut(), cr.gamma.clone());
     let (zt, zm) = {
         let sc = sc.get(0)?;
         (sc.term(), sc.assumption().clone())
     };
-    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &cr.gamma_ax)?;
     let z_in_beta = ip.retarget_set(&zm, &back)?;
 
     // ── the λ's own body, down to `app(drec, app(⟦f⟧,z))` ───────────────────
@@ -611,7 +614,7 @@ fn ih_leg(
         &z_in_beta,
     )?;
     let e_b = derived::congr_arg(
-        &mut ip.env,
+        &mut ip.env_mut(),
         ap.app,
         &[drec.clone(), ap.apply(pulled.clone(), tup.clone())],
         1,
@@ -620,14 +623,14 @@ fn ih_leg(
     let e_ab = rec_dep::eq_trans_pub(ip, &e_a, &e_b)?;
     let bx = derived::inst_all(&cr.px.body_ax, &[composite.clone(), zt.clone()])?;
     let q_eq = rec_dep::eq_trans_pub(ip, &bx, &e_ab)?;
-    let l3 = derived::eq_symm(&mut ip.env, &q_eq)?;
+    let l3 = derived::eq_symm(&mut ip.env_mut(), &q_eq)?;
 
     let body = rec_dep::eq_trans_pub(ip, &l12, &l3)?;
     let family = sc.close(tok).discharge(&body).ok()?;
 
     // ── the two graphs agree ────────────────────────────────────────────────
     let rule = derived::ext::lam_ext_n(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &ap,
         lam_site.t,
         lam_site.lam,
@@ -672,7 +675,7 @@ fn peel_app(ip: &Interp, t: &Term, n: usize) -> Option<(Term, Vec<Term>)> {
 }
 
 fn eq_trans(ip: &mut Interp, a: &Thm, b: &Thm) -> Option<Thm> {
-    derived::eq_trans(&mut ip.env, a, b)
+    derived::eq_trans(&mut ip.env_mut(), a, b)
 }
 
 #[cfg(test)]

@@ -190,7 +190,7 @@ fn peeled(ip: &mut Interp, thm: &Thm) -> (Vec<String>, Thm) {
     let mut cur = thm.clone();
     let mut names = Vec::new();
     while names.len() < PEEL_CAP && cur.concl().is_forall() {
-        let v = ip.env.fresh_var();
+        let v = ip.fresh_var();
         let t = Term::var(v);
         let nm = format!("x{}", names.len());
         ip.set_label(&t, nm.clone());

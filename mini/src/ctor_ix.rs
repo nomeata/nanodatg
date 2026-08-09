@@ -215,7 +215,8 @@ pub(crate) fn ctor_abbrevs(
     let mut out = Vec::with_capacity(spec.ctors.len());
     for (i, cs) in spec.ctors.iter().enumerate() {
         let fvs: Vec<kernel::FreeVar> = {
-            let (kenv, _, _) = ip.ind_parts()?;
+            let (mut kenv, _, _) = ip.ind_parts()?;
+            let kenv = &mut *kenv;
             (0..cs.order.len()).map(|_| kenv.fresh_var()).collect()
         };
         let (mut ys, mut rs) = (Vec::new(), Vec::new());
@@ -239,11 +240,12 @@ pub(crate) fn ctor_abbrevs(
         // constructor, so nothing indexed-and-plain moves.
         let ps = base.param_terms();
         let rs_c = crate::zoneb::rec_slot_terms(ip, cs, spec.params, &ps, &rs)?;
-        let (kenv, app, _) = ip.ind_parts()?;
+        let (mut kenv, app, _) = ip.ind_parts()?;
+        let kenv = &mut *kenv;
         // `ctor_term_at` at `base.param_terms()` is `ctor_term`, and it is
         // those variables and not fresh ones because they are what the
         // abstraction list below holds.
-        let raw = base.ctor_term_at(&app.mach, i, &ys, &rs_c, &ps)?;
+        let raw = base.ctor_term_at(&app.mach.borrow(), i, &ys, &rs_c, &ps)?;
         let abstraction: Vec<kernel::FreeVar> =
             base.params.iter().copied().chain(fvs.iter().copied()).collect();
         out.push(derived::define_abbrev(kenv, &abstraction, &raw)?);
@@ -586,7 +588,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         a.extend(ys[..j].iter().cloned());
         let ax = abbrev.get(j).ok_or_else(|| bad(FIELD))?;
         let unfold = derived::inst_all(ax, &a).ok_or_else(|| bad(FIELD))?;
-        let back = derived::eq_symm(&mut ip.env, &unfold).ok_or_else(|| bad(FIELD))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &unfold).ok_or_else(|| bad(FIELD))?;
         let out = ip.retarget_set(m, &back).ok_or_else(|| bad(FIELD))?;
         if *out.concl() != want(j) {
             return Err(bad(FIELD))
@@ -634,7 +636,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         // and the two terms differ — a decline here, and not a theorem about
         // another declaration's carrier.
         let cong = index_congr(ip, carrier.ty, &ps, ds, axs, &a).ok_or_else(|| bad(REC_ARG))?;
-        let back = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad(REC_ARG))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &cong).ok_or_else(|| bad(REC_ARG))?;
 
         let out = match spec.rec_dom(j) {
             // ── a plain recursive occurrence ────────────────────────────────
@@ -692,10 +694,13 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
                 if gamma != dom {
                     return Err(bad("a recursive argument's domain"))
                 }
-                let onto_beta = derived::eq_symm(&mut ip.env, &g_ax)
-                    .and_then(|b| {
-                        derived::congr_arg(&mut ip.env, fs_sym, &[gamma, cod.clone()], 0, &b)
-                    })
+                // Statement by statement: each `env_mut()` guard must end
+                // before the closure that needs `ip` runs.
+                let sym0 = derived::eq_symm(&mut ip.env_mut(), &g_ax);
+                let cong0 = sym0.and_then(|b| {
+                    derived::congr_arg(&mut ip.env_mut(), fs_sym, &[gamma, cod.clone()], 0, &b)
+                });
+                let onto_beta = cong0
                     .and_then(|eq| ip.retarget_set(&in_fs, &eq))
                     .ok_or_else(|| bad("a recursive argument's domain rewrite"))?;
 
@@ -703,26 +708,29 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
                 //    same `fs`. Two equations composed, and the second is the
                 //    frame check above.
                 let beta = spine_eq(ip, site, &at.store_ty, &ps, param_mems, ds, Some(&cod))?;
-                let to_syms = derived::eq_trans(&mut ip.env, &beta, &back)
-                    .and_then(|eq| {
-                        derived::congr_arg(&mut ip.env, fs_sym, &[beta0.clone(), cod], 1, &eq)
-                    })
+                let trans0 = derived::eq_trans(&mut ip.env_mut(), &beta, &back);
+                let cong1 = trans0.and_then(|eq| {
+                    derived::congr_arg(&mut ip.env_mut(), fs_sym, &[beta0.clone(), cod], 1, &eq)
+                });
+                let to_syms = cong1
                     .and_then(|eq| ip.retarget_set(&onto_beta, &eq))
                     .ok_or_else(|| bad("a recursive argument's codomain rewrite"))?;
 
                 // 5. `pull(gⱼ, T(p⃗)) ∈ fs(T(p⃗), ind(p⃗, d⃗ᵢⱼ))`.
                 let rule = {
                     let g = spec.rec_dom(j).to_vec();
-                    let (kenv, app, p) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-                    let s = app.mach.wt.sums.clone();
-                    app.mach
-                        .telescope(kenv, np, &g)
-                        .and_then(|tel| {
+                    let (mut kenv, app, p) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+                    let kenv = &mut *kenv;
+                    let s = app.mach.borrow().wt.sums.clone();
+                    // Bound first: the `borrow_mut` guard must end before the
+                    // closure below takes its own borrow of the machine.
+                    let tel = app.mach.borrow_mut().telescope(kenv, np, &g);
+                    tel.and_then(|tel| {
                             let rx = app.reindex(kenv)?;
                             derived::sigma::reindex_in_funspace(
                                 kenv,
                                 &s,
-                                &app.mach.proj,
+                                &app.mach.borrow().proj,
                                 &tel,
                                 &rx,
                                 &p.fs_app_mem,
@@ -797,13 +805,13 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         let mut i_args: Vec<Term> = ps.clone();
         i_args.extend(interps.iter().map(|(t, _)| t.clone()));
         let i_at = derived::inst_all(i_ax, &i_args).ok_or_else(|| bad(RESULT))?;
-        let back = derived::eq_symm(&mut ip.env, &i_at).ok_or_else(|| bad(RESULT))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &i_at).ok_or_else(|| bad(RESULT))?;
         let onto = ip.retarget_set(&subj, &back).ok_or_else(|| bad(INDEX_TYPE))?;
 
         let i_sym = site.tr.ii.spec.indices.get(k).copied().ok_or_else(|| bad(RESULT))?;
         let cong = index_congr(ip, i_sym, &ps, &at.result[..k], &e_axs[..k], &e_args)
             .ok_or_else(|| bad(INDEX_TYPE))?;
-        let to_syms = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad(RESULT))?;
+        let to_syms = derived::eq_symm(&mut ip.env_mut(), &cong).ok_or_else(|| bad(RESULT))?;
         let out = ip.retarget_set(&onto, &to_syms).ok_or_else(|| bad(INDEX_TYPE))?;
         if *out.concl() != want(nf + k) {
             return Err(bad(RESULT))
@@ -841,7 +849,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     let cong = index_congr(ip, carrier.ty, &ps, &at.result, e_axs, &e_args)
         .ok_or_else(|| bad(RESULT))?;
     let onto = ip.retarget_set(&mem, &cong).ok_or_else(|| bad(SPINE))?;
-    let to_spine = derived::eq_symm(&mut ip.env, &beta).ok_or_else(|| bad(SPINE))?;
+    let to_spine = derived::eq_symm(&mut ip.env_mut(), &beta).ok_or_else(|| bad(SPINE))?;
     let out = ip.retarget_set(&onto, &to_spine).ok_or_else(|| bad(SPINE))?;
     if *out.concl() != Formula::mem(term.clone(), goal_set) {
         return Err(bad("the constructor did not land in its own codomain"))
@@ -918,7 +926,7 @@ pub(crate) fn index_congr(
         }
         eqs.push(at);
     }
-    derived::congr(&mut ip.env, ty, &eqs)
+    derived::congr(&mut ip.env_mut(), ty, &eqs)
 }
 
 /// The right-nested conjunction of the atoms, or `None` when there are none.
@@ -1087,10 +1095,11 @@ mod tests {
             .expect("translated")
             .base
             .clone();
-        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let (mut kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let kenv = &mut *kenv;
         for (i, j) in [(0usize, 1usize), (0, 2), (1, 2)] {
             let d = base
-                .distinct(kenv, &app.mach, i, j)
+                .distinct(kenv, &app.mach.borrow(), i, j)
                 .unwrap_or_else(|| panic!("no distinctness for ({i},{j})"));
             assert!(d.hyps().is_empty(), "distinctness must be unconditional");
         }
@@ -1196,7 +1205,8 @@ mod tests {
             "G.g must take `RecArg::general`, or this test is about nothing"
         );
 
-        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let (mut kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let kenv = &mut *kenv;
         let ps = base.param_terms();
         let (yv, rv) = (kenv.fresh_var(), kenv.fresh_var());
         let (y, r) = (Term::var(yv), Term::var(rv));
@@ -1211,7 +1221,7 @@ mod tests {
             .expect("an equation")
             .1;
         let raw = base
-            .ctor_term(&app.mach, 0, std::slice::from_ref(&y), std::slice::from_ref(&r))
+            .ctor_term(&app.mach.borrow(), 0, std::slice::from_ref(&y), std::slice::from_ref(&r))
             .expect("the raw-field term");
         assert_ne!(
             body, raw,

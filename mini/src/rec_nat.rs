@@ -214,7 +214,7 @@ fn open_index(
     at: &At,
 ) -> Option<(crate::scope::ScopeToken, Term, Thm, Thm)> {
     let omega = nc.nat.omega();
-    let tok = scopes.open(&mut ip.env, omega.clone());
+    let tok = scopes.open(&mut ip.env_mut(), omega.clone());
     let (x_tm, x_mem) = {
         let s = scopes.get(0)?;
         (s.term(), s.assumption().clone())
@@ -239,7 +239,7 @@ fn open_index(
 fn motive_cong(ip: &mut Interp, c_tm: &Term, eq: &Thm) -> Option<Thm> {
     let (a, b) = eq.concl().as_eq()?;
     let (a, b) = (a.clone(), b.clone());
-    let y = ip.env.fresh_var();
+    let y = ip.fresh_var();
     let lhs = ip.app(c_tm.clone(), a.clone());
     let tmpl = ip.app(c_tm.clone(), Term::var(y));
     let leib = Thm::eq_leibniz(a, b, y, Formula::eq(lhs.clone(), tmpl));
@@ -281,7 +281,7 @@ fn value_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)>
     if shape2.dom() != fibre_x {
         return None
     }
-    let tok_v = scopes.open(&mut ip.env, fibre_x);
+    let tok_v = scopes.open(&mut ip.env_mut(), fibre_x);
     let (v_tm, v_mem) = {
         let s = scopes.get(0)?;
         (s.term(), s.assumption().clone())
@@ -296,7 +296,7 @@ fn value_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)>
     let inner = scopes.close(tok_v).discharge(&moved).ok()?;
     let step = scopes.close(tok_x).discharge(&inner).ok()?;
 
-    let rule = derived::nat::natrec_mem(&mut ip.env, &nc.nat, &at.c_tm, &at.cz_tm, &at.cs_tm)
+    let rule = derived::nat::natrec_mem(&mut ip.env_mut(), &nc.nat, &at.c_tm, &at.cz_tm, &at.cs_tm)
         .ok()?;
     let fired = Thm::mp(&rule, &derived::and_intro(&at.cz_mem, &step))?;
     let at_t = derived::inst_all(&fired, std::slice::from_ref(&at.t_tm))?;
@@ -316,7 +316,7 @@ fn value_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)>
 /// inhabited by it.
 fn prop_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)> {
     let point = ip.point();
-    let z = ip.env.fresh_var();
+    let z = ip.fresh_var();
     // `φ(z) := • ∈ app(⟦C⟧, z)`.
     let phi = Formula::mem(point.clone(), ip.app(at.c_tm.clone(), Term::var(z)));
 
@@ -369,7 +369,7 @@ fn prop_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)> 
     })
     .ok()?;
 
-    let all = derived::nat::induct(&mut ip.env, nc.nat.core(), z, &phi, &base, &step).ok()?;
+    let all = derived::nat::induct(&mut ip.env_mut(), nc.nat.core(), z, &phi, &base, &step).ok()?;
     let at_t = derived::inst_all(&all, std::slice::from_ref(&at.t_tm))?;
     let mem = Thm::mp(&at_t, &at.t_mem)?;
     Some((point, mem))
@@ -398,7 +398,7 @@ fn subject_to_point(ip: &mut Interp, mem: &Thm, eq: &Thm) -> Option<Thm> {
         return None
     }
     let r = r.clone();
-    let y: FreeVar = ip.env.fresh_var();
+    let y: FreeVar = ip.fresh_var();
     let leib = Thm::eq_leibniz(e, r, y, Formula::mem(Term::var(y), s));
     let step = Thm::mp(&leib, eq)?;
     Thm::mp(&step, mem)

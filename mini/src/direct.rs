@@ -420,7 +420,7 @@ fn former_bottom(
     // closed theorem of the tower; the raise is the cumulativity table, and it
     // is what would make a `Sort u`-valued clause land in `⟦Sort u⟧` rather
     // than only in `⟦Prop⟧`.
-    let in_u0 = tower.cond_in_u0(&mut ip.env, &phi, &term, &chi);
+    let in_u0 = tower.cond_in_u0(&mut ip.env_mut(), &phi, &term, &chi);
     let Some(in_u0) = in_u0 else { return gap(Gap::IndSpec(*name, "denotation typing")) };
     let raised = if level == 0 {
         Some(in_u0)
@@ -670,7 +670,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     }
     // …and back onto the applied spine, which is what the Lean codomain
     // interprets to.
-    let back = match derived::eq_symm(&mut ip.env, &spine_eq) {
+    let back = match derived::eq_symm(&mut ip.env_mut(), &spine_eq) {
         Some(t) => t,
         None => return gap(Gap::ConvCompose("direct-spine-symm")),
     };
@@ -690,7 +690,8 @@ impl Interp {
     pub fn direct(&mut self) -> Option<std::rc::Rc<Direct>> {
         if self.direct.is_none() && !self.direct_failed {
             let sums = self.prelude.tower.sums.clone();
-            self.direct = Direct::build(&mut self.env, &sums).map(std::rc::Rc::new);
+            let built = Direct::build(&mut self.env_mut(), &sums).map(std::rc::Rc::new);
+            self.direct = built;
             self.direct_failed = self.direct.is_none();
         }
         self.direct.clone()

@@ -168,7 +168,7 @@ pub(crate) fn fire(
         // of it — which is a property of the clause and not a coincidence.
         let rule = derived::inst_all(&nc.nat.iota_zero, &[cz.clone(), cs.clone()])
             .ok_or_else(|| bad(COMPOSE))?;
-        derived::eq_trans(&mut ip.env, &beta, &rule).ok_or_else(|| bad(COMPOSE))?
+        derived::eq_trans(&mut ip.env_mut(), &beta, &rule).ok_or_else(|| bad(COMPOSE))?
     } else {
         let (k_tm, k_mem) = field.ok_or_else(|| bad(MAJOR))?;
         let former = succ_former.ok_or_else(|| bad(MAJOR))?;
@@ -177,12 +177,12 @@ pub(crate) fn fire(
             .beta_spine(&former, std::slice::from_ref(&k_tm), std::slice::from_ref(&k_mem))
             .ok_or_else(|| bad(COMPOSE))?;
         let cong = natrec_cong(ip, &nc, &cz, &cs, &sbeta).ok_or_else(|| bad(COMPOSE))?;
-        let step = derived::eq_trans(&mut ip.env, &beta, &cong).ok_or_else(|| bad(COMPOSE))?;
+        let step = derived::eq_trans(&mut ip.env_mut(), &beta, &cong).ok_or_else(|| bad(COMPOSE))?;
         // The ι rule itself, whose side condition is `k ∈ ω`.
         let rule = derived::inst_all(&nc.nat.iota_succ, &[cz.clone(), cs.clone(), k_tm.clone()])
             .ok_or_else(|| bad(COMPOSE))?;
         let iota = Thm::mp(&rule, &k_mem).ok_or_else(|| bad(COMPOSE))?;
-        let step = derived::eq_trans(&mut ip.env, &step, &iota).ok_or_else(|| bad(COMPOSE))?;
+        let step = derived::eq_trans(&mut ip.env_mut(), &step, &iota).ok_or_else(|| bad(COMPOSE))?;
         // **The recursive call goes back on the spine it came from.** `derived`
         // names it `natrec(cz,cs,k)`; Lean's right-hand side names
         // `Nat.rec C cz cs k`, whose interpretation is the four-deep
@@ -193,9 +193,9 @@ pub(crate) fn fire(
         inner_mems[3] = k_mem;
         let (_, ibeta) =
             ip.beta_spine(head_tm, &inner_tms, &inner_mems).ok_or_else(|| bad(COMPOSE))?;
-        let back = derived::eq_symm(&mut ip.env, &ibeta).ok_or_else(|| bad(COMPOSE))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &ibeta).ok_or_else(|| bad(COMPOSE))?;
         let cong2 = minor_cong(ip, &cs, &inner_tms[3], &back).ok_or_else(|| bad(COMPOSE))?;
-        derived::eq_trans(&mut ip.env, &step, &cong2).ok_or_else(|| bad(COMPOSE))?
+        derived::eq_trans(&mut ip.env_mut(), &step, &cong2).ok_or_else(|| bad(COMPOSE))?
     };
 
     // The chain must land on the interpretation the *export's* right-hand side
@@ -217,7 +217,7 @@ fn natrec_cong(
 ) -> Option<Thm> {
     let (a, b) = eq.concl().as_eq()?;
     let (a, b) = (a.clone(), b.clone());
-    let y = ip.env.fresh_var();
+    let y = ip.fresh_var();
     let lhs = ip.mk(nc.nat.natrec, vec![cz.clone(), cs.clone(), a.clone()]);
     let tmpl = ip.mk(nc.nat.natrec, vec![cz.clone(), cs.clone(), Term::var(y)]);
     let leib = Thm::eq_leibniz(a, b, y, Formula::eq(lhs.clone(), tmpl));
@@ -234,7 +234,7 @@ fn minor_cong(
     let (a, b) = eq.concl().as_eq()?;
     let (a, b) = (a.clone(), b.clone());
     let head = ip.app(cs.clone(), k.clone());
-    let y = ip.env.fresh_var();
+    let y = ip.fresh_var();
     let lhs = ip.app(head.clone(), a.clone());
     let tmpl = ip.app(head, Term::var(y));
     let leib = Thm::eq_leibniz(a, b, y, Formula::eq(lhs.clone(), tmpl));

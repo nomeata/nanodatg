@@ -48,7 +48,8 @@ use std::rc::Rc;
 
 use derived::cumul::apparatus::IndChain;
 use derived::inductive::Machine;
-use derived::prelude::{fast_forward, prelude, Prelude};
+use derived::prelude::{prelude, Prelude};
+use nanoda_lib::tg::EnvCore;
 use derived::skeleton;
 use derived::tower::Cumul;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
@@ -74,14 +75,16 @@ pub struct ConstInterp {
 /// The interpretation's state: one kernel `Env`, the ambient signature, the
 /// term registry the skeleton decomposition needs, and the stores.
 pub struct Interp {
-    pub env: Env,
+    /// The kernel `Env`, the canonical skeleton variables and the W-type
+    /// machine, behind the same-thread handle both engines can hold at once.
+    /// [`Interp::new`] mints a private one — the historical behaviour — and
+    /// [`Interp::over`] takes the caller's, which is what makes this engine's
+    /// symbols and the checker's one signature (ENV-UNIFY.md §3.3).
+    core: EnvCore,
     pub prelude: Rc<Prelude>,
-    /// The canonical binder slot every skeleton abstracts over.
+    /// The canonical binder slot every skeleton abstracts over — a copy of
+    /// the core's, kept because the common read-only use needs no borrow.
     x_canon: FreeVar,
-    /// The canonical hole variables, by index. They must be the same across
-    /// every term this `Interp` decomposes, or two occurrences of one body
-    /// shape would produce two unequal skeletons.
-    hole_vars: Vec<FreeVar>,
     /// `⊢ Uₘ ⊆ Uₙ` for every `m ≤ n ≤ height`, and the lifting rules over it.
     ///
     /// Built eagerly to [`CUMUL_HEIGHT`]: it is `O(h²)` theorems, `h` is a
@@ -395,8 +398,13 @@ pub const CUMUL_HEIGHT: usize = 8;
 /// the **same** signature, and the per-`(name, σ)` stores that go with them.
 pub struct IndApparatus {
     /// The apparatus every declaration is translated over — one, so that the
-    /// `MachineId` guards on `Inductive::is_over` all pass.
-    pub mach: Machine,
+    /// `MachineId` guards on `Inductive::is_over` all pass. Held through the
+    /// [`EnvCore`]'s cell: the machine is the core's, so an `Interp` and a
+    /// checker backend over one core translate onto **one** machine, and
+    /// each other's carriers compose. `RefCell` because `Inductive::build`
+    /// needs `&mut Machine` at the same time as `&mut Env`, and the two live
+    /// behind different cells.
+    pub mach: Rc<std::cell::RefCell<Machine>>,
     /// The cumulative hierarchy over that same `Wtype` and `Bound`.
     pub chain: IndChain,
     /// The translated declarations, by `(name, ground levels)`.
@@ -827,16 +835,22 @@ pub struct DepElim {
 }
 
 impl IndApparatus {
-    fn build(env: &mut Env, p: &Prelude) -> Option<IndApparatus> {
-        let sums = p.tower.sums.clone();
-        let wt = derived::wtype::Wtype::over(env, sums)?;
-        let bnd = derived::bound::Bound::over(env, &wt, p.u_sym, p.lu_ax.clone())?;
-        let chain = IndChain::over(env, &p.tower, &wt, &bnd)?;
-        let mach = Machine::over(env, wt, bnd)?;
+    fn build(core: &EnvCore, p: &Prelude) -> Option<IndApparatus> {
+        // The `Wtype`, `Bound` and `Machine` are the **core's** — built once,
+        // over the prelude tower's own `Sums`, and shared with any other
+        // engine holding the same core. A second `Machine` would mint a
+        // second `rec₊` and a second `MachineId`, and nothing translated
+        // over it would compose with the first's carriers.
+        let mach = core.machine(p)?;
+        let chain = {
+            let m = mach.borrow();
+            let mut env = core.env_mut();
+            IndChain::over(&mut env, &p.tower, &m.wt, &m.bnd)
+        }?;
         // Necessary *and* checked: the chain's `U₁` must be the tower level
         // `⟦Type 0⟧` names, or `⊢ ind(p⃗) ∈ U₁` would be a membership in a
         // universe no Lean sort denotes.
-        if chain.chain.u1.set != p.tower.u(1) || !chain.is_over(&mach) {
+        if chain.chain.u1.set != p.tower.u(1) || !chain.is_over(&mach.borrow()) {
             return None
         }
         Some(IndApparatus {
@@ -981,7 +995,7 @@ impl IndApparatus {
             return None
         }
         let built = derived::inductive::family::TruncRecursor::over_declaration(
-            env, &self.mach, &tt.ind, &tt.tc,
+            env, &self.mach.borrow(), &tt.ind, &tt.tc,
         )
         .map(Rc::new);
         match built {
@@ -1002,7 +1016,7 @@ impl IndApparatus {
     pub fn trunc(&mut self, env: &mut Env) -> Option<Rc<derived::prop::trunc::Trunc>> {
         if self.trunc.is_none() && !self.trunc_failed {
             self.trunc =
-                derived::prop::trunc::Trunc::new(env, &self.mach.wt.sums).map(Rc::new);
+                derived::prop::trunc::Trunc::new(env, &self.mach.borrow().wt.sums).map(Rc::new);
             self.trunc_failed = self.trunc.is_none();
         }
         self.trunc.clone()
@@ -1011,7 +1025,7 @@ impl IndApparatus {
     /// `acc`, over this machine's own `Apply`. See [`IndApparatus::acc`].
     pub fn acc(&mut self, env: &mut Env) -> Option<Rc<derived::acc::Acc>> {
         if self.acc.is_none() && !self.acc_failed {
-            self.acc = derived::acc::Acc::with_apply(env, &self.mach.wt.sums.ap).map(Rc::new);
+            self.acc = derived::acc::Acc::with_apply(env, &self.mach.borrow().wt.sums.ap).map(Rc::new);
             self.acc_failed = self.acc.is_none();
         }
         self.acc.clone()
@@ -1020,7 +1034,7 @@ impl IndApparatus {
     /// The W-recursor over this machine's `Wtype`. See [`IndApparatus::wrec`].
     pub fn wrec(&mut self, env: &mut Env) -> Option<Rc<WRec>> {
         if self.wrec.is_none() && !self.wrec_failed {
-            let built = Self::build_wrec(env, &self.mach);
+            let built = Self::build_wrec(env, &self.mach.borrow());
             self.wrec_failed = built.is_none();
             self.wrec = built;
         }
@@ -1058,9 +1072,9 @@ impl IndApparatus {
         let w = self.wrec(env);
         let built = w.and_then(|w| {
             let gr = derived::inductive::GenRecursor::build(
-                env, &self.mach, ind, &w.rc, &w.iota, &w.funspace,
+                env, &self.mach.borrow(), ind, &w.rc, &w.iota, &w.funspace,
             )?;
-            let dr = derived::inductive::DepRecursor::build(env, &self.mach, ind, &gr, &w.rc)?;
+            let dr = derived::inductive::DepRecursor::build(env, &self.mach.borrow(), ind, &gr, &w.rc)?;
             Some(Rc::new(DepRec { gr, dr }))
         });
         match built {
@@ -1098,7 +1112,7 @@ impl IndApparatus {
             return None
         }
         let built = derived::inductive::family::LePropFields::build(
-            env, &self.mach, &cs.spec, &cs.lp, &cs.params,
+            env, &self.mach.borrow(), &cs.spec, &cs.lp, &cs.params,
         )
         .map(Rc::new);
         match built {
@@ -1133,7 +1147,7 @@ impl IndApparatus {
             return None
         }
         let built = derived::inductive::family::TruncFields::over_declaration(
-            env, &self.mach, &tt.ind, &tt.tc,
+            env, &self.mach.borrow(), &tt.ind, &tt.tc,
         )
         .map(Rc::new);
         match built {
@@ -1168,7 +1182,7 @@ impl IndApparatus {
         if self.reindex_failed {
             return None
         }
-        let built = derived::sigma::Reindex::new(env, &self.mach.wt.sums, &self.mach.proj)
+        let built = derived::sigma::Reindex::new(env, &self.mach.borrow().wt.sums, &self.mach.borrow().proj)
             .map(Rc::new);
         match built {
             Some(r) => {
@@ -1193,7 +1207,7 @@ impl IndApparatus {
     /// theorems say nothing about. Delegating rather than mirroring is what
     /// makes the two the same by construction.
     pub fn push(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Push>> {
-        self.mach.push(env)
+        self.mach.borrow().push(env)
     }
 
     /// The field inhabitations of one **class-(T)** declaration, built once.
@@ -1220,7 +1234,7 @@ impl IndApparatus {
             return None
         }
         let built =
-            derived::inductive::DeclFields::over_declaration(env, &self.mach, &t.ind).map(Rc::new);
+            derived::inductive::DeclFields::over_declaration(env, &self.mach.borrow(), &t.ind).map(Rc::new);
         match built {
             Some(f) => {
                 self.decl_fields.insert(key.clone(), f.clone());
@@ -1267,7 +1281,7 @@ impl IndApparatus {
         if self.decl_projs_failed.contains(key) {
             return None
         }
-        let built = crate::proj_data::build(env, &self.mach, &t.ind).map(Rc::new);
+        let built = crate::proj_data::build(env, &self.mach.borrow(), &t.ind).map(Rc::new);
         match built {
             Some(p) => {
                 self.decl_projs.insert(key.clone(), p.clone());
@@ -1313,7 +1327,7 @@ impl IndApparatus {
             return None
         }
         let built = derived::inductive::family::IndexedPropRecursor::over_family(
-            env, &self.mach, ind, fam,
+            env, &self.mach.borrow(), ind, fam,
         )
         .map(Rc::new);
         match built {
@@ -1352,7 +1366,7 @@ impl IndApparatus {
             return None
         }
         let built = derived::inductive::family::IndexedTruncRecursor::over_family(
-            env, &self.mach, tr, ind, fam, tc,
+            env, &self.mach.borrow(), tr, ind, fam, tc,
         )
         .map(Rc::new);
         match built {
@@ -1386,10 +1400,10 @@ impl IndApparatus {
         }
         let built = self.wrec(env).and_then(|w| {
             let gr = derived::inductive::GenRecursor::build(
-                env, &self.mach, ind, &w.rc, &w.iota, &w.funspace,
+                env, &self.mach.borrow(), ind, &w.rc, &w.iota, &w.funspace,
             )?;
             derived::inductive::family::IndexedDepRecursor::over_family(
-                env, &self.mach, ind, fam, &gr, &w.rc,
+                env, &self.mach.borrow(), ind, fam, &gr, &w.rc,
             )
             .map(Rc::new)
         });
@@ -1412,20 +1426,29 @@ impl Default for Interp {
 
 impl Interp {
     pub fn new() -> Interp {
+        // A private core: one `Env::new()` fast-forwarded past the prelude —
+        // exactly the preamble this constructor used to run inline. The
+        // prelude was proved against a different `Env`; an `Env` is only a
+        // pair of counters, so replaying its theorems is sound whichever
+        // `Env` the core minted.
+        Interp::over(EnvCore::fresh())
+    }
+
+    /// An `Interp` over a **caller-supplied** [`EnvCore`] — the `Nat::over`
+    /// pattern at the engine root. Handing the same core to this and to the
+    /// checker's `tg::install_shared_core` is what makes the two engines'
+    /// skeleton keys equal terms, their hole series one series, and their
+    /// W-type machines one machine; `Interp::new` hands each `Interp` a
+    /// private core, which is the historical two-signature behaviour.
+    pub fn over(core: EnvCore) -> Interp {
         let prelude = prelude();
-        let mut env = Env::new();
-        // The prelude was proved against a different `Env`. An `Env` is only a
-        // pair of counters, so replaying its theorems is sound; all that must
-        // be arranged is that this one never re-issues an id the prelude used.
-        fast_forward(&mut env, &prelude);
-        let x_canon = env.fresh_var();
-        let cumul = Cumul::new(&mut env, &prelude.tower, CUMUL_HEIGHT)
+        let x_canon = core.x_canon;
+        let cumul = Cumul::new(&mut core.env_mut(), &prelude.tower, CUMUL_HEIGHT)
             .expect("the cumulativity table is a closed derivation over the prelude's own tower");
         let mut ip = Interp {
-            env,
+            core,
             prelude,
             x_canon,
-            hole_vars: Vec::new(),
             cumul,
             consts: HashMap::new(),
             lams: HashMap::new(),
@@ -1461,6 +1484,20 @@ impl Interp {
         ip.sym_labels.insert(ip.prelude.fs_sym(), "fs");
         ip
     }
+
+    /// The shared kernel `Env`, for the duration of one statement. Every use
+    /// is deliberately short-lived: holding this across a call that itself
+    /// reaches the core would panic on the re-entrant borrow.
+    pub fn env_mut(&self) -> std::cell::RefMut<'_, Env> { self.core.env_mut() }
+
+    /// Mint a fresh variable. One internal borrow, so two of these may sit in
+    /// one expression — which `env_mut().fresh_var()` twice may not.
+    pub fn fresh_var(&self) -> FreeVar { self.core.fresh_var() }
+
+    /// The shared-signature handle, for handing this `Interp`'s `Env`,
+    /// canonical variables and machine to the other engine — or to a second
+    /// `Interp`, whose keys then compare term-for-term with this one's.
+    pub fn core(&self) -> &EnvCore { &self.core }
 
     /// The name of an ambient symbol, for a blocker report.
     pub fn sym_label(&self, f: FnSym) -> Option<&'static str> { self.sym_labels.get(&f).copied() }
@@ -1498,7 +1535,7 @@ impl Interp {
 
     pub fn ind_apparatus(&mut self) -> Option<&mut IndApparatus> {
         if self.ind.is_none() && !self.ind_failed {
-            self.ind = IndApparatus::build(&mut self.env, &self.prelude).map(Box::new);
+            self.ind = IndApparatus::build(&self.core, &self.prelude).map(Box::new);
             self.ind_failed = self.ind.is_none();
         }
         self.ind.as_deref_mut()
@@ -1506,12 +1543,18 @@ impl Interp {
 
     /// The three things a zone-B construction needs at once: the kernel `Env`,
     /// the apparatus, and the ambient signature. Handed out together because
-    /// they are three fields of one struct and every builder needs all three.
-    pub fn ind_parts(&mut self) -> Option<(&mut Env, &mut IndApparatus, Rc<Prelude>)> {
+    /// every builder needs all three. The `Env` arrives as a `RefMut` guard on
+    /// the shared core — callers rebind it with `let env = &mut *env;` and
+    /// proceed exactly as before; the guard lives to the end of the caller's
+    /// borrow, during which only `derived/` code (which never reaches back
+    /// into the core) runs.
+    pub fn ind_parts(
+        &mut self,
+    ) -> Option<(std::cell::RefMut<'_, Env>, &mut IndApparatus, Rc<Prelude>)> {
         self.ind_apparatus()?;
         let p = self.prelude.clone();
-        let Interp { env, ind, .. } = self;
-        Some((env, ind.as_deref_mut()?, p))
+        let Interp { core, ind, .. } = self;
+        Some((core.env_mut(), ind.as_deref_mut()?, p))
     }
 
     /// **Proof irrelevance**: `Γ ⊢ ⟦e⟧ = •` from `Γ ⊢ ⟦T⟧ ∈ U₀` and
@@ -1533,7 +1576,7 @@ impl Interp {
     pub fn point_of_proof(&mut self, ty_mem: &Thm, e_mem: &Thm) -> Option<Thm> {
         if self.prop_sub.is_none() {
             let p = self.prelude.clone();
-            let t = derived::anchor::falsity::prop_subsingleton(&mut self.env, &p.tower.sums)?;
+            let t = derived::anchor::falsity::prop_subsingleton(&mut self.env_mut(), &p.tower.sums)?;
             self.prop_sub = Some(t);
         }
         let rule = self.prop_sub.clone()?;
@@ -1594,14 +1637,10 @@ impl Interp {
     /// The canonical binder slot.
     pub fn x_canon(&self) -> FreeVar { self.x_canon }
 
-    /// The `i`-th canonical hole variable, allocated on demand.
-    pub fn hole_var(&mut self, i: usize) -> FreeVar {
-        while self.hole_vars.len() <= i {
-            let v = self.env.fresh_var();
-            self.hole_vars.push(v);
-        }
-        self.hole_vars[i]
-    }
+    /// The `i`-th canonical hole variable, allocated on demand — from the
+    /// [`EnvCore`], so the series is one series across every client of the
+    /// core, the checker included.
+    pub fn hole_var(&mut self, i: usize) -> FreeVar { self.core.hole_var(i) }
 
     /// Split `t` into the part mentioning `v` and its maximal `v`-free
     /// subterms, which are pushed onto `holes` and replaced by canonical hole
@@ -1613,16 +1652,9 @@ impl Interp {
     /// variable"; the structure is now read off the term, so there is no such
     /// term and nothing to leak.
     pub fn skeleton(&mut self, t: &Term, v: FreeVar, holes: &mut Vec<Term>) -> Term {
-        // Destructured so the `hole_var` callback can borrow `env`/`hole_vars`.
-        let Interp { env, hole_vars, x_canon, .. } = self;
-        let mut hv = |i: usize| -> FreeVar {
-            while hole_vars.len() <= i {
-                let v = env.fresh_var();
-                hole_vars.push(v);
-            }
-            hole_vars[i]
-        };
-        skeleton::skeleton(*x_canon, &mut hv, t, v, holes)
+        let core = self.core.clone();
+        let mut hv = |i: usize| -> FreeVar { core.hole_var(i) };
+        skeleton::skeleton(self.x_canon, &mut hv, t, v, holes)
     }
 
     // ─────────────────────────────────────────────────── the sort tower ──
@@ -1726,7 +1758,7 @@ impl Interp {
     /// The binder variable is fresh and does not occur in `cod`, which is what
     /// makes the skeleton hole 0 entire.
     pub fn const_fibre_site(&mut self, cod: &Term) -> Option<FibreSite> {
-        let w = self.env.fresh_var();
+        let w = self.fresh_var();
         self.fibre_site(cod, w)
     }
 
@@ -1831,9 +1863,9 @@ impl Interp {
         // **last** — the argument order every `_n` construction assumes.
         let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
         xs.push(self.x_canon);
-        let (t, t_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+        let (t, t_ax) = derived::define_abbrev(&mut self.env_mut(), &xs, &skel)?;
         let p = self.prelude.clone();
-        let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env, &p.ap, t)?;
+        let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env_mut(), &p.ap, t)?;
         let site = LamSite { t, skel: skel.clone(), t_ax, lam, lam_ax, holes: Vec::new(), k };
         self.lams.insert(skel, site.clone());
         self.lam_by_sym.insert(lam, site.clone());
@@ -1930,7 +1962,7 @@ impl Interp {
             }
             let p = self.prelude.clone();
             let beta = derived::funcs::beta_conditional_n(
-                &mut self.env,
+                &mut self.env_mut(),
                 &p.ap,
                 site.t,
                 site.lam,
@@ -1942,7 +1974,7 @@ impl Interp {
             let step = Thm::mp(&derived::inst_all(&beta, &inst_args)?, mem)?;
             // …and off the body symbol onto the next level's own term.
             let unfold = self.body_unfold(&site, a.clone())?;
-            let level = derived::eq_trans(&mut self.env, &step, &unfold)?;
+            let level = derived::eq_trans(&mut self.env_mut(), &step, &unfold)?;
             let next = level.concl().as_eq()?.1.clone();
             let applied = self.app(spine.clone(), a.clone());
             acc = Some(match acc {
@@ -1950,11 +1982,11 @@ impl Interp {
                 Some(prev) => {
                     let ap = p.ap.app;
                     let cong = derived::congr(
-                        &mut self.env,
+                        &mut self.env_mut(),
                         ap,
                         &[prev, Thm::eq_refl(a.clone())],
                     )?;
-                    derived::eq_trans(&mut self.env, &cong, &level)?
+                    derived::eq_trans(&mut self.env_mut(), &cong, &level)?
                 }
             });
             spine = applied;
@@ -1984,7 +2016,7 @@ impl Interp {
             return x.clone()
         }
         for (i, h) in holes.iter().enumerate() {
-            if self.hole_vars.get(i).is_some_and(|v| *skel == Term::var(*v)) {
+            if self.core.hole(i).is_some_and(|v| *skel == Term::var(v)) {
                 return h.clone()
             }
         }
@@ -2052,8 +2084,8 @@ impl Interp {
         if *inst.concl() != Formula::eq(tw.clone(), subj.clone()) {
             return None
         }
-        let back = derived::eq_symm(&mut self.env, &inst)?;
-        let x = self.env.fresh_var();
+        let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
+        let x = self.fresh_var();
         let leib =
             Thm::eq_leibniz(subj, tw.clone(), x, Formula::mem(Term::var(x), set.clone()));
         let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
@@ -2075,7 +2107,7 @@ impl Interp {
     ) -> Option<Thm> {
         let p = self.prelude.clone();
         let rule = derived::ext::lam_in_funspace_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             &p.prod,
             &p.fs,
@@ -2113,21 +2145,21 @@ impl Interp {
         // `b(h⃗, x) = ⟦B⟧`'s skeleton — holes first, binder last.
         let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
         xs.push(self.x_canon);
-        let (b, b_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+        let (b, b_ax) = derived::define_abbrev(&mut self.env_mut(), &xs, &skel)?;
 
         let p = self.prelude.clone();
-        let dp = derived::ext::DProdN::new(&mut self.env, &p.ap, &p.fs, b)?;
+        let dp = derived::ext::DProdN::new(&mut self.env_mut(), &p.ap, &p.fs, b)?;
         // The one ingredient that mentions `b`, and hence the only one that
         // has to be re-run per fibre rather than taken from the tower.
         let ur = derived::universe::universe_replacement_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.tower.space.empty_ax,
             dp.img,
             &dp.img_ax,
             b,
         )?;
         let replacement = derived::universe::least_universe_replacement_n(
-            &mut self.env,
+            &mut self.env_mut(),
             p.tower.space.lu,
             &p.tower.space.lu_ax,
             dp.img,
@@ -2143,9 +2175,9 @@ impl Interp {
             bin_union: &p.tower.bin_union,
         };
         let general =
-            derived::ext::dprod_in_universe_of_n(&mut self.env, &p.ap, &p.fs, &fibre, &u)?;
+            derived::ext::dprod_in_universe_of_n(&mut self.env_mut(), &p.ap, &p.fs, &fibre, &u)?;
         let rule =
-            derived::ext::dprod_in_universe_pair_n(&mut self.env, &p.ap, &fibre, &u, &general)?;
+            derived::ext::dprod_in_universe_pair_n(&mut self.env_mut(), &p.ap, &fibre, &u, &general)?;
         // `fibre` borrows `replacement`; the borrow ends here.
 
         let site =
@@ -2221,8 +2253,8 @@ impl Interp {
         if *inst.concl() != Formula::eq(bw.clone(), subj.clone()) {
             return None
         }
-        let back = derived::eq_symm(&mut self.env, &inst)?;
-        let x = self.env.fresh_var();
+        let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
+        let x = self.fresh_var();
         let leib = Thm::eq_leibniz(subj, bw.clone(), x, Formula::mem(Term::var(x), set.clone()));
         let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
         (*out.concl() == Formula::mem(bw, set)).then_some(out)
@@ -2249,7 +2281,7 @@ impl Interp {
         // Record the instance, so a later decomposition can walk into it.
         let _ = self.mk(sym, args.clone());
         let at = derived::inst_all(ax, &args)?;
-        let back = derived::eq_symm(&mut self.env, &at)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &at)?;
         self.retarget_set(mem, &back)
     }
 
@@ -2267,7 +2299,7 @@ impl Interp {
         if lhs != a {
             return None
         }
-        let x = self.env.fresh_var();
+        let x = self.fresh_var();
         let leib =
             Thm::eq_leibniz(lhs, rhs.clone(), x, Formula::mem(subj.clone(), Term::var(x)));
         let out = Thm::mp(&Thm::mp(&leib, eq)?, mem)?;
@@ -2313,9 +2345,9 @@ impl Interp {
     ) -> Option<Thm> {
         let p = self.prelude.clone();
         let beta =
-            derived::funcs::beta_conditional_n(&mut self.env, &p.ap, lam.t, lam.lam, &lam.lam_ax)?;
+            derived::funcs::beta_conditional_n(&mut self.env_mut(), &p.ap, lam.t, lam.lam, &lam.lam_ax)?;
         let lam_fs = derived::ext::lam_in_funspace_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             &p.prod,
             &p.fs,
@@ -2324,7 +2356,7 @@ impl Interp {
             &lam.lam_ax,
         )?;
         let rule = derived::ext::lam_in_dprod_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             &p.fs,
             (lam.t, lam.lam, &beta, &lam_fs),
@@ -2363,7 +2395,7 @@ impl Interp {
     ) -> Option<Thm> {
         let p = self.prelude.clone();
         let rule = derived::ext::lam_in_dprod_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             &p.fs,
             (px.body, px.graph, &px.beta, &px.lam_in_funspace),
@@ -2407,11 +2439,11 @@ impl Interp {
         }
         let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
         xs.push(self.x_canon);
-        let (b, b_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+        let (b, b_ax) = derived::define_abbrev(&mut self.env_mut(), &xs, &skel)?;
 
         // `φ(h⃗, A) := ∀x. (x ∈ A → • ∈ b(h⃗, x))`, with the binder slot the
         // canonical one, so that one body shape gives one formula.
-        let a_var = self.env.fresh_var();
+        let a_var = self.fresh_var();
         let mut bargs: Vec<Term> = xs[..k].iter().map(|v| Term::var(*v)).collect();
         bargs.push(Term::var(self.x_canon));
         let bx = self.mk(b, bargs);
@@ -2428,7 +2460,7 @@ impl Interp {
 
         let p = self.prelude.clone();
         let (chi, chi_ax) =
-            derived::prop::conditional_singleton(&mut self.env, &p.tower.sums, &params, &phi)?;
+            derived::prop::conditional_singleton(&mut self.env_mut(), &p.tower.sums, &params, &phi)?;
         let site = CondSite { b, skel: skel.clone(), b_ax, chi, chi_ax, phi, params, holes: Vec::new(), k };
         self.conds.insert(skel, site.clone());
         self.cond_by_sym.insert(chi, site.clone());
@@ -2554,7 +2586,7 @@ impl Interp {
         // and costs nothing.
         let ty_mem = self.cond_typing(site, dom.clone())?;
         let f_pt = self.point_of_proof(&ty_mem, f_mem)?;
-        let back = derived::eq_symm(&mut self.env, &f_pt)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &f_pt)?;
         let f_mem = &self.retarget_subject(f_mem, &back)?;
         let p = self.prelude.clone();
         let elim = derived::prop::cond_elim(&p.tower.sums, &phi, &c, &chi_at)?;
@@ -2632,7 +2664,7 @@ impl Interp {
     ) -> Option<Thm> {
         let p = self.prelude.clone();
         let rule = derived::ext::lam_ext_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             s1.t,
             s1.lam,
@@ -2660,7 +2692,7 @@ impl Interp {
         let p = self.prelude.clone();
         let (a, b) = (s1.dp.clone(), s2.dp.clone());
         let rule = derived::ext::dprod_ext_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.ap,
             &p.fs,
             (a.b, a.img, &a.img_ax, a.dprod, &a.dprod_def),
@@ -2684,7 +2716,7 @@ impl Interp {
     ) -> Option<Thm> {
         let p = self.prelude.clone();
         let rule = derived::prop::cond_ext_n(
-            &mut self.env,
+            &mut self.env_mut(),
             &p.tower.sums,
             (s1.b, s1.chi, &s1.chi_ax),
             (s2.b, s2.chi, &s2.chi_ax),
@@ -2743,7 +2775,7 @@ impl Interp {
             Some(t) => t.clone(),
             None => {
                 let t = derived::ext::dprod_const_fibre_n(
-                    &mut self.env,
+                    &mut self.env_mut(),
                     &p.ap,
                     &p.fs,
                     site.b,
@@ -2759,7 +2791,10 @@ impl Interp {
             }
         };
         // The fibre at a point, and the proof that the point does not matter.
-        let (xv, yv) = (self.env.fresh_var(), self.env.fresh_var());
+        // Two statements, not a tuple: each `env_mut()` borrow must end
+        // before the next begins.
+        let xv = self.fresh_var();
+        let yv = self.fresh_var();
         let at_x = self.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(xv))?;
         let at_y = self.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(yv))?;
         let cod = at_x.concl().as_eq()?.1.clone();
@@ -2794,10 +2829,10 @@ impl Interp {
         if rhs != subj {
             return None
         }
-        let x = self.env.fresh_var();
+        let x = self.fresh_var();
         let leib =
             Thm::eq_leibniz(rhs, lhs.clone(), x, Formula::mem(Term::var(x), set.clone()));
-        let back = derived::eq_symm(&mut self.env, eq)?;
+        let back = derived::eq_symm(&mut self.env_mut(), eq)?;
         let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
         (*out.concl() == Formula::mem(lhs, set)).then_some(out)
     }
@@ -2813,7 +2848,7 @@ impl Interp {
     pub fn cond_typing(&mut self, site: &CondSite, dom: Term) -> Option<Thm> {
         let (c, phi, chi_at) = self.cond_parts(site, dom)?;
         let p = self.prelude.clone();
-        let out = p.tower.cond_in_u0(&mut self.env, &phi, &c, &chi_at)?;
+        let out = p.tower.cond_in_u0(&mut self.env_mut(), &phi, &c, &chi_at)?;
         (*out.concl() == Formula::mem(c, self.sort(0))).then_some(out)
     }
 
@@ -2825,7 +2860,7 @@ impl Interp {
     /// definition gets a name of its own, and the returned theorem *is* delta
     /// reduction's certificate for it.
     pub fn abbrev(&mut self, body: &Term) -> Option<(Term, Thm)> {
-        let (sym, ax) = derived::define_abbrev(&mut self.env, &[], body)?;
+        let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
         let t = self.mk(sym, vec![]);
         // The axiom is checked against the statement claimed rather than
         // trusted: a mismatch is a gap, never a described-but-false theorem.
@@ -2840,7 +2875,7 @@ impl Interp {
     /// derivable is that the new symbol denotes an inhabitant of anything,
     /// which is why the store's `typing` is a [`Gap`] on this path.
     pub fn opaque(&mut self) -> Term {
-        let sym = self.env.declare(0);
+        let sym = self.env_mut().declare(0);
         self.mk(sym, vec![])
     }
 
@@ -2934,7 +2969,7 @@ mod tests {
     #[test]
     fn skeleton_abstracts_the_binder_and_holes_the_rest() {
         let mut ip = Interp::new();
-        let v = ip.env.fresh_var();
+        let v = ip.fresh_var();
         let closed = ip.sort(0);
         // `app(v, ⟦Prop⟧)` — mentions the binder, so it must be recorded.
         let t = ip.app(Term::var(v), closed.clone());
@@ -2950,7 +2985,7 @@ mod tests {
 
         // Two occurrences of one body shape must decompose to the *same*
         // skeleton, or their defeq needs a theorem where reflexivity should do.
-        let v2 = ip.env.fresh_var();
+        let v2 = ip.fresh_var();
         let other = ip.sort(3);
         let t2 = ip.app(Term::var(v2), other.clone());
         let mut holes2 = Vec::new();
@@ -2982,9 +3017,9 @@ mod tests {
     #[test]
     fn skeleton_decomposes_a_term_the_interpretation_did_not_build() {
         let mut ip = Interp::new();
-        let v = ip.env.fresh_var();
+        let v = ip.fresh_var();
         let closed = ip.sort(0);
-        let f = ip.env.declare(2);
+        let f = ip.env_mut().declare(2);
         // Built with `Term::apply`, behind mini's back — as `derived::congr`
         // and every kernel-side instantiation build their terms.
         let unbuilt = Term::apply(f, vec![Term::var(v), closed.clone()]);
@@ -3044,7 +3079,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut sc = Scopes::new();
         let u1 = ip.sort(1);
-        let tok = sc.open(&mut ip.env, u1.clone());
+        let tok = sc.open(&mut ip.env_mut(), u1.clone());
         // `Γ ⊢ α ∈ ⟦Type 0⟧` — the scope's own assumption, at zero cost.
         let dom_mem = sc.get(0).unwrap().assumption().clone();
         let alpha = sc.get(0).unwrap().term();
@@ -3096,7 +3131,7 @@ mod tests {
         let mut sc = Scopes::new();
         let dom = ip.sort(0);
 
-        let tok = sc.open(&mut ip.env, dom.clone());
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
         let w = sc.get(0).unwrap().var();
         // The body is `bvar 0`, so ⟦b⟧ is the scope's own variable and its
         // typing is the scope's stored assumption — no derivation at all.
@@ -3129,7 +3164,7 @@ mod tests {
         let dom = ip.sort(0);
         let (c, _) = ip.abbrev(&ip.sort(1)).expect("abbrev");
 
-        let tok = sc.open(&mut ip.env, dom.clone());
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
         let w = sc.get(0).unwrap().var();
         let body_tm = ip.app(c.clone(), Term::var(w));
         let site = ip.lam_site(&body_tm, w).expect("lam site");
@@ -3157,13 +3192,13 @@ mod tests {
         let (c1, _) = ip.abbrev(&ip.sort(1)).unwrap();
         let (c2, _) = ip.abbrev(&ip.sort(2)).unwrap();
 
-        let t1 = sc.open(&mut ip.env, dom.clone());
+        let t1 = sc.open(&mut ip.env_mut(), dom.clone());
         let w1 = sc.get(0).unwrap().var();
         let b1 = ip.app(c1.clone(), Term::var(w1));
         let s1 = ip.lam_site(&b1, w1).unwrap();
         let _ = sc.close(t1);
 
-        let t2 = sc.open(&mut ip.env, dom);
+        let t2 = sc.open(&mut ip.env_mut(), dom);
         let w2 = sc.get(0).unwrap().var();
         let b2 = ip.app(c2.clone(), Term::var(w2));
         let s2 = ip.lam_site(&b2, w2).unwrap();
@@ -3192,7 +3227,7 @@ mod tests {
         let dom = ip.sort(1);
         let dom_mem = ip.sort_typing(1).unwrap(); // ⊢ U₁ ∈ U₂
 
-        let tok = sc.open(&mut ip.env, dom.clone());
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
         let w = sc.get(0).unwrap().var();
         let body_ty = Term::var(w);
         // `Γ ⊢ x ∈ U₁`, the scope's own assumption; raise it to `U₂`, which is
@@ -3232,7 +3267,7 @@ mod tests {
         let mut sc = Scopes::new();
         let dom = ip.sort(0);
 
-        let tok = sc.open(&mut ip.env, dom.clone());
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
         let w = sc.get(0).unwrap().var();
         let lam = ip.lam_site(&Term::var(w), w).expect("lam site");
         let fib = ip.fibre_site(&dom.clone(), w).expect("fibre site");
@@ -3244,7 +3279,7 @@ mod tests {
         let mem = sc.get(0).unwrap().assumption().clone();
         let mem = ip.to_body_symbol(&lam, w, &mem).expect("to t");
         let b_at = derived::inst_all(&fib.b_ax, &[dom.clone(), Term::var(w)]).expect("b at w");
-        let back = derived::eq_symm(&mut ip.env, &b_at).expect("symm");
+        let back = derived::eq_symm(&mut ip.env_mut(), &b_at).expect("symm");
         let mem = ip.retarget_set(&mem, &back).expect("retarget to the fibre");
 
         let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &mem);
@@ -3284,13 +3319,13 @@ mod tests {
         let (a, b) = (ip.sort(0), ip.sort(1));
 
         // A binder-free codomain: hole 0 entire, and `const_dprod` is the term.
-        let w = ip.env.fresh_var();
+        let w = ip.fresh_var();
         let konst = ip.fibre_site(&b, w).expect("the constant fibre");
         assert_eq!(konst.holes, vec![b.clone()], "a binder-free codomain is hole 0 entire");
         let dp = ip.const_dprod(a.clone(), b.clone()).expect("dprod at the constant fibre");
         assert_eq!(dp, ip.dprod_term(&konst, a.clone()));
         // …and asking again mints nothing: the same site, at any binder.
-        let w2 = ip.env.fresh_var();
+        let w2 = ip.fresh_var();
         let again = ip.fibre_site(&b, w2).expect("the same constant fibre");
         assert_eq!(again.dp.dprod, konst.dp.dprod, "one table entry, corpus-wide");
 
@@ -3308,7 +3343,7 @@ mod tests {
         assert!(ip.as_pi(&stray).is_none(), "a stray fs must not decompose as an interpreted Π");
 
         // A genuinely dependent fibre is a different site.
-        let w3 = ip.env.fresh_var();
+        let w3 = ip.fresh_var();
         let dep_cod = ip.mk(ip.prelude.fs_sym(), vec![Term::var(w3), b.clone()]);
         let dep = ip.fibre_site(&dep_cod, w3).expect("a dependent fibre");
         assert_ne!(dep.dp.dprod, konst.dp.dprod, "fibre_by_sym must tell the two apart");
@@ -3327,7 +3362,7 @@ mod tests {
         let mut ip = Interp::new();
         let mut sc = Scopes::new();
         let dom = ip.sort(0);
-        let tok = sc.open(&mut ip.env, dom.clone());
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
         let w = sc.get(0).unwrap().var();
 
         let site = ip.cond_site(&Term::var(w), w).expect("cond site");
@@ -3356,14 +3391,14 @@ mod tests {
         let (c1, _) = ip.abbrev(&ip.sort(1)).unwrap();
         let (c2, _) = ip.abbrev(&ip.sort(2)).unwrap();
 
-        let t1 = sc.open(&mut ip.env, dom.clone());
+        let t1 = sc.open(&mut ip.env_mut(), dom.clone());
         let w1 = sc.get(0).unwrap().var();
         let s1 = ip.cond_site(&c1.clone(), w1).expect("site");
         let out = ip.cond_typing(&s1, dom.clone()).expect("typing");
         assert_eq!(*out.concl(), Formula::mem(ip.cond_term(&s1, dom.clone()), ip.sort(0)));
         let _ = sc.close(t1);
 
-        let t2 = sc.open(&mut ip.env, dom);
+        let t2 = sc.open(&mut ip.env_mut(), dom);
         let w2 = sc.get(0).unwrap().var();
         let s2 = ip.cond_site(&c2.clone(), w2).expect("site");
         let _ = sc.close(t2);

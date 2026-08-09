@@ -235,7 +235,7 @@ fn build(
     // `⟦t⟧ = •` moves both sides at once: the subject is `app(app(pack,ā),w)`
     // and the set is `app(app(C̄,ā),w)`, so one Leibniz rewrite at a single hole
     // carries the membership from `•` onto the binder.
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let pack_at = ip.app(pack.clone(), aa.clone());
     let c_at = ip.app(cx.cm.clone(), aa.clone());
     let (sub_hole, set_hole) =
@@ -251,7 +251,7 @@ fn build(
     // property of who built a term left the λ above this bottom unable to
     // skeletonise its body. One abbreviation over the nest's own binders fixes
     // it, exactly as `rec_dep::dep_bottom` does.
-    // **`&mut ip.env`, not `Interp::ind_parts`.** `rec_dep::dep_bottom` reaches
+    // **`&mut *ip.env_mut()`, not `Interp::ind_parts`.** `rec_dep::dep_bottom` reaches
     // its `Env` through the inductive apparatus because it is holding one
     // already; here that would make `117_accRecType` — an export that mentions
     // no inductive but `Acc` — build a `Wtype`, a `Bound` and an `IndChain` for
@@ -259,7 +259,7 @@ fn build(
     // exists to avoid.
     let raw = ip.app(pack_at, tt);
     let (sym, ax) =
-        derived::define_abbrev(&mut ip.env, &at.vars, &raw).ok_or_else(|| bad(TERM))?;
+        derived::define_abbrev(&mut ip.env_mut(), &at.vars, &raw).ok_or_else(|| bad(TERM))?;
     // **And the name is kept.** `define_abbrev` mints a fresh symbol per call,
     // so this equation is the only way from the symbol a β chain lands on back
     // to `pack` — and the ι rule ([`crate::rec_acc_iota`]) has no other route.
@@ -293,9 +293,9 @@ pub(crate) fn major(ip: &mut Interp, cx: &Cx<'_>, at: &At, aa: &Term) -> Option<
     let t_in_set = ip.retarget_set(&at.mems[5], &beta_a)?;
     let chi_a = derived::inst_all(&cx.ac.acc_set_ax, &args)?;
     let phi_a = cx.ac.phi(&cx.a, &cx.r, aa);
-    let in_u0 = tower.cond_in_u0(&mut ip.env, &phi_a, &set_a, &chi_a)?;
+    let in_u0 = tower.cond_in_u0(&mut ip.env_mut(), &phi_a, &set_a, &chi_a)?;
     let t_pt = ip.point_of_proof(&in_u0, &t_in_set)?;
-    let pt_eq_t = derived::eq_symm(&mut ip.env, &t_pt)?;
+    let pt_eq_t = derived::eq_symm(&mut ip.env_mut(), &t_pt)?;
     let pt_in_set = ip.retarget_subject(&t_in_set, &pt_eq_t)?;
     let elim = derived::prop::cond_elim(&sums, &phi_a, &set_a, &chi_a)?;
     let a_in_acc = Thm::mp(&elim, &pt_in_set)?;
@@ -401,7 +401,7 @@ pub(crate) fn acc_point(
     let pt = Thm::mp(&intro, x_in_acc)?;
     let mems = [cx.a_mem.clone(), cx.r_mem.clone(), x_in_a.clone()];
     let (_, beta) = ip.beta_spine(&at.former, &args, &mems)?;
-    let back = derived::eq_symm(&mut ip.env, &beta)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &beta)?;
     ip.retarget_set(&pt, &back)
 }
 
@@ -454,7 +454,7 @@ pub(crate) fn step_typed_at(ip: &mut Interp, cx: &Cx<'_>, at: &At) -> Option<Thm
     let sums = ip.prelude.tower.sums.clone();
 
     let mut sc = Scopes::new();
-    let tok_x = sc.open(&mut ip.env, cx.acc_t.clone());
+    let tok_x = sc.open(&mut ip.env_mut(), cx.acc_t.clone());
     let (x, x_in_acc) = {
         let s = sc.get(0)?;
         (s.term(), s.assumption().clone())
@@ -463,7 +463,7 @@ pub(crate) fn step_typed_at(ip: &mut Interp, cx: &Cx<'_>, at: &At) -> Option<Thm
     let (f, f_mem, s3, iset) = minor_fn(ip, cx, at, &x, &x_in_a, &x_in_acc, &mut sc)?;
     let (_, fibre_mem) = motive_fibre(ip, cx, at, &x, &x_in_a, &x_in_acc)?;
 
-    let tok_i = sc.open(&mut ip.env, ih_bound(&sums, &cx.a, &cx.t));
+    let tok_i = sc.open(&mut ip.env_mut(), ih_bound(&sums, &cx.a, &cx.t));
     let i = {
         let s = sc.get(0)?;
         s.term()
@@ -512,7 +512,7 @@ pub(crate) fn step_typed_at(ip: &mut Interp, cx: &Cx<'_>, at: &At) -> Option<Thm
     let over_i = sc.close(tok_i).discharge(&out).ok()?;
     let over_x = sc.close(tok_x).discharge(&over_i).ok()?;
     let want = derived::rec_acc::step_typed(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &cx.ra.ra.base,
         &cx.a,
         &cx.graph,
@@ -554,7 +554,7 @@ fn no_pair_at(
     )?;
     let f_sub = derived::and_elim_left(&is_fun)?;
 
-    let wv = ip.env.fresh_var();
+    let wv = ip.fresh_var();
     let w = Term::var(wv);
     let pair = sums.ap.sets.pair(i.clone(), w.clone());
     let to_prod = derived::inst_all(&f_sub, std::slice::from_ref(&pair))?;
@@ -586,7 +586,7 @@ fn no_pair_at(
 fn refine(ip: &mut Interp, cx: &Cx<'_>, at: &At, st: &Thm) -> Result<Thm, &'static str> {
     let point = ip.point();
     // `φ(z) := app(accrec,z) ∈ app(app(C̄,z),•)`.
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let phi = {
         let lhs = ip.app(cx.accrec.clone(), Term::var(zv));
         let at_z = ip.app(cx.cm.clone(), Term::var(zv));
@@ -600,12 +600,12 @@ fn refine(ip: &mut Interp, cx: &Cx<'_>, at: &At, st: &Thm) -> Result<Thm, &'stat
     // clause lists only the motive's because its `φ` is `• ∈ app(app(C̄,z),•)`
     // and mentions nothing else; that is the one difference between the two
     // calls, and it is not a difference in the scheme.
-    let (av, rv) = (ip.env.fresh_var(), ip.env.fresh_var());
+    let (av, rv) = (ip.fresh_var(), ip.fresh_var());
     let params = [av, rv, at.vars[0], at.vars[1], at.vars[2], at.vars[3]];
     let sets = cx.ac.sets.clone();
-    let rule = acc_rect(&mut ip.env, &sets, &params, Params { a: av, r: rv }, zv, &phi).ok_or(RECT)?;
+    let rule = acc_rect(&mut ip.env_mut(), &sets, &params, Params { a: av, r: rv }, zv, &phi).ok_or(RECT)?;
     let want = ind_step(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &sets,
         &cx.acc_t,
         &cx.a,
@@ -633,14 +633,14 @@ fn ind_step_at(
     let up = cx.ac.sets.sets.up;
 
     let mut sc = Scopes::new();
-    let tok_x = sc.open(&mut ip.env, cx.a.clone());
+    let tok_x = sc.open(&mut ip.env_mut(), cx.a.clone());
     let (x, x_in_a) = {
         let s = sc.get(0).ok_or(REFINE)?;
         (s.term(), s.assumption().clone())
     };
 
     // The induction hypothesis, spelled as `derived::acc::ind_step` spells it.
-    let yv = ip.env.fresh_var();
+    let yv = ip.fresh_var();
     let y = Term::var(yv);
     let ih_formula = Formula::forall(
         yv,
@@ -700,7 +700,7 @@ fn accessible_from_ih(
     x_in_a: &Thm,
     ih: &Thm,
 ) -> Option<Thm> {
-    let yv = ip.env.fresh_var();
+    let yv = ip.fresh_var();
     let y = Term::var(yv);
     let at_y = derived::inst_all(ih, std::slice::from_ref(&y))?;
     let (y_in_a, rest) = at_y.concl().as_imp()?;

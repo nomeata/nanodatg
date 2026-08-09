@@ -200,7 +200,8 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         let key = (site.ind, site.inst.clone());
         let (base, fam, tc) = (cp.base.clone(), cp.ii.clone(), cp.tc.clone());
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-        let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+        let Some((mut kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+        let kenv = &mut *kenv;
         let Some(trunc) = app.trunc(kenv) else { return gap(Gap::IndApparatus) };
         match app.indexed_trunc_recursor(kenv, &key, &trunc, &base, &fam, &tc) {
             Some(r) => r,
@@ -292,7 +293,7 @@ fn fire(
         return Err(bad(CARRIER))
     }
     let ax_at = derived::inst_all(&cp.abbrev, &sa).ok_or_else(|| bad(CARRIER))?;
-    let to_trunc = derived::eq_trans(&mut ip.env, &beta, &ax_at).ok_or_else(|| bad(CARRIER))?;
+    let to_trunc = derived::eq_trans(&mut ip.env_mut(), &beta, &ax_at).ok_or_else(|| bad(CARRIER))?;
     let t_in = ip.retarget_set(&at.t_mem, &to_trunc).ok_or_else(|| bad(CARRIER))?;
     let mem = Thm::mp(&at_t, &t_in).ok_or_else(|| bad(CARRIER))?;
     if *mem.concl() != Formula::mem(point.clone(), at.goal.clone()) {

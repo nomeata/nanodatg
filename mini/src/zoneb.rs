@@ -1002,9 +1002,10 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // ── the carrier ───────────────────────────────────────────────────────
     let ind = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         Rc::new(
-            Inductive::build(kenv, &mut app.mach, &spec)
+            Inductive::build(kenv, &mut app.mach.borrow_mut(), &spec)
                 .ok_or(Gap::IndSpec(*ind_name, "carrier"))?,
         )
     };
@@ -1393,13 +1394,14 @@ fn build_trunc(
     }
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let tower = ip.prelude.tower.clone();
-    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-    let ind = Inductive::build(kenv, &mut app.mach, &base)
+    let (mut kenv_g, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let kenv = &mut *kenv_g;
+    let ind = Inductive::build(kenv, &mut app.mach.borrow_mut(), &base)
         .ok_or(Gap::IndSpec(*ind_name, "carrier"))?;
     let tr = app.trunc(kenv).ok_or(Gap::IndApparatus)?;
     let tc = derived::inductive::family::TruncCarrier::over_declaration(
         kenv,
-        &app.mach,
+        &app.mach.borrow(),
         &tower,
         &tr,
         &ind,
@@ -1417,6 +1419,8 @@ fn build_trunc(
         .ok_or(Gap::IndSpec(*ind_name, "truncation abbreviation"))?;
     let at = derived::inst_all(&tc.in_u0, &ps).ok_or(Gap::ConvCompose("trunc-in-u0"))?;
     let ax_at = derived::inst_all(&ax, &ps).ok_or(Gap::ConvCompose("trunc-abbrev"))?;
+    // Release the `Env` guard before `ip` is borrowed again.
+    drop(kenv_g);
     let onto = ip.retarget_subject(&at, &ax_at).ok_or(Gap::ConvCompose("trunc-subject"))?;
     let univ = derived::gen_all(&ind.params, &onto);
     let ind = Rc::new(ind);
@@ -1627,7 +1631,7 @@ fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
     let Some(ax_at) = derived::inst_all(&site.ax, &ps) else {
         return gap(bad("the truncation abbreviation"))
     };
-    let Some(to_trunc) = derived::eq_trans(&mut ip.env, &beta, &ax_at) else {
+    let Some(to_trunc) = derived::eq_trans(&mut ip.env_mut(), &beta, &ax_at) else {
         return gap(bad("the truncation abbreviation"))
     };
 
@@ -1647,7 +1651,7 @@ fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
                 let Some(unfold) = derived::inst_all(axj, &a) else {
                     return gap(bad("a plain field's typing"))
                 };
-                let Some(back) = derived::eq_symm(&mut ip.env, &unfold) else {
+                let Some(back) = derived::eq_symm(&mut ip.env_mut(), &unfold) else {
                     return gap(bad("a plain field's typing"))
                 };
                 let Some(out) = ip.retarget_set(mem, &back) else {
@@ -1672,7 +1676,7 @@ fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
                 let Some(pt) = ip.point_of_proof(&cod_mem, mem) else {
                     return gap(bad("a recursive argument's proof irrelevance"))
                 };
-                let Some(back) = derived::eq_symm(&mut ip.env, &pt) else {
+                let Some(back) = derived::eq_symm(&mut ip.env_mut(), &pt) else {
                     return gap(bad("a recursive argument's proof irrelevance"))
                 };
                 let Some(at_pt) = ip.retarget_subject(mem, &back) else {
@@ -1715,7 +1719,7 @@ fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
     };
 
     // ── `‖ind(p⃗)‖` back onto `⟦T p⃗⟧` ────────────────────────────────────────
-    let Some(back) = derived::eq_symm(&mut ip.env, &to_trunc) else {
+    let Some(back) = derived::eq_symm(&mut ip.env_mut(), &to_trunc) else {
         return gap(bad("the truncation abbreviation"))
     };
     let Some(out) = ip.retarget_set(&mem, &back) else {
@@ -1777,9 +1781,10 @@ fn build_indexed(
     // indexed carrier is carved *out of* it, so it must be the same object.
     let ind = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         Rc::new(
-            Inductive::build(kenv, &mut app.mach, &spec.base)
+            Inductive::build(kenv, &mut app.mach.borrow_mut(), &spec.base)
                 .ok_or(Gap::IndSpec(*ind_name, "carrier"))?,
         )
     };
@@ -1791,11 +1796,12 @@ fn build_indexed(
     // Before the translation exists, because the translation carries it.
     let ctor_abbrev = crate::ctor_ix::ctor_abbrevs(ip, &ind, &spec.base)
         .ok_or(Gap::IndSpec(*ind_name, "naming a constructor's term"))?;
-    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let (mut kenv_g, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let kenv = &mut *kenv_g;
     let wrec = app.wrec(kenv).ok_or(Gap::IndApparatus)?;
     let ii = derived::inductive::family::IndexedInductive::build(
         kenv,
-        &mut app.mach,
+        &mut app.mach.borrow_mut(),
         &ind,
         &spec,
         &wrec.rc,
@@ -1806,7 +1812,7 @@ fn build_indexed(
     let iu = derived::inductive::family::IndexedUniverse::over_at(
         kenv,
         &app.chain,
-        &app.mach,
+        &app.mach.borrow(),
         &ind,
         &ii.carrier,
         &du.du,
@@ -1832,6 +1838,8 @@ fn build_indexed(
         rec_dom_abbrev,
     });
     app.indexed.insert((*ind_name, inst.to_vec()), tr.clone());
+    // Release the `Env` guard before `c` is borrowed again below.
+    drop(kenv_g);
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
     // **After the former, and unable to unseat it.** The type former is a
     // complete obligation on its own and `042_rbTreeDef` asks for it and
@@ -1900,7 +1908,7 @@ pub(crate) fn spec_of(
                     .map_err(|_| bad("index type"))?
                     .ok_or_else(|| bad("index type uninterpretable"))?;
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
+                let (sym, ax) = derived::define_abbrev(&mut ip.env_mut(), &abstraction, &dom)
                     .ok_or_else(|| bad("index type mentions a later binder"))?;
                 indices.push(sym);
                 index_axs.push(ax);
@@ -2141,7 +2149,7 @@ fn ctor_spec(
                 // *plain field* is not expressible — and `define_abbrev` is
                 // what refuses it, rather than a hand-written scan.
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction[..np], &dom)
+                let (sym, ax) = derived::define_abbrev(&mut ip.env_mut(), &abstraction[..np], &dom)
                     .ok_or_else(|| bad("recursive argument domain depends on a field"))?;
                 syms.push(sym);
                 axs.push(ax);
@@ -2243,7 +2251,7 @@ fn ctor_spec(
             let sym_args: Vec<Term> = abstraction.iter().map(|v| Term::var(*v)).collect();
             let (sym, unfold) = {
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
+                let (sym, ax) = derived::define_abbrev(&mut ip.env_mut(), &abstraction, &dom)
                     .ok_or_else(|| bad("field type depends on a recursive field"))?;
                 let at = derived::inst_all(&ax, &sym_args)
                     .ok_or_else(|| bad("field abbreviation instance"))?;
@@ -2352,7 +2360,7 @@ fn index_syms(
         let tm = t.tm.clone().ok_or_else(|| t.ev.reason(bad(())))?;
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let (sym, ax) =
-            derived::define_abbrev(&mut ip.env, abstraction, &tm).ok_or_else(|| bad(()))?;
+            derived::define_abbrev(&mut ip.env_mut(), abstraction, &tm).ok_or_else(|| bad(()))?;
         out.push(sym);
         axs.push(ax);
     }
@@ -2379,10 +2387,10 @@ fn discharge_at_symbol(
     let w = closed.var();
     let discharged = closed.discharge(inner).ok()?;
     let ip = c.interp()?;
-    let x = ip.env.fresh_var();
+    let x = ip.fresh_var();
     let at = Formula::forall(w, Formula::imp(Formula::mem(Term::var(w), Term::var(x)), phi));
     // `unfold` is `βᵢ(p⃗,y⃗) = ⟦βᵢ⟧`; the substitution runs the other way.
-    let back = derived::eq_symm(&mut ip.env, unfold)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), unfold)?;
     let leib = Thm::eq_leibniz(dom, sym_app.clone(), x, at);
     Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
 }
@@ -2634,14 +2642,14 @@ fn decl_universe(
         for (.., ev) in &shape.ctors {
             let mut out = Vec::with_capacity(ev.legs.len());
             for leg in &ev.legs {
-                out.push(collapse_over_params(&mut ip.env, ind_name, leg, &ps, np, &mut hyp)?);
+                out.push(collapse_over_params(&mut ip.env_mut(), ind_name, leg, &ps, np, &mut hyp)?);
             }
             per_ctor.push(out);
             let mut doms = Vec::with_capacity(ev.rec_dom_sort.len());
             for row in &ev.rec_dom_sort {
                 let mut r = Vec::with_capacity(row.len());
                 for th in row {
-                    r.push(collapse_over_params(&mut ip.env, ind_name, th, &ps, np, &mut hyp)?);
+                    r.push(collapse_over_params(&mut ip.env_mut(), ind_name, th, &ps, np, &mut hyp)?);
                 }
                 doms.push(r);
             }
@@ -2659,13 +2667,14 @@ fn decl_universe(
     let lvl = tower.at(level as usize).ok_or(Gap::SortTowerHeight)?;
     let want = ip.sort(level);
     let tags = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let mut summands = Vec::with_capacity(per_ctor.len());
         for (ci, legs) in per_ctor.iter().enumerate() {
             let obligations = derived::cumul::summand_obligations_at(
                 kenv,
                 &app.chain,
-                &app.mach,
+                &app.mach.borrow(),
                 ind,
                 ci,
                 hyp.as_ref(),
@@ -2677,7 +2686,7 @@ fn decl_universe(
                 derived::cumul::summand_at(
                     kenv,
                     &app.chain,
-                    &app.mach,
+                    &app.mach.borrow(),
                     ind,
                     ci,
                     hyp.as_ref(),
@@ -2687,7 +2696,7 @@ fn decl_universe(
                 .ok_or_else(|| short(()))?,
             );
         }
-        derived::cumul::tags_at(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &lvl, &summands)
+        derived::cumul::tags_at(kenv, &app.chain, &app.mach.borrow(), ind, hyp.as_ref(), &lvl, &summands)
             .ok_or_else(|| short(()))?
     };
     // The per-summand fibre facts — see [`fibre_facts`].
@@ -2695,11 +2704,12 @@ fn decl_universe(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
     // for, so the tag sum arrives where the placement wants it.
-    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let kenv = &mut *kenv;
     let du = derived::cumul::DeclUniverse::over_at_general(
         kenv,
         &app.chain,
-        &app.mach,
+        &app.mach.borrow(),
         ind,
         hyp.as_ref(),
         &lvl,
@@ -2913,7 +2923,8 @@ fn fibre_facts(
         let mut ms = Vec::with_capacity(recs);
         for (j, g) in doms.into_iter().enumerate() {
             let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-            let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let kenv = &mut *kenv;
             if g.is_empty() {
                 // **The one-point summand**, and it is not a special case of
                 // anything below: `fibre_summands` spells an empty `γ` as `1`
@@ -2984,12 +2995,12 @@ fn fibre_facts(
             // `Inductive::build` and kept nothing but the type of. A second
             // build would be a second telescope, and both theorems below would
             // be about a summand this declaration's fibre value does not sum.
-            let tel = app.mach.telescope(kenv, np, &g).ok_or_else(short)?;
+            let tel = app.mach.borrow_mut().telescope(kenv, np, &g).ok_or_else(short)?;
             ms.push(
                 derived::cumul::unary_telescope_at(
                     kenv,
                     &app.chain,
-                    &app.mach,
+                    &app.mach.borrow(),
                     &tel,
                     &ps,
                     hyp,
@@ -3177,8 +3188,9 @@ pub(crate) fn rec_slot_terms(
     if !takes_general_recarg(spec) {
         return Some(rs.to_vec())
     }
-    let (kenv, app, _) = ip.ind_parts()?;
-    let s = app.mach.wt.sums.clone();
+    let (mut kenv, app, _) = ip.ind_parts()?;
+    let kenv = &mut *kenv;
+    let s = app.mach.borrow().wt.sums.clone();
     let mut out = Vec::with_capacity(rs.len());
     for (j, r) in rs.iter().enumerate() {
         let g = spec.rec_dom(j).to_vec();
@@ -3186,7 +3198,7 @@ pub(crate) fn rec_slot_terms(
             out.push(derived::point_fun::PointFun::of(&s, s.point(), r.clone()));
             continue
         }
-        let tel = app.mach.telescope(kenv, np, &g)?;
+        let tel = app.mach.borrow_mut().telescope(kenv, np, &g)?;
         let rx = app.reindex(kenv)?;
         out.push(rx.of(r.clone(), tel.ty_of(ps.to_vec())));
     }
@@ -3237,7 +3249,8 @@ fn constructor(
     let (ctor_sym, ctor_ax) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let fvs: Vec<kernel::FreeVar> = {
-            let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let (mut kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let kenv = &mut *kenv;
             (0..spec.order.len()).map(|_| kenv.fresh_var()).collect()
         };
         let (mut ys, mut rs) = (Vec::new(), Vec::new());
@@ -3255,10 +3268,11 @@ fn constructor(
         let params: Vec<Term> = at.ind.params.iter().map(|v| Term::var(*v)).collect();
         let rs = rec_slot_terms(ip, &spec, at.np, &params, &rs)
             .ok_or(Gap::IndSpec(at.name, "recursive field transport"))?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let raw = at
             .ind
-            .ctor_term(&app.mach, i, &ys, &rs)
+            .ctor_term(&app.mach.borrow(), i, &ys, &rs)
             .ok_or(Gap::IndSpec(at.name, "ctor term"))?;
         // **`p⃗ ++ f⃗`, not `f⃗`.** A plain constructor's term mentions no
         // parameter and this degenerates to the old abstraction at `np = 0`;
@@ -3519,7 +3533,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let Some(at) = abbrev.get(j).and_then(|ax| derived::inst_all(ax, &args)) else {
             return gap(Gap::IndSpec(*ind_name, "field abbreviation instance"))
         };
-        let Some(back) = derived::eq_symm(&mut ip.env, &at) else {
+        let Some(back) = derived::eq_symm(&mut ip.env_mut(), &at) else {
             return gap(Gap::ConvCompose("ctor-field-symm"))
         };
         match ip.retarget_set(m, &back) {
@@ -3543,7 +3557,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // `ind-spec(…: ctor abbreviation instance)` when the abbreviation widened.
     let raw = {
         let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-        match ind.ctor_term_at(&app.mach, i, &ys, &rs_c, ps) {
+        match ind.ctor_term_at(&app.mach.borrow(), i, &ys, &rs_c, ps) {
             Some(t) => t,
             None => return gap(Gap::IndSpec(*ind_name, "ctor term")),
         }
@@ -3644,7 +3658,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             };
             let (pt, rule) = {
                 let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-                (app.mach.wt.sums.point(), app.mach.pf.in_fs.clone())
+                (app.mach.borrow().wt.sums.point(), app.mach.borrow().pf.in_fs.clone())
             };
             let inst = derived::inst_all(&rule, &[pt, rs[j].clone(), carrier.clone()]);
             // Same check as the function-typed branch below, and for the same
@@ -3683,7 +3697,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             let Some(eq) = cod_conv[j].clone() else {
                 return gap(bad("recursive field codomain"))
             };
-            match derived::eq_trans(&mut ip.env, &eq, &spine_eq) {
+            match derived::eq_trans(&mut ip.env_mut(), &eq, &spine_eq) {
                 Some(t) => t,
                 None => return gap(bad("recursive field codomain")),
             }
@@ -3720,32 +3734,35 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         if gamma != dom {
             return gap(bad("recursive argument domain"))
         }
-        let Some(onto_beta) = derived::eq_symm(&mut ip.env, &ax)
-            .and_then(|back| {
-                derived::congr_arg(&mut ip.env, fs_sym, &[gamma, cod.clone()], 0, &back)
-            })
-            .and_then(|eq| ip.retarget_set(&in_fs, &eq))
-        else {
+        // Statement by statement: each `env_mut()` guard must end before
+        // the closure that needs `ip` runs.
+        let sym0 = derived::eq_symm(&mut ip.env_mut(), &ax);
+        let cong0 = sym0.and_then(|back| {
+            derived::congr_arg(&mut ip.env_mut(), fs_sym, &[gamma, cod.clone()], 0, &back)
+        });
+        let Some(onto_beta) = cong0.and_then(|eq| ip.retarget_set(&in_fs, &eq)) else {
             return gap(bad("recursive argument domain rewrite"))
         };
         // ── 4. `⟦T p⃗⟧ ↦ ind(p⃗)`, inside the same `fs` ──────────────────────
-        let Some(on_ind) =
-            derived::congr_arg(&mut ip.env, fs_sym, &[beta0, cod], 1, &cod_to_ind)
-                .and_then(|eq| ip.retarget_set(&onto_beta, &eq))
-        else {
+        let cong1 = derived::congr_arg(&mut ip.env_mut(), fs_sym, &[beta0, cod], 1, &cod_to_ind);
+        let Some(on_ind) = cong1.and_then(|eq| ip.retarget_set(&onto_beta, &eq)) else {
             return gap(bad("recursive argument codomain rewrite"))
         };
         // ── 5. `pull(gⱼ, T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))` ─────────────────────────
         let rule = {
             let g = spec.rec_dom(j).to_vec();
-            let Some((kenv, app, p)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-            let s = app.mach.wt.sums.clone();
-            let built = app.mach.telescope(kenv, np, &g).and_then(|tel| {
+            let Some((mut kenv, app, p)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+            let kenv = &mut *kenv;
+            let s = app.mach.borrow().wt.sums.clone();
+            // Bound first: the `borrow_mut` guard must end before the closure
+            // below takes its own borrows of the machine.
+            let tel = app.mach.borrow_mut().telescope(kenv, np, &g);
+            let built = tel.and_then(|tel| {
                 let rx = app.reindex(kenv)?;
                 derived::sigma::reindex_in_funspace(
                     kenv,
                     &s,
-                    &app.mach.proj,
+                    &app.mach.borrow().proj,
                     &tel,
                     &rx,
                     &p.fs_app_mem,
@@ -3789,7 +3806,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     };
     // …and the set back onto the applied spine, which is what the Lean codomain
     // interprets to.
-    let back = match derived::eq_symm(&mut ip.env, &spine_eq) {
+    let back = match derived::eq_symm(&mut ip.env_mut(), &spine_eq) {
         Some(t) => t,
         None => return gap(Gap::ConvCompose("ctor-spine-symm")),
     };
@@ -4502,7 +4519,7 @@ mod tests {
                     let ax = &ixd.axioms.ctors[0].rec_args[0][0];
                     let ip = c.interp().expect("threaded");
                     let (t0, t1) =
-                        (Term::var(ip.env.fresh_var()), Term::var(ip.env.fresh_var()));
+                        (Term::var(ip.fresh_var()), Term::var(ip.fresh_var()));
                     let at = derived::inst_all(ax, &[t0.clone(), t1.clone()])
                         .unwrap_or_else(|| panic!("{label}: `d⃗₀₀` has arity np + 1 = 2"));
                     let (_, rhs) = at.concl().as_eq().expect("a defining equation");
@@ -4542,8 +4559,8 @@ mod tests {
     /// is refused" from "a second theorem is refused".
     #[test]
     fn two_theorems_of_one_declaration_may_not_name_two_antecedents() {
-        let mut ip = Interp::new();
-        let env = &mut ip.env;
+        let ip = Interp::new();
+        let env = &mut *ip.env_mut();
         // Two distinct domains, and the parameter the theorems are moved onto.
         let (d1, d2) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
         let p = env.fresh_var();
@@ -4659,7 +4676,7 @@ mod tests {
         // the kernel's `∀` body is de Bruijn-closed and there is nothing to
         // read out of it in place.
         assert!(th.concl().is_forall(), "the parameter scope leaves a `∀`");
-        let v = c.interp().expect("threaded").env.fresh_var();
+        let v = c.interp().expect("threaded").fresh_var();
         let at = derived::inst_all(th, &[Term::var(v)]).expect("instantiate the prenex");
         let (guard, concl) = at.concl().as_imp().expect("the parameter's own typing as a guard");
         assert_eq!(guard, concl, "the body is the bound variable's own membership");
@@ -4849,7 +4866,7 @@ mod tests {
                         // The `∀` body is de Bruijn-closed, so the only way to
                         // ask whether it mentions the parameter is to
                         // instantiate at a variable and look.
-                        let v = c.interp().expect("threaded").env.fresh_var();
+                        let v = c.interp().expect("threaded").fresh_var();
                         let at = derived::inst_all(th, &[Term::var(v)])
                             .expect("instantiate the prenex");
                         let (_, concl) =
@@ -5097,12 +5114,12 @@ mod tests {
     fn a_second_translation_mints_no_second_symbol() {
         let (env, t, ctors) = three_ctor_env();
         let mut ip = Interp::new();
-        let fresh = ip.env.declare(0).id();
+        let fresh = ip.env_mut().declare(0).id();
         {
             let mut c = Checker::threaded(&env, &mut ip);
             ensure(&mut c, &t, &[]).expect("the first translation succeeds");
         }
-        let before = ip.env.declare(0).id();
+        let before = ip.env_mut().declare(0).id();
         // **The probe can see minting.** Without this the assertion below would
         // also pass against an `ensure` that never minted anything at all, and
         // a test that cannot fail for the reason it names is worse than none.
@@ -5119,7 +5136,7 @@ mod tests {
                 ensure(&mut c, n, &[]).expect("a second ensure on a constructor");
             }
         }
-        let after = ip.env.declare(0).id();
+        let after = ip.env_mut().declare(0).id();
         assert_eq!(
             after,
             before + 1,
@@ -5301,7 +5318,7 @@ mod tests {
     fn an_indexed_family_is_translated_with_its_typing_and_walked_once() {
         let (env, t) = indexed_env();
         let mut ip = Interp::new();
-        let fresh = ip.env.declare(0).id();
+        let fresh = ip.env_mut().declare(0).id();
         {
             let mut c = Checker::threaded(&env, &mut ip);
             ensure(&mut c, &t, &[]).expect("the indexed family translates");
@@ -5318,7 +5335,7 @@ mod tests {
                 "the former's typing must be about its own interpretation, in its own type"
             );
         }
-        let before = ip.env.declare(0).id();
+        let before = ip.env_mut().declare(0).id();
         assert!(before - fresh > 5, "the walk must actually mint, or the probe proves nothing");
         {
             let mut c = Checker::threaded(&env, &mut ip);
@@ -5326,7 +5343,7 @@ mod tests {
                 ensure(&mut c, &t, &[]).expect("a second translation is a store hit");
             }
         }
-        let after = ip.env.declare(0).id();
+        let after = ip.env_mut().declare(0).id();
         assert_eq!(
             after,
             before + 1,
@@ -5403,7 +5420,7 @@ mod tests {
             let i_at = derived::inst_all(&it.ax.indices[k], &iargs).expect("ι axiom at p⃗, e⃗<ₖ");
             let onto_subject =
                 ip.retarget_subject(&b0_mem, &e_at).expect("⊢ e₀ₖ(p⃗) ∈ ⟦B⟧");
-            let back = derived::eq_symm(&mut ip.env, &i_at).expect("⟦B⟧ = ιₖ(…)");
+            let back = derived::eq_symm(&mut ip.env_mut(), &i_at).expect("⟦B⟧ = ιₖ(…)");
             let both = ip.retarget_set(&onto_subject, &back).expect("⊢ e₀ₖ(p⃗) ∈ ιₖ(…)");
             ws.push(derived::gen_all(&ctor.pvs, &both));
             prev.push(Term::apply(e_sym, ps.clone()));
@@ -5464,11 +5481,12 @@ mod tests {
             }
         }
         let key = (t, Vec::new());
-        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let (mut kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let kenv = &mut *kenv;
         let ind = app.decls.get(&key).expect("translated").ind.clone();
         for (i, j) in [(0usize, 1usize), (0, 2), (1, 2)] {
             let d = ind
-                .distinct(kenv, &app.mach, i, j)
+                .distinct(kenv, &app.mach.borrow(), i, j)
                 .unwrap_or_else(|| panic!("no distinctness for ({i},{j})"));
             assert!(d.hyps().is_empty(), "distinctness must be unconditional");
         }

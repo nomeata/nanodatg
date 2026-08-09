@@ -130,7 +130,7 @@ pub(crate) fn fire(
     if bot != want_bot {
         return Err(bad(NEST))
     }
-    let step1 = derived::congr(&mut ip.env, ap_sym, &[beta, Thm::eq_refl(major.clone())])
+    let step1 = derived::congr(&mut ip.env_mut(), ap_sym, &[beta, Thm::eq_refl(major.clone())])
         .ok_or_else(|| bad(NEST))?;
 
     // ── step 2: the major, down `⟦Quot.mk.{u}⟧`'s nest ──────────────────────
@@ -147,7 +147,7 @@ pub(crate) fn fire(
     if mk_beta.concl().as_eq().map(|(l, _)| l) != Some(major) {
         return Err(bad(MAJOR))
     }
-    let step2 = derived::congr(&mut ip.env, ap_sym, &[Thm::eq_refl(bot.clone()), mk_beta])
+    let step2 = derived::congr(&mut ip.env_mut(), ap_sym, &[Thm::eq_refl(bot.clone()), mk_beta])
         .ok_or_else(|| bad(MAJOR))?;
 
     // ── step 3: `lift_beta`, whose two antecedents the redex supplies ───────
@@ -163,8 +163,8 @@ pub(crate) fn fire(
 
     // ── the chain, and the reduct ───────────────────────────────────────────
     let to_tm = ip.app(f, x);
-    let chain = derived::eq_trans(&mut ip.env, &step1, &step2)
-        .and_then(|t| derived::eq_trans(&mut ip.env, &t, &step3))
+    let chain = derived::eq_trans(&mut ip.env_mut(), &step1, &step2)
+        .and_then(|t| derived::eq_trans(&mut ip.env_mut(), &t, &step3))
         .ok_or_else(|| bad(RULE))?;
     let lhs = arg_tms.iter().fold(head_tm.clone(), |acc, t| ap.apply(acc, t.clone()));
     if *chain.concl() != Formula::eq(lhs, to_tm.clone()) {

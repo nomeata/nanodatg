@@ -108,7 +108,7 @@ pub(crate) fn certify(
     }
 
     // ── the pointwise family, which is the body symbol's own axiom ──────────
-    let xv = ip.env.fresh_var();
+    let xv = ip.fresh_var();
     let x = Term::var(xv);
     let body_eq = ip
         .symbol_at(site.t, &site.t_ax, &site.holes, &x)
@@ -127,7 +127,7 @@ pub(crate) fn certify(
 
     // ── the two graphs are equal ────────────────────────────────────────────
     let rule = derived::ext::lam_ext_n(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &ap,
         site.t,
         site.lam,
@@ -166,8 +166,8 @@ pub(crate) fn certify(
     let eta_at =
         derived::inst_all(&eta.eta, &[dom.clone(), cod, f_tm.clone()]).ok_or(Gap::FunEta)?;
     let f_is_graph = Thm::mp(&eta_at, &f_in_fs).ok_or(Gap::FunEta)?;
-    let back = derived::eq_symm(&mut ip.env, &f_is_graph).ok_or(Gap::FunEta)?;
-    let out = derived::eq_trans(&mut ip.env, &graphs, &back).ok_or(Gap::FunEta)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &f_is_graph).ok_or(Gap::FunEta)?;
+    let out = derived::eq_trans(&mut ip.env_mut(), &graphs, &back).ok_or(Gap::FunEta)?;
     if *out.concl() != Formula::eq(lam_tm.clone(), f_tm.clone()) {
         return Err(Gap::FunEta)
     }
@@ -187,11 +187,11 @@ impl Interp {
         if self.eta.is_none() && !self.eta_failed {
             let p = self.prelude.clone();
             self.eta = (|| {
-                let app_pair = derived::ext::app_of_pair(&mut self.env, &p.ap)?;
+                let app_pair = derived::ext::app_of_pair(&mut self.env_mut(), &p.ap)?;
                 let fun_ext =
-                    derived::ext::funspace_ext(&mut self.env, &p.ap, &p.prod, &p.fs, &app_pair)?;
+                    derived::ext::funspace_ext(&mut self.env_mut(), &p.ap, &p.prod, &p.fs, &app_pair)?;
                 derived::ext::Eta::new(
-                    &mut self.env,
+                    &mut self.env_mut(),
                     &p.ap,
                     &p.prod,
                     &p.fs,

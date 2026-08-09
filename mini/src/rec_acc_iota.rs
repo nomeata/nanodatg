@@ -290,12 +290,12 @@ pub(crate) fn fire(
     let ap_sym = ip.prelude.ap.app;
     let pt_eq_h = {
         let h_pt = ip.point_of_proof(&h_ty_mem, &h_mem).ok_or_else(|| bad(INTRO))?;
-        derived::eq_symm(&mut ip.env, &h_pt).ok_or_else(|| bad(INTRO))?
+        derived::eq_symm(&mut ip.env_mut(), &h_pt).ok_or_else(|| bad(INTRO))?
     };
     let at_a = ip.app(cx.em.clone(), aa.clone());
-    let head_cong = derived::congr(&mut ip.env, ap_sym, &[Thm::eq_refl(at_a), pt_eq_h])
+    let head_cong = derived::congr(&mut ip.env_mut(), ap_sym, &[Thm::eq_refl(at_a), pt_eq_h])
         .ok_or_else(|| bad(RHS))?;
-    let cong = derived::congr(&mut ip.env, ap_sym, &[head_cong, rows])
+    let cong = derived::congr(&mut ip.env_mut(), ap_sym, &[head_cong, rows])
         .ok_or_else(|| bad(RHS))?;
     let out = eq_trans(ip, &step2, &cong).ok_or_else(|| bad(RHS))?;
     if out.concl().as_eq().map(|(_, r)| r) != Some(want.clone()) {
@@ -345,7 +345,7 @@ fn rows_agree(
 
     // ── the rows agree at every `y ∈ A` ─────────────────────────────────────
     let mut sc = Scopes::new();
-    let tok_y = sc.open(&mut ip.env, cx.a.clone());
+    let tok_y = sc.open(&mut ip.env_mut(), cx.a.clone());
     let (yv, y, y_in_a) = {
         let s = sc.get(0).ok_or_else(|| bad(ROWS))?;
         (s.var(), s.term(), s.assumption().clone())
@@ -362,12 +362,12 @@ fn rows_agree(
     let row_eq = row_agrees(
         ip, ind, cx, at, head_tm, elim, major, &y, &y_in_a, &inner, &mut sc,
     )?;
-    let back = derived::eq_symm(&mut ip.env, &t_at_y).ok_or_else(|| bad(LAM))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &t_at_y).ok_or_else(|| bad(LAM))?;
     let body = eq_trans(ip, &row_eq, &back).ok_or_else(|| bad(ROWS))?;
     let pw = sc.close(tok_y).discharge(&body).map_err(|_| bad(ROWS))?;
 
     // ── …hence the two images are one set ───────────────────────────────────
-    let pv = ip.env.fresh_var();
+    let pv = ip.fresh_var();
     let p = Term::var(pv);
     let ep_t = ep_of(base.ep, cx.graph.clone(), y.clone(), major.aa.clone());
     let v1 = cval_of(&sums, ep_t, ip.app(cx.accrec.clone(), y.clone()));
@@ -394,7 +394,7 @@ fn rows_agree(
         derived::inst_all(&lsite.lam_ax, &a).ok_or_else(|| bad(LAM))?
     };
     let rule = same_rows(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &sums.ap.sets,
         pv,
         yv,
@@ -474,7 +474,7 @@ fn row_agrees(
     let ep_t = ep_of(base.ep, cx.graph.clone(), y.clone(), major.aa.clone());
     let sing_v = derived::singleton(up, v.clone());
     let cval_eq =
-        derived::congr_arg(&mut ip.env, sums.prod.prod, &[ep_t, sing_v], 0, &edge_eq)
+        derived::congr_arg(&mut ip.env_mut(), sums.prod.prod, &[ep_t, sing_v], 0, &edge_eq)
             .ok_or_else(|| bad(EDGE))?;
     let at_rel = cval_of(&sums, rel.clone(), v.clone());
     if cval_eq.concl().as_eq().ok_or_else(|| bad(EDGE))?.1 != at_rel {
@@ -482,7 +482,7 @@ fn row_agrees(
     }
 
     // ── the value agrees at every proof `w ∈ ⟦r y ā⟧` ───────────────────────
-    let tok_w = sc.open(&mut ip.env, rel.clone());
+    let tok_w = sc.open(&mut ip.env_mut(), rel.clone());
     let (wv, w, w_in_rel) = {
         let s = sc.get(0).ok_or_else(|| bad(SPINE))?;
         (s.var(), s.term(), s.assumption().clone())
@@ -498,7 +498,7 @@ fn row_agrees(
     if spine_eq.concl().as_eq().ok_or_else(|| bad(SPINE))?.1 != t2_rhs {
         return Err(bad(SPINE))
     }
-    let back = derived::eq_symm(&mut ip.env, &t2_at_w).ok_or_else(|| bad(LAM))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &t2_at_w).ok_or_else(|| bad(LAM))?;
     let body = eq_trans(ip, &spine_eq, &back).ok_or_else(|| bad(SPINE))?;
     if body.concl().as_eq().map(|(l, r)| (l.clone(), r.clone())) != Some((v.clone(), t2_lhs))
     {
@@ -507,9 +507,9 @@ fn row_agrees(
     let pw = sc.close(tok_w).discharge(&body).map_err(|_| bad(SPINE))?;
 
     // ── …hence the constant function and the λ-graph are one set ────────────
-    let pv = ip.env.fresh_var();
+    let pv = ip.fresh_var();
     let p = Term::var(pv);
-    let ax1 = cval_members(&mut ip.env, &sums, &rel, &v, &p).ok_or_else(|| bad(ROWS))?;
+    let ax1 = cval_members(&mut ip.env_mut(), &sums, &rel, &v, &p).ok_or_else(|| bad(ROWS))?;
     let ax2 = {
         let mut a = l2.holes.clone();
         a.push(rel.clone());
@@ -522,7 +522,7 @@ fn row_agrees(
         Term::apply(l2.t, a)
     };
     let rule = same_rows(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &sums.ap.sets,
         pv,
         wv,
@@ -566,7 +566,7 @@ fn recursive_call(
 
     // `w` is a proof, so it is `•` — which is what puts the pair in the graph.
     let w_pt = ip.point_of_proof(rel_u0, w_in_rel).ok_or_else(|| bad(PRED))?;
-    let pt_eq_w = derived::eq_symm(&mut ip.env, &w_pt).ok_or_else(|| bad(PRED))?;
+    let pt_eq_w = derived::eq_symm(&mut ip.env_mut(), &w_pt).ok_or_else(|| bad(PRED))?;
     let pt_in_rel = ip.retarget_subject(w_in_rel, &pt_eq_w).ok_or_else(|| bad(PRED))?;
     let pair = Thm::mp(
         &derived::inst_all(
@@ -616,7 +616,7 @@ fn recursive_call(
     .and_then(|x| Thm::mp(&x, &y_in_acc))
     .ok_or_else(|| bad(SPINE))?;
     let to_value = eq_trans(ip, &to_pack, &pa).ok_or_else(|| bad(SPINE))?;
-    derived::eq_symm(&mut ip.env, &to_value).ok_or_else(|| bad(SPINE))
+    derived::eq_symm(&mut ip.env_mut(), &to_value).ok_or_else(|| bad(SPINE))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -872,7 +872,7 @@ fn peel_app(ip: &Interp, t: &Term, n: usize) -> Option<(Term, Vec<Term>)> {
 }
 
 fn eq_trans(ip: &mut Interp, a: &Thm, b: &Thm) -> Option<Thm> {
-    derived::eq_trans(&mut ip.env, a, b)
+    derived::eq_trans(&mut ip.env_mut(), a, b)
 }
 
 #[cfg(test)]
@@ -902,19 +902,19 @@ mod tests {
         let cval_ext = ra.ra.base.cval_ext.clone();
 
         let (cv, v1v, v2v, pv, yv) = (
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
         );
         let (c, v1, v2, p) =
             (Term::var(cv), Term::var(v1v), Term::var(v2v), Term::var(pv));
         assert_ne!(v1, v2, "the two values must not already be one term");
 
-        let ax1 = cval_members(&mut ip.env, &sums, &c, &v1, &p)
+        let ax1 = cval_members(&mut ip.env_mut(), &sums, &c, &v1, &p)
             .expect("cval's members, one at a time");
-        let ax2 = cval_members(&mut ip.env, &sums, &c, &v2, &p).expect("…at the other value");
+        let ax2 = cval_members(&mut ip.env_mut(), &sums, &c, &v2, &p).expect("…at the other value");
         assert!(ax1.hyps().is_empty() && ax2.hyps().is_empty(), "both are ⊢, not Γ ⊢");
 
         let (s1, s2) = (
@@ -923,7 +923,7 @@ mod tests {
         );
         let sets = sums.ap.sets.clone();
         let rule = same_rows(
-            &mut ip.env, &sets, pv, yv, &c, &v1, &v2, &s1, &s2, &ax1, &ax2,
+            &mut ip.env_mut(), &sets, pv, yv, &c, &v1, &v2, &s1, &s2, &ax1, &ax2,
         )
         .expect("the extensionality");
         let want = derived::inst_all(&cval_ext, &[c, v1, v2]).expect("cval_ext at these terms");
@@ -944,16 +944,16 @@ mod tests {
     /// make [`same_rows`] decline four functions deeper.
     #[test]
     fn cval_has_one_row_per_member_of_its_condition() {
-        let mut ip = Interp::new();
+        let ip = Interp::new();
         let sums = ip.prelude.tower.sums.clone();
         let (cv, vv, pv, xv) = (
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
-            ip.env.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
+            ip.fresh_var(),
         );
         let (c, v, p) = (Term::var(cv), Term::var(vv), Term::var(pv));
-        let out = cval_members(&mut ip.env, &sums, &c, &v, &p).expect("the members");
+        let out = cval_members(&mut ip.env_mut(), &sums, &c, &v, &p).expect("the members");
         let want = Formula::iff(
             Formula::mem(p.clone(), cval_of(&sums, c.clone(), v.clone())),
             Formula::exists(

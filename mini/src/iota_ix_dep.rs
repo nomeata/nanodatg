@@ -332,7 +332,7 @@ pub(crate) fn fire(
     if ceq_lhs != major_tm {
         return Err(bad(CTOR))
     }
-    let cong = derived::congr(&mut ip.env, ap_sym, &[Thm::eq_refl(irec.clone()), ceq.clone()])
+    let cong = derived::congr(&mut ip.env_mut(), ap_sym, &[Thm::eq_refl(irec.clone()), ceq.clone()])
         .ok_or_else(|| bad(CTOR))?;
     let step2 = eq_trans(ip, &step1, &cong).ok_or_else(|| bad(CTOR))?;
 
@@ -376,7 +376,7 @@ pub(crate) fn fire(
                     .and_then(|f| f.get(plains))
                     .ok_or_else(|| bad(ATOM))?;
                 let unfold = derived::inst_all(ax, &a).ok_or_else(|| bad(ATOM))?;
-                let back = derived::eq_symm(&mut ip.env, &unfold).ok_or_else(|| bad(ATOM))?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &unfold).ok_or_else(|| bad(ATOM))?;
                 plains += 1;
                 ip.retarget_set(&mem, &back).ok_or_else(|| bad(ATOM))?
             }
@@ -404,7 +404,7 @@ pub(crate) fn fire(
                     .ok_or_else(|| bad(ATOM))?;
                 let cg = crate::ctor_ix::index_congr(ip, tr.ii.carrier.ty, &at.ps, &ds, axs, &ia)
                     .ok_or_else(|| bad(ATOM))?;
-                let back = derived::eq_symm(&mut ip.env, &cg).ok_or_else(|| bad(ATOM))?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &cg).ok_or_else(|| bad(ATOM))?;
                 t_raw.push(mem.clone());
                 recs += 1;
                 ip.retarget_set(&onto, &back).ok_or_else(|| bad(ATOM))?
@@ -461,9 +461,9 @@ pub(crate) fn fire(
         let (_, jbeta) = ip.beta_spine(head_tm, &jargs, &jmems).ok_or_else(|| bad(NEST))?;
         let jax = derived::inst_all(&elim.ax, &jargs).ok_or_else(|| bad(ABBREV))?;
         let leg = eq_trans(ip, &jbeta, &jax).ok_or_else(|| bad(NEST))?;
-        acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
+        acc = derived::congr(&mut ip.env_mut(), ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
     }
-    let back = derived::eq_symm(&mut ip.env, &acc).ok_or_else(|| bad(RHS))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &acc).ok_or_else(|| bad(RHS))?;
     let out = eq_trans(ip, &step3, &back).ok_or_else(|| bad(RHS))?;
     if out.concl().as_eq().map(|(_, r)| r) != Some(want.clone()) {
         return Err(bad(RHS))
@@ -511,7 +511,7 @@ fn peel_app(ip: &Interp, t: &Term, n: usize) -> Option<(Term, Vec<Term>)> {
 }
 
 fn eq_trans(ip: &mut Interp, a: &Thm, b: &Thm) -> Option<Thm> {
-    derived::eq_trans(&mut ip.env, a, b)
+    derived::eq_trans(&mut ip.env_mut(), a, b)
 }
 
 #[cfg(test)]

@@ -114,7 +114,7 @@ pub(crate) fn ih_in_minor_domain(
     )?;
 
     // ── everything at one predecessor `y ∈ A` ───────────────────────────────
-    let tok_y = sc.open(&mut ip.env, cx.a.clone());
+    let tok_y = sc.open(&mut ip.env_mut(), cx.a.clone());
     let (yv, y, y_in_a) = {
         let s = sc.get(0)?;
         (s.var(), s.term(), s.assumption().clone())
@@ -127,7 +127,7 @@ pub(crate) fn ih_in_minor_domain(
 
     // `⟨y, row_v⟩ ∈ ih`, and hence `app(ih,y) = row_v`.
     let row_in = {
-        let y2 = ip.env.fresh_var();
+        let y2 = ip.fresh_var();
         let body = Formula::and(
             Formula::mem(Term::var(y2), cx.a.clone()),
             Formula::eq(row.clone(), row_of(&sums, base.ep, &cx.accrec, &cx.graph, x, &Term::var(y2))),
@@ -161,7 +161,7 @@ pub(crate) fn ih_in_minor_domain(
     let b_at_y = ip.fibre_at(&si, y.clone());
     let img_t = si.dp.img_of(&si.holes, cx.a.clone());
     let row_in_base = {
-        let w = ip.env.fresh_var();
+        let w = ip.fresh_var();
         let at_w = ip.fibre_at(&si, Term::var(w));
         let body = Formula::and(
             Formula::mem(Term::var(w), cx.a.clone()),
@@ -178,7 +178,7 @@ pub(crate) fn ih_in_minor_domain(
         args.push(b_at_y.clone());
         let in_img = Thm::mp(&derived::iff_mpr(&derived::inst_all(&si.dp.img_ax, &args)?)?, &ex)?;
 
-        let s = ip.env.fresh_var();
+        let s = ip.fresh_var();
         let body = Formula::and(
             Formula::mem(Term::var(s), img_t.clone()),
             Formula::mem(row_v.clone(), Term::var(s)),
@@ -197,7 +197,7 @@ pub(crate) fn ih_in_minor_domain(
     // this one `y` and discharged from one scope.
     let sec_body = ip.retarget_subject(&row_sym, &app_eq)?;
     let tot_body = {
-        let u = ip.env.fresh_var();
+        let u = ip.fresh_var();
         let body = Formula::and(
             Formula::mem(Term::var(u), outer_base.clone()),
             Formula::mem(sums.ap.sets.pair(y.clone(), Term::var(u)), ih_tm.clone()),
@@ -300,7 +300,7 @@ fn row_in_fibre(
     // ── the inner product is a function space ───────────────────────────────
     let c_at_y = ip.app(cx.cm.clone(), row.y.clone());
     let fibre = ip.app(c_at_y, point);
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let mut bargs = sj.holes.clone();
     bargs.push(Term::var(zv));
     let b_at_z = derived::inst_all(&sj.b_ax, &bargs)?;
@@ -312,7 +312,7 @@ fn row_in_fibre(
         &derived::a1i(&b_at_z, Formula::mem(Term::var(zv), rel.clone())),
     )?;
     let cfib = derived::ext::dprod_const_fibre_n(
-        &mut ip.env,
+        &mut ip.env_mut(),
         &prelude.ap,
         &prelude.fs,
         sj.b,
@@ -330,7 +330,7 @@ fn row_in_fibre(
 
     // ── the constant function is in it ──────────────────────────────────────
     let cval_rel = cval_of(&sums, rel.clone(), row.v.clone());
-    let tok_w = sc.open(&mut ip.env, rel.clone());
+    let tok_w = sc.open(&mut ip.env_mut(), rel.clone());
     let (w, w_in_rel) = {
         let s = sc.get(0)?;
         (s.term(), s.assumption().clone())
@@ -338,7 +338,7 @@ fn row_in_fibre(
     // `w` is a proof of `r y x`, so it is `•` — which is what puts the pair
     // into the graph and so lets the induction hypothesis fire.
     let w_pt = ip.point_of_proof(&rel_u0, &w_in_rel)?;
-    let pt_eq_w = derived::eq_symm(&mut ip.env, &w_pt)?;
+    let pt_eq_w = derived::eq_symm(&mut ip.env_mut(), &w_pt)?;
     let pt_in_rel = ip.retarget_subject(&w_in_rel, &pt_eq_w)?;
     let pair = Thm::mp(
         &derived::inst_all(
@@ -370,7 +370,7 @@ fn row_in_fibre(
             )?)?,
             &derived::and_intro(&w_in_rel, &v_in_sing),
         )?;
-        let u = ip.env.fresh_var();
+        let u = ip.fresh_var();
         let body = Formula::and(
             Formula::mem(Term::var(u), fibre.clone()),
             Formula::mem(sums.ap.sets.pair(w.clone(), Term::var(u)), cval_rel.clone()),
@@ -397,7 +397,7 @@ fn row_in_fibre(
         )?)?,
         &is_fun,
     )?;
-    let back = derived::eq_symm(&mut ip.env, &dp_eq)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &dp_eq)?;
     let in_dprod = ip.retarget_set(&in_fs, &back)?;
     if in_dprod.concl().as_mem()?.1 != *inner {
         return None
@@ -405,7 +405,7 @@ fn row_in_fibre(
     // `cval(ep(R̄,y,x), v) = cval(⟦r y x⟧, v)` — the edge equation, applied in
     // the product's first argument.
     let cval_eq = derived::congr_arg(
-        &mut ip.env,
+        &mut ip.env_mut(),
         sums.prod.prod,
         &[row.ep_t.clone(), row.sing_v.clone()],
         0,
@@ -435,7 +435,7 @@ fn subset_of_prod(
 ) -> Option<Thm> {
     let sums = ip.prelude.tower.sums.clone();
     let base = cx.ra.ra.base.clone();
-    let (pv, yv, hole) = (ip.env.fresh_var(), ip.env.fresh_var(), ip.env.fresh_var());
+    let (pv, yv, hole) = (ip.fresh_var(), ip.fresh_var(), ip.fresh_var());
     let (p, y) = (Term::var(pv), Term::var(yv));
     let row_y = row_of(&sums, base.ep, &cx.accrec, &cx.graph, x, &y);
     let prod_t = sums.prod.of(cx.a.clone(), outer_base.clone());
@@ -449,7 +449,7 @@ fn subset_of_prod(
     let row_in_prod = derived::syl(&derived::and_left(mem_ya, eq_p.clone()), &at_y)?;
     let to_eq = derived::syl(
         &derived::and_right(Formula::mem(y.clone(), cx.a.clone()), eq_p),
-        &derived::eq_symm_imp(&mut ip.env, p.clone(), row_y.clone()),
+        &derived::eq_symm_imp(&mut ip.env_mut(), p.clone(), row_y.clone()),
     )?;
     let leib =
         Thm::eq_leibniz(row_y, p.clone(), hole, Formula::mem(Term::var(hole), prod_t));
@@ -465,7 +465,7 @@ fn subset_of_prod(
         &[cx.accrec.clone(), cx.a.clone(), cx.graph.clone(), x.clone(), p.clone()],
     )?;
     let out = derived::syl(&derived::iff_mp(&ax)?, &from_ex)?;
-    let want = kernel::thm::subset(&mut ip.env, ih_tm.clone(), sums.prod.of(cx.a.clone(), outer_base.clone()));
+    let want = kernel::thm::subset(&mut ip.env_mut(), ih_tm.clone(), sums.prod.of(cx.a.clone(), outer_base.clone()));
     let all_p = crate::rec_dep::gen_all_checked(&[pv], &out)?;
     (*all_p.concl() == want).then_some(all_p)
 }

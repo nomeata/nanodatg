@@ -262,9 +262,10 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let at = At { xs, mems, former, ctor_former, goal, prop };
     let key = (site.ind, site.inst.clone());
     let fields = {
-        let Some((kenv, app, _)) = c.interp().and_then(|ip| ip.ind_parts()) else {
+        let Some((mut kenv, app, _)) = c.interp().and_then(|ip| ip.ind_parts()) else {
             return gap(Gap::IndApparatus)
         };
+        let kenv = &mut *kenv;
         match app.prop_fields(kenv, &key, &site.cs) {
             Some(f) => f,
             None => return gap(bad(FIELDS)),
@@ -314,7 +315,7 @@ fn build(
     // declaration.
     let a_in_u0 = derived::inst_all(&cs.in_u0, &ps).ok_or_else(|| bad(CARRIER))?;
     let t_pt = ip.point_of_proof(&a_in_u0, &t_in_a).ok_or_else(|| bad(CARRIER))?;
-    let pt_eq_t = derived::eq_symm(&mut ip.env, &t_pt).ok_or_else(|| bad(CARRIER))?;
+    let pt_eq_t = derived::eq_symm(&mut ip.env_mut(), &t_pt).ok_or_else(|| bad(CARRIER))?;
     // `• ∈ A_φ(p⃗)` — `LePropFields`' own major premise.
     let major = ip.retarget_subject(&t_in_a, &pt_eq_t).ok_or_else(|| bad(CARRIER))?;
 
@@ -414,7 +415,7 @@ fn build(
             .dprod_app(&c_fibre, &spine, &c_tm, &t_tm, &c_mem, &t_mem)
             .ok_or_else(|| bad(MOTIVE_TY))?;
         let pt = ip.point_of_proof(&goal_in_u0, &out).ok_or_else(|| bad(MOTIVE_TY))?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| bad(MOTIVE_TY))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(|| bad(MOTIVE_TY))?;
         out = ip.retarget_subject(&out, &back).ok_or_else(|| bad(MOTIVE_TY))?;
         term = point;
     }
@@ -434,7 +435,7 @@ fn leibniz_in_motive(
 ) -> Option<Thm> {
     let (a, b) = eq.concl().as_eq()?;
     let (a, b) = (a.clone(), b.clone());
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let at_hole = ip.app(motive.clone(), Term::var(hole));
     let leib = Thm::eq_leibniz(a, b, hole, Formula::mem(subject.clone(), at_hole));
     Thm::mp(&Thm::mp(&leib, eq)?, mem)
@@ -577,7 +578,7 @@ pub(crate) fn inhabit(
 pub(crate) fn subset_of_unit(ip: &mut Interp, b: &Term, in_u0: &Thm) -> Option<Thm> {
     let unit_mem = ip.prelude.tower.sums.unit_mem.clone();
     let mut scopes = Scopes::new();
-    let tok = scopes.open(&mut ip.env, b.clone());
+    let tok = scopes.open(&mut ip.env_mut(), b.clone());
     let z_mem = scopes.get(0)?.assumption().clone();
     let z_pt = ip.point_of_proof(in_u0, &z_mem)?;
     let z_in_1 = ip.retarget_subject(&unit_mem, &z_pt)?;
@@ -700,7 +701,7 @@ mod tests {
             let (site, _) =
                 ip.as_lam(&cur).unwrap_or_else(|| panic!("⟦And.rec⟧ is not a λ at level {lv}"));
             let (skel, holes) = (site.skel.clone(), site.holes.clone());
-            let x = Term::var(ip.env.fresh_var());
+            let x = Term::var(ip.fresh_var());
             binders.push(x.clone());
             cur = ip.rebuild(&skel, &holes, &x);
         }

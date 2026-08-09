@@ -358,12 +358,13 @@ fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
 
     // `φ(z) := • ∈ app(⟦C⟧, z)` — the caller's own formula, which is the
     // whole reason `anything` takes one.
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let motive = xs[site.np].clone();
     let at_z = ip.app(motive.clone(), Term::var(zv));
     let phi = Formula::mem(point.clone(), at_z);
-    let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-    let Some(ed) = derived::inductive::EmptyDecl::over_declaration(kenv, &app.mach, &site.ind_obj)
+    let Some((mut kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+    let kenv = &mut *kenv;
+    let Some(ed) = derived::inductive::EmptyDecl::over_declaration(kenv, &app.mach.borrow(), &site.ind_obj)
     else {
         return gap(bad("no constructors: EmptyDecl"))
     };
@@ -517,12 +518,12 @@ fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
     // `• = t`: the subset of `1` has `•` for its only element.
     let pt_eq_t = derived::inst_all(&sums.unit_eta, std::slice::from_ref(&t))
         .and_then(|r| Thm::mp(&r, &t_in_1))
-        .and_then(|t_pt| derived::eq_symm(&mut ip.env, &t_pt));
+        .and_then(|t_pt| derived::eq_symm(&mut ip.env_mut(), &t_pt));
     let Some(pt_eq_t) = pt_eq_t else { return gap(Gap::ConvCompose("eq-rec-unit-eta")) };
 
     // Two Leibniz steps, in the order the two facts arrive: `a ↦ b` in the
     // motive's first argument, then `• ↦ t` in its second.
-    let x = ip.env.fresh_var();
+    let x = ip.fresh_var();
     let phi_a = Formula::mem(refl.clone(), {
         let m = ip.app(motive.clone(), Term::var(x));
         ip.app(m, point.clone())
@@ -531,7 +532,7 @@ fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
         .and_then(|i| Thm::mp(&i, &mems[3]));
     let Some(at_b) = at_b else { return gap(Gap::ConvCompose("eq-rec-motive-index")) };
 
-    let y = ip.env.fresh_var();
+    let y = ip.fresh_var();
     let phi_pt = Formula::mem(refl.clone(), {
         let m = ip.app(motive, b);
         ip.app(m, Term::var(y))
@@ -648,7 +649,7 @@ mod tests {
                         .as_lam(&cur)
                         .unwrap_or_else(|| panic!("⟦Eq.rec⟧ is not a λ at level {lv}"));
                     let (skel, holes) = (site.skel.clone(), site.holes.clone());
-                    let x = Term::var(ip.env.fresh_var());
+                    let x = Term::var(ip.fresh_var());
                     cur = ip.rebuild(&skel, &holes, &x);
                 }
             }

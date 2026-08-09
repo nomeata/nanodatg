@@ -242,7 +242,7 @@ pub fn mk_at(
     if beta.concl().as_eq()?.0 != *cod_tm {
         return None
     }
-    let back = derived::eq_symm(&mut ip.env, &beta)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &beta)?;
     if *mem.concl() != Formula::mem(term.clone(), bot) {
         return None
     }
@@ -319,7 +319,7 @@ pub fn ind_at(
 
     // ── at a fresh member of `A` ────────────────────────────────────────────
     let mut scopes = Scopes::new();
-    let tok = scopes.open(&mut ip.env, a.clone());
+    let tok = scopes.open(&mut ip.env_mut(), a.clone());
     let (xv, x, x_mem) = {
         let sc = scopes.get(0)?;
         (sc.var(), sc.term(), sc.assumption().clone())
@@ -343,14 +343,14 @@ pub fn ind_at(
     if sym != app_sym || args.len() != 2 || args[0] != *beta {
         return None
     }
-    let move_eq = derived::congr_arg(&mut ip.env, app_sym, &args, 1, &mk_beta)?;
+    let move_eq = derived::congr_arg(&mut ip.env_mut(), app_sym, &args, 1, &mk_beta)?;
     let at_class = ip.retarget_set(&at_x, &move_eq)?;
 
     // `q = class(A,R̄,x) → • ∈ app(β̄,q)`, under `x ∈ A`.
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let phi_hole = Formula::mem(point, ip.app(beta.clone(), Term::var(hole)));
     let leib = Thm::eq_leibniz(klass.clone(), q.clone(), hole, phi_hole);
-    let symm = derived::eq_symm_imp(&mut ip.env, q.clone(), klass);
+    let symm = derived::eq_symm_imp(&mut ip.env_mut(), q.clone(), klass);
     let chain = derived::syl(&symm, &leib)?;
     let step = derived::mpd_const(&chain, &at_class)?;
 
@@ -468,7 +468,7 @@ pub fn lift_at(
     let lift_mem = Thm::mp(&rule, &derived::and_intro(&f_in_fs, &compat))?;
 
     let dp_eq_q = at_dom(ip, &quot_t)?;
-    let back = derived::eq_symm(&mut ip.env, &dp_eq_q)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &dp_eq_q)?;
     let in_dp = ip.retarget_set(&lift_mem, &back)?;
 
     // `⟦Quot α r⟧` is a redex over the formation nest, and it sits in the
@@ -476,11 +476,11 @@ pub fn lift_at(
     // what makes this one congruence rather than a rebuild.
     let (_, beta_eq) =
         ip.beta_spine(former, &[a.clone(), r.clone()], &[a_mem.clone(), r_mem.clone()])?;
-    let onto = derived::eq_symm(&mut ip.env, &beta_eq)?;
+    let onto = derived::eq_symm(&mut ip.env_mut(), &beta_eq)?;
     let mut dargs = site.holes.clone();
     dargs.push(quot_t);
     let last = dargs.len().checked_sub(1)?;
-    let move_eq = derived::congr_arg(&mut ip.env, site.dp.dprod, &dargs, last, &onto)?;
+    let move_eq = derived::congr_arg(&mut ip.env_mut(), site.dp.dprod, &dargs, last, &onto)?;
     let out = ip.retarget_set(&in_dp, &move_eq)?;
     (*out.concl() == Formula::mem(term.clone(), cod_tm.clone())).then_some((term, out))
 }
@@ -528,7 +528,7 @@ pub(crate) fn rcompat_at(
     let site = &fsite;
 
     let mut scopes = Scopes::new();
-    let tok_x = scopes.open(&mut ip.env, a.clone());
+    let tok_x = scopes.open(&mut ip.env_mut(), a.clone());
     let (xv, x, x_mem) = {
         let sc = scopes.get(0)?;
         (sc.var(), sc.term(), sc.assumption().clone())
@@ -540,7 +540,7 @@ pub(crate) fn rcompat_at(
     }
     let at_x = ip.cond_app(&s1, a, h_mem, &x, &x_mem)?;
 
-    let tok_y = scopes.open(&mut ip.env, a.clone());
+    let tok_y = scopes.open(&mut ip.env_mut(), a.clone());
     let (yv, y, y_mem) = {
         let sc = scopes.get(0)?;
         (sc.var(), sc.term(), sc.assumption().clone())
@@ -556,7 +556,7 @@ pub(crate) fn rcompat_at(
     // is the pair membership, and `graph_pair` is the direction that owes `r`.
     let set3 = at_y.concl().as_mem()?.1;
     let PiShape::Prop { site: s3, dom: rel } = ip.as_pi(&set3)? else { return None };
-    let tok_w = scopes.open(&mut ip.env, rel.clone());
+    let tok_w = scopes.open(&mut ip.env_mut(), rel.clone());
     let (w, w_mem) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -693,7 +693,7 @@ pub fn sound_eq(
     }
     let rel_ty = ip.dprod_app(&s2, a, &mid.0, y, &at_x, y_mem)?;
     let pt = ip.point_of_proof(&rel_ty, h_mem)?;
-    let back = derived::eq_symm(&mut ip.env, &pt)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
     let holds = ip.retarget_subject(h_mem, &back)?;
 
     // **`pair_in_graph`, and this is the direction that owes the pair.**
@@ -729,9 +729,9 @@ pub fn sound_eq(
         &[ps[0].clone(), ps[1].clone(), y.clone()],
         &[pm[0].clone(), pm[1].clone(), y_mem.clone()],
     )?;
-    let left = derived::eq_trans(&mut ip.env, &bx, &classes)?;
-    let back_y = derived::eq_symm(&mut ip.env, &by)?;
-    derived::eq_trans(&mut ip.env, &left, &back_y)
+    let left = derived::eq_trans(&mut ip.env_mut(), &bx, &classes)?;
+    let back_y = derived::eq_symm(&mut ip.env_mut(), &by)?;
+    derived::eq_trans(&mut ip.env_mut(), &left, &back_y)
 }
 
 impl Interp {
@@ -744,7 +744,8 @@ impl Interp {
     pub fn quotient(&mut self) -> Option<Rc<QuotClause>> {
         if self.quotient.is_none() && !self.quotient_failed {
             let p = self.prelude.clone();
-            self.quotient = QuotClause::build(&mut self.env, &p).map(Rc::new);
+            let built = QuotClause::build(&mut self.env_mut(), &p).map(Rc::new);
+            self.quotient = built;
             self.quotient_failed = self.quotient.is_none();
         }
         self.quotient.clone()
@@ -787,7 +788,7 @@ mod tests {
     #[test]
     fn the_two_graphs_share_one_pairing() {
         let mut ip = Interp::new();
-        let (x, y) = (ip.env.fresh_var(), ip.env.fresh_var());
+        let (x, y) = (ip.fresh_var(), ip.fresh_var());
         let mine = ip.quotient().expect("builds").q.sums.ap.sets.clone();
         let theirs = ip.acc().expect("builds").sets.sets.clone();
         assert_eq!(
@@ -806,7 +807,7 @@ mod tests {
         let q = ip.quotient().expect("builds");
         for u in [1u32, 2] {
             let rung = ip.prelude.tower.at(u as usize).expect("a rung");
-            let (av, rv) = (ip.env.fresh_var(), ip.env.fresh_var());
+            let (av, rv) = (ip.fresh_var(), ip.fresh_var());
             let (a, r) = (Term::var(av), Term::var(rv));
             // The premise the checker would hold: `⟦α⟧ ∈ ⟦Sort u⟧`.
             let a_mem = crate::scope::test_support::assume(Formula::mem(a.clone(), rung.set.clone()));
@@ -824,7 +825,7 @@ mod tests {
     fn formation_declines_at_sort_zero() {
         let mut ip = Interp::new();
         let q = ip.quotient().expect("builds");
-        let (av, rv) = (ip.env.fresh_var(), ip.env.fresh_var());
+        let (av, rv) = (ip.fresh_var(), ip.fresh_var());
         let (a, r) = (Term::var(av), Term::var(rv));
         let a_mem = crate::scope::test_support::assume(Formula::mem(a.clone(), ip.sort(0)));
         assert!(q.formation(&mut ip, 0, &a, &r, &a_mem).is_none(), "there is no rung 0");

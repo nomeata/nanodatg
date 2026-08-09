@@ -276,7 +276,7 @@ fn build(
     // `χ ⊆ 1` unconditionally, so this needs nothing about the declaration.
     let chi_in_u0 = derived::inst_all(&site.cs.lic.in_u0, &sp_args).ok_or_else(|| bad(CARRIER))?;
     let t_pt = ip.point_of_proof(&chi_in_u0, &t_in_chi).ok_or_else(|| bad(CARRIER))?;
-    let pt_eq_t = derived::eq_symm(&mut ip.env, &t_pt).ok_or_else(|| bad(CARRIER))?;
+    let pt_eq_t = derived::eq_symm(&mut ip.env_mut(), &t_pt).ok_or_else(|| bad(CARRIER))?;
 
     // ── the minor, applied at the indices the map names ─────────────────────
     //
@@ -316,7 +316,7 @@ fn build(
     // there is no nest to β-reduce and no equation to compose, which is the one
     // place this is *simpler* than `crate::rec_prop` rather than harder.
     // Everything the permutation did is checked by the comparison below.
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let goal_at = |ip: &mut Interp, z: &Term| {
         let mut t = c_tm.clone();
         for x in &ix_tms {
@@ -353,7 +353,7 @@ fn build(
         args.push((t_tm.clone(), t_mem.clone()));
         let goal_in_u0 = apply_all(ip, &c_tm, &c_mem, &args).ok_or_else(|| bad(MINOR))?;
         let pt = ip.point_of_proof(&goal_in_u0, &out).ok_or_else(|| bad(MINOR))?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| bad(MINOR))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(|| bad(MINOR))?;
         out = ip.retarget_subject(&out, &back).ok_or_else(|| bad(MINOR))?;
         term = point;
     }

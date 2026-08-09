@@ -239,7 +239,7 @@ fn build(ip: &mut Interp, ac: &AccClause, site: &Site, at: &At) -> Result<Thm, G
 
     // `φ(z) := • ∈ app(app(⟦C⟧,z),•)` — the motive at `z` and at the proof of
     // `Acc α r z`, which is `•` because `Acc α r z` is a `Prop`.
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let phi = {
         let at_z = ip.app(cm.clone(), Term::var(zv));
         Formula::mem(point.clone(), ip.app(at_z, point.clone()))
@@ -254,12 +254,12 @@ fn build(ip: &mut Interp, ac: &AccClause, site: &Site, at: &At) -> Result<Thm, G
     let chi_a = derived::inst_all(&ac.acc_set_ax, &args_a).ok_or_else(|| bad(MAJOR))?;
     let phi_a = ac.phi(&a, &r, &aa);
     let in_u0 = tower
-        .cond_in_u0(&mut ip.env, &phi_a, &set_a, &chi_a)
+        .cond_in_u0(&mut ip.env_mut(), &phi_a, &set_a, &chi_a)
         .ok_or_else(|| bad(MAJOR))?;
     // `⟦t⟧ = •`: the proof binder ranges over a conditional singleton, so §6.2's
     // proof irrelevance applies to it exactly as it does inside `cond_app`.
     let t_pt = ip.point_of_proof(&in_u0, &t_in_set).ok_or_else(|| bad(MAJOR))?;
-    let pt_eq_t = derived::eq_symm(&mut ip.env, &t_pt).ok_or_else(|| bad(MAJOR))?;
+    let pt_eq_t = derived::eq_symm(&mut ip.env_mut(), &t_pt).ok_or_else(|| bad(MAJOR))?;
     let pt_in_set = ip.retarget_subject(&t_in_set, &pt_eq_t).ok_or_else(|| bad(MAJOR))?;
     let elim = cond_elim(&sums, &phi_a, &set_a, &chi_a).ok_or_else(|| bad(MAJOR))?;
     let a_in_acc = Thm::mp(&elim, &pt_in_set).ok_or_else(|| bad(MAJOR))?;
@@ -273,14 +273,14 @@ fn build(ip: &mut Interp, ac: &AccClause, site: &Site, at: &At) -> Result<Thm, G
     // own variable has to be one of them; `A` and `R` are then generalised and
     // instantiated at this nest's terms, which is `decl_rect`'s shape in
     // [`crate::rec_dep`] one declaration along.
-    let (av, rv) = (ip.env.fresh_var(), ip.env.fresh_var());
+    let (av, rv) = (ip.fresh_var(), ip.fresh_var());
     let params = [av, rv, at.vars[2]];
     let sets = ac.sets.clone();
-    let rule = acc_rect(&mut ip.env, &sets, &params, Params { a: av, r: rv }, zv, &phi)
+    let rule = acc_rect(&mut ip.env_mut(), &sets, &params, Params { a: av, r: rv }, zv, &phi)
         .ok_or_else(|| bad(RECT))?;
     // The premise `derived` rebuilds at these very terms — so what `ind_step_at`
     // produced is compared against A3's own statement and not merely used.
-    let want = ind_step(&mut ip.env, &sets, &sets.of(a.clone(), graph.clone()), &a, &graph, zv, &phi);
+    let want = ind_step(&mut ip.env_mut(), &sets, &sets.of(a.clone(), graph.clone()), &a, &graph, zv, &phi);
     if *step.concl() != want {
         return Err(bad(MINOR))
     }
@@ -291,7 +291,7 @@ fn build(ip: &mut Interp, ac: &AccClause, site: &Site, at: &At) -> Result<Thm, G
     let out = Thm::mp(&at_a, &a_in_acc).ok_or_else(|| bad(RECT))?;
 
     // ── `φ(⟦a⟧)` is the codomain with `•` where `⟦t⟧` stands ────────────────
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let c_at_a = ip.app(cm, aa);
     let at_hole = ip.app(c_at_a, Term::var(hole));
     let leib =
@@ -328,14 +328,14 @@ fn ind_step_at(
     let acc_t = ac.sets.of(a.clone(), graph.clone());
 
     let mut scopes = Scopes::new();
-    let tok_x = scopes.open(&mut ip.env, a.clone());
+    let tok_x = scopes.open(&mut ip.env_mut(), a.clone());
     let (x, x_mem) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
     };
 
     // The induction hypothesis, spelled as `derived::acc::ind_step` spells it.
-    let yv = ip.env.fresh_var();
+    let yv = ip.fresh_var();
     let y = Term::var(yv);
     let ih_formula = Formula::forall(
         yv,
@@ -451,7 +451,7 @@ pub(crate) fn preds(
     if d1 != a {
         return None
     }
-    let tok_y = sc.open(&mut ip.env, a.clone());
+    let tok_y = sc.open(&mut ip.env_mut(), a.clone());
     let (yv, y, y_mem) = {
         let s = sc.get(0)?;
         (s.var(), s.term(), s.assumption().clone())
@@ -462,7 +462,7 @@ pub(crate) fn preds(
     let inner = ip.rebuild(&skel, &holes, &y);
     let (l2, rel) = prop_pi(ip, &inner)?;
 
-    let tok_w = sc.open(&mut ip.env, rel.clone());
+    let tok_w = sc.open(&mut ip.env_mut(), rel.clone());
     let (wv, w_mem) = {
         let s = sc.get(0)?;
         (s.var(), s.assumption().clone())
@@ -473,7 +473,7 @@ pub(crate) fn preds(
     // twice and is the only place this clause reads `⟦r⟧`'s typing.
     let rel_in_u0 = rel_typing(ip, &r, &r_mem, &y, &y_mem, x, x_mem, &rel)?;
     let w_pt = ip.point_of_proof(&rel_in_u0, &w_mem)?;
-    let pt_eq_w = derived::eq_symm(&mut ip.env, &w_pt)?;
+    let pt_eq_w = derived::eq_symm(&mut ip.env_mut(), &w_pt)?;
     let pt_in_rel = ip.retarget_subject(&w_mem, &pt_eq_w)?;
 
     // `⟨y,x⟩ ∈ R̄` — hold Lean's curried `r`, owe the pair. See the header.
@@ -512,7 +512,7 @@ pub(crate) fn preds(
             // read backwards.
             let (_, beta) =
                 ip.beta_spine(&at.former, &args, &[a_mem, r_mem, y_mem.clone()])?;
-            let back = derived::eq_symm(&mut ip.env, &beta)?;
+            let back = derived::eq_symm(&mut ip.env_mut(), &beta)?;
             ip.retarget_set(&pt, &back)?
         }
     };

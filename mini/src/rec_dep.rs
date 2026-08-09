@@ -493,7 +493,7 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
     if set != ip.dprod_term(&c_fibre, spine.clone()) {
         return Err(bad(MOTIVE_TY))
     }
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let at_hole = ip.dprod_term(&c_fibre, Term::var(hole));
     let leib = Thm::eq_leibniz(
         spine.clone(),
@@ -901,8 +901,9 @@ pub(crate) fn crossings(
         let fun_ext = crate::conv::funspace_ext(ip)?;
         let ps = cx.ps.clone();
         let (tel, px, rx, in_funspace, roundtrip, pull_in_funspace, pull_roundtrip, at_tuple) = {
-            let (kenv, app, _) = ip.ind_parts()?;
-            let tel = app.mach.telescope(kenv, ps.len(), &g)?;
+            let (mut kenv, app, _) = ip.ind_parts()?;
+            let kenv = &mut *kenv;
+            let tel = app.mach.borrow_mut().telescope(kenv, ps.len(), &g)?;
             let px = app.push(kenv)?;
             let rx = app.reindex(kenv)?;
             // The slot's stated set really is *this* telescope's — the one
@@ -926,7 +927,7 @@ pub(crate) fn crossings(
             if a != tel.ty_of(own) {
                 return None
             }
-            let proj = &app.mach.proj;
+            let proj = &app.mach.borrow().proj;
             let inf = derived::sigma::push_in_funspace(kenv, &s, &tel, &px, &fs_app_mem)?;
             let rt = derived::sigma::push_pull_roundtrip(
                 kenv, &s, proj, &tel, &rx, &px, &fs_app_mem, &fun_ext,
@@ -986,13 +987,14 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
     let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let phi = Formula::mem(point.clone(), s.ap.apply(cx.c_tm.clone(), Term::var(zv)));
     let (rule, parts) = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let rule = decl_rect(kenv, &app.mach, &cx.ind, zv, &phi)
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
+        let rule = decl_rect(kenv, &app.mach.borrow(), &cx.ind, zv, &phi)
             .ok_or_else(|| bad("dependent recursor: structural induction"))?;
-        let parts = rect_parts(kenv, &app.mach, &cx.ind, zv, &phi)
+        let parts = rect_parts(kenv, &app.mach.borrow(), &cx.ind, zv, &phi)
             .ok_or_else(|| bad("dependent recursor: structural induction"))?;
         (rule, parts)
     };
@@ -1050,7 +1052,8 @@ pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<P
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
     let key = (site.ind, site.inst.clone());
     let dep = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.dep_recursor(kenv, &key, &cx.ind).ok_or({
             Gap::Recursor(
                 site.ind,
@@ -1159,7 +1162,8 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // as `zoneb`'s constructor bottom does.
     let raw = ap.apply(derived::subst_term(&dr.rec, &sub), cx.t_tm.clone());
     let (sym, ax) = {
-        let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
     };
     let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;
@@ -1196,7 +1200,7 @@ pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> 
         return None
     }
     let mut scopes = Scopes::new();
-    let tok_x = scopes.open(&mut ip.env, cx.w_term.clone());
+    let tok_x = scopes.open(&mut ip.env_mut(), cx.w_term.clone());
     let (xt, xm) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -1204,7 +1208,7 @@ pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> 
     let cx_at = ip.app(cx.c_tm.clone(), xt.clone());
     let cx_mem = ip.dprod_app(&cx.c_fibre, &cx.w_term, &cx.c_tm, &xt, &cx.c_in_fs, &xm)?;
 
-    let tok_y = scopes.open(&mut ip.env, cx_at.clone());
+    let tok_y = scopes.open(&mut ip.env_mut(), cx_at.clone());
     let (yt, ym) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -1321,7 +1325,7 @@ pub(crate) fn minor_at(
             None => shape.dom(),
             Some(cr) => s.fs.of(cr.a.clone(), cx.w_term.clone()),
         };
-        let tok = scopes.open(&mut ip.env, dom);
+        let tok = scopes.open(&mut ip.env_mut(), dom);
         let (wv, wt, wm) = {
             let sc = scopes.get(0)?;
             (sc.var(), sc.term(), sc.assumption().clone())
@@ -1351,7 +1355,7 @@ pub(crate) fn minor_at(
         if l >= k + m {
             let j = l - (k + m);
             if let Some(cr) = cross[j].as_ref() {
-                let vj = (!prop).then(|| ip.env.fresh_var());
+                let vj = (!prop).then(|| ip.fresh_var());
                 let vt = vj.map(Term::var);
                 ih_vs[j] = vj;
                 ih_imp[k + m + j] =
@@ -1395,7 +1399,7 @@ pub(crate) fn minor_at(
     if set != ap.apply(cx.c_tm.clone(), lhs.clone()) {
         return None
     }
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let leib = Thm::eq_leibniz(
         lhs,
         rhs.clone(),
@@ -1415,7 +1419,7 @@ pub(crate) fn minor_at(
         let ty_mem =
             ip.dprod_app(&cx.c_fibre, &cx.w_term, &cx.c_tm, &rhs, &cx.c_in_fs, &ctor_in_w)?;
         let pt = ip.point_of_proof(&ty_mem, &chain)?;
-        let back = derived::eq_symm(&mut ip.env, &pt)?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
         chain = ip.retarget_subject(&chain, &back)?;
     }
 
@@ -1494,7 +1498,7 @@ pub(crate) fn minor_at(
     atoms.extend((0..m).map(|j| match cross[j].as_ref() {
         None => Formula::mem(vs[j].clone(), ap.apply(cx.c_tm.clone(), ts[j].clone())),
         Some(cr) => {
-            let zv = ip.env.fresh_var();
+            let zv = ip.fresh_var();
             let tz = Term::var(zv);
             let val = if prop {
                 point.clone()
@@ -1516,7 +1520,7 @@ pub(crate) fn minor_at(
 
     // The equation that moves atom `a`'s set onto the one the interpretation
     // named, where the two are different sets with the same members.
-    let back = derived::eq_symm(&mut ip.env, &cx.w_eq)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &cx.w_eq)?;
     let mut set_eq: Vec<Option<Thm>> = Vec::with_capacity(atoms.len());
     for j in 0..k {
         let mut a = cx.ps.clone();
@@ -1536,8 +1540,10 @@ pub(crate) fn minor_at(
         }
         set_eq.push(match bridge.rec_eq.get(j).and_then(|o| o.as_ref()) {
             None => Some(back.clone()),
-            Some(eq) => derived::eq_symm(&mut ip.env, eq)
-                .and_then(|to_cod| eq_trans(ip, &back, &to_cod)),
+            Some(eq) => {
+                let sym = derived::eq_symm(&mut ip.env_mut(), eq);
+                sym.and_then(|to_cod| eq_trans(ip, &back, &to_cod))
+            }
         });
     }
     for _ in 0..m {
@@ -1636,7 +1642,7 @@ fn push_into_pi(
 
     let fs_sym = ip.prelude.fs_sym();
     let onto_gamma = derived::congr_arg(
-        &mut ip.env,
+        &mut ip.env_mut(),
         fs_sym,
         &[cr.beta0.clone(), cx.w_term.clone()],
         0,
@@ -1644,9 +1650,9 @@ fn push_into_pi(
     )?;
     let mem = ip.retarget_set(&mem, &onto_gamma)?;
 
-    let back = derived::eq_symm(&mut ip.env, &cx.w_eq)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &cx.w_eq)?;
     let onto_spine = derived::congr_arg(
-        &mut ip.env,
+        &mut ip.env_mut(),
         fs_sym,
         &[gamma.clone(), cx.w_term.clone()],
         1,
@@ -1655,7 +1661,7 @@ fn push_into_pi(
     let mem = ip.retarget_set(&mem, &onto_spine)?;
 
     let (cod, bridge) = ip.dprod_is_fs(&fsite, &gamma)?;
-    let unbridge = derived::eq_symm(&mut ip.env, &bridge)?;
+    let unbridge = derived::eq_symm(&mut ip.env_mut(), &bridge)?;
     // **The codomain has to reach the spine, and it need not *spell* it.** A
     // field written `∀z:α. constType (T α) (T α)` is a recursive argument —
     // `zoneb::rec_field` classifies it by its reduct and the constructor's own
@@ -1676,15 +1682,15 @@ fn push_into_pi(
         if eq.concl().as_eq() != Some((cod.clone(), spine.clone())) {
             return None
         }
-        let to_cod = derived::eq_symm(&mut ip.env, eq)?;
+        let to_cod = derived::eq_symm(&mut ip.env_mut(), eq)?;
         let onto_cod = derived::congr_arg(
-            &mut ip.env,
+            &mut ip.env_mut(),
             fs_sym,
             &[gamma.clone(), spine.clone()],
             1,
             &to_cod,
         )?;
-        derived::eq_trans(&mut ip.env, &onto_cod, &unbridge)?
+        derived::eq_trans(&mut ip.env_mut(), &onto_cod, &unbridge)?
     };
     let out = ip.retarget_set(&mem, &to_dom)?;
     let _ = s;
@@ -1743,15 +1749,15 @@ pub(crate) fn pull_from_pi(
             return None
         }
         let onto_spine =
-            derived::congr_arg(&mut ip.env, fs_sym, &[gamma.clone(), cod], 1, eq)?;
+            derived::congr_arg(&mut ip.env_mut(), fs_sym, &[gamma.clone(), cod], 1, eq)?;
         ip.retarget_set(&mem, &onto_spine)?
     };
-    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &cr.gamma_ax)?;
     let onto_beta =
-        derived::congr_arg(&mut ip.env, fs_sym, &[gamma, spine.clone()], 0, &back)?;
+        derived::congr_arg(&mut ip.env_mut(), fs_sym, &[gamma, spine.clone()], 0, &back)?;
     let mem = ip.retarget_set(&mem, &onto_beta)?;
     let onto_w = derived::congr_arg(
-        &mut ip.env,
+        &mut ip.env_mut(),
         fs_sym,
         &[cr.beta0.clone(), spine],
         1,
@@ -1825,7 +1831,7 @@ fn ih_transport(
     // `derived`'s atom, built here so that the caller's copy and this
     // derivation's cannot drift: [`minor_at`] rebuilds the same formula and
     // `at_atom` compares them.
-    let zv = ip.env.fresh_var();
+    let zv = ip.fresh_var();
     let tz = Term::var(zv);
     let atom = Formula::forall(
         zv,
@@ -1844,7 +1850,7 @@ fn ih_transport(
         None => cr.gamma.clone(),
         Some(_) => cr.beta0.clone(),
     };
-    let tok_b = sc.open(&mut ip.env, bdom);
+    let tok_b = sc.open(&mut ip.env_mut(), bdom);
     let (bv, bt, bm) = {
         let scope = sc.get(0)?;
         (scope.var(), scope.term(), scope.assumption().clone())
@@ -1854,7 +1860,7 @@ fn ih_transport(
     // introduction rule and `Push::app`'s side condition are stated at.
     let b_in_beta = match v {
         None => {
-            let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+            let back = derived::eq_symm(&mut ip.env_mut(), &cr.gamma_ax)?;
             ip.retarget_set(&bm, &back)?
         }
         Some(_) => bm.clone(),
@@ -1874,9 +1880,9 @@ fn ih_transport(
         &b_in_beta,
     )?;
     // `app(push(t,β₀), b) = app(t,⟨b,•⟩)`, wanted the other way round.
-    let beta = derived::eq_symm(&mut ip.env, &beta)?;
+    let beta = derived::eq_symm(&mut ip.env_mut(), &beta)?;
     let (lhs, rhs) = beta.concl().as_eq()?;
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let subject = value(&tup);
     let leib = Thm::eq_leibniz(
         lhs.clone(),
@@ -1906,7 +1912,7 @@ fn ih_transport(
             args.push(cr.beta0.clone());
             let idx = args.len() - 1;
             let onto_gamma =
-                derived::congr_arg(&mut ip.env, inner.dp.dprod, &args, idx, &cr.gamma_ax)?;
+                derived::congr_arg(&mut ip.env_mut(), inner.dp.dprod, &args, idx, &cr.gamma_ax)?;
             ip.retarget_set(&raw, &onto_gamma)?
         }
         _ => return None,
@@ -1961,7 +1967,7 @@ fn ctor_at_binders(
         if *rt.concl() != Formula::eq(ts[j].clone(), rec_ws[j].clone()) {
             return None
         }
-        let hole = ip.env.fresh_var();
+        let hole = ip.fresh_var();
         let mut ts_hole = ts.clone();
         ts_hole[j] = Term::var(hole);
         // **At `⟦p⃗⟧`, not at the declaration's own parameter variables.** A
@@ -1981,8 +1987,8 @@ fn ctor_at_binders(
         let (got, at_hole) = {
             let (_, app, _) = ip.ind_parts()?;
             (
-                cx.ind.ctor_term_at(&app.mach, i, ys, &ts, &cx.ps)?,
-                cx.ind.ctor_term_at(&app.mach, i, ys, &ts_hole, &cx.ps)?,
+                cx.ind.ctor_term_at(&app.mach.borrow(), i, ys, &ts, &cx.ps)?,
+                cx.ind.ctor_term_at(&app.mach.borrow(), i, ys, &ts_hole, &cx.ps)?,
             )
         };
         if out.concl().as_eq()?.1 != got {
@@ -2047,7 +2053,7 @@ fn at_atom(
             if eq.concl().as_eq()? != (s1.clone(), s2.clone()) {
                 return None
             }
-            let hole = ip.env.fresh_var();
+            let hole = ip.fresh_var();
             let leib = Thm::eq_leibniz(s1, s2, hole, Formula::mem(subj, Term::var(hole)));
             return derived::syl(&base, &Thm::mp(&leib, eq)?)
         }
@@ -2075,7 +2081,7 @@ fn eq_trans(ip: &mut Interp, xy: &Thm, yz: &Thm) -> Option<Thm> {
     if y1 != y2 {
         return None
     }
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let leib = Thm::eq_leibniz(y2, z, hole, Formula::eq(x, Term::var(hole)));
     Thm::mp(&leib, yz).and_then(|t| Thm::mp(&t, xy))
 }
@@ -2239,7 +2245,7 @@ mod tests {
                     .as_lam(&cur)
                     .unwrap_or_else(|| panic!("⟦L.rec⟧ is not a λ at level {lv}"));
                 let (skel, holes) = (site.skel.clone(), site.holes.clone());
-                let x = Term::var(ip.env.fresh_var());
+                let x = Term::var(ip.fresh_var());
                 cur = ip.rebuild(&skel, &holes, &x);
             }
         }
@@ -2339,10 +2345,11 @@ mod tests {
         }
         let s = ip.prelude.tower.sums.clone();
         let key = (l, Vec::new());
-        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let (mut kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let kenv = &mut *kenv;
         let ind = app.decls.get(&key).expect("translated").ind.clone();
         let w = ind.wty.clone();
-        let th = cod_at_funspace(kenv, &app.mach, &ind)
+        let th = cod_at_funspace(kenv, &app.mach.borrow(), &ind)
             .expect("cod_at_funspace was repaired in derived at c2bd75f");
         let (cv, vv) = (kenv.fresh_var(), kenv.fresh_var());
         let (tc, tv) = (Term::var(cv), Term::var(vv));

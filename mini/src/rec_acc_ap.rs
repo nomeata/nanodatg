@@ -144,20 +144,20 @@ impl Interp {
         let sums = self.prelude.tower.sums.clone();
         // **The clause's `Acc`, not a fresh one.** See the module header; this
         // one line is the whole of the trap.
-        let base = Base::over(&mut self.env, sums.clone(), ac.sets.clone())?;
-        let ra = RecAcc::over(&mut self.env, base)?;
-        let bounded = Bounded::build(&mut self.env, &ra)?;
-        let pred_closed = acc_pred_closed(&mut self.env, &ac.sets)?;
+        let base = Base::over(&mut self.env_mut(), sums.clone(), ac.sets.clone())?;
+        let ra = RecAcc::over(&mut self.env_mut(), base)?;
+        let bounded = Bounded::build(&mut self.env_mut(), &ra)?;
+        let pred_closed = acc_pred_closed(&mut self.env_mut(), &ac.sets)?;
         let g = RelGraph { s: &sums, graph: ac.graph, graph_ax: &ac.graph_ax };
         let edge_value = edge_is_relation_value(
-            &mut self.env,
+            &mut self.env_mut(),
             &g,
             ra.base.ep,
             &ra.base.ep_ax,
             &ac.graph_pair,
             &ac.pair_in_graph,
         )?;
-        let app_off_domain = derived::funcs::app_off_domain(&mut self.env, &sums.ap)?;
+        let app_off_domain = derived::funcs::app_off_domain(&mut self.env_mut(), &sums.ap)?;
         let out = RecAccApparatus { ra, bounded, pred_closed, edge_value, app_off_domain };
         out.all_unconditional().then_some(out)
     }

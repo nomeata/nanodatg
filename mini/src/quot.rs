@@ -298,7 +298,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
             if bot != xs[0] || beta.concl().as_eq().map(|(l, _)| l) != Some(cod_tm.clone()) {
                 return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
             }
-            let Some(back) = derived::eq_symm(&mut ip.env, &beta) else {
+            let Some(back) = derived::eq_symm(&mut ip.env_mut(), &beta) else {
                 return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
             };
             // `⟦a⟧ ∈ ⟦Quot α r⟧`, then `⟦a⟧ = •`, then the subject moves.
@@ -306,7 +306,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
                 .retarget_set(&a_mem, &back)
                 .and_then(|m| {
                     let pt = ip.point_of_proof(&cod_mem, &m)?;
-                    let sym = derived::eq_symm(&mut ip.env, &pt)?;
+                    let sym = derived::eq_symm(&mut ip.env_mut(), &pt)?;
                     ip.retarget_subject(&m, &sym)
                 })
                 .filter(|t| *t.concl() == kernel::Formula::mem(point.clone(), cod_tm.clone()));
@@ -358,11 +358,11 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
             // at; one congruence in `app`'s second argument is the rest.
             let out = (|| {
                 let pt = ip.point_of_proof(&a_in_u0, &q_in_a)?;
-                let back = derived::eq_symm(&mut ip.env, &pt)?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
                 let b_tm = at_q.concl().as_mem()?.1.clone();
                 let beta_fn = ip.parts_of(&b_tm)?.1.first()?.clone();
                 let move_eq =
-                    derived::congr_arg(&mut ip.env, app_sym, &[beta_fn, point.clone()], 1, &back)?;
+                    derived::congr_arg(&mut ip.env_mut(), app_sym, &[beta_fn, point.clone()], 1, &back)?;
                 ip.retarget_set(&at_q, &move_eq)
             })();
             match out {
@@ -426,10 +426,10 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
                 // `⟦α⟧ = ⟦Quot α r⟧`, then one congruence in the `Π` symbol's
                 // **last** argument, which is where `dprod_term`/`cond_term`
                 // put the domain.
-                let back = derived::eq_symm(&mut ip.env, &beta)?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &beta)?;
                 let (sym, args) = ip.parts_of(&set)?;
                 let last = args.len().checked_sub(1)?;
-                let move_eq = derived::congr_arg(&mut ip.env, sym, &args, last, &back)?;
+                let move_eq = derived::congr_arg(&mut ip.env_mut(), sym, &args, last, &back)?;
                 ip.retarget_set(&f_mem, &move_eq)
             })();
             match out {

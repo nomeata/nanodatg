@@ -228,15 +228,16 @@ pub(crate) fn build(
     let built = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let tower = ip.prelude.tower.clone();
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let params: Vec<FreeVar> = (0..np).map(|_| kenv.fresh_var()).collect();
         let ps: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
-        let ix = IndexSpace::build(kenv, &mut app.mach, &spec, &ps)
+        let ix = IndexSpace::build(kenv, &mut app.mach.borrow_mut(), &spec, &ps)
             .ok_or_else(|| bad("index space"))?;
         let ac = app.acc(kenv).ok_or(Gap::IndApparatus)?;
-        let lc = LeCarrier::build(kenv, &app.mach, &ac, &spec, &ix, &params)
+        let lc = LeCarrier::build(kenv, &app.mach.borrow(), &ac, &spec, &ix, &params)
             .ok_or_else(|| bad("class (S) carrier"))?;
-        let lp = LeProp::build(kenv, &app.mach, &spec, &ix, &lc, &params)
+        let lp = LeProp::build(kenv, &app.mach.borrow(), &spec, &ix, &lc, &params)
             .ok_or_else(|| bad("class (S) truth value"))?;
         // `⊢ A_φ(p⃗) ∈ U₀`, from the *same* three arguments every other
         // conditional singleton's typing is built from. It is unconditional —
@@ -400,7 +401,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             return gap(bad("field abbreviation"))
         };
         let Some(at) = inst_all(ax, &args) else { return gap(bad("field abbreviation instance")) };
-        let Some(back) = derived::eq_symm(&mut ip.env, &at) else {
+        let Some(back) = derived::eq_symm(&mut ip.env_mut(), &at) else {
             return gap(Gap::ConvCompose("class-s-field-symm"))
         };
         match ip.retarget_set(m, &back) {
@@ -444,7 +445,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     if *mem.concl() != Formula::mem(point.clone(), carrier) {
         return gap(bad("ctor is not about its own codomain"))
     }
-    let back = match derived::eq_symm(&mut ip.env, &spine_eq) {
+    let back = match derived::eq_symm(&mut ip.env_mut(), &spine_eq) {
         Some(t) => t,
         None => return gap(Gap::ConvCompose("class-s-spine-symm")),
     };

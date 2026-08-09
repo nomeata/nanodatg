@@ -180,13 +180,14 @@ pub(crate) fn build(
     let built = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let tower = ip.prelude.tower.clone();
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv_g, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv_g;
         let wrec = app.wrec(kenv).ok_or(Gap::IndApparatus)?;
         let tr = app.trunc(kenv).ok_or(Gap::IndApparatus)?;
         // The erased skeleton, exactly as `build_indexed` builds it: the indexed
         // carrier is carved *out of* it, so it must be the same object.
         let base = Rc::new(
-            Inductive::build(kenv, &mut app.mach, &walk.spec.base)
+            Inductive::build(kenv, &mut app.mach.borrow_mut(), &walk.spec.base)
                 .ok_or_else(|| bad("class (P) at an index: the skeleton"))?,
         );
         // **The §5.2 chain, with no universe chain beside it.** This is the
@@ -195,7 +196,7 @@ pub(crate) fn build(
         let ii = Rc::new(
             IndexedInductive::build(
                 kenv,
-                &mut app.mach,
+                &mut app.mach.borrow_mut(),
                 &base,
                 &walk.spec,
                 &wrec.rc,
@@ -205,7 +206,7 @@ pub(crate) fn build(
             .ok_or_else(|| bad("class (P) at an index: the indexed carrier"))?,
         );
         let tc = Rc::new(
-            TruncCarrier::over_family(kenv, &app.mach, &tower, &tr, &base, &ii.carrier)
+            TruncCarrier::over_family(kenv, &app.mach.borrow(), &tower, &tr, &base, &ii.carrier)
                 .ok_or_else(|| bad("class (P) at an index: the truncation carrier"))?,
         );
 
@@ -222,6 +223,8 @@ pub(crate) fn build(
         let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
         let at = inst_all(&tc.in_u0, &args).ok_or(Gap::ConvCompose("trunc-ix-in-u0"))?;
         let ax_at = inst_all(&ax, &args).ok_or(Gap::ConvCompose("trunc-ix-abbrev"))?;
+        // Release the `Env` guard before `ip` is borrowed again.
+        drop(kenv_g);
         let onto = ip.retarget_subject(&at, &ax_at).ok_or(Gap::ConvCompose("trunc-ix-subject"))?;
         let univ = derived::gen_all(&vars, &onto);
         let params = base.params.clone();
@@ -556,7 +559,7 @@ fn build_ctor(
         a.extend(ys[..j].iter().cloned());
         let ax = abbrev.get(j).ok_or_else(|| bad(FIELD))?;
         let unfold = inst_all(ax, &a).ok_or_else(|| bad(FIELD))?;
-        let back = derived::eq_symm(&mut ip.env, &unfold).ok_or_else(|| bad(FIELD))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &unfold).ok_or_else(|| bad(FIELD))?;
         let out = ip.retarget_set(mem, &back).ok_or_else(|| bad(FIELD))?;
         if *out.concl() != atoms_of(&tcc.trunc_atoms, j) {
             return Err(bad(FIELD))
@@ -597,7 +600,7 @@ fn build_ctor(
             .ok_or_else(|| bad(SPINE))?;
         let d_mem = at.rec_ty.get(j).ok_or_else(|| bad(REC_ARG))?;
         let pt = ip.point_of_proof(d_mem, r_mem).ok_or_else(|| bad(REC_ARG))?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| bad(REC_ARG))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(|| bad(REC_ARG))?;
         let at_pt = ip.retarget_subject(r_mem, &back).ok_or_else(|| bad(REC_ARG))?;
         let out = ip.retarget_set(&at_pt, &to_trunc).ok_or_else(|| bad(REC_ARG))?;
         if *out.concl() != atoms_of(&tcc.trunc_atoms, k + j) {
@@ -631,12 +634,12 @@ fn build_ctor(
         let mut i_args: Vec<Term> = ps.clone();
         i_args.extend(interps.iter().map(|(t, _)| t.clone()));
         let i_at = inst_all(i_ax, &i_args).ok_or_else(|| bad(RESULT))?;
-        let back = derived::eq_symm(&mut ip.env, &i_at).ok_or_else(|| bad(RESULT))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &i_at).ok_or_else(|| bad(RESULT))?;
         let onto = ip.retarget_set(&subj, &back).ok_or_else(|| bad(crate::ctor_ix::INDEX_TYPE))?;
         let i_sym = cp.walk.spec.indices.get(q).copied().ok_or_else(|| bad(RESULT))?;
         let cong = crate::ctor_ix::index_congr(ip, i_sym, &ps, &at.result[..q], &e_axs[..q], &e_args)
             .ok_or_else(|| bad(crate::ctor_ix::INDEX_TYPE))?;
-        let to_syms = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad(RESULT))?;
+        let to_syms = derived::eq_symm(&mut ip.env_mut(), &cong).ok_or_else(|| bad(RESULT))?;
         let out = ip.retarget_set(&onto, &to_syms).ok_or_else(|| bad(crate::ctor_ix::INDEX_TYPE))?;
         if *out.concl() != atoms_of(&tcc.trunc_atoms, nf + q) {
             return Err(bad(RESULT))
@@ -664,7 +667,7 @@ fn build_ctor(
     // ── `‖ind(p⃗, e⃗ᵢ)‖` back onto `⟦T p⃗ e⃗⟧` ──────────────────────────────────
     let to_trunc = carrier_eq(ip, &cp, &at.store_ty, &ps, param_mems, &at.result, e_axs, &e_args)
         .ok_or_else(|| bad(SPINE))?;
-    let back = derived::eq_symm(&mut ip.env, &to_trunc).ok_or_else(|| bad(SPINE))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &to_trunc).ok_or_else(|| bad(SPINE))?;
     let out = ip.retarget_set(&mem, &back).ok_or_else(|| bad(SPINE))?;
     let goal_set = {
         let mut a: Vec<Term> = ps.clone();
@@ -717,15 +720,15 @@ pub(crate) fn carrier_eq(
     }
     let (_, beta) = ip.beta_spine(store_ty, &a, &m)?;
     let cong = crate::ctor_ix::index_congr(ip, cp.sym, ps, xs, axs, iargs)?;
-    let to_syms = derived::eq_symm(&mut ip.env, &cong)?;
-    let onto = derived::eq_trans(&mut ip.env, &beta, &to_syms)?;
+    let to_syms = derived::eq_symm(&mut ip.env_mut(), &cong)?;
+    let onto = derived::eq_trans(&mut ip.env_mut(), &beta, &to_syms)?;
     let mut sym_args: Vec<Term> = ps.to_vec();
     for (k, _) in xs.iter().enumerate() {
         let at = inst_all(axs.get(k)?, iargs)?;
         sym_args.push(at.concl().as_eq()?.0);
     }
     let ax_at = inst_all(&cp.abbrev, &sym_args)?;
-    derived::eq_trans(&mut ip.env, &onto, &ax_at)
+    derived::eq_trans(&mut ip.env_mut(), &onto, &ax_at)
 }
 
 #[cfg(test)]

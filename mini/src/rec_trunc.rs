@@ -241,8 +241,8 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     // `TruncCarrier` states.
     let (_, beta) = ip.beta_spine(&at.former, &ps, &param_mems).ok_or_else(|| bad(CARRIER))?;
     let ax_at = derived::inst_all(&tt.abbrev, &ps).ok_or_else(|| bad(CARRIER))?;
-    let to_trunc = derived::eq_trans(&mut ip.env, &beta, &ax_at).ok_or_else(|| bad(CARRIER))?;
-    let from_trunc = derived::eq_symm(&mut ip.env, &to_trunc).ok_or_else(|| bad(CARRIER))?;
+    let to_trunc = derived::eq_trans(&mut ip.env_mut(), &beta, &ax_at).ok_or_else(|| bad(CARRIER))?;
+    let from_trunc = derived::eq_symm(&mut ip.env_mut(), &to_trunc).ok_or_else(|| bad(CARRIER))?;
     let (spine, _) = to_trunc.concl().as_eq().ok_or_else(|| bad(CARRIER))?;
     let t_in_carrier = ip.retarget_set(&t_mem, &to_trunc).ok_or_else(|| bad(CARRIER))?;
 
@@ -255,7 +255,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     op_args.push(t_tm.clone());
     let op = derived::inst_all(&tt.tc.only_point, &op_args).ok_or_else(|| bad(CARRIER))?;
     let t_is_pt = Thm::mp(&op, &t_in_carrier).ok_or_else(|| bad(CARRIER))?;
-    let back = derived::eq_symm(&mut ip.env, &t_is_pt).ok_or_else(|| bad(CARRIER))?;
+    let back = derived::eq_symm(&mut ip.env_mut(), &t_is_pt).ok_or_else(|| bad(CARRIER))?;
     let pt_in_spine = ip.retarget_subject(&t_mem, &back).ok_or_else(|| bad(CARRIER))?;
 
     // ── the motive is a function into `⟦Prop⟧` ──────────────────────────────
@@ -298,7 +298,8 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     // ── the rule, one per declaration ───────────────────────────────────────
     let key = (site.ind, site.inst.clone());
     let tr = {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.trunc_recursor(kenv, &key, &tt).ok_or({
             Gap::Recursor(
                 site.ind,
@@ -367,7 +368,7 @@ fn minor_at(ip: &mut Interp, site: &Site, cx: &Cx, tr: &TruncRecursor, i: usize)
     for _ in 0..nlev {
         let set = f_mem.concl().as_mem()?.1;
         let shape = ip.as_pi(&set)?;
-        let tok = scopes.open(&mut ip.env, shape.dom());
+        let tok = scopes.open(&mut ip.env_mut(), shape.dom());
         let (wv, wt, wm) = {
             let sc = scopes.get(0)?;
             (sc.var(), sc.term(), sc.assumption().clone())
@@ -397,7 +398,7 @@ fn minor_at(ip: &mut Interp, site: &Site, cx: &Cx, tr: &TruncRecursor, i: usize)
     let mut chain = f_mem.clone();
     if subject != point {
         let pt = ip.point_of_proof(&cx.cx_pt_mem, &f_mem)?;
-        let back = derived::eq_symm(&mut ip.env, &pt)?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
         chain = ip.retarget_subject(&chain, &back)?;
     }
 
@@ -498,7 +499,7 @@ fn at_atom(
     if eq.concl().as_eq()? != (s1.clone(), s2.clone()) {
         return None
     }
-    let hole = ip.env.fresh_var();
+    let hole = ip.fresh_var();
     let leib = Thm::eq_leibniz(s1, s2, hole, Formula::mem(subj, Term::var(hole)));
     derived::syl(&base, &Thm::mp(&leib, eq)?)
 }

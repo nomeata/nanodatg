@@ -91,7 +91,7 @@ impl Conv {
     /// step instead of a re-proof.
     pub fn then(self, ip: &mut Interp, next: Conv) -> Conv {
         let to = next.to;
-        let ev = self.ev.zip(next.ev, |a, b| match derived::eq_trans(&mut ip.env, &a, &b) {
+        let ev = self.ev.zip(next.ev, |a, b| match derived::eq_trans(&mut ip.env_mut(), &a, &b) {
             Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose("trans")),
         });
@@ -136,7 +136,7 @@ impl Conv {
 pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     let ap = ip.prelude.ap.app;
     f.clone().zip(a.clone(), |ef, ea| {
-        match derived::congr(&mut ip.env, ap, &[ef, ea]) {
+        match derived::congr(&mut ip.env_mut(), ap, &[ef, ea]) {
             Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose("symm")),
         }
@@ -165,7 +165,7 @@ pub fn beta_leg(
 ) -> Ev {
     let p = ip.prelude.clone();
     let Some(beta) =
-        derived::funcs::beta_conditional_n(&mut ip.env, &p.ap, site.t, site.lam, &site.lam_ax)
+        derived::funcs::beta_conditional_n(&mut ip.env_mut(), &p.ap, site.t, site.lam, &site.lam_ax)
     else {
         return Ev::missing(Gap::ConvCompose("app-cong"))
     };
@@ -198,8 +198,8 @@ pub fn beta_leg(
 /// building it two ways is exactly the drift that check exists to catch.
 pub fn funspace_ext(ip: &mut Interp) -> Option<Thm> {
     let p = ip.prelude.clone();
-    let app_pair = derived::ext::app_of_pair(&mut ip.env, &p.ap)?;
-    derived::ext::funspace_ext(&mut ip.env, &p.ap, &p.prod, &p.fs, &app_pair)
+    let app_pair = derived::ext::app_of_pair(&mut ip.env_mut(), &p.ap)?;
+    derived::ext::funspace_ext(&mut ip.env_mut(), &p.ap, &p.prod, &p.fs, &app_pair)
 }
 
 /// **`tryFunEta`**: two set-functions of the same space that agree pointwise
@@ -237,11 +237,11 @@ pub fn fun_eta_leg(
     to: E,
 ) -> Conv {
     let p = ip.prelude.clone();
-    let Some(app_pair) = derived::ext::app_of_pair(&mut ip.env, &p.ap) else {
+    let Some(app_pair) = derived::ext::app_of_pair(&mut ip.env_mut(), &p.ap) else {
         return Conv::gap(to, Gap::ConvCompose("app-of-pair"))
     };
     let Some(rule) =
-        derived::ext::funspace_ext(&mut ip.env, &p.ap, &p.prod, &p.fs, &app_pair)
+        derived::ext::funspace_ext(&mut ip.env_mut(), &p.ap, &p.prod, &p.fs, &app_pair)
     else {
         return Conv::gap(to, Gap::FunEta)
     };
@@ -285,10 +285,10 @@ mod tests {
         let prop = ip.sort(0);
 
         // The enclosing context: `a : Prop`.
-        let outer = sc.open(&mut ip.env, prop.clone());
+        let outer = sc.open(&mut ip.env_mut(), prop.clone());
         let a = sc.get(0).unwrap().term();
         // …and the λ, whose own binder is a *different* scope.
-        let inner = sc.open(&mut ip.env, prop.clone());
+        let inner = sc.open(&mut ip.env_mut(), prop.clone());
         let x = sc.get(0).unwrap().var();
         let site = ip.lam_site(&Term::var(x), x).expect("lam site");
         let _ = sc.close(inner);
@@ -369,7 +369,7 @@ mod tests {
         let prop = ip.sort(0);
 
         // `f := ⟦λ x:Prop. x⟧`, and `g` the same graph.
-        let tok = sc.open(&mut ip.env, prop.clone());
+        let tok = sc.open(&mut ip.env_mut(), prop.clone());
         let x = sc.get(0).unwrap().var();
         let site = ip.lam_site(&Term::var(x), x).expect("lam site");
         // `Γ ⊢ t(x) ∈ ⟦Prop⟧`, then discharge to the λ typing's premise.
@@ -383,7 +383,7 @@ mod tests {
         let f = ip.lam_term(&site, prop.clone());
 
         // Pointwise agreement of `f` with itself, over a fresh scope.
-        let tok = sc.open(&mut ip.env, prop.clone());
+        let tok = sc.open(&mut ip.env_mut(), prop.clone());
         let y = sc.get(0).unwrap().var();
         let refl = Thm::eq_refl(ip.app(f.clone(), Term::var(y)));
         let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &refl);

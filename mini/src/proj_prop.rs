@@ -164,7 +164,8 @@ pub(crate) fn typing(
     // projected expression does not already denote `•` — proof irrelevance,
     // which is sound because `A_φ ⊆ 1` whatever ψ is.
     let fields = {
-        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.prop_fields(kenv, &key, &cs).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -179,7 +180,7 @@ pub(crate) fn typing(
     } else {
         let a_in_u0 = derived::inst_all(&cs.in_u0, &ps).ok_or_else(|| miss!())?;
         let pt = ip.point_of_proof(&a_in_u0, &in_a).ok_or_else(|| miss!())?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| miss!())?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(|| miss!())?;
         ip.retarget_subject(&in_a, &back).ok_or_else(|| miss!())?
     };
 
@@ -285,7 +286,8 @@ fn trunc_typing(
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
-        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.trunc_fields(kenv, key, tt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -316,7 +318,7 @@ fn trunc_typing(
             .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&subject)))
             .and_then(|t| Thm::mp(&t, &in_t))
             .ok_or_else(|| miss!())?;
-        let back = derived::eq_symm(&mut ip.env, &only).ok_or_else(|| miss!())?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &only).ok_or_else(|| miss!())?;
         ip.retarget_subject(&in_t, &back).ok_or_else(|| miss!())?
     };
     if *major.concl() != Formula::mem(point.clone(), ab_r) {
@@ -472,7 +474,8 @@ fn decl_typing(
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
-        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.decl_fields(kenv, key, dt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;

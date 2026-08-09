@@ -267,7 +267,7 @@ pub fn intro_mem(
 
     // ── `∀y. (y ∈ A → (⟨y,x̄⟩ ∈ R̄ → y ∈ acc(A,R̄)))` ─────────────────────────
     let mut scopes = Scopes::new();
-    let tok_y = scopes.open(&mut ip.env, a.clone());
+    let tok_y = scopes.open(&mut ip.env_mut(), a.clone());
     let (y, y_mem) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -284,7 +284,7 @@ pub fn intro_mem(
     // …and at a proof of `r y x`, which is a scope rather than a certificate.
     let rel_set = at_y.concl().as_mem()?.1;
     let PiShape::Prop { site: inner, dom: rel } = ip.as_pi(&rel_set)? else { return None };
-    let tok_w = scopes.open(&mut ip.env, rel.clone());
+    let tok_w = scopes.open(&mut ip.env_mut(), rel.clone());
     let (w, w_mem) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
@@ -339,7 +339,8 @@ impl Interp {
     pub fn acc(&mut self) -> Option<Rc<AccClause>> {
         if self.acc.is_none() && !self.acc_failed {
             let sums = self.prelude.tower.sums.clone();
-            self.acc = AccClause::build(&mut self.env, &sums).map(Rc::new);
+            let built = AccClause::build(&mut self.env_mut(), &sums).map(Rc::new);
+            self.acc = built;
             self.acc_failed = self.acc.is_none();
         }
         self.acc.clone()
@@ -387,10 +388,11 @@ mod tests {
     fn the_two_acc_apparatus_share_one_pairing() {
         let mut ip = Interp::new();
         let mine = ip.acc().expect("builds").sets.sets.clone();
-        let (x, y) = (ip.env.fresh_var(), ip.env.fresh_var());
+        let (x, y) = (ip.fresh_var(), ip.fresh_var());
         let pair_here = mine.pair(Term::var(x), Term::var(y));
         let theirs = {
-            let (env, app, _) = ip.ind_parts().expect("the inductive apparatus builds");
+            let (mut env, app, _) = ip.ind_parts().expect("the inductive apparatus builds");
+            let env = &mut *env;
             app.acc(env).expect("the class-(S) acc builds").sets.clone()
         };
         assert_eq!(
@@ -410,9 +412,9 @@ mod tests {
     fn the_axiom_is_about_the_condition_this_module_states() {
         let mut ip = Interp::new();
         let a = ip.acc().expect("builds");
-        let (av, rv, xv) = (ip.env.fresh_var(), ip.env.fresh_var(), ip.env.fresh_var());
+        let (av, rv, xv) = (ip.fresh_var(), ip.fresh_var(), ip.fresh_var());
         let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
-        let z = ip.env.fresh_var();
+        let z = ip.fresh_var();
         let at = derived::inst_all(&a.acc_set_ax, &[ta.clone(), tr.clone(), tx.clone()])
             .and_then(|t| derived::inst_all(&t, &[Term::var(z)]))
             .expect("instantiates");

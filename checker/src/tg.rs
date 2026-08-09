@@ -1770,17 +1770,19 @@ impl Inductives {
     /// The whole development, over the prelude's own pairing, power set,
     /// product, function space and universe operator — so that `⟦Bool⟧` is a
     /// set built from the same operators every other rule speaks of.
-    fn build(env: &mut Env, pre: &Prelude) -> Option<Inductives> {
-        let sums = derived::sums::Sums::over(
-            env,
-            pre.ap.clone(),
-            pre.pow,
-            pre.pow_ax.clone(),
-            pre.prod.clone(),
-            pre.fs.clone(),
-        )?;
-        let wt = derived::wtype::Wtype::over(env, sums)?;
-        let bnd = derived::bound::Bound::over(env, &wt, pre.u_sym, pre.lu_ax.clone())?;
+    /// Over a **caller-supplied** `Wtype` and `Bound` — the [`EnvCore`]'s, so
+    /// that the enumerations, `N` and `List` here are welded to the same `W`
+    /// as the general path's [`derived::inductive::Machine`], on whichever
+    /// engine built it first. This used to mint its own `Sums` (over the
+    /// prelude's operators) and its own `Wtype`/`Bound`; the core builds the
+    /// pair over the prelude *tower's* own `Sums` instead, which is the
+    /// object `mini` was already using — one `sum`, one `W`, for both.
+    fn build(
+        env: &mut Env,
+        _pre: &Prelude,
+        wt: derived::wtype::Wtype,
+        bnd: derived::bound::Bound,
+    ) -> Option<Inductives> {
         let empty_u = derived::enums::empty_in_least_universe(env, &wt, &bnd)?;
         let mem = derived::enums::enum_mem(env, &wt, &bnd, &empty_u)?;
         let inj = derived::enums::enum_inj(env, &wt)?;
@@ -1837,6 +1839,144 @@ enum Lit {
     Str(String),
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The shared semantic core (ENV-UNIFY.md §3.3, tracks B1/B2).
+//
+// Everything that must be **one object per run** for two engines' certificates
+// to compose, behind one cheaply-cloneable handle: the kernel `Env` (one
+// brand, one counter pair — `Env` is deliberately not `Clone`, because two
+// copies would re-issue the same ids for different purposes), the canonical
+// skeleton variables (`x_canon` and the hole series, which appear inside
+// every skeleton key and so decide whether two engines' keys are equal
+// *terms*), and the W-type apparatus (`Wtype`, `Bound`, `Machine` — every
+// `Machine::over` mints a fresh `rec₊`, `⋂` and `MachineId`, so a second
+// build is a second family of symbols no theorem relates to the first's).
+//
+// `mini`'s `Interp::over` and this file's [`install_shared_core`] both take
+// one of these; `Interp::new` and the [`shared`] fallback mint a private one,
+// which reproduces the old two-`Env` behaviour exactly. The `Rc`s make the
+// handle `!Send`, and that is the concurrency decision, not an accident: the
+// evidence axis of a mixed run is single-threaded, and a thread that wants
+// its own apparatus gets its own core (today's per-thread `SHARED`
+// behaviour, unchanged).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The one-per-run semantic objects both engines must share for their
+/// certificates to compose, as a cloneable same-thread handle. See the header
+/// above for what belongs here and why.
+#[derive(Clone)]
+pub struct EnvCore {
+    /// The kernel signature and variable source — the brand.
+    env: Rc<std::cell::RefCell<Env>>,
+    /// The canonical binder slot every skeleton abstracts over.
+    pub x_canon: FreeVar,
+    /// The canonical hole-variable series, grown on demand by either engine.
+    /// Shared because a skeleton key contains `hole_var(i)` literally: two
+    /// series would make the same shape two different key terms.
+    hole_vars: Rc<std::cell::RefCell<Vec<FreeVar>>>,
+    /// The W-type and its bound, over the **prelude tower's own `Sums`**,
+    /// built once on first demand. The outer `Option` is "attempted", the
+    /// inner "succeeded" — a failed build is not retried.
+    wtb: Rc<std::cell::RefCell<Option<Option<(derived::wtype::Wtype, derived::bound::Bound)>>>>,
+    /// The one [`derived::inductive::Machine`], over that same `Wtype` and
+    /// `Bound`, built once on first demand. Same `Option` convention.
+    machine: Rc<
+        std::cell::RefCell<
+            Option<Option<Rc<std::cell::RefCell<derived::inductive::Machine>>>>,
+        >,
+    >,
+}
+
+impl EnvCore {
+    /// A fresh core: one `Env::new()`, fast-forwarded past this thread's
+    /// prelude, with the canonical binder slot minted. This is exactly the
+    /// preamble `Interp::new` and the old `shared()` each ran privately; a
+    /// caller that hands the *same* core to both engines is what makes their
+    /// symbols one signature.
+    pub fn fresh() -> EnvCore {
+        let pre = prelude();
+        let mut env = Env::new();
+        fast_forward(&mut env, &pre);
+        let x_canon = env.fresh_var();
+        EnvCore {
+            env: Rc::new(std::cell::RefCell::new(env)),
+            x_canon,
+            hole_vars: Rc::new(std::cell::RefCell::new(Vec::new())),
+            wtb: Rc::new(std::cell::RefCell::new(None)),
+            machine: Rc::new(std::cell::RefCell::new(None)),
+        }
+    }
+
+    /// The kernel `Env`, for the duration of one statement. Every use must be
+    /// short-lived: holding this across a call that itself reaches the core
+    /// panics on the re-entrant borrow.
+    pub fn env_mut(&self) -> std::cell::RefMut<'_, Env> { self.env.borrow_mut() }
+
+    /// Mint a fresh variable from the shared `Env`.
+    pub fn fresh_var(&self) -> FreeVar { self.env.borrow_mut().fresh_var() }
+
+    /// The `i`-th canonical hole variable, minting on demand. The series is
+    /// one series across every client of this core, whichever engine asks
+    /// first.
+    pub fn hole_var(&self, i: usize) -> FreeVar {
+        let mut hs = self.hole_vars.borrow_mut();
+        while hs.len() <= i {
+            let v = self.env.borrow_mut().fresh_var();
+            hs.push(v);
+        }
+        hs[i]
+    }
+
+    /// The `i`-th hole variable **if it has been minted**, without minting.
+    /// For the read-only "is this skeleton a bare hole" checks.
+    pub fn hole(&self, i: usize) -> Option<FreeVar> { self.hole_vars.borrow().get(i).copied() }
+
+    /// Whether two handles are the same core — one `Env`, one brand.
+    pub fn same_core(&self, other: &EnvCore) -> bool { Rc::ptr_eq(&self.env, &other.env) }
+
+    /// The shared `Wtype` and `Bound`, over the prelude tower's own `Sums`,
+    /// built on first demand. Clones share the underlying symbols, so a clone
+    /// *is* the shared apparatus.
+    pub fn wtype_bound(
+        &self,
+        pre: &Prelude,
+    ) -> Option<(derived::wtype::Wtype, derived::bound::Bound)> {
+        if let Some(r) = self.wtb.borrow().as_ref() {
+            return r.clone()
+        }
+        let built = {
+            let mut env = self.env.borrow_mut();
+            derived::wtype::Wtype::over(&mut env, pre.tower.sums.clone()).and_then(|wt| {
+                let bnd =
+                    derived::bound::Bound::over(&mut env, &wt, pre.u_sym, pre.lu_ax.clone())?;
+                Some((wt, bnd))
+            })
+        };
+        *self.wtb.borrow_mut() = Some(built.clone());
+        built
+    }
+
+    /// The one shared [`derived::inductive::Machine`], over
+    /// [`EnvCore::wtype_bound`]'s `Wtype` and `Bound`, built on first demand.
+    /// Both engines' inductive translations must be welded to this one — the
+    /// `MachineId` guards on `Inductive::is_over` are what enforce it.
+    pub fn machine(
+        &self,
+        pre: &Prelude,
+    ) -> Option<Rc<std::cell::RefCell<derived::inductive::Machine>>> {
+        if let Some(r) = self.machine.borrow().as_ref() {
+            return r.clone()
+        }
+        let built = self.wtype_bound(pre).and_then(|(wt, bnd)| {
+            let mut env = self.env.borrow_mut();
+            derived::inductive::Machine::over(&mut env, wt, bnd)
+        });
+        let m = built.map(|m| Rc::new(std::cell::RefCell::new(m)));
+        *self.machine.borrow_mut() = Some(m.clone());
+        m
+    }
+}
+
 /// The per-thread signature, and the derivations keyed on it.
 ///
 /// # Every `Thm` here is a [`Sealed`], and that is a rule rather than a habit
@@ -1855,16 +1995,16 @@ enum Lit {
 /// fails and none of this moves a measured number. It replaces an argument about
 /// today's callers with one about the code.
 struct Shared {
-    /// The kernel signature and variable source, shared by every backend on
-    /// this thread so that equal skeletons are equal *terms*.
-    env: Env,
+    /// The kernel signature, variable source and canonical skeleton
+    /// variables, shared by every backend on this thread so that equal
+    /// skeletons are equal *terms* — and, when a caller installed the core
+    /// ([`install_shared_core`]), shared with `mini`'s `Interp` too, so that
+    /// the *two engines'* skeletons are equal terms. The canonical variables
+    /// are reused across skeletons: they are abstracted away by
+    /// `define_abbrev` immediately and never escape.
+    core: EnvCore,
     /// The axiom-free interpretation symbols; copied into each backend.
     syms: Syms,
-    /// Canonical variables for skeletons, so that two lambdas with the same
-    /// body shape produce the *same* key. Reused across skeletons: they are
-    /// abstracted away by `define_abbrev` immediately and never escape.
-    hole_vars: Vec<FreeVar>,
-    x_canon: FreeVar,
     /// Head symbol (and, when built, graph machinery) per distinct skeleton.
     lam_infos: HashMap<Term, Rc<LamInfo>>,
     /// The same entries, found by the `lam` symbol instead of the skeleton.
@@ -1959,19 +2099,19 @@ struct Shared {
     /// The recursor for the **parameterised** shape — `List.rec` — on the same
     /// [`RecCore`] again.
     list_rec: Option<Option<Rc<ListRecursor>>>,
-    /// **The general path's apparatus**: one [`derived::inductive::Machine`]
-    /// per thread, built with [`derived::inductive::Machine::over`] on
-    /// [`Inductives`]'s own `Wtype` and `Bound`, so its carriers, [`RecCore`]
-    /// and the whole existing signature share one `W`, one function space, one
-    /// pairing and one universe operator. That sharing is the single
-    /// coordination point `RECURSOR-DESIGN.md` §7.4 warned about, and it is
-    /// satisfiable without touching `derived/`.
-    ///
-    /// A `RefCell` because `Inductive::build` needs `&mut Machine` (the
-    /// telescope and `Σ`-symbol caches grow) at the same time as `&mut Env`,
-    /// and the two live behind *different* cells so neither borrow is
-    /// re-entrant on the other.
-    machine: Option<Option<Rc<std::cell::RefCell<derived::inductive::Machine>>>>,
+    // **The general path's apparatus** — one [`derived::inductive::Machine`] —
+    // used to be a field here, per thread, built on [`Inductives`]'s own
+    // `Wtype` and `Bound`. It now lives one level down, in [`EnvCore`], over
+    // the *core's* `Wtype` and `Bound` — the same objects [`Inductives`] is
+    // built over — so that when the core is shared with `mini`, the two
+    // engines' carriers, [`RecCore`] and the whole signature share one `W`,
+    // one function space, one pairing and one universe operator. That sharing
+    // is the single coordination point `RECURSOR-DESIGN.md` §7.4 warned
+    // about, and it is still satisfied without touching `derived/`: the
+    // `RefCell` around the `Machine` is there because `Inductive::build`
+    // needs `&mut Machine` (the telescope and `Σ`-symbol caches grow) at the
+    // same time as `&mut Env`, and the two live behind *different* cells so
+    // neither borrow is re-entrant on the other.
     /// Translated declarations, keyed `(NamePtr::raw, interpreted levels)` —
     /// the [`Shared::const_syms`] convention. `None` memoises a **decline**, so
     /// a declaration that the walk refuses once does not re-run the walk per
@@ -2166,32 +2306,57 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// The thread's shared signature, created on first use.
-fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
+/// Install a caller-supplied [`EnvCore`] as the seed of this thread's
+/// [`Shared`] — the production route to one signature across both engines:
+/// hand the same core to `mini`'s `Interp::over` and to this. Must run before
+/// the thread's first `TgBackend` is built; panics if the thread already has
+/// a `Shared`, because replacing one mid-run would strand every symbol the
+/// old one minted.
+pub fn install_shared_core(core: EnvCore) {
+    SHARED.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "install_shared_core: this thread already has a Shared; installing the core must \
+             happen before the first TgBackend"
+        );
+        *slot.borrow_mut() = Some(new_shared(core));
+    })
+}
+
+/// The thread's shared signature, created on first use — over a private fresh
+/// [`EnvCore`] unless [`install_shared_core`] ran first.
+fn shared(_pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
     SHARED.with(|slot| {
         if let Some(s) = slot.borrow().as_ref() {
             return s.clone()
         }
-        let mut env = Env::new();
-        fast_forward(&mut env, pre);
-        let syms = Syms {
-            sort: env.declare(1),
-            pi: env.declare(2),
-            let_: env.declare(3),
-            proj: env.declare(2),
-            bvar: env.declare(1),
-            lzero: env.declare(0),
-            lsucc: env.declare(1),
-            lmax: env.declare(2),
-            limax: env.declare(2),
-            idx: env.declare(1),
+        let sh = new_shared(EnvCore::fresh());
+        *slot.borrow_mut() = Some(sh.clone());
+        sh
+    })
+}
+
+/// A [`Shared`] over `core`, with the ten structure symbols minted from it.
+fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
+    {
+        let syms = {
+            let mut env = core.env_mut();
+            Syms {
+                sort: env.declare(1),
+                pi: env.declare(2),
+                let_: env.declare(3),
+                proj: env.declare(2),
+                bvar: env.declare(1),
+                lzero: env.declare(0),
+                lsucc: env.declare(1),
+                lmax: env.declare(2),
+                limax: env.declare(2),
+                idx: env.declare(1),
+            }
         };
-        let x_canon = env.fresh_var();
         let sh = Rc::new(std::cell::RefCell::new(Shared {
-            env,
+            core,
             syms,
-            hole_vars: Vec::new(),
-            x_canon,
             lam_infos: HashMap::new(),
             lam_by_lam: HashMap::new(),
             lam_betas: HashMap::new(),
@@ -2214,7 +2379,6 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             bool_rec: None,
             nat_rec: None,
             list_rec: None,
-            machine: None,
             gen_inds: HashMap::new(),
             gen_recs: HashMap::new(),
             opaque_syms: HashMap::new(),
@@ -2230,15 +2394,19 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
         }));
-        *slot.borrow_mut() = Some(sh.clone());
         sh
-    })
+    }
 }
 
 /// The Tarski–Grothendieck backend.
 pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// The signature, and everything keyed on it, shared per thread.
     shared: Rc<std::cell::RefCell<Shared>>,
+    /// The [`Shared`]'s own [`EnvCore`], cloned out so the `Env` and the
+    /// canonical variables are reachable without borrowing `Shared` — the
+    /// two live behind different cells, so neither borrow is re-entrant on
+    /// the other.
+    core: EnvCore,
     /// The application machinery and the universe operator, shared per thread.
     pre: Rc<Prelude>,
     /// The checker's declaration environment, used to resolve a constant to its
@@ -3235,12 +3403,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     pub fn new(decls: &'x crate::env::Env<'x, 't>) -> Self {
         let pre = prelude();
         let shared = shared(&pre);
-        let (syms, x_canon) = {
+        let (syms, core) = {
             let sh = shared.borrow();
-            (sh.syms, sh.x_canon)
+            (sh.syms, sh.core.clone())
         };
+        let x_canon = core.x_canon;
         TgBackend {
             shared,
+            core,
             pre,
             decls,
             const_defs: HashMap::new(),
@@ -3293,9 +3463,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// Every use is deliberately short-lived: holding this across a call that
     /// itself reaches the shared state would panic on the re-entrant borrow.
-    fn env_mut(&self) -> std::cell::RefMut<'_, Env> {
-        std::cell::RefMut::map(self.shared.borrow_mut(), |s| &mut s.env)
-    }
+    fn env_mut(&self) -> std::cell::RefMut<'_, Env> { self.core.env_mut() }
 
     /// Build `f(args)` and remember its shape, so that [`Self::skeleton`] can
     /// take it apart again later.
@@ -4020,15 +4188,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some((t, ax))
     }
 
-    /// The `i`-th canonical hole variable, allocating on demand.
-    fn hole_var(&mut self, i: usize) -> FreeVar {
-        let mut sh = self.shared.borrow_mut();
-        while sh.hole_vars.len() <= i {
-            let v = sh.env.fresh_var();
-            sh.hole_vars.push(v);
-        }
-        sh.hole_vars[i]
-    }
+    /// The `i`-th canonical hole variable, allocating on demand — from the
+    /// [`EnvCore`], so the series is one series across both engines.
+    fn hole_var(&mut self, i: usize) -> FreeVar { self.core.hole_var(i) }
 
     /// The graph machinery for a skeleton, if that skeleton has been seen.
     fn lam_info(&self, key: &Term) -> Option<Rc<LamInfo>> { self.shared.borrow().lam_infos.get(key).cloned() }
@@ -4053,15 +4215,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// in another crate. So [`skeleton_recorded`] keeps the old behaviour here,
     /// and `TgBackend::parts` keeps its reason to exist.
     fn skeleton(&mut self, t: &Term, v: FreeVar, holes: &mut Vec<Term>) -> Option<Term> {
-        let shared = self.shared.clone();
-        let mut hole_var = |i: usize| -> FreeVar {
-            let mut sh = shared.borrow_mut();
-            while sh.hole_vars.len() <= i {
-                let h = sh.env.fresh_var();
-                sh.hole_vars.push(h);
-            }
-            sh.hole_vars[i]
-        };
+        let core = self.core.clone();
+        let mut hole_var = |i: usize| -> FreeVar { core.hole_var(i) };
         skeleton_recorded(&mut self.parts, self.x_canon, &mut hole_var, t, v, holes)
     }
 
@@ -4655,10 +4810,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return r
         }
         let pre = self.pre.clone();
-        let built = {
+        // The `Wtype` and `Bound` come from the core — the same pair the
+        // [`derived::inductive::Machine`] is built over, on either engine —
+        // and the borrow is released before `Inductives::build` takes the
+        // `Env`.
+        let wtb = self.core.wtype_bound(&pre);
+        let built = wtb.and_then(|(wt, bnd)| {
             let mut env = self.env_mut();
-            Inductives::build(&mut env, &pre)
-        };
+            Inductives::build(&mut env, &pre, wt, bnd)
+        });
         let r = built.map(Rc::new);
         self.shared.borrow_mut().inds = Some(r.clone());
         r
@@ -6682,17 +6842,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The thread's [`derived::inductive::Machine`], built on first use over
     /// [`Inductives`]'s `Wtype` and `Bound`.
     fn machine(&mut self) -> Option<Rc<std::cell::RefCell<derived::inductive::Machine>>> {
-        if let Some(m) = self.shared.borrow().machine.clone() {
-            return m
-        }
-        let inds = self.inductives();
-        let built = inds.and_then(|inds| {
-            let mut env = self.env_mut();
-            derived::inductive::Machine::over(&mut env, inds.wt.clone(), inds.bnd.clone())
-        });
-        let m = built.map(|m| Rc::new(std::cell::RefCell::new(m)));
-        self.shared.borrow_mut().machine = Some(m.clone());
-        m
+        self.core.machine(&self.pre)
     }
 
     /// **The translated declaration** for `ind_name` at `levels`, from the

@@ -650,8 +650,8 @@ fn walk(
                             sm.extend(ds.iter().map(|(_, t)| t.clone()));
                             let (_, beta) =
                                 ip.beta_spine(&at.former, &sa, &sm).ok_or_else(fail)?;
-                            let back = derived::eq_symm(&mut ip.env, &beta).ok_or_else(fail)?;
-                            derived::eq_trans(&mut ip.env, &cong, &back).ok_or_else(fail)?
+                            let back = derived::eq_symm(&mut ip.env_mut(), &beta).ok_or_else(fail)?;
+                            derived::eq_trans(&mut ip.env_mut(), &cong, &back).ok_or_else(fail)?
                         }
                         // `‖ind(p⃗,d⃗ᵢⱼ)‖ = ⟦T p⃗ d⃗⟧`: the same two steps and one
                         // more, since `⟦T p⃗ d⃗⟧` is the *truncation*. The
@@ -670,7 +670,7 @@ fn walk(
                                 &a,
                             )
                             .ok_or_else(fail)?;
-                            derived::eq_symm(&mut ip.env, &fwd).ok_or_else(fail)?
+                            derived::eq_symm(&mut ip.env_mut(), &fwd).ok_or_else(fail)?
                         }
                     };
                     // The drift check, and it is the same one at both routes:
@@ -727,10 +727,10 @@ fn walk(
                 None => ceqs.push(Thm::eq_refl(child)),
                 Some((ty_mem, mem)) => {
                     let pt = ip.point_of_proof(&ty_mem, &mem).ok_or_else(fail)?;
-                    ceqs.push(derived::eq_symm(&mut ip.env, &pt).ok_or_else(fail)?);
+                    ceqs.push(derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(fail)?);
                 }
             }
-            motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?
+            motive_congr_of(&mut ip.env_mut(), &s, &at.c_tm, &ceqs).ok_or_else(fail)?
         };
         if eq.concl().as_eq() != Some((ddom, idom.clone())) {
             return Err(fail())
@@ -796,7 +796,7 @@ fn walk(
             return Err(bad(SORTS))
         }
         let pt = ip.point_of_proof(&ty_mem, &f_mem).ok_or_else(fail)?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(fail)?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &pt).ok_or_else(fail)?;
         f_mem = ip.retarget_subject(&f_mem, &back).ok_or_else(fail)?;
     }
 
@@ -818,7 +818,7 @@ fn walk(
     let mut ceqs: Vec<Thm> = Vec::with_capacity(ni + 1);
     for ax in e_axs {
         let fwd = derived::inst_all(ax, &e_args).ok_or_else(fail)?;
-        ceqs.push(derived::eq_symm(&mut ip.env, &fwd).ok_or_else(fail)?);
+        ceqs.push(derived::eq_symm(&mut ip.env_mut(), &fwd).ok_or_else(fail)?);
     }
     // **The conclusion's third argument.** At class (T) it is the constructor
     // term, and getting from `⟦T.ctorᵢ p⃗ y⃗ r⃗⟧` to `ctorᵢ(y⃗,r⃗)` is β down the
@@ -833,13 +833,13 @@ fn walk(
                 ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems).ok_or_else(fail)?;
             // Over `p⃗ ++ f⃗`, which is `sp_args` — see `ctor_ix::ctor_abbrevs`.
             let cax = derived::inst_all(&t.ctor_abbrev[i].1, &sp_args).ok_or_else(fail)?;
-            derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(fail)?
+            derived::eq_trans(&mut ip.env_mut(), &cbeta, &cax).ok_or_else(fail)?
         }
         None => Thm::eq_refl(ip.point()),
     };
     ceqs.push(last);
     let s = ip.prelude.tower.sums.clone();
-    let move_eq = motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?;
+    let move_eq = motive_congr_of(&mut ip.env_mut(), &s, &at.c_tm, &ceqs).ok_or_else(fail)?;
     let concl = ip.retarget_set(&f_mem, &move_eq).ok_or_else(fail)?;
 
     let atoms: Vec<Formula> = src.iter().map(|f| subst_f(f, &sub)).collect();
@@ -887,9 +887,9 @@ pub(crate) fn domain_swap(
     let w = closed.var();
     let phi = inner.concl().clone();
     let discharged = closed.discharge(inner).ok()?;
-    let x = ip.env.fresh_var();
+    let x = ip.fresh_var();
     let at = Formula::forall(w, Formula::imp(Formula::mem(Term::var(w), Term::var(x)), phi));
-    let back = derived::eq_symm(&mut ip.env, eq)?;
+    let back = derived::eq_symm(&mut ip.env_mut(), eq)?;
     let leib = Thm::eq_leibniz(idom, ddom, x, at);
     Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
 }

@@ -180,8 +180,9 @@ pub(crate) fn term(mach: &Machine, j: usize, z: Term) -> Term {
 /// rebuild, and the equality check that guarded it against rebuilding a term
 /// the theorems are not about, are both gone: this is `proj_of`.
 fn term_at(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Term> {
-    let mach = &ip.ind_apparatus()?.mach;
-    Some(term(mach, j, z))
+    let mach = ip.ind_apparatus()?.mach.clone();
+    let m = mach.borrow();
+    Some(term(&m, j, z))
 }
 
 /// **The inverse of [`term_at`]**: `πⱼ(z) ↦ z`, by peeling the applicative
@@ -202,8 +203,9 @@ fn term_at(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Term> {
 /// [`Interp::parts_of`]: crate::interp::Interp::parts_of
 pub(crate) fn subject_of(ip: &mut crate::interp::Interp, j: usize, t: &Term) -> Option<Term> {
     let (inter, un, up, app) = {
-        let mach = &ip.ind_apparatus()?.mach;
-        (mach.proj.inter, mach.wt.sums.ap.sets.un, mach.wt.sums.ap.sets.up, mach.wt.sums.ap.app)
+        let mach = ip.ind_apparatus()?.mach.clone();
+        let m = mach.borrow();
+        (m.proj.inter, m.wt.sums.ap.sets.un, m.wt.sums.ap.sets.up, m.wt.sums.ap.app)
     };
     // `π₁ p = ⋃(⋂p)` — two layers, both recorded.
     let un_fst = |t: &Term| -> Option<Term> {
@@ -239,8 +241,9 @@ pub(crate) fn subject_of(ip: &mut crate::interp::Interp, j: usize, t: &Term) -> 
     // The drift check every other route in this file makes: rebuilding must
     // give back the term we were handed, so a peel that walked into the wrong
     // component is `None` rather than a subject that is not this one.
-    let mach = &ip.ind_apparatus()?.mach;
-    (*t == term(mach, j, z.clone())).then_some(z)
+    let mach = ip.ind_apparatus()?.mach.clone();
+    let m = mach.borrow();
+    (*t == term(&m, j, z.clone())).then_some(z)
 }
 
 /// **`Γ ⊢ ⟦projⱼ s⟧ = ⟦projⱼ s₂⟧` from `Γ ⊢ ⟦s⟧ = ⟦s₂⟧`** — the leg `whnf`'s
@@ -282,7 +285,7 @@ pub(crate) fn stuck_leg(
         return Ev::missing(Gap::NoEndpoint)
     };
     let Some((_, app, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
-    let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
+    let (ap, inter) = (app.mach.borrow().wt.sums.ap.clone(), app.mach.borrow().proj.inter);
     let g = move |t: Term| {
         let mut cur = derived::proj::snd_of(&ap, inter, derived::proj::fst_of(&ap, inter, t));
         for _ in 0..j {
@@ -290,7 +293,8 @@ pub(crate) fn stuck_leg(
         }
         derived::proj::fst_of(&ap, inter, cur)
     };
-    let Some((kenv, _, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
+    let Some((mut kenv, _, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
+    let kenv = &mut *kenv;
     let Some(out) = congr_of(kenv, &g, &eq) else { return Ev::missing(Gap::NoEndpoint) };
     if out.concl().as_eq() != Some((la, rb)) {
         return Ev::missing(Gap::NoEndpoint)
@@ -523,7 +527,8 @@ pub(crate) fn typing(
     let former = c.stored_term(ind, &inst).ok_or_else(|| miss!())?;
     let (ps, param_mems) = c.nest_arg_typings(&former, &ind_ty, &args[..np])?;
     let dp = {
-        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.decl_proj(kenv, &key, &dt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -698,8 +703,9 @@ pub(crate) fn iota(
     // apparatus is borrowed beside `env`. It is the same composition, which is
     // [`term_at`] and therefore [`term`] and therefore `proj_of` itself.
     let lhs = term_at(ip, j, s_tm).ok_or_else(|| miss!())?;
-    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-    let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
+    let (mut kenv_g, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let kenv = &mut *kenv_g;
+    let (ap, inter) = (app.mach.borrow().wt.sums.ap.clone(), app.mach.borrow().proj.inter);
     let g = move |t: Term| {
         let mut cur = derived::proj::snd_of(&ap, inter, derived::proj::fst_of(&ap, inter, t));
         for _ in 0..j {
@@ -708,10 +714,12 @@ pub(crate) fn iota(
         derived::proj::fst_of(&ap, inter, cur)
     };
     let under = congr_of(kenv, &g, &ceq).ok_or_else(|| miss!())?;
-    let rule = computes(kenv, &app.mach, &dt.ind, j, &fields).ok_or_else(|| miss!())?;
-    if rule.concl().as_eq().map(|(l, _)| l) != Some(term(&app.mach, j, ctor_tm)) {
+    let rule = computes(kenv, &app.mach.borrow(), &dt.ind, j, &fields).ok_or_else(|| miss!())?;
+    if rule.concl().as_eq().map(|(l, _)| l) != Some(term(&app.mach.borrow(), j, ctor_tm)) {
         return Err(miss!())
     }
+    // Release the `Env` guard before `c` is borrowed again below.
+    drop(kenv_g);
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let out = crate::rec_dep::eq_trans_pub(ip, &under, &rule).ok_or_else(|| miss!())?;
     let rhs = arg_tms.get(np + j).cloned().ok_or_else(|| miss!())?;
@@ -812,7 +820,8 @@ pub(crate) fn structure_eta(
     let ps: Vec<Term> = arg_tms[..np].to_vec();
     let p_mems: Vec<Thm> = c_mems[..np].to_vec();
     let dp = {
-        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         app.decl_proj(kenv, &key, &dt).ok_or_else(|| miss!())?
     };
 
@@ -854,19 +863,24 @@ pub(crate) fn structure_eta(
     let mut cur = fields.clone();
     let mut moved = Thm::eq_refl(step1.concl().as_eq().ok_or_else(|| miss!())?.1);
     for (i, conv) in convs.iter().enumerate() {
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let (mach, indc) = (&app.mach, &dt.ind);
-        let before = cur.clone();
-        // The `unwrap_or` can only fire if `ctor_term` refuses, which it cannot
-        // here — `before` has the constructor's own arity and `dt.ind` is over
-        // this machine, both checked above — and a wrong term would be caught
-        // by `congr_of`'s reflexivity step rather than believed.
-        let g = |t: Term| {
-            let mut a = before.clone();
-            a[i] = t;
-            indc.ctor_term(mach, 0, &a, &[]).unwrap_or_else(|| a[i].clone())
+        // Scoped so the `Env` guard drops before `ip` is borrowed again below.
+        let step = {
+            let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let kenv = &mut *kenv;
+            let (mach, indc) = (&*app.mach.borrow(), &dt.ind);
+            let before = cur.clone();
+            // The `unwrap_or` can only fire if `ctor_term` refuses, which it
+            // cannot here — `before` has the constructor's own arity and
+            // `dt.ind` is over this machine, both checked above — and a wrong
+            // term would be caught by `congr_of`'s reflexivity step rather
+            // than believed.
+            let g = |t: Term| {
+                let mut a = before.clone();
+                a[i] = t;
+                indc.ctor_term(mach, 0, &a, &[]).unwrap_or_else(|| a[i].clone())
+            };
+            congr_of(kenv, &g, conv).ok_or_else(|| miss!())?
         };
-        let step = congr_of(kenv, &g, conv).ok_or_else(|| miss!())?;
         moved = crate::rec_dep::eq_trans_pub(ip, &moved, &step).ok_or_else(|| miss!())?;
         cur[i] = pis[i].clone();
     }
@@ -947,7 +961,7 @@ pub(crate) fn proj_congr(
     let (lhs, rhs) = {
         let l = term_at(ip, j, x1).ok_or_else(|| miss!())?;
         let (_, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
+        let (ap, inter) = (app.mach.borrow().wt.sums.ap.clone(), app.mach.borrow().proj.inter);
         let g = move |t: Term| {
             let mut cur = derived::proj::snd_of(&ap, inter, derived::proj::fst_of(&ap, inter, t));
             for _ in 0..j {
@@ -955,7 +969,8 @@ pub(crate) fn proj_congr(
             }
             derived::proj::fst_of(&ap, inter, cur)
         };
-        let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let out = congr_of(kenv, &g, &eq).ok_or_else(|| miss!())?;
         let (l2, r2) = out.concl().as_eq().ok_or_else(|| miss!())?;
         if l2 != l {

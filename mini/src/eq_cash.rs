@@ -410,7 +410,7 @@ pub fn cash_stmt(c: &mut Checker<'_, '_>, stmt: &E, mem: Thm) -> Result<Cashed, 
                 .ok_or_else(|| gap!(Gap::ConvCompose("eq-cash-proof-irrelevance")))?;
             // `point_of_proof` proves `⟦proof⟧ = •`; the subject moves along
             // its symmetric, which is what `retarget_subject` takes.
-            let back = derived::eq_symm(&mut ip.env, &to_pt)
+            let back = derived::eq_symm(&mut ip.env_mut(), &to_pt)
                 .ok_or_else(|| gap!(Gap::ConvCompose("eq-cash-subject-symm")))?;
             ip.retarget_subject(&mem, &back)
                 .ok_or_else(|| gap!(Gap::ConvCompose("eq-cash-subject")))?

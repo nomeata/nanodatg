@@ -201,7 +201,8 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         let key = (site.ind, site.inst.clone());
         let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-        let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+        let Some((mut kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+        let kenv = &mut *kenv;
         match app.indexed_prop_recursor(kenv, &key, &base, fam) {
             Some(r) => r,
             None => return gap(Gap::Recursor(site.ind, RULE, Cause::Library)),

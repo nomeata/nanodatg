@@ -158,10 +158,11 @@ pub(crate) fn build(
     let built = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let tower = ip.prelude.tower.clone();
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let kenv = &mut *kenv;
         let params: Vec<FreeVar> = (0..np).map(|_| kenv.fresh_var()).collect();
         let ps: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
-        let ix = IndexSpace::build(kenv, &mut app.mach, &walk.spec, &ps)
+        let ix = IndexSpace::build(kenv, &mut app.mach.borrow_mut(), &walk.spec, &ps)
             .ok_or_else(|| bad("class (S) at an index: the index space"))?;
         let ac = app.acc(kenv).ok_or(Gap::IndApparatus)?;
         // One reason, because there is one shape left that could fail here.
@@ -169,12 +170,12 @@ pub(crate) fn build(
         // (a variable capture in the existential closure, fixed at `8d9c94c`);
         // it is deleted rather than pinned at zero, because a reason string
         // nothing emits is a trap for whoever greps for it next.
-        let lc = LeCarrier::build(kenv, &app.mach, &ac, &walk.spec, &ix, &params)
+        let lc = LeCarrier::build(kenv, &app.mach.borrow(), &ac, &walk.spec, &ix, &params)
             .ok_or_else(|| bad("class (S) at an index: the carrier"))?;
         // `ac` rather than the index space: nothing in `le_index` speaks about
         // `Idx(p⃗)`, and taking the `Acc` lets it pin `lc.acc_set` against it.
         let lic =
-            LeIndexCarrier::build(kenv, &app.mach, &tower, &ac, &walk.spec, &lc, &params)
+            LeIndexCarrier::build(kenv, &app.mach.borrow(), &tower, &ac, &walk.spec, &lc, &params)
                 .ok_or_else(|| bad("class (S) at an index: the conditional singleton"))?;
         if lic.ctor_intro.is_none() {
             return Err(bad(RECURSIVE))
@@ -349,7 +350,7 @@ fn build_ctor(
             .and_then(|v| v.get(j))
             .ok_or_else(|| bad("a field abbreviation"))?;
         let at = inst_all(ax, &args).ok_or_else(|| bad("a field abbreviation instance"))?;
-        let back = derived::eq_symm(&mut ip.env, &at).ok_or_else(|| bad("a field typing"))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &at).ok_or_else(|| bad("a field typing"))?;
         atoms.push(ip.retarget_set(m, &back).ok_or_else(|| bad("a field typing"))?);
     }
 
@@ -372,12 +373,12 @@ fn build_ctor(
         let mut i_args: Vec<Term> = ps.clone();
         i_args.extend(interps.iter().map(|(t, _)| t.clone()));
         let i_at = inst_all(i_ax, &i_args).ok_or_else(|| bad("an index type"))?;
-        let back = derived::eq_symm(&mut ip.env, &i_at).ok_or_else(|| bad("an index type"))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &i_at).ok_or_else(|| bad("an index type"))?;
         let onto = ip.retarget_set(&subj, &back).ok_or_else(|| bad("an index type"))?;
         let i_sym = cs.walk.spec.indices.get(k).copied().ok_or_else(|| bad("an index type"))?;
         let cong = crate::ctor_ix::index_congr(ip, i_sym, &ps, &result[..k], &e_axs[..k], &e_args)
             .ok_or_else(|| bad("an index type"))?;
-        let to_syms = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad("an index type"))?;
+        let to_syms = derived::eq_symm(&mut ip.env_mut(), &cong).ok_or_else(|| bad("an index type"))?;
         atoms.push(ip.retarget_set(&onto, &to_syms).ok_or_else(|| bad("an index type"))?);
         interps.push((e_tm.clone(), mem.clone()));
     }
@@ -414,7 +415,7 @@ fn build_ctor(
     let cong = crate::ctor_ix::index_congr(ip, cs.lic.sym, &ps, result, e_axs, &e_args)
         .ok_or_else(|| bad("the result indices"))?;
     let onto = ip.retarget_set(&mem, &cong).ok_or_else(|| bad("the former's spine"))?;
-    let to_spine = derived::eq_symm(&mut ip.env, &beta).ok_or_else(|| bad("the former's spine"))?;
+    let to_spine = derived::eq_symm(&mut ip.env_mut(), &beta).ok_or_else(|| bad("the former's spine"))?;
     let out = ip.retarget_set(&onto, &to_spine).ok_or_else(|| bad("the former's spine"))?;
     if *out.concl() != Formula::mem(point.clone(), goal_set) {
         return Err(bad("the constructor did not land in its own codomain"))

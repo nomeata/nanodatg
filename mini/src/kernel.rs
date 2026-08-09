@@ -755,7 +755,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             match dom {
                 Some(d) => {
                     let depth = th.scopes.len();
-                    let tok = th.scopes.open(&mut th.ip.env, d);
+                    let tok = th.scopes.open(&mut th.ip.env_mut(), d);
                     th.tokens.push(tok);
                     th.slots.push(Some(depth));
                 }
@@ -2588,7 +2588,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     return Ok(Typing { ty, tm: None, ev: Ev::missing(Gap::IndApparatus) })
                 };
                 let tm = nc.numeral(*n);
-                let ev = match nc.mem(&mut ip.env, *n) {
+                let ev = match nc.mem(&mut ip.env_mut(), *n) {
                     Some(m) => Ev::Proved(m),
                     None => Ev::missing(Gap::IndApparatus),
                 };
@@ -2657,19 +2657,19 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Ev::missing(Gap::ConvCompose("natlit-endpoint"))
         }
         let prev_tm = nc.numeral(prev);
-        let Some(prev_mem) = nc.mem(&mut ip.env, prev) else {
+        let Some(prev_mem) = nc.mem(&mut ip.env_mut(), prev) else {
             return Ev::missing(Gap::IndApparatus)
         };
         let Some((_, beta)) = ip.beta_spine(&former, &[prev_tm], &[prev_mem]) else {
             return Ev::missing(Gap::ConvCompose("natlit-succ-beta"))
         };
-        let Ok(bump) = nc.eval().succ(&mut ip.env, prev) else {
+        let Ok(bump) = nc.eval().succ(&mut ip.env_mut(), prev) else {
             return Ev::missing(Gap::ConvCompose("natlit-succ-eval"))
         };
-        let Some(fwd) = derived::eq_trans(&mut ip.env, &beta, &bump) else {
+        let Some(fwd) = derived::eq_trans(&mut ip.env_mut(), &beta, &bump) else {
             return Ev::missing(Gap::ConvCompose("natlit-succ-compose"))
         };
-        match derived::eq_symm(&mut ip.env, &fwd) {
+        match derived::eq_symm(&mut ip.env_mut(), &fwd) {
             Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose("natlit-succ-symm")),
         }
@@ -3581,7 +3581,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `Γ ⊢ ⟦a⟧ = ⟦c⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧` and `Γ ⊢ ⟦b⟧ = ⟦c⟧`.
     fn ev_trans(&mut self, a: Ev, b: Ev, at: &'static str) -> Ev {
-        a.zip(b, |x, y| match self.ip().and_then(|ip| derived::eq_trans(&mut ip.env, &x, &y)) {
+        a.zip(b, |x, y| match self.ip().and_then(|ip| derived::eq_trans(&mut ip.env_mut(), &x, &y)) {
             Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose(at)),
         })
@@ -3589,7 +3589,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `Γ ⊢ ⟦b⟧ = ⟦a⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧`.
     fn ev_symm(&mut self, a: Ev, at: &'static str) -> Ev {
-        a.and_then(|x| match self.ip().and_then(|ip| derived::eq_symm(&mut ip.env, &x)) {
+        a.and_then(|x| match self.ip().and_then(|ip| derived::eq_symm(&mut ip.env_mut(), &x)) {
             Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose(at)),
         })
