@@ -211,17 +211,25 @@ landed and green, [ ] not landed.
   former `ite0(g,a,b)`, by `∃!`-definitional extension, classical cases on
   `g = ∅`. Exports `when_zero`/`when_nonzero`. Both computation directions
   pinned (`ite0(∅,a,b) = a`; `ite0(succ ∅,a,b) = b` through `succ_ne_zero`).
-* [ ] **`order`** (`order.rs`) — trichotomy on ω (previously recorded as "this
-  development does not have" it, `cumul/stages.rs:34`), the zero/succ case
-  principle, `⊆ ↔ (∈ ∨ =)`, and `max = ∪`: closure in ω, upper bound,
-  absorption.
+* [x] **`order`** (`order.rs`, tests `levels_order.rs`) — trichotomy on ω
+  (previously recorded as "this development does not have" it,
+  `cumul/stages.rs:34`), the zero/succ case principle, `⊆ ↔ (∈ ∨ =)`, and
+  `max = ∪`: closure in ω, upper bound (unconditional), absorption.
+  Non-vacuity: `1 ∪ 2 = 2` forced through Regularity.
 * [x] **`utower`** (`utower.rs`, tests `levels_utower.rs`) — the recursion theorem at `G := U(·)`,
   seed ω: `app(lvl,0) = ω`, `∀n∈ω. app(lvl,succ n) = U(app(lvl,n))`,
   `is_universe` at every successor rung, the climb `lvl(n) ∈ lvl(succ n)`,
   `ω ∈ lvl(succ n)`, and the numeral bridges to the existing tower's rungs.
-* [ ] **`srt`** (`srt.rs`) — `srt(n) = ite0(n, U₀, app(lvl,n))`:
-  `⟦Sort ·⟧` as one term function of a *variable* level; sort-in-sort,
-  cumulativity along `∈` and `⊆`, `U₀`-absorption at the bottom.
+* [x] **`srt`** (`srt.rs`, tests `levels_srt.rs`) — `srt(n) = ite0(n, U₀,
+  app(lvl,n))`: `⟦Sort ·⟧` as one term function of a *variable* level;
+  `at_zero`/`at_succ` computation, sort-in-sort (`Sort ℓ : Sort (ℓ+1)` at a
+  variable rung), cumulativity one rung up (`step_sub`) and along `∈`
+  (`mono_mem`), `ω`- and `U₀`-membership at every successor rung.
+  Non-vacuity: `srt(0) ≠ srt(1)` — Prop and Type 0 stay distinct.
+* [x] **`apparatus`** (`apparatus.rs`, tests `levels_apparatus.rs`) — the
+  `LevelPoly` bundle over one tower chain, plus `imax_in_omega`:
+  `ite0(v, ∅, u ∪ v) ∈ ω` for `u, v ∈ ω`, closing ω-membership of every
+  level expression's interpretation by structural recursion.
 * [ ] **`rules`** (`rules.rs`) — the flagship: Π-formation at
   `imax(u,v)` with the Prop/Type split as `ite0` *inside the term*, one
   theorem, both branches; plus the demonstrations (`a : Type u ⊢ (a → a) :
