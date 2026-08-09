@@ -2493,6 +2493,12 @@ it. Filtering the output again with the flag on declines 115 times at the
 name guard and returns the file byte-identical — idempotence, §1.5's
 mechanism unchanged.
 
+That `monomorph` resolves the two level-bound classes is measured, not
+assumed: on the monomorphized `init-prelude` the same run generates **128
+models — every `PUnit`, `PEmpty`, `PULift` and `Trans` instance among them
+— with 282 statements compared and 0 differing**. A pipeline that wants
+those shapes runs `monomorph` first.
+
 Fixtures: `modelgen/tests/prim_shapes.lean` is one positive occupant per
 route variant, `modelgen/tests/prim_declines.lean` one per refusal path with
 its reason pinned by prefix, both in `Test.lean`'s table.
