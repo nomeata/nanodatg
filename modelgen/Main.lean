@@ -48,13 +48,16 @@ written** — an exit of 3 means there is no output to use. -/
 def exitInternal : UInt32 := 3
 
 def usage : String :=
-  "usage: modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]"
+  "usage: modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--prim-models] [--quiet]"
 
 structure Opts where
   input : String := ""
   /-- `some "-"` is stdout; see [`writeExport`]. -/
   output : Option String := none
   checkRecursors : Bool := false
+  /-- The third construction: model simple inductives from the five
+  primitives (`Modelgen/Simple.lean`). Off by default. -/
+  primModels : Bool := false
   quiet : Bool := false
 
 def parseArgs : List String → Except String Opts
@@ -65,6 +68,7 @@ where
     | [], o => if o.input.isEmpty then .error "no input file" else .ok o
     | "-o" :: p :: rest, o => go rest { o with output := some p }
     | "--check-recursors" :: rest, o => go rest { o with checkRecursors := true }
+    | "--prim-models" :: rest, o => go rest { o with primModels := true }
     | "--quiet" :: rest, o => go rest { o with quiet := true }
     | a :: rest, o =>
       -- `-` alone is only ever the argument of `-o`, which the line above has
@@ -131,7 +135,7 @@ def run (o : Opts) : IO UInt32 := do
   -- from a bad input, since both used to exit 1.
   let res ← try
       let ((decls, rep), _) ←
-        (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Modelgen.runFilter x o.checkRecursors)) ctx
+        (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Modelgen.runFilter x o.checkRecursors o.primModels)) ctx
           { env })
       pure (Except.ok (decls, rep))
     catch e => pure (Except.error (toString e))

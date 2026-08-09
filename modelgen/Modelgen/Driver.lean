@@ -1,4 +1,4 @@
-import Modelgen.Mutual
+import Modelgen.Simple
 
 /-!
 # The filter
@@ -317,6 +317,59 @@ def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
   if (← getEnv).constants.contains `Eq then return true
   return !(reserved.contains `Eq || reserved.contains `Eq.refl)
 
+/-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
+asked of every basis constant a prim model may splice: each must be already
+installed or not declared by the input at all, else the model waits for the
+input's own declaration to be replayed. -/
+def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
+  let env ← getEnv
+  for n in [`Eq, `Eq.refl, `False, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk] do
+    unless env.constants.contains n || !reserved.contains n do return false
+  return true
+
+/-- One simple inductive's model from the primitives, generated and
+accounted for — the third construction, [`Modelgen.primIso`], behind
+`--prim-models`. Shared by the input's own simple inductives and the
+composition (the single inductives the other two constructions emit). -/
+def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
+    (ctors : Array (Name × Expr)) (reserved : Std.HashSet Name)
+    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
+    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+  let (out, rep, pending) := st
+  let saved ← getEnv
+  match ← (primIso tname lparams np ty ctors reserved).run with
+  | .error dec =>
+    setEnv saved
+    return (out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") }, pending)
+  | .ok is =>
+    let mut out := out
+    for gd in is.decls do
+      for e in ← toEDecls gd do out := out.push e
+    let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
+    unless is.spliced.isEmpty do
+      rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
+    return (out, rep, pending.push (#[tname], np, is))
+
+/-- **The composition's third step**: the single inductives a mutual model
+just emitted — `T._model.tag` and `T._model.aux` — are declarations of the
+output like any other, so `--prim-models` runs on them too. The tag is a
+plain sum and models; `aux` is indexed and declines today, and the decline
+is recorded rather than skipped, because the boundary of the composition is
+a measurement. -/
+def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
+    (reserved : Std.HashSet Name)
+    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
+    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+  let mut st := st
+  for n in members do
+    let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
+    let mut cts : Array (Name × Expr) := #[]
+    for cn in iv.ctors do
+      let some ci := (← getEnv).constants.find? cn | continue
+      cts := cts.push (cn, ci.type)
+    st ← genPrim n lparams np iv.type cts reserved st
+  return st
+
 /-- One plain mutual block's model, generated and accounted for.
 
 A function rather than two copies inline because it is called from two places
@@ -324,7 +377,7 @@ in [`Modelgen.runFilter`] — at the block, and again at the input's own `Eq` fo
 a block that had to wait for it. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
-    (reserved : Std.HashSet Name)
+    (reserved : Std.HashSet Name) (primModels : Bool)
     (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
     MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
   let (out, rep, pending) := st
@@ -340,10 +393,15 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    return (out, rep, pending.push (all, np, is))
+    let st := (out, rep, pending.push (all, np, is))
+    if primModels then
+      primCompose is.members is.levelParams np reserved st
+    else
+      return st
 
 /-- **The filter.** -/
-def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Report) := do
+def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) :
+    MetaM (Array EDecl × Report) := do
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
   -- Held back until the export's own declaration is installed, so the
@@ -352,6 +410,8 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
   -- Plain mutual blocks whose model is waiting for the input's own `Eq`.
   let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
     Array (Array (Name × Expr))) := #[]
+  -- Simple inductives (`--prim-models`) waiting for the input's own `Eq`.
+  let mut waitingPrim : Array (Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
@@ -428,6 +488,12 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
                   rep := { rep with
                     generated := rep.generated.push (is.members[0]!, is2.decls.size) }
                   pending := pending.push (is.members, t.numParams, is2)
+                  -- ── the third step of the chain (`--prim-models`) ─────────
+                  -- The mutual model's own single inductives, modelled from
+                  -- the primitives — nested → mutual → primitives, one pass.
+                  if primModels then
+                    (out, rep, pending) ← primCompose is2.members is2.levelParams
+                      t.numParams reserved (out, rep, pending)
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
@@ -485,17 +551,35 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
           -- that declares no `Eq` at all does not wait: §1.5 splices one.
           if ← eqReady reserved then
             (out, rep, pending) ← genMutual all t.levelParams t.numParams tys ctors reserved
-              (out, rep, pending)
+              primModels (out, rep, pending)
           else
             waiting := waiting.push job
+        -- ── a simple inductive (`--prim-models`): the third construction ──
+        -- Generated after the replay, like the plain mutual block and for
+        -- the same reason: the statements are the installed recursor's own,
+        -- restored, and there is nothing else to read them off.
+        if primModels && ts.length == 1 && t.numNested == 0 then
+          let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
+          if ← primReady reserved then
+            (out, rep, pending) ← genPrim t.name t.levelParams t.numParams t.type ctors
+              reserved (out, rep, pending)
+          else
+            waitingPrim := waitingPrim.push (t.name, t.levelParams, t.numParams, t.type, ctors)
     out := out.push d
     -- The input's own `Eq` has just arrived: every block that was waiting for
     -- it gets its model here, **after** the `Eq` record, which is where
     -- dependency order puts it.
     if !waiting.isEmpty && (← eqReady reserved) then
       for (all, lp, np, tys, ctors) in waiting do
-        (out, rep, pending) ← genMutual all lp np tys ctors reserved (out, rep, pending)
+        (out, rep, pending) ← genMutual all lp np tys ctors reserved primModels
+          (out, rep, pending)
       waiting := #[]
+    -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
+    -- for whichever of those the input declares later, not only for `Eq`.
+    if !waitingPrim.isEmpty && (← primReady reserved) then
+      for (n, lp, np, ty, ctors) in waitingPrim do
+        (out, rep, pending) ← genPrim n lp np ty ctors reserved (out, rep, pending)
+      waitingPrim := #[]
     for (all, np, is) in pending do
       let (m, errs) ← checkModel all np is
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
@@ -511,7 +595,9 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
   -- decline list gains nothing at all against the run before §1.6 existed, and
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
   for (all, lp, np, tys, ctors) in waiting do
-    (out, rep, pending) ← genMutual all lp np tys ctors reserved (out, rep, pending)
+    (out, rep, pending) ← genMutual all lp np tys ctors reserved primModels (out, rep, pending)
+  for (n, lp, np, ty, ctors) in waitingPrim do
+    (out, rep, pending) ← genPrim n lp np ty ctors reserved (out, rep, pending)
   for (all, np, is) in pending do
     let (m, errs) ← checkModel all np is
     rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
