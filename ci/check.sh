@@ -81,6 +81,12 @@ step "modelgen suites"           ./ci/check-modelgen.sh
 # toolchain and so runs even where the step above SKIPs.
 step "modelgen count self-test"  ./ci/check-modelgen.sh --self-test
 
+# The corpus discovery the three corpus steps below share, self-tested first.
+# It builds a throwaway repository and a real `git worktree` of it, so the cell
+# that matters — a worktree with no `vendor/` finding the main checkout's copy —
+# is exercised rather than asserted. Needs neither corpus nor toolchain, ~0.3 s.
+step "corpus discovery self-test" ./ci/corpus-dir.sh --self-test
+
 # The Lean Kernel Arena corpus. `scripts/arena.sh` has been a real pass/fail
 # gate since 2026-07-30 and no step ran it. `bad/` is a *ratchet* against
 # `scripts/arena-accept.txt`, not a blanket must-reject — see that script's
@@ -88,11 +94,6 @@ step "modelgen count self-test"  ./ci/check-modelgen.sh --self-test
 # `ci/corpus-dir.sh` above has already looked in the main checkout as well as
 # in this one, so a SKIP here means the machine really has not fetched it.
 # ~60 s for the release build the first time, ~4 s for the run.
-# …and first the self-test for the discovery the three corpus steps now share.
-# It builds a throwaway repository and a real `git worktree` of it, so the cell
-# that matters — a worktree with no `vendor/` finding the main checkout's copy —
-# is exercised rather than asserted. Needs no corpus and no toolchain, ~0.3 s.
-step "corpus discovery self-test" ./ci/corpus-dir.sh --self-test
 step "arena corpus"              ./ci/check-arena.sh
 # …and the self-test for its four ratchet cells and its count guard, which
 # needs neither the corpus nor a toolchain and so runs where the step SKIPs.
