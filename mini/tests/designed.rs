@@ -2522,3 +2522,30 @@ fn a_monomorphized_export_costs_nothing() {
         "`_at.1.1.PU`'s η is the conversion half of the second cause:\n{out}"
     );
 }
+
+/// **`Quot.lift` of `Quot.mk`, off the corpus** — `quot_lift_reduction.lean`.
+///
+/// `mini/src/quot_iota.rs`'s ι chain (β down the lift's nest, β down
+/// `Quot.mk`'s, then `lift_beta` with both antecedents discharged) had
+/// exactly one input anywhere: the gitignored corpus's
+/// `124_quotLiftReduction`. When the kernel `Env` moved behind the shared
+/// `EnvCore` cell, the chain's composition held one `env_mut()` guard as a
+/// statement-long temporary while a closure took a second — a re-entrant
+/// borrow, a panic, on this path and no other — and only the corpus ratchet
+/// saw it. This fixture is that path as a committed export: red (exit 101)
+/// under the re-introduced chained borrow, green as landed.
+///
+/// The `gapped=0` on the `convs` row is the sharp half: the run not merely
+/// surviving the quot ι step but certifying it, so a future regression that
+/// *declines* the chain instead of panicking is equally visible.
+#[test]
+fn quot_lift_of_mk_is_certified_off_the_corpus() {
+    let out = run("quot_lift_reduction.ndjson");
+    all_derived(&out, 2);
+    let convs = row(&out, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "the quot ι chain must certify:\n{out}");
+    assert!(
+        convs.get("moved").copied().unwrap_or(0) > 0,
+        "no conversion moved — the fixture no longer reaches the quot ι step:\n{out}"
+    );
+}

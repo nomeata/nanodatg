@@ -163,7 +163,11 @@ pub(crate) fn fire(
 
     // ── the chain, and the reduct ───────────────────────────────────────────
     let to_tm = ip.app(f, x);
-    let chain = derived::eq_trans(&mut ip.env_mut(), &step1, &step2)
+    // Two statements, not a chain: the first `env_mut()` guard is a
+    // statement-long temporary, and the closure's own `env_mut()` would be a
+    // re-entrant borrow of the shared core.
+    let chain12 = derived::eq_trans(&mut ip.env_mut(), &step1, &step2);
+    let chain = chain12
         .and_then(|t| derived::eq_trans(&mut ip.env_mut(), &t, &step3))
         .ok_or_else(|| bad(RULE))?;
     let lhs = arg_tms.iter().fold(head_tm.clone(), |acc, t| ap.apply(acc, t.clone()));
