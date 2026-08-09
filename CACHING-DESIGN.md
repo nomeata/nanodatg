@@ -7,8 +7,21 @@ are in §6 — the narrowed-gate variant on the `DTree` tower, the full tutorial
 suite under it at the certified level (which PROFILE.md §9 names as not
 measured), `mini/tests/nested.rs`, and the attribution runs its one failure
 required — using `scripts/profile-probe.diff` plus a ten-line extension
-(`MINI_FRAME_ACC`) in a scratch worktree. Nothing is landed; another seat may
-be in `mini/src/`.*
+(`MINI_FRAME_ACC`) in a scratch worktree.*
+
+**Status: step 1 is landed; step 2 is landed. Steps 3 and 4 are not.** The
+landing re-took every figure that describes the code rather than the study, on
+`origin/master` after the arena port (`#120`), with `perf stat -e
+instructions` per `47b262b`; where a number below is superseded it is
+corrected in place and marked. The two the reader wants first: `mini/tests/
+nested.rs` **17 905 884 629 054 → 8 408 759 079 586 instructions (2.13×)**, and
+the 91 good tutorial exports **453.88 G → 431.28 G (1.05×)** — the corpus
+being the axis this was never expected to move much. The corpus ratchet held
+to the counter: `accept 89 / decline 2 / reject 0`, `pairs 218`,
+`constEv 218`, `typeEv 218`, `unsealed 0`, `gapped 0`, `proved 829 661`,
+`sealed 827 084`, `moved 3 454`, `movedSealed 908`. Step 1's cache-off/on A/B
+is stronger than a counter comparison and is recorded in §6.1, which is where
+every figure in this paragraph comes from.
 
 ## Verdict
 
@@ -29,12 +42,19 @@ condition cannot change any run in which `th` is `Some`. (PROFILE's second
 headline, `nested.rs` 309.5 → 124.2 s, is **stale**: the tree moved under the
 study — §3.)
 
+*(As landed, the non-allocating key is not experiment G's mixer. `#120` made
+an `E` a `u32` into `checker`'s hash-consed arena, where pointer identity is
+structural identity, so the exact key is cheaper than any hash of the tree:
+`Frame::map` became `HashMap<E, Typing>` and `hash_expr` was deleted rather
+than rewritten. §6.1 has the landing's figures, and they are on `nested.rs`
+and the corpus rather than on the `tower` probe, which is not on master.)*
+
 The plan, ranked. Each step's yield is measured unless marked as an estimate.
 
 | # | change | buys | risks, and the detector for each |
 | --- | --- | --- | --- |
-| 1 | narrow the gate to `th.is_some()`; replace `hash_expr`'s SipHash + `format!` with the structural mixer (~60 lines, PROFILE §5 G) | towers 91.9 → 7.25 s (12.7×), re-taken here on current master at 7.10 s; full certified runs 9.7× / 1.67× / 1.04× (PROFILE §5; measured under the wholesale variant — the narrowed one coincides on the towers that dominate the first two rows and forgoes at most the third row's 4%). The `#110` claim (`nested.rs` 2.49×) is stale — since `87eb672` that file's cost is dominated by the certified ι seeding, which is step 3's, not step 1's (§3, §5) | certified path: none, by construction. Acceptance path: determinism argument in §2; detectors are the fidelity gate (91 accept / 42 reject, MINI-DESIGN §11.2) and the armed ratchet `tutorial_first_blocker` — the whole tutorial suite passed under the change (§6) |
-| 2 | take `opt-level = 3` for the profiles CI uses, **when there is memory for it** | a further −12.7% at step 1's configuration (7.25 → 6.33 s, PROFILE §5); build measured at 1.25 GB peak `rustc` RSS, 3 m 27 | this row said "fix the stale `Cargo.toml` comment", and the comment is **not** stale: `70409b7` (line tables) is 01:00 and `9902ef1` (the SIGKILL at `opt-level = 3`) is 01:14, so the kill was already at line tables and the cause is headroom — under 1 GiB free against a 1.25 GB peak. Both measurements stand; the step is conditional on free memory, and PROFILE §9's `--release` row is still open |
+| 1 | **LANDED.** narrow the gate to `th.is_some()`; and the key — the "~60-line structural mixer" this row asked for was overtaken by `#120` and became a *deletion*: an `E` is `checker`'s `ExprPtr`, pointer identity is structural identity, so `Frame::map` is `HashMap<E, Typing>` and `hash_expr` is gone | as landed, `perf stat -e instructions`: `nested.rs` **17.906 T → 8.409 T (2.13×)**, the 91 good tutorial exports **453.88 G → 431.28 G (1.05×)**, frame-cache hit rate over that corpus **3.38% → 18.15%** and over `nested_model --nested` **10.2% → 33.2%**. Attributed: the gate is 2.04× / 1.046× of it, the pointer key the remaining 1.043× / 1.007×. The tower figures in this row (12.7×, 7.10 s) were taken on the `tower` probe, which is not on master, and are left as the study's own | certified path: none, by construction. Acceptance path: determinism argument in §2; detectors are the fidelity gate (91 accept / 42 reject, MINI-DESIGN §11.2) and the armed ratchet `tutorial_first_blocker` — all green, and §6.1's A/B is byte-exact |
+| 2 | **LANDED.** take `opt-level = 3` for the profiles CI uses, **when there is memory for it** | as landed, at step 1's configuration: `nested.rs` **8.409 T → 7.783 T (−7.4%)**, the corpus **431.28 G → 404.27 G (−6.3%)**; step 1 and step 2 together are `nested.rs` **2.30×** and the corpus **1.12×**. Build re-measured on the landing tree: `cargo build --workspace --exclude nanoda_lib --all-targets` at `CARGO_BUILD_JOBS=2`, **exit 0, 3 m 19, 1 253 564 kB peak `rustc` RSS** — PROFILE's 1.25 GB to three digits | the condition this row made the step wait on is **satisfied and was checked, not assumed**: `9902ef1`'s SIGKILL was headroom (under 1 GiB free against a 1.25 GB peak) because 48.25 GiB of tmpfs was pinned in `user-1001.slice`. At the landing that tmpfs held **376 MB**, and the slice was at 25.8 GB of a 53.87 GB limit — 28 GB of headroom against a 1.25 GB peak. It is a *condition*, not a settled fact: a seat that finds the tmpfs full again will hit the same kill, and the `Cargo.toml` comment now says so. PROFILE §9's `--release` row is still open |
 | 3 | the certified axis: build `CERTIFYING-OVERHEAD.md` §2's **fix 2** — the α-canonical `Sealed` memo — as designed | *estimate, not a measurement*: bounded above by the measured 97.8% of certified conversions that occur inside a repeat of an already-seen α-canonical judgement (C-O §4(5)); this is the only designed lever on the 97 s / 96%-certification fixture that step 1 does not touch (1.04×) | key cost is O(size) per entry and must be amortized (a whnf-memo at O(size) keys was a measured 0.63× *regression*, PROFILE §5 B); the memo must store **certificates only** — on this axis the gate's policy is *correct* (§5) |
 | 4 | a cross-opening acceptance memo (telescope-chain key), **only if** generated towers must scale past the current sizes | *estimate*: the post-memo residue is n^1.98 and ≥ 2 100× duplicated (PROFILE §6, §9); a key that survives binder re-entry removes the remaining exponent's constant, plausibly to near-linear — unmeasured | the sound key must cover the reachable telescope (§7); the cheap version needs cached per-node hashes, which is the first real step toward `checker/`'s representation — take the enabler, not the representation (§4) |
 
@@ -338,6 +358,53 @@ CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build -p mini --tests --examples --
 ( ulimit -v 4194304; MINI_FRAME_ACC=1 MINI_FASTHASH=1 cargo test -p mini --test nested )
 ```
 
+## 6.1 The landing's own measurements
+
+*Taken at the landing, not in a scratch worktree: `origin/master` at `8e2e45b`
+plus the change, `test` profile, `perf stat -e instructions` per `47b262b`
+("counters decide, clocks comment"). Three binaries were built and measured
+against each other so the two halves of step 1 could be attributed
+separately.*
+
+| configuration | `mini/tests/nested.rs` | 91 good tutorial exports |
+| --- | ---: | ---: |
+| baseline (`8e2e45b`) | 17 905 884 629 054 | 453 882 252 046 |
+| gate narrowed only | 8 768 536 899 614 (2.042×) | 434 129 398 137 (1.045×) |
+| **+ the pointer key (step 1)** | **8 408 759 079 586 (2.129×)** | **431 279 848 180 (1.052×)** |
+| **+ `opt-level = 3` (step 2)** | **7 782 754 492 560 (2.301×)** | **404 270 824 242 (1.123×)** |
+
+`nested.rs` is `20 passed; 0 failed; 2 ignored` in all four. The corpus column
+is 91 spawns of `mini --no-modelgen --verbose`, one per export.
+
+* **The frame cache stops being dead.** Over the corpus, `framecache` goes
+  from `hits=225 327 misses=6 443 795` (**3.38%** of 6 669 122 lookups) to
+  `hits=421 716 misses=1 901 703` (**18.15%** of 2 323 419) — the *lookup*
+  count falls by 65% because a hit elides a whole subtree's worth of them. On
+  `nested_model --nested`, the fixture that is 96% certification, **10.2% →
+  33.2%** over 20 047 626 → 8 026 077 lookups, and the verdict line is the
+  same `accept 25 declarations`.
+* **The cache-off/on A/B is byte-exact, not counter-exact.** The guardrail
+  asked for deterministic counters; the stronger check was available and is
+  what was run. All 820 lines of `--verbose` output over the 91 exports —
+  every `facts`, `clauses`, `ledger`, `evidence`, `convs` and `untranslated`
+  row, `constEv 218/218`, `typeEv 218`, `unsealed 0`, `gapped 0`,
+  `proved 829 661`, `sealed 827 084`, `moved 3 454`, `movedSealed 908`, and
+  the `accept 89 / decline 2 / reject 0` population — are **identical between
+  the cache-off and cache-on runs, and the only line that differs anywhere is
+  the `framecache` row itself**. The same diff is identical again across
+  `opt-level = 3`. Two baseline runs were diffed against each other first, to
+  establish that the output is deterministic at all.
+* **`ci/check.sh` is green** at `NANODATG_REQUIRE_CORPUS=1`, all steps, on the
+  landing tree.
+* **§6's `nested.rs` bullet is superseded by the arena port, not by this
+  change.** That bullet reports the file failing under a 4 GB cap and needing
+  "> 7.5 GB *at baseline*", so that "a capped seat cannot run it in any
+  configuration". Since `#120` that is no longer true: the whole file runs
+  uncapped in one process tree with the heaviest spawned `mini` peaking at
+  about **1.8 GB RSS**, 20 passed / 2 ignored, in every one of the four
+  configurations above. The `#[ignore]` on `nested.rs:640` and step 3's
+  argument are untouched — this is a memory correction, not a cost one.
+
 ## 7. What this does not fix, and what stays unmeasured
 
 * **The n^2.0 residue on the acceptance towers.** After step 1 the exponent is
@@ -361,17 +428,18 @@ CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build -p mini --tests --examples --
   argument and the green ratchet in §6 say no pair report can see the
   difference; a future armed *acceptance-axis* diagnostic (none exists
   today) would need to account for it.
-* **Not measured**, carried forward from PROFILE §9 where still open:
-  `ci/check.sh` end to end; Lean's kernel caches (still unverified); a true
-  `--release` build; the cross-opening share as a number; hash-consing
-  `kernel::Term` wall-clock. New here: step 3's actual yield (the 97.8% is a
-  bound measured on another fixture, not a prediction for `nested_iota`);
-  `nested.rs` on current master *without* a memory cap (needs > 7.5 GB and
-  tens of minutes; the 40 G machine ceiling is shared, and this study did not
-  spend it); and `checker/`'s certified (`--features tg`) speed — PROFILE
+* **Not measured**, carried forward from PROFILE §9 where still open: Lean's
+  kernel caches (still unverified); a true `--release` build; the
+  cross-opening share as a number; hash-consing `kernel::Term` wall-clock.
+  New here: step 3's actual yield (the 97.8% is a bound measured on another
+  fixture, not a prediction for `nested_iota`); and `checker/`'s certified
+  (`--features tg`) speed — PROFILE
   §1's reference row exercised `NullCertifier` only, so "checker/ keeps its
   caches *and* is fast while certifying" remains a source-level claim, not a
-  timing.
+  timing. Two entries left this list at the landing: `ci/check.sh` end to end
+  ran green at both `opt-level`s, and `nested.rs` without a memory cap is
+  §6.1's four rows — since `#120` it no longer needs the > 7.5 GB that made
+  it unaffordable to take.
 
 Sources: PROFILE.md §§1–9; CERTIFYING-OVERHEAD.md §§1–4 and its appendix;
 MINI-DESIGN.md §0.3, §0.4, §11, §13; MINI-HANDOFF.md §40; MEASUREMENTS.md

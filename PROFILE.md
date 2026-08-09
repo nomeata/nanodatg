@@ -28,15 +28,26 @@ What that path does instead is ask `infer_type` **285 922 406 times** for one
 23-declaration tower whose whole vocabulary is **9 561 distinct expressions**
 — a directly measured **43 000× duplication** of expression construction
 (§4), against `APP-SPINES.md`'s HyperLogLog estimate of 5–49× on the
-certified side. On the acceptance axis mini has **no live cache whatsoever**:
-`wt_memo` is keyed on a `Term` that does not exist there, and
-`Checker::frames` — the memo that took `nested_model` from 8m08 to 1m48 on the
-certified path — is switched off by one line, `frame_put`'s
+certified side. On the acceptance axis mini had, when this was measured, **no
+live cache whatsoever**: `wt_memo` is keyed on a `Term` that does not exist
+there, and `Checker::frames` — the memo that took `nested_model` from 8m08 to
+1m48 on the certified path — was switched off by one line, `frame_put`'s
 `if t.ev.thm().is_none() { return }`, because acceptance-only evidence is
-always a `Gap`. Measured: **0 hits in 285 922 406 lookups**. It still computes
-the key: `hash_expr` walks the whole expression and `format!`s every universe
-level, and that key-for-a-memo-that-stores-nothing is **34% of the entire run**
-(§3, §5).
+always a `Gap`. Measured: **0 hits in 285 922 406 lookups**. It still computed
+the key: `hash_expr` walked the whole expression and `format!`ed every universe
+level, and that key-for-a-memo-that-stores-nothing was **34% of the entire
+run** (§3, §5).
+
+*(Both of those are now history rather than description: CACHING-DESIGN.md's
+step 1 landed, so the gate reads `self.th.is_some() && t.ev.thm().is_none()`
+and the acceptance axis has a live memo, and `hash_expr` is gone — since
+`#120` an `E` is `checker`'s `ExprPtr` and pointer identity is structural
+identity, so `Frame::map` is keyed on the `E` itself. Landed figures, `perf
+stat -e instructions` on the `test` profile: `mini/tests/nested.rs`
+17 905 884 629 054 → **8 408 759 079 586** (2.13×), the 91 good tutorial
+exports 453.88 G → **431.28 G** (1.05×), frame-cache hit rate over that corpus
+3.38% → **18.15%**. The 12.7× headline below was measured on the `tower`
+probe, which is not on master; the two numbers just given are.)*
 
 Removing the gate — nothing else, and no change to any verdict or ledger
 line — takes the `DTree` tower from **91.9 s to 8.8 s (10.5×)**; adding a
@@ -440,9 +451,9 @@ had to be made telescope-scoped instead.
 
 **Where the hypothesis is right, narrowly and expensively.** The one cache
 mini *did* rebuild stores a whole `Typing` — type, interpretation *and*
-evidence — and `frame_put` refuses an entry whose evidence is a `Gap`. On the
+evidence — and `frame_put` refused an entry whose evidence was a `Gap`. On the
 certified path that costs little. On the acceptance path *every* entry is a
-`Gap`, so the cache is 100% dead and its key is still paid. That is the
+`Gap`, so the cache was 100% dead and its key was still paid. That is the
 certifying design switching off a cache on an axis that has no certificates,
 and it is §5's experiment A: 10.5×, one line.
 
@@ -451,6 +462,12 @@ a cache-free, hash-cons-free teaching kernel by deliberate fidelity, rebuilt
 one of the missing caches for the certified path, and gated that one on
 evidence — leaving the acceptance path with no caches at all and the full cost
 of a key.**
+
+*(The gate has since been narrowed to `self.th.is_some() &&
+t.ev.thm().is_none()`, per CACHING-DESIGN.md §1: the staleness route it guards
+against — an `Interp` growing under the frame via lazy fills — exists only
+where there is an `Interp`, so it is kept on the certified path and dropped on
+the acceptance one. See this document's Verdict for the landed figures.)*
 
 ## 8. The four candidates, judged
 

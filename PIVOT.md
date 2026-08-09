@@ -88,11 +88,13 @@ Per the standing instruction, before anything is built on them:
    figure is right as stated.
 2. **"Mini has none by design."** Mini *began* with none; today it has three
    caches — `Checker::frames`, `wt_memo`, and the `Interp` symbol tables —
-   added by measurement (MINI-DESIGN §0.3's bracketed note). What is true and
-   load-bearing: on the **acceptance** axis the frame memo is disabled by the
-   `Gap` gate (`frame_put`, `mini/src/kernel.rs:2203–2209` — verified still
-   un-narrowed on master; CACHING-DESIGN's step 1 is a recommendation, not a
-   landing), so that axis effectively has none.
+   added by measurement (MINI-DESIGN §0.3's bracketed note). The clause that
+   used to stand here — "on the **acceptance** axis the frame memo is disabled
+   by the `Gap` gate, so that axis effectively has none" — was true when it
+   was written and is **no longer**: CACHING-DESIGN's step 1 landed, the gate
+   in `frame_put` is now `self.th.is_some() && t.ev.thm().is_none()`, and the
+   acceptance axis has a live memo (corpus hit rate 3.38% → 18.15%,
+   `mini/tests/nested.rs` 17.906 T → 8.409 T instructions).
 3. **"Assume fully monomorphic input."** Only mode B is fully monomorphic,
    and mode B's output is refused by every kernel that mints recursors by
    name — nanoda, and Lean itself (MONOMORPH §4.2: "Mode B needs a checker

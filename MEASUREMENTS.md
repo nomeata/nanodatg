@@ -5643,8 +5643,24 @@ the whole reason `47b262b` says counters decide.
 
 Re-run after rebasing onto `0b7fa3b`, which is three arena-expression commits
 further on and is therefore *not* comparable with the pair above: **39.29 T,
-1 142 s (19.0 min)**, `all checks passed`, no step SKIPped. Quote that one for
-"how long is `ci/check.sh`" and the pair above for "what did the matrix cost".
+1 142 s (19.0 min)**, `all checks passed`, no step SKIPped.
+
+Re-run again at CACHING-DESIGN.md's steps 1 and 2 — the narrowed `Gap` gate
+with the pointer key, and `opt-level = 3` in `dev` and `test` — warm tree,
+`CARGO_BUILD_JOBS=12`, same shape of run as the row above and comparable with
+it: **19 271 833 029 935 instructions (19.27 T), 1 532 s**,
+`all checks passed`, no step SKIPped. **51.0 % of the script gone, 2.04×.**
+Quote *this* one for "how long is `ci/check.sh`", the 39.29 T for what the
+steps were worth to it, and the pair above for "what did the matrix cost".
+
+Two things this row is not. It is **not** an attribution between the two
+steps: that is CACHING-DESIGN.md §6.1's four rows, taken on
+`mini/tests/nested.rs` and the tutorial corpus, where the split is 2.13× for
+step 1 and a further 1.08× for step 2. And its **wall column is worthless
+here** — 1 532 s against the previous row's 1 142 s, on a box carrying
+another seat's `monomorph` run at 14.8 GB RSS for the whole of it, while the
+instruction column fell by half. That is `47b262b` exactly: counters decide,
+clocks comment.
 
 **The coverage is the same set of tests, and that is checked rather than
 argued.** `Running …` on stderr and libtest's results on stdout are both ordered
