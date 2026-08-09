@@ -973,6 +973,13 @@ of them: `nat::Nat` has the carrier, both ι rules and `ω ∈ U₁`, `nat::Eval
 the numerals and the arithmetic, and `nat::natrec_mem` — added for this — has
 the recursor's typing.
 
+**Build the apparatus with `Nat::over`, never `Nat::new`.** `Nat::new` calls
+`Tower::new`, a fresh chain of definitional extensions, so it hands back an `ω`
+over a *second* `1`, `•`, `app`, `∅` and pairing. Nothing about that is a type
+error: `⊢ ω ∈ U₁` would simply be a membership in a `U₁` no interpretation
+mentions, and `⟦Nat.zero⟧ = 0` would name an `∅` nothing else does. Row 9 must
+thread `ip.prelude.tower` in, which is what `Nat::over` exists for.
+
 | # | site | what it supplies |
 |---|---|---|
 | 1 | `direct.rs:165` `enum Clause` | a `Nat` variant |
