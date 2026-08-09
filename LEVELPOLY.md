@@ -215,7 +215,7 @@ landed and green, [ ] not landed.
   development does not have" it, `cumul/stages.rs:34`), the zero/succ case
   principle, `⊆ ↔ (∈ ∨ =)`, and `max = ∪`: closure in ω, upper bound,
   absorption.
-* [ ] **`utower`** (`utower.rs`) — the recursion theorem at `G := U(·)`,
+* [x] **`utower`** (`utower.rs`, tests `levels_utower.rs`) — the recursion theorem at `G := U(·)`,
   seed ω: `app(lvl,0) = ω`, `∀n∈ω. app(lvl,succ n) = U(app(lvl,n))`,
   `is_universe` at every successor rung, the climb `lvl(n) ∈ lvl(succ n)`,
   `ω ∈ lvl(succ n)`, and the numeral bridges to the existing tower's rungs.
@@ -227,9 +227,62 @@ landed and green, [ ] not landed.
   theorem, both branches; plus the demonstrations (`a : Type u ⊢ (a → a) :
   Type u` at a variable `u`; the `PUnit`-shaped `1 ∈ srt(u)` at every `u`).
 
-## 4. What it costs
+## 4. The checker prototype, and what it costs
 
-<!-- measurements -->
+### 4.1 The wedge
+
+Behind `NANODATG_LEVELPOLY=1` (default off; flag unset ⇒ bit-identical
+behaviour), the `tg` backend on this branch:
+
+* builds the `LevelPoly` apparatus once per thread, over the prelude's own
+  tower chain (`Shared::lp`);
+* interprets a `Sort ℓ` whose **canonical level still mentions a parameter**
+  as `srt(ℓ̂)` — the ω-vocabulary of §1.1/§1.2 — instead of the axiom-free
+  `sort(⟦ℓ⟧)` symbol (`interp_sort_poly`); ground levels are untouched, and
+  dispatch stays on the canonical representative, so `⟦·⟧` remains a function
+  and the two vocabularies cannot collide (different head symbols);
+* discharges the sort-typing obligation `⟦Sort ℓ⟧ ∈ ⟦Sort (ℓ+1)⟧` at a
+  variable `ℓ` (`ty_sort_poly`): `Srt::sort_in_sort` instantiated at `ℓ̂`,
+  composed with the structural ω-membership evidence
+  `⊢ ⋀(uᵢ ∈ ω) → ℓ̂ ∈ ω` (`omega_level`, using `max_in_omega` /
+  `imax_in_omega` / `succ`-closure at each constructor), as a **conditional
+  certificate** whose assumptions are exactly the `uᵢ ∈ ω` facts — carried by
+  the existing `hyps` channel of `TgTyping::Derived`, counted by the existing
+  conditional-typing counters, and never silently dropped.
+
+What the wedge deliberately does **not** do: the `ite0`-Π clause
+(`interp_pi_undet` still mints the axiom-free symbol — the mathematics for
+its replacement is `levels::rules`, the wiring is §5.3 step 3), constants,
+inductives, and the store schema. It is a prototype of the *seam*, named as
+such.
+
+### 4.2 Measurements (init-prelude, `nanoda_bin` debug + `tg`, this branch)
+
+* **Flag off is bit-for-bit today's behaviour**: the full `tg` suite (72 + 6
+  + 28 tests) passes with the wedge code in the tree and the flag unset.
+* **Cost**: 227,607,726,315 instructions flag-off vs 228,162,815,272 flag-on
+  — **+0.24%**, which prices the whole apparatus construction (trichotomy,
+  recursion theorem at `U`, `srt` laws) *plus* the per-level evidence
+  building. Single runs of a deterministic counter (`perf stat -e
+  instructions`); wall time not quoted, per project rule.
+* **The honest surprise — the old encoding was already discharging the
+  variable sort rule, vacuously.** Under the opaque arm,
+  `⟦Sort (u+1)⟧ = U(⟦Sort u⟧)` by the `Succ` climb, so the obligation
+  `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧` is literally `x ∈ U(x)` at an axiom-free
+  constant, and `domain_premise` discharged it **unconditionally** — true of
+  *any set whatsoever*, carrying no fact connecting `⟦Sort u⟧@σ(u):=0` to
+  `U₀` and no ω-structure. The report diff shows exactly this trade:
+  `by x ∈ U(x)` drops 1399 → 1345 (−54) and those 54 sites move to
+  conditional certificates under real `u ∈ ω` assumptions or (3 sites, where
+  canonicalisation reshaped `succ ℓ`) to counted misses; escaped assumptions
+  rise 2138 → 2156 (+18) because the prototype has no declaration-boundary
+  quantifier yet (§5.3 step 5 is where `gen` would turn them into
+  `∀u∈ω`-theorems); TOTAL gaps 15423 → 15443 (+20). **The counter regression
+  is the semantic upgrade made visible**: a certificate that used to say
+  "some set is in its least universe" now says "for every natural `u`, rung
+  `u` is in rung `u+1`", and the counters price the fact that nothing above
+  the seam consumes the stronger form yet.
+* Acceptance is unchanged in both directions (exit 0, same declarations).
 
 ## 5. The checker-side map
 

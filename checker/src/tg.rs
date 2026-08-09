@@ -2299,6 +2299,23 @@ struct Shared {
     /// interpretation, not a step in it. Holding it here is what lets
     /// [`global_report`] say whether this run has it.
     false_anchor: Option<Sealed>,
+    /// The level-quantification apparatus (`LEVELPOLY.md`), built over the
+    /// prelude's tower when `NANODATG_LEVELPOLY=1` and `None` otherwise.
+    ///
+    /// **Prototype seam of the `explore/level-poly-target` branch.** When
+    /// present, a `Sort ℓ` whose canonical level still mentions a parameter is
+    /// interpreted as `srt(ℓ̂)` — a term with *facts* — instead of the opaque
+    /// `sort(⟦ℓ⟧)` symbol, and [`TgBackend::ty_sort`] discharges
+    /// `⟦Sort ℓ⟧ ∈ ⟦Sort (ℓ+1)⟧` at a variable `ℓ` as a conditional
+    /// certificate under the `u ∈ ω` assumptions. Off by default; with the
+    /// flag unset nothing here changes behaviour.
+    lp: Option<Rc<derived::levels::apparatus::LevelPoly>>,
+}
+
+/// Whether the level-quantification prototype is enabled for this process.
+fn levelpoly_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NANODATG_LEVELPOLY").is_some_and(|v| v != "0"))
 }
 
 thread_local! {
@@ -2354,6 +2371,19 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
                 idx: env.declare(1),
             }
         };
+        // The prototype apparatus is built once per core, before anything
+        // else numbers symbols off its `Env`; its cost is measured in
+        // `LEVELPOLY.md` §4 and is paid only under the flag. The tower it is
+        // built over is the thread prelude's — the same one `fast_forward`
+        // replayed into this core's `Env`, so the symbols line up whichever
+        // caller minted the core.
+        let lp = if levelpoly_enabled() {
+            let pre = prelude();
+            let mut env = core.env_mut();
+            derived::levels::apparatus::level_poly(&mut env, &pre.tower).map(Rc::new)
+        } else {
+            None
+        };
         let sh = Rc::new(std::cell::RefCell::new(Shared {
             core,
             syms,
@@ -2393,6 +2423,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             declar_typings: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
+            lp,
         }));
         sh
     }
@@ -4067,6 +4098,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // levels yield different terms — which is what made idempotence and
         // absorption unprovable.
         let l = self.canon_level(ctx, level);
+        // `explore/level-poly-target`: a level the σ-schedule cannot ground is
+        // interpreted as `srt(ℓ̂)` — a term with facts — when the apparatus is
+        // enabled. Dispatching on the canonical representative keeps `⟦·⟧` a
+        // function exactly as the ground path does, and a ground level never
+        // takes this branch, so the two vocabularies cannot collide.
+        if levelpoly_enabled() && !self.level_ground(ctx, l) {
+            if let Some(t) = self.interp_sort_poly(ctx, l) {
+                return t
+            }
+        }
         match ctx.read_level(l) {
             Level::Zero => self.pre.u0(),
             Level::Succ(a, _) => {
@@ -4087,6 +4128,176 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     fn interp_levels(&mut self, ctx: &mut TcCtx<'t, 'p>, ls: LevelsPtr<'t>) -> Vec<Term> {
         ctx.read_levels(ls).iter().copied().collect::<Vec<_>>().into_iter().map(|l| self.interp_level(ctx, l)).collect()
+    }
+
+    // ── The level-quantification prototype (`LEVELPOLY.md`) ──────────────────
+    //
+    // Everything below is inert unless `NANODATG_LEVELPOLY=1`: the flag gates
+    // both entry points ([`Self::interp_sort`]'s early return and
+    // [`Self::ty_sort`]'s branch), and with it unset the apparatus is never
+    // built and no path reaches these functions.
+
+    /// The thread's [`derived::levels::apparatus::LevelPoly`], when enabled.
+    fn lp(&self) -> Option<Rc<derived::levels::apparatus::LevelPoly>> {
+        self.shared.borrow().lp.clone()
+    }
+
+    /// Whether `l` is ground — no level parameter reaches it. (σ has already
+    /// been applied by the caller; what is left symbolic stays symbolic.)
+    fn level_ground(&self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> bool {
+        match ctx.read_level(l) {
+            Level::Zero => true,
+            Level::Succ(a, _) => self.level_ground(ctx, a),
+            Level::Max(a, b, _) | Level::IMax(a, b, _) => {
+                self.level_ground(ctx, a) && self.level_ground(ctx, b)
+            }
+            Level::Param(..) => false,
+        }
+    }
+
+    /// The `u ∈ ω` assumptions a level's interpretation needs, one per distinct
+    /// parameter, in traversal order.
+    fn collect_level_params(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>, omega: &Term, out: &mut Vec<Formula>) {
+        match ctx.read_level(l) {
+            Level::Zero => {}
+            Level::Succ(a, _) => self.collect_level_params(ctx, a, omega, out),
+            Level::Max(a, b, _) | Level::IMax(a, b, _) => {
+                self.collect_level_params(ctx, a, omega, out);
+                self.collect_level_params(ctx, b, omega, out);
+            }
+            Level::Param(..) => {
+                let t = self.interp_level(ctx, l);
+                let f = Formula::mem(t, omega.clone());
+                if !out.contains(&f) {
+                    out.push(f);
+                }
+            }
+        }
+    }
+
+    /// Interpret a level into the **ω-vocabulary** — `∅`, `succ`, `∪`,
+    /// `ite0(·,∅,·∪·)` — together with the evidence that the result is a
+    /// natural number: `(ℓ̂, assms, ⊢ ⋀assms → ℓ̂ ∈ ω)` (the theorem is
+    /// unconditional when `assms` is empty). `LEVELPOLY.md` §1.1.
+    ///
+    /// This is deliberately **not** [`Self::interp_level`]: that map reifies
+    /// level *syntax* into axiom-free symbols (`lzero`, `lmax`, …) for the
+    /// injectivity the sort rule needs; this one interprets levels as the
+    /// natural numbers they denote, which is what `srt(·)` consumes. The two
+    /// meet only at parameters, where both use the shared per-name symbol —
+    /// so an `assms` entry here is a fact *about* the very constant the
+    /// ground path leaves opaque.
+    fn omega_level(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> Option<(Term, Vec<Formula>, Thm)> {
+        let lp = self.lp()?;
+        let omega = lp.omega();
+        let mut assms = Vec::new();
+        self.collect_level_params(ctx, l, &omega, &mut assms);
+        let h = conj_of(&assms);
+        let (t, thm) = self.omega_level_rec(ctx, l, &lp, &assms, h.as_ref())?;
+        debug_assert_eq!(
+            u_concl(&thm, h.as_ref()),
+            Some(Formula::mem(t.clone(), omega)),
+            "omega_level: the evidence is not about the term"
+        );
+        Some((t, assms, thm))
+    }
+
+    /// The recursive half of [`Self::omega_level`]: `(ℓ̂, ⊢ [H →] ℓ̂ ∈ ω)`
+    /// under the *fixed* antecedent `h = conj(assms)`.
+    fn omega_level_rec(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        l: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+        assms: &[Formula],
+        h: Option<&Formula>,
+    ) -> Option<(Term, Thm)> {
+        // `⊢ a → b` and `⊢ [H →] a` give `⊢ [H →] b`.
+        let lift = |cl: &Thm, prem: &Thm| -> Option<Thm> {
+            match h {
+                None => Thm::mp(cl, prem),
+                Some(_) => derived::syl(prem, cl),
+            }
+        };
+        match ctx.read_level(l) {
+            Level::Zero => {
+                let t = lp.zero();
+                Some((t, u_a1i(&lp.r.peano.core.zero_mem, h)))
+            }
+            Level::Succ(a, _) => {
+                let (ta, pa) = self.omega_level_rec(ctx, a, lp, assms, h)?;
+                let cl = derived::inst_all(&lp.r.peano.core.succ_closed, std::slice::from_ref(&ta))?;
+                let thm = lift(&cl, &pa)?;
+                Some((lp.succ_of(ta), thm))
+            }
+            Level::Max(a, b, _) => {
+                let (ta, pa) = self.omega_level_rec(ctx, a, lp, assms, h)?;
+                let (tb, pb) = self.omega_level_rec(ctx, b, lp, assms, h)?;
+                let both = match h {
+                    None => derived::and_intro(&pa, &pb),
+                    Some(_) => derived::hyp_and(&pa, &pb)?,
+                };
+                let cl = derived::inst_all(&lp.ord.max_in_omega, &[ta.clone(), tb.clone()])?;
+                let thm = lift(&cl, &both)?;
+                Some((lp.max(ta, tb), thm))
+            }
+            Level::IMax(a, b, _) => {
+                let (ta, pa) = self.omega_level_rec(ctx, a, lp, assms, h)?;
+                let (tb, pb) = self.omega_level_rec(ctx, b, lp, assms, h)?;
+                let both = match h {
+                    None => derived::and_intro(&pa, &pb),
+                    Some(_) => derived::hyp_and(&pa, &pb)?,
+                };
+                let cl = derived::inst_all(&lp.imax_in_omega, &[ta.clone(), tb.clone()])?;
+                let thm = lift(&cl, &both)?;
+                Some((lp.imax(ta, tb), thm))
+            }
+            Level::Param(..) => {
+                let t = self.interp_level(ctx, l);
+                let f = Formula::mem(t.clone(), lp.omega());
+                let i = assms.iter().position(|a| *a == f)?;
+                Some((t, conj_proj(assms, i)?))
+            }
+        }
+    }
+
+    /// `⟦Sort ℓ⟧ := srt(ℓ̂)` at a level the σ-schedule cannot ground — the
+    /// quantified replacement for the opaque `sort(⟦ℓ⟧)` arm. Only the term;
+    /// the evidence is rebuilt by the consumer ([`Self::ty_sort_poly`]), which
+    /// is where it is checked against the obligation.
+    fn interp_sort_poly(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> Option<Term> {
+        let lp = self.lp()?;
+        let omega = lp.omega();
+        let mut assms = Vec::new();
+        self.collect_level_params(ctx, l, &omega, &mut assms);
+        let h = conj_of(&assms);
+        let (t, _) = self.omega_level_rec(ctx, l, &lp, &assms, h.as_ref())?;
+        Some(lp.srt_at(t))
+    }
+
+    /// The quantified branch of the sort-typing rule, `None` when it does not
+    /// apply (flag off, ground level, or an obligation whose interpreted shape
+    /// is not literally `srt(ℓ̂) ∈ srt(succ ℓ̂)`).
+    fn ty_sort_poly(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, te: &Term, tt: &Term) -> Option<TgTyping> {
+        let lp = self.lp()?;
+        let Expr::Sort { level, .. } = ctx.read_expr(e) else { return None };
+        let l = self.canon_level(ctx, level);
+        if self.level_ground(ctx, l) {
+            return None
+        }
+        let (lhat, assms, hthm) = self.omega_level(ctx, l)?;
+        // The obligation must be about exactly the terms the rule proves
+        // things about — the same guard every rule here ends on.
+        if *te != lp.srt_at(lhat.clone()) || *tt != lp.srt_at(lp.succ_of(lhat.clone())) {
+            return None
+        }
+        let sis = derived::inst_all(&lp.s.sort_in_sort, std::slice::from_ref(&lhat))?;
+        let h = conj_of(&assms);
+        let thm = match h {
+            None => Thm::mp(&sis, &hthm)?,
+            Some(_) => derived::syl(&hthm, &sis)?,
+        };
+        Some(self.typing(crate::certify::TyGap::Sort, te, tt, thm, assms))
     }
 
     /// The per-thread key for a Lean name, or `None` for a name interned in a
@@ -14128,13 +14339,27 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
 
     /// `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, which the interpretation makes
     /// `x ∈ U(x)` — [`Self::domain_premise`]'s first branch, at one instance.
+    ///
+    /// At a level the σ-schedule cannot ground, and with the
+    /// `explore/level-poly-target` apparatus enabled, the obligation is
+    /// `srt(ℓ̂) ∈ srt(succ ℓ̂)` instead — `Srt::sort_in_sort` at the variable
+    /// index, a **conditional** certificate under the level's `u ∈ ω`
+    /// assumptions (`LEVELPOLY.md` §1.3). The guard that the interpreted
+    /// obligation really has that shape falls through to the ordinary miss
+    /// when it fails, e.g. when canonicalisation reshaped `succ ℓ`.
     fn ty_sort(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
         let (te, tt) = (self.interp(ctx, e), self.interp(ctx, ty));
+        if levelpoly_enabled() {
+            if let Some(t) = self.ty_sort_poly(ctx, e, &te, &tt) {
+                return t
+            }
+        }
         match self.domain_premise(&te, &tt) {
             Some(t) => self.typing(crate::certify::TyGap::Sort, &te, &tt, t, Vec::new()),
             None => self.ty_miss(crate::certify::TyGap::Sort),
         }
     }
+
 
     /// A constant's typing: **a lookup** in the store filled when the
     /// declaration was checked. Not a walk down the delta graph — a constant's
