@@ -19,6 +19,22 @@
 # enforcement**, exits 1, and runs before any input is looked at, so it runs on
 # every machine.
 #
+# # Finding the corpus, and counting it
+#
+# "Absent" has to mean absent, and it did not. `vendor/` is gitignored, so a
+# `git worktree` — which is how every seat on this project works — has no
+# corpus at `$ROOT/vendor/arena-tests` even when the machine has one, and this
+# script hard-coded that path twice. `ci/corpus-dir.sh` answers the question
+# properly (main checkout via `git rev-parse --git-common-dir`), and the two
+# self-test cells that needed a *present* corpus now build a synthetic one
+# instead of borrowing the real one, so they hold on a machine that has none.
+#
+# The count uses `find -L`, because the corpus a worktree reaches is a symlink
+# and `find` does not descend one named on its command line: measured, plain
+# `find` said 0 where `find -L` said 157, and this step called BROKEN on a
+# corpus the suites beside it were reading. Zero remains a hard failure — that
+# is the guard, and two cells hold it down, one plain and one through a link.
+#
 # # The feature matrix (the top half)
 #
 # `ci/check.sh` runs the two feature variants over `-p nanoda_lib` rather than
@@ -43,7 +59,13 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-CORPUS="${CORPUS_DIR:-$ROOT/vendor/arena-tests}"
+# `vendor/` is gitignored, so a `git worktree` does not get the corpus and
+# `$ROOT/vendor/arena-tests` is the wrong answer in the environment every seat
+# on this project actually works in. `ci/corpus-dir.sh` falls back to the main
+# checkout's copy; when there is none anywhere it echoes the local path anyway,
+# so the "ABSENT" message below still names the path README.md tells you to
+# unpack into. See that script's header.
+CORPUS="${CORPUS_DIR:-$("$ROOT/ci/corpus-dir.sh")}"
 MODELGEN="${MODELGEN_BIN:-$ROOT/modelgen/.lake/build/bin/modelgen}"
 CHECK_SH="${CHECK_SH:-$ROOT/ci/check.sh}"
 SCAN_DIRS="${SCAN_DIRS:-$ROOT/checker/tests $ROOT/mini/tests}"
@@ -61,16 +83,56 @@ self_test() {
     else echo "SELFTEST FAIL: $name wanted rc=$want, got $rc" >&2; env "$@" "$0" >&2; sfails=$((sfails+1)); fi
   }
   echo "self-testing $0"
-  mkdir -p "$TMP/empty"
+  # A synthetic corpus — one directory holding one export — and the two
+  # symlinked shapes of it. Synthetic and not the real thing on purpose: this
+  # block used to point the "present corpus" cells at
+  # `$ROOT/vendor/arena-tests`, which is gitignored and therefore *absent* in
+  # every `git worktree`, so on the machine every seat actually works on the
+  # cell got a SKIP where it wanted a BROKEN and the self-test was 1 FAIL. A
+  # self-test that only holds where the optional input happens to be installed
+  # is the very thing this script exists to forbid.
+  mkdir -p "$TMP/empty" "$TMP/corpus"
+  : > "$TMP/corpus/x.ndjson"
+  ln -s "$TMP/corpus" "$TMP/linked"
+  ln -s "$TMP/empty"  "$TMP/linked-empty"
   # An absent input is a SKIP, not a pass and not a failure.
   expect 77 "an absent corpus SKIPs" CORPUS_DIR="$TMP/nope" MODELGEN_BIN="$TMP/nope"
   # A corpus that unpacked short is BROKEN, not a skip: the directory test that
   # every call site used to do would have called this one present.
-  expect 1  "a present-but-empty corpus is BROKEN" CORPUS_DIR="$TMP/empty" MODELGEN_BIN="$TMP/nope"
+  # `NANODATG_REQUIRE_CORPUS=1` is what makes this cell *about the count guard*:
+  # without it the run also exits 1 down at the variable check, so the cell
+  # passed with the count guard deleted and pinned nothing.
+  expect 1  "a present-but-empty corpus is BROKEN" \
+            CORPUS_DIR="$TMP/empty" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=1
   # The corpus is there but nothing required it — this is the state the whole
   # change exists to prevent, and it must not be reported as a pass.
   expect 1  "a corpus present with the variable unset is BROKEN" \
-            CORPUS_DIR="$ROOT/vendor/arena-tests" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=
+            CORPUS_DIR="$TMP/corpus" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=
+  # A corpus reached through a symlink — the shape a worktree gets, and the one
+  # `find` without `-L` reports as zero. Reaching 77 means it got past the
+  # count guard and stopped only for the missing modelgen. Falsifier: drop the
+  # `-L` from the count below and this cell returns 1.
+  expect 77 "a symlinked corpus is counted, not reported empty" \
+            CORPUS_DIR="$TMP/linked" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=1
+  # …and `-L` must not have bought that by making the zero guard unfalsifiable:
+  # a symlink to a genuinely empty corpus is still BROKEN.
+  expect 1  "a symlink to an empty corpus is still BROKEN" \
+            CORPUS_DIR="$TMP/linked-empty" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=1
+  # The exit code alone would accept a link that yielded *some* wrong number, so
+  # pin the count itself: through the link it must equal the count in the
+  # directory the link points at.
+  local nlink ndir
+  count_of() {
+    env CORPUS_DIR="$1" MODELGEN_BIN="$TMP/nope" NANODATG_REQUIRE_CORPUS=1 "$0" 2>/dev/null \
+      | sed -nE 's/^  arena corpus: ([0-9]+) exports.*/\1/p'
+  }
+  nlink="$(count_of "$TMP/linked")"; ndir="$(count_of "$TMP/corpus")"
+  if [[ "$nlink" == "$ndir" && "$nlink" == "1" ]]; then
+    echo "  ok: the count through a symlink equals the count in the directory ($nlink)"
+  else
+    echo "SELFTEST FAIL: linked corpus counted '$nlink', directory counted '$ndir', wanted 1" >&2
+    sfails=$((sfails+1))
+  fi
   # …and the ci/check.sh grep.
   printf '#!/bin/sh\nstep "tests" cargo test --workspace\n' > "$TMP/no-tg.sh"
   expect 1  "a ci/check.sh with no --features tg step is BROKEN" \
@@ -269,9 +331,19 @@ sites=$(grep -rE 'skip_guard::(absent|no_inputs|tool_absent)\b' \
 missing=0
 
 if [[ -d "$CORPUS" ]]; then
-  n=$(find "$CORPUS" -name '*.ndjson' -type f 2>/dev/null | wc -l)
+  # `-L`, and it is not decoration. A seat working in a `git worktree` reaches
+  # the gitignored corpus through a symlink, and `find` does not descend a
+  # symlink *named on its command line*. Measured 2026-08-09: plain `find`
+  # reported 0 exports for a linked corpus that `find -L` counted 157 in — so
+  # this step called BROKEN on a corpus that the suites running beside it were
+  # reading perfectly well through ordinary path resolution. A step that
+  # contradicts the tests next to it teaches the reader to discount it.
+  n=$(find -L "$CORPUS" -name '*.ndjson' -type f 2>/dev/null | wc -l)
   if (( n == 0 )); then
-    echo "BROKEN: $CORPUS exists but holds no .ndjson exports" >&2
+    echo "BROKEN: $CORPUS is reachable but holds no .ndjson exports." >&2
+    echo "        Zero is never a pass here. Either the corpus unpacked short," >&2
+    echo "        or this step cannot see files the suites beside it can read." >&2
+    echo "        Both are reds; neither is an absence." >&2
     exit 1
   fi
   echo "  arena corpus: $n exports at $CORPUS"
