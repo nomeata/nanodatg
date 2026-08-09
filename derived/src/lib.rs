@@ -51,6 +51,7 @@ pub mod hyp;
 pub mod inductive;
 pub mod infinity;
 pub mod isum;
+pub mod levels;
 pub mod nat;
 pub mod pairs;
 pub mod point_fun;
