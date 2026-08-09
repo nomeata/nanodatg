@@ -499,70 +499,21 @@ pub struct Checker<'e, 'i> {
 struct Frame {
     /// `th.scopes.len()` when this frame was last written to.
     scopes_len: usize,
-    /// Structural hash of the key expression → the candidates under it. `Expr`
-    /// has no `Hash`, and a hash is a hint: a hit is confirmed by `==` before
-    /// the `Typing` is handed back, exactly as `wt_memo` confirms its own.
-    map: HashMap<u64, Vec<(E, Typing)>>,
-}
-
-/// A structural hash of a Lean expression. Not a canonical form and not
-/// required to be one — [`Frame::map`] confirms every hit by equality.
-fn hash_expr(e: &E) -> u64 {
-    use std::hash::{Hash, Hasher};
-    fn go<H: Hasher>(e: &E, h: &mut H) {
-        match &e.view() {
-            Expr::BVar(i) => {
-                0u8.hash(h);
-                i.hash(h);
-            }
-            Expr::Sort(u) => {
-                1u8.hash(h);
-                format!("{u}").hash(h);
-            }
-            Expr::Const(n, ls) => {
-                2u8.hash(h);
-                n.hash(h);
-                ls.len().hash(h);
-                for l in ls.iter() {
-                    format!("{l}").hash(h);
-                }
-            }
-            Expr::App(f, a) => {
-                3u8.hash(h);
-                go(f, h);
-                go(a, h);
-            }
-            Expr::Lam { ty, body } => {
-                4u8.hash(h);
-                go(ty, h);
-                go(body, h);
-            }
-            Expr::Forall { ty, body } => {
-                5u8.hash(h);
-                go(ty, h);
-                go(body, h);
-            }
-            Expr::Let { ty, val, body } => {
-                6u8.hash(h);
-                go(ty, h);
-                go(val, h);
-                go(body, h);
-            }
-            Expr::Proj { ind, idx, s } => {
-                7u8.hash(h);
-                ind.hash(h);
-                idx.hash(h);
-                go(s, h);
-            }
-            other => {
-                8u8.hash(h);
-                format!("{other}").hash(h);
-            }
-        }
-    }
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    go(e, &mut h);
-    h.finish()
+    /// The key expression → its typing.
+    ///
+    /// **The key is the expression itself, and that is now exact rather than a
+    /// hint.** This was `HashMap<u64, Vec<(E, Typing)>>` over a structural
+    /// hash, with every hit re-confirmed by `==`, because `Expr` was an `Rc`
+    /// tree with no `Hash`. Since `#120` an [`E`] is `checker`'s `ExprPtr` —
+    /// a `u32` into the hash-consed arena, where **pointer identity is
+    /// structural identity** (`crate::expr`'s header, and the binder-metadata
+    /// normal form `crate::arena` pins with four tests that makes it hold).
+    /// So `E: Hash` hashes one `u32` and `E: Eq` compares one `u32`: the
+    /// bucket vector, the confirmation scan and the O(size) walk that computed
+    /// the old key all had nothing left to do. The soundness argument above is
+    /// unchanged — it is about *which* expressions may share a frame, not
+    /// about how the frame finds them.
+    map: HashMap<E, Typing>,
 }
 
 /// The interpretation and the kernel scope stack, kept **inside** the
@@ -2117,11 +2068,18 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// [`Checker::beta_premise`] on a typing the caller **already inferred**.
     ///
-    /// mini has no `infer_type` cache by design, so an argument inferred twice
-    /// is an argument's whole subtree walked twice, and at a nest of arguments
-    /// that are themselves nests the factor compounds. That is what this form
-    /// exists to avoid at [`Checker::nest_arg_typings`], whose loop holds the
-    /// `Typing` it just derived.
+    /// **Nothing here may assume the memo catches the second inference.**
+    /// mini does have an `infer_type` memo — [`Frame`], and
+    /// [`Checker::infer_type`] a few dozen lines below opens with
+    /// `frame_get`. But the caller this form exists for,
+    /// [`Checker::nest_arg_typings`], runs with an `Interp`, and on that path
+    /// [`Checker::frame_put`] stores **certificates only**: a typing whose
+    /// evidence is a `Gap` is refused, so re-inferring the argument really is
+    /// an argument's whole subtree walked twice. (Where the memo *would* hit
+    /// it returns the very `Typing` this form is handed, so the form is never
+    /// the worse of the two.) At a nest of arguments that are themselves
+    /// nests the factor compounds; that is what this form exists to avoid, in
+    /// the loop that already holds the `Typing` it just derived.
     ///
     /// # Holding `⟦a⟧` is *not* holding the inference — measured
     ///
@@ -2171,20 +2129,19 @@ impl<'e, 'i> Checker<'e, 'i> {
     // ────────────────────────────────────────────────── inferType ──
 
     pub fn infer_type(&mut self, e: &E) -> R<Typing> {
-        let h = hash_expr(e);
-        if let Some(t) = self.frame_get(h, e) {
+        if let Some(t) = self.frame_get(e) {
             return Ok(t)
         }
         let t = self.infer_type_inner(e)?;
-        self.frame_put(h, e, &t);
+        self.frame_put(e, &t);
         Ok(t)
     }
 
     /// A hit in the innermost frame, or `None`. Empties the frame first if a
     /// kernel scope was opened behind `lenv`'s back — see [`Frame`].
-    fn frame_get(&mut self, h: u64, e: &E) -> Option<Typing> {
+    fn frame_get(&mut self, e: &E) -> Option<Typing> {
         let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
-        // **Every path counts.** The first draft took the `map.get(&h)?` early
+        // **Every path counts.** The first draft took the `map.get(e)?` early
         // return, which is the *common* miss, so the census reported a hit rate
         // computed over hits plus almost nothing.
         let hit = (|| {
@@ -2194,17 +2151,46 @@ impl<'e, 'i> Checker<'e, 'i> {
                 f.scopes_len = n;
                 return None
             }
-            f.map.get(&h)?.iter().find(|(k, _)| k == e).map(|(_, t)| t.clone())
+            f.map.get(e).cloned()
         })();
         crate::census::note_frame_cache(hit.is_some());
         hit
     }
 
-    fn frame_put(&mut self, h: u64, e: &E, t: &Typing) {
-        // **Only a certificate is kept.** A `Gap` is cheap to re-reach and
-        // caching one would keep it out of `blocker`'s trail on every call but
-        // the first — `wt_memo`'s policy, and the instrument it had to repair.
-        if t.ev.thm().is_none() {
+    fn frame_put(&mut self, e: &E, t: &Typing) {
+        // **A `Gap` is kept only where nothing can turn it into a proof.**
+        //
+        // On the **certified** path (`th: Some`) only a certificate is stored,
+        // and the reason is stronger than the trail hygiene this condition was
+        // first written for (*"a `Gap` is cheap to re-reach and caching one
+        // would keep it out of `blocker`'s trail on every call but the
+        // first"*): there the `Interp` **grows** inside a frame's lifetime —
+        // `zoneb::ensure` builds carriers on demand and the nested splice
+        // performs lazy fills — so an inference that gaps at `no-interp(T)`
+        // now can succeed later in the very same frame once `⟦T⟧` lands. A
+        // cached `Gap` would freeze a reason that has stopped being true,
+        // which is §0.4's "keyed on a name instead of a cause" defect with a
+        // cache as the vehicle. A cached `Proved` cannot go stale in either
+        // direction: a `Thm`, once derived, stays derived, and the store only
+        // grows. The asymmetry is therefore correct there, and deleting it
+        // outright was measured to buy at most 4% (CACHING-DESIGN.md §1).
+        //
+        // On the **acceptance** path (`th: None`) that staleness route does
+        // not exist — `Checker::new` sets `th: None`, so there is no `Interp`
+        // to consult and none to grow, and the `Gap` an entry carries is the
+        // one recomputation would mint again. But *every* entry's evidence is
+        // a `Gap` there, because nothing can carry a certificate without an
+        // `Interp` — so the unnarrowed condition did not filter the memo, it
+        // **disabled** it, while still paying for the lookup: measured at
+        // `infer_type` entered 285 922 406 times for 9 561 distinct
+        // expressions with **0 hits in 285 922 406 lookups** (PROFILE.md §3).
+        // Its cost there was total and its purpose unreachable.
+        //
+        // `self.th.is_some()` is what separates the two, and it leaves the
+        // certified path **byte-identical by construction rather than by
+        // test**: the added conjunct is false exactly when `th` is `None`, so
+        // no run with an `Interp` can take a different branch than before.
+        if self.th.is_some() && t.ev.thm().is_none() {
             return
         }
         let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
@@ -2213,10 +2199,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             f.map.clear();
             f.scopes_len = n;
         }
-        let slot = f.map.entry(h).or_default();
-        if !slot.iter().any(|(k, _)| k == e) {
-            slot.push((*e, t.clone()));
-        }
+        f.map.entry(*e).or_insert_with(|| t.clone());
     }
 
     fn infer_type_inner(&mut self, e: &E) -> R<Typing> {
