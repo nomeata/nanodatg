@@ -197,6 +197,24 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     let mut accepted = 0usize;
     for decl in &loaded.decls {
         if let Err(msg) = kernel::add(&mut env, decl) {
+            // **A budget refusal is a decline.** See
+            // [`crate::kernel::BUDGET_DECLINE`]: `reject` says the file is
+            // ill-typed and `decline` says mini does not handle it, and
+            // running out of recursion budget is the second. Classified here
+            // because this is the one place a kernel-pass error becomes a
+            // verdict.
+            if msg.starts_with(crate::kernel::BUDGET_DECLINE) {
+                return Outcome {
+                    verdict: Verdict::Declined {
+                        reason: format!("{} while checking {}", msg, decl.name()),
+                    },
+                    facts: loaded.facts,
+                    census,
+                    elim_audit: Vec::new(),
+                    ledger: None,
+                    dump: None,
+                }
+            }
             return Outcome {
                 verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
                 facts: loaded.facts,

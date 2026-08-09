@@ -462,6 +462,9 @@ pub struct Checker<'e, 'i> {
     /// How deep [`Checker::assert_def_eq_as`] currently is. See
     /// [`DEFEQ_MAX_DEPTH`].
     defeq_depth: u32,
+    /// How deep [`Checker::whnf_conv`] currently is. Same bound, same reason:
+    /// the two recursions are different and either one alone is fatal.
+    whnf_depth: u32,
 }
 
 /// **The bound on definitional-equality recursion**, and the one guard in mini
@@ -492,12 +495,27 @@ pub struct Checker<'e, 'i> {
 /// cheaper than the failure it replaces. At `2_000` the fixture trips it in
 /// **1.6 s under a 4 GB cap**.
 ///
-/// The corpus's own peak is **34**, measured over all 91 exports, so `2_000`
-/// is 58× headroom and no legitimate derivation on anything mini accepts is
-/// near it. It is deliberately a round number and deliberately not tight: it
+/// The corpus's own peaks are **34** for `def_eq` and **at most 20** for
+/// `whnf`, measured over all 91 exports, so `2_000` is 58× and 100× headroom
+/// and no legitimate derivation on anything mini accepts is near it. It is deliberately a round number and deliberately not tight: it
 /// is a backstop against a runaway, not a statement about how deep a proof may
 /// be, and the message says so.
 pub const DEFEQ_MAX_DEPTH: u32 = 2_000;
+
+/// The prefix both budget messages carry, and the seam
+/// [`crate::run`] classifies them by.
+///
+/// **A budget refusal is a decline and not a rejection.** The two words mean
+/// different things in this project: `reject` says the *file* is ill-typed and
+/// `decline` says *mini* does not handle it. Running out of recursion budget is
+/// the second — `init-prelude` is a perfectly good export — and reporting it as
+/// the first would put a true file in the population of false ones.
+///
+/// A string prefix rather than an error type because `kernel::add` returns
+/// `Result<(), String>` throughout and threading a second channel for one
+/// producer would be a wide change for one bit. The bit is produced in exactly
+/// two places and read in exactly one; all three name this constant.
+pub const BUDGET_DECLINE: &str = "budget: ";
 
 /// One telescope slot's worth of [`Checker::infer_type`] results.
 ///
@@ -578,6 +596,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
             defeq_depth: 0,
+            whnf_depth: 0,
         }
     }
 
@@ -595,6 +614,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
             defeq_depth: 0,
+            whnf_depth: 0,
         }
     }
 
@@ -898,6 +918,31 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// heuristic; `go`'s recursion is a loop here, and the certificate is a
     /// `trans` chain composed along it.
     pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
+        // **Bounded, for the reason [`DEFEQ_MAX_DEPTH`] gives.** `whnf_conv`
+        // recurses into itself — at a recursor's major premise, and through
+        // `whnf_typing` — and a major that is a nat literal makes that
+        // recursion as deep as the literal: reduce `natLit n`, fire ι, and the
+        // right-hand side contains the eliminator again at `natLit (n−1)`.
+        //
+        // This is the trap `NAT-REPRESENTATION.md` §7 predicted for step 3
+        // without step 4, and it is **second**: the first abort on
+        // `init-prelude` was `def_eq` comparing a literal with itself, which is
+        // fixed above and moved the failure from *seconds* to twenty-four
+        // minutes. What is left is the genuine one, and until the accelerated
+        // operations are in it must **report** rather than abort.
+        self.whnf_depth += 1;
+        if self.whnf_depth > DEFEQ_MAX_DEPTH {
+            self.whnf_depth -= 1;
+            return Err(format!(
+                "weak-head reduction recursed past {DEFEQ_MAX_DEPTH} levels while reducing {e};                  mini bounds this because the alternative is a stack overflow, which reports                  nothing"
+            ))
+        }
+        let out = self.whnf_conv_inner(e, tm, why);
+        self.whnf_depth -= 1;
+        out
+    }
+
+    fn whnf_conv_inner(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
         let tm_asked = tm.is_some();
         // Handed no endpoint, this is the acceptance-only `whnf` and its legs
         // state nothing; `why` is the caller's own reason and was recorded
