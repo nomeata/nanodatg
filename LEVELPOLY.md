@@ -200,6 +200,57 @@ composes them unchanged. (10) Universe closure at a variable rung — the
 tower's `∀c` closure theorems apply at `c := app(lvl, n)` directly; not even
 `is_universe` is needed, though it is available (§ verdict).
 
+### 1.8 The three commissioned attacks, answered
+
+* **Is the `_` arm of `interp_sort` the only groundness assumption?** No —
+  and this was established before designing, not assumed. The instantiation
+  schedule, `under_sigma`, the `(name, levels)` keying (checker tables and
+  mini's `ConstKey`), `IndApparatus`' per-σ stores, the `Clause` dispatch,
+  mini's `ground::eval`/`Gap::SymbolicLevel`/`CUMUL_HEIGHT`, and the
+  recursor's eliminating universe each assume groundness **independently**
+  (§5.1 is the full census with locations). The `_` arm is merely where the
+  assumption is *visible* as an opaque term; the wedge (§4) relieves exactly
+  that seam and no other, which is why §5.3 lists five more steps.
+* **Is ω the right index set, given the ω-high tower and the finite-branching
+  record?** Yes, and the two are different axes. The 2026-08-05
+  finite-branching entry is about W-type *fibre* cardinality, was superseded
+  the same day ("Infinitary branching is wired", the `wpath` route), and is
+  untouched by anything here. The level index is a different quantity: a
+  Lean level under a valuation *is* a natural number (thesis §6.1,
+  `v : UV → ℕ`), the tower's rungs are indexed by exactly ω, and quantifying
+  `u ∈ ω` ranges over precisely the instantiations the ground schedule
+  enumerates one by one. An index set larger than ω would quantify over
+  rungs no Lean level can name.
+* **Is `Prop` handled by the same conditional?** Yes — that is what
+  `srt(n) = ite0(n, U₀, app(lvl,n))` *is*. `U₀` is not `U(anything)` and is
+  not a rung of the internal ladder (the ladder's base is `ω`, preserving
+  the `U(ω)`-not-`U(U₀)` countermodel decision); the `Zero ↦ pre.u0()`
+  discontinuity lives inside the same `ite0` that carries `imax`, and every
+  variable-level theorem splits on `n = ∅` exactly where the ground code's
+  Rust `if` used to decide. Proof irrelevance stays a fact about `U₀`
+  (`u0_subsingleton`), available in the zero branch of any such split; the
+  tests pin `srt(0) = U₀`, `srt(0) ≠ srt(1)`, and the flagship's zero branch
+  computing into `U₀`.
+
+### 1.9 `is_universe(U(c))`, and what this construction actually spends
+
+The commissioning brief's constraint — "`is_universe(U(c))` is NOT available"
+(`derived/src/bound.rs:51`) — is **stale**: `least_universe_is_universe`
+proves `⊢ ∀x. is_universe(U(x))` outright (CSB; `DECISIONS.md` 2026-08-05,
+"the recursion theorem was never on the path"). `bound.rs`'s header has not
+been corrected on master and still states the old constraint.
+
+The construction here barely needs it either way. The closure facts the
+flagship spends go through the tower's **`∀c`-shaped transfer theorems**
+(`Tower::funspace`, `u0_in`, `transitive` — the transfer-through-the-
+intersection route the brief pointed at) instantiated at the *variable-rung
+term* `c := app(lvl, q)`, which is exactly the `bound.rs` precedent one
+quantifier deeper. `is_universe` appears once, as `UTower::step_is_universe`
+(exported for future consumers, e.g. closure lemmas stated over
+`is_universe(u)` rather than over `U(c)`); nothing load-bearing on this
+branch rests on it, so the design would have survived even under the stale
+constraint.
+
 ## 2. Why quantification is sound where the schedule was — the two-line argument
 
 The ground schedule is sound because Lean's own semantics quantifies levels at
@@ -317,6 +368,27 @@ such.
   `u` is in rung `u+1`", and the counters price the fact that nothing above
   the seam consumes the stronger form yet.
 * Acceptance is unchanged in both directions (exit 0, same declarations).
+* **Gate results at head.** Flag **off**: the whole `tg` suite passes
+  (72 + 0 + 6 + 28 + 8-ignored), the full `derived` suite passes (103 green
+  result lines, two consecutive sweeps, zero failures), boundary and
+  mini-scope checks clean. Flag **on**: 27 of `tg_tutorial`'s 28 pass; the
+  one failure is `the_general_iota_rule_computes_on_the_prelude`, which is a
+  **total-gap ratchet** (`init-prelude: 15443 gaps, ratchet 15423 — the
+  general ι path regressed`) tripping on precisely the +20 gaps this section
+  explains — the 54 vacuous discharges the wedge declines to make plus the
+  assumptions that escape for want of the declaration-boundary quantifier.
+  The ι path itself did not regress; the ratchet measures total gaps and is
+  doing its job on a prototype that knowingly trades vacuous certificates
+  for honest conditional ones. The step that retires this failure is §5.3
+  step 5 (quantify the escaping `u ∈ ω` assumptions at the declaration
+  boundary), not a fix to ι.
+* The arena corpus gate ran green on this branch
+  (`152 matched, 0 mismatched, 2 declined, 0 waived (of 154)` — the same two
+  declines as master). `mini` never builds the `tg` backend (the
+  feature-inert guard in `ci/check.sh` enforces it) and `derived`'s changes
+  are purely additive modules, so the flag cannot reach the mini gates; a
+  re-run of arena and mini-vs-nanoda at the final head is still owed and
+  named here rather than assumed.
 
 ## 5. The checker-side map
 
