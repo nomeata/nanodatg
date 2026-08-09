@@ -9,12 +9,23 @@ split becomes an if-then-else **inside the target term**.
 ## Verdict, first
 
 **No mathematical obstruction was found; the set theory supports the design in
-full.** The verdict rests on constructions that are *built and tested* on this
-branch (§3), not on argument alone. What separates this branch from a shipping
-variant is engineering volume in `checker/`/`mini/` — the ground-σ assumption
-is load-bearing in the translation layer's keying and clause dispatch — and
-that volume is mapped in §5, with what was prototyped named as prototyped and
-what is unmeasured named as unmeasured.
+full.** The verdict rests on constructions *built and kernel-checked* on this
+branch (§3), not on argument alone: the level vocabulary lives in ω (`max` is
+binary union, `imax` is one conditional), the universe tower is internalised
+as a set function of a variable rung (the recursion theorem at `G := U(·)`),
+and the centrepiece — Π-formation at `imax` with the Prop/Type split as an
+if-then-else **inside the target term**, exactly the conditional the owner
+predicted — is one theorem at fully variable levels whose two branches
+provably compute to the correct ground facts. A prototype seam in the `tg`
+backend (§4) interprets and certifies variable-level sorts end to end behind
+a flag, at +0.24% instructions, with today's suites green in both flag
+states.
+
+What separates this branch from a shipping variant is engineering volume in
+`checker/`/`mini/` — the ground-σ assumption is load-bearing in the
+translation layer's keying and clause dispatch — and that volume is mapped in
+§5, with what was prototyped named as prototyped and what is unmeasured named
+as unmeasured. Nothing in it is blocked on mathematics.
 
 Two claims in the commissioning brief are **refuted** by the tree as it stands,
 and both make the design *easier* than briefed:
@@ -230,10 +241,25 @@ landed and green, [ ] not landed.
   `LevelPoly` bundle over one tower chain, plus `imax_in_omega`:
   `ite0(v, ∅, u ∪ v) ∈ ω` for `u, v ∈ ω`, closing ω-membership of every
   level expression's interpretation by structural recursion.
-* [ ] **`rules`** (`rules.rs`) — the flagship: Π-formation at
-  `imax(u,v)` with the Prop/Type split as `ite0` *inside the term*, one
-  theorem, both branches; plus the demonstrations (`a : Type u ⊢ (a → a) :
-  Type u` at a variable `u`; the `PUnit`-shaped `1 ∈ srt(u)` at every `u`).
+* [x] **`rules`** (`rules.rs`, tests `levels_rules.rs`) — the flagship:
+
+  ```text
+  ⊢ ∀u ∀v ∀A ∀b. (((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ b ∈ srt(v)))
+                    → ite0(v, cnd(A,b), fs(A,b)) ∈ srt(ite0(v, ∅, u ∪ v)))
+  ```
+
+  Π-formation at `imax(u,v)`, the Prop/Type split as `ite0` **inside the
+  target term**, one theorem, both branches — Carneiro's two `Π` clauses
+  (§6.2) merged by the level conditional at fully variable levels. The tests
+  instantiate the *one* theorem at `(0,0,1,1)` and compute it down to
+  `⊢ cnd(1,1) ∈ U₀` (the Prop clause), and at `(1,1,ω,ω)` down to
+  `⊢ fs(ω,ω) ∈ U(ω)` (the Type clause, `U(ω)` pinned as the existing
+  tower's rung 1) — both branches of the conditional compute to the right
+  ground facts. Plus `mono_sub` (cumulativity along `⊆`), `fun_type_demo`
+  (`α : Type u ⊢ (α → α) : Type u` at a *variable* `u` — the owner's
+  "`a : Type u` becomes `⟦a⟧ ∈ U(u)`" sentence as a kernel theorem), and
+  `punit_demo` (`⊢ ∀u∈ω. 1 ∈ srt(u)` — the `PUnit`-carrier membership as
+  **one** theorem where the ground checker mints one symbol per σ, §1.6).
 
 ## 4. The checker prototype, and what it costs
 
