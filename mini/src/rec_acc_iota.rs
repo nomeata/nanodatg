@@ -352,10 +352,11 @@ fn rows_agree(
     };
     // `t(p⃗,y)` off the body symbol and onto the λ it abbreviates.
     //
-    // **[`Interp::body_unfold`], not `inst_all`.** The two produce the same
-    // `Term`; only the first *records* its applicative structure, and an
-    // unrecorded term cannot be taken apart again — which is exactly what
-    // [`Interp::as_lam`] is about to do to it.
+    // [`Interp::body_unfold`] rather than a bare `inst_all` against the site's
+    // axiom. The two produce the same `Term`, and once did not deliver the same
+    // thing: only `body_unfold` filed the result's applicative structure, and a
+    // term absent from that table could not be taken apart — which is exactly
+    // what [`Interp::as_lam`] does to it next.
     let t_at_y = ip.body_unfold(&lsite, y.clone()).ok_or_else(|| bad(LAM))?;
     let inner = t_at_y.concl().as_eq().ok_or_else(|| bad(LAM))?.1.clone();
     let row_eq = row_agrees(

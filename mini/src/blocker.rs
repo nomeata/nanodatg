@@ -581,13 +581,14 @@ pub fn variant_sites(g: &Gap) -> Vec<(String, u32, String)> {
 
 // ────────────────────────────────────────────────────── term rendering ──
 
-/// The applicative structure of a kernel term, as far as mini recorded it.
+/// The applicative structure of a kernel term, and the best name mini has for
+/// each symbol in it.
 ///
-/// Terms are opaque outside `kernel` — there is no public destructor — so this
-/// reads [`Interp::parts_of`], the hint table every term built through
-/// `Interp::mk` is entered in, and the label registry mini fills for the terms
-/// it can name. A term that is neither is `⟨·⟩`: honest, and the reason the
-/// *wanted* obligation above is stated at the Lean level, where it is exact.
+/// Two sources, in order: the label registry mini fills for the terms it can
+/// name, then [`Interp::parts_of`], which reads the spine off the term itself.
+/// An unlabelled symbol prints as `f<id>`, and a term with no spine at all — a
+/// bare variable — as `⟨·⟩`: honest, and the reason the *wanted* obligation
+/// above is stated at the Lean level, where it is exact.
 pub fn show_term(ip: &Interp, t: &kernel::Term, depth: usize) -> String {
     if let Some(l) = ip.label_of(t) {
         return l.to_string()

@@ -4,34 +4,26 @@
 //! # Interface
 //!
 //! ```text
-//! type Parts = HashMap<Term, (FnSym, Vec<Term>)>
-//!
-//! record(parts, f, args)                     -> Term    // Term::apply, remembered
-//! skeleton(parts, x_canon, hole_var, t, v, holes) -> Option<Term>
+//! skeleton(x_canon, hole_var, t, v, holes) -> Term
 //! ```
-//!
-//! [`record`] builds `f(args)` and remembers its applicative structure in
-//! `parts`; every term the caller intends to decompose later must be built
-//! through it.
 //!
 //! [`skeleton`] rewrites `t` into a **skeleton**: every occurrence of `v` is
 //! replaced by the canonical binder slot `x_canon`, and every maximal subterm
 //! *not* mentioning `v` is pushed onto `holes` and replaced by a canonical hole
-//! variable, `hole_var(i)` for the `i`-th. The result is `None` if some subterm
-//! that mentions `v` was never passed through [`record`] — the caller has
-//! leaked a variable, and that should surface as a failure rather than be
-//! papered over. Nodes built on the way are themselves recorded, so the
-//! skeleton can be walked again to rebuild an instance of it.
+//! variable, `hole_var(i)` for the `i`-th.
+//!
+//! It is **total**: the applicative structure it walks is read straight off the
+//! term with [`Term::as_app`], so there is no term it cannot take apart, and
+//! the result can be walked again to rebuild an instance of the skeleton.
 //!
 //! `hole_var` is a callback rather than an [`kernel::Env`] because the hole
 //! variables are *canonical*: two calls for the same index must return the same
 //! variable, across every term the caller ever decomposes, or two occurrences
 //! of one body shape would produce two unequal skeletons.
 //!
-//! **Nothing here is a theorem and nothing here is trusted.** [`Parts`] is a
-//! *hint* — the kernel does not expose [`Term`]'s constructors for reading, so
-//! the applicative structure has to be recorded on the way in — and a wrong
-//! hint yields a skeleton whose reassembly fails to match, never a bad proof.
+//! **Nothing here is a theorem and nothing here is trusted.** A skeleton is a
+//! *term*, and a wrong one yields a reassembly that fails to match, never a bad
+//! proof.
 //!
 //! # Why this exists
 //!
@@ -54,58 +46,68 @@
 //! the interpretation of `b` with the abstracted positions filled in, so the
 //! two sides of the beta equation line up syntactically instead of merely
 //! morally.
+//!
+//! # The `Parts` table this replaced, and what it cost
+//!
+//! Until `Term::as_app` existed the kernel exposed no way to read a term's
+//! applicative structure, so this module carried a `record` function and a
+//! `Parts = HashMap<Term, (FnSym, Vec<Term>)>` side table: **every term the
+//! caller intends to decompose later must be built through it**, and
+//! `skeleton` answered `None` for anything else.
+//!
+//! Three things were wrong with that, all of them measured rather than argued
+//! (`PRELUDE-COST.md` §3.2, §3.3):
+//!
+//! * **It stored what the term already held.** The value `(f, args)` is
+//!   precisely the contents of the `TermData::App` node the key points at, in a
+//!   second `Vec` — 246 bytes of marginal cost per entry for a copy.
+//! * **It was 54 % of the live heap** of an `init-prelude` run and held 80 % of
+//!   the process's live kernel `Term` nodes, growing at 0.6 entries per
+//!   conversion forever, with no eviction and no scope.
+//! * **Its misses were silent and wrong.** A term the *kernel* built — a
+//!   substitution instance, or either endpoint of a `derived::congr` — never
+//!   passed through `record`, so it was indistinguishable from a term with no
+//!   structure. `mini`'s `conv::app_cong` header records six conversions lost
+//!   to exactly that asymmetry, and clearing the table between declarations
+//!   turned 0 gaps into 213.
+//!
+//! Reading the structure back out of the term is not merely cheaper than
+//! remembering it; it is the operation the callers wanted all along, and it
+//! cannot miss.
 
-use std::collections::HashMap;
-
-use kernel::{FnSym, FreeVar, Term};
-
-/// The applicative structure of the terms a caller has built.
-///
-/// The kernel does not expose [`Term`]'s constructors for reading, so a term
-/// that will have to be taken apart later has to be *recorded* when it is
-/// built. See [`record`].
-pub type Parts = HashMap<Term, (FnSym, Vec<Term>)>;
-
-/// `f(args)`, with its applicative structure remembered in `parts`.
-///
-/// The first recording of a term wins: the same term built twice has the same
-/// structure, so a later insertion could only be redundant.
-pub fn record(parts: &mut Parts, f: FnSym, args: Vec<Term>) -> Term {
-    let t = Term::apply(f, args.clone());
-    parts.entry(t.clone()).or_insert((f, args));
-    t
-}
+use kernel::{FreeVar, Term};
 
 /// Split `t` into the part that mentions `v` and the maximal `v`-free
 /// subterms, which are pushed onto `holes` and replaced by canonical hole
 /// variables. `v` itself becomes the canonical bound-variable slot `x_canon`.
 ///
-/// Returns `None` if a term mentioning `v` was not built by [`record`], which
-/// would mean the caller had leaked a variable — a bug, and one that should
-/// surface as a failure rather than be papered over.
+/// **Total.** The three cases are exhaustive: a term not mentioning `v` is a
+/// hole, `v` itself is the slot, and anything else mentions `v` and is
+/// therefore an application — a `Free` other than `v` and a `Bound` do not
+/// mention `v`, so [`Term::as_app`] cannot answer `None` here.
 pub fn skeleton(
-    parts: &mut Parts,
     x_canon: FreeVar,
     hole_var: &mut dyn FnMut(usize) -> FreeVar,
     t: &Term,
     v: FreeVar,
     holes: &mut Vec<Term>,
-) -> Option<Term> {
+) -> Term {
     if !t.occurs_free(v) {
         let h = hole_var(holes.len());
         holes.push(t.clone());
-        return Some(Term::var(h))
+        return Term::var(h)
     }
     if *t == Term::var(v) {
-        return Some(Term::var(x_canon))
+        return Term::var(x_canon)
     }
-    let (f, args) = parts.get(t)?.clone();
+    let Some((f, args)) = t.as_app() else {
+        // Unreachable: see the totality note above. `Term::var(v)` is the only
+        // non-application mentioning `v`, and it was handled.
+        return t.clone()
+    };
     let mut out = Vec::with_capacity(args.len());
-    for a in &args {
-        out.push(skeleton(parts, x_canon, hole_var, a, v, holes)?);
+    for a in args {
+        out.push(skeleton(x_canon, hole_var, a, v, holes));
     }
-    // Through `record`, so that the skeleton's own structure is recorded too: a
-    // caller walks it to rebuild an instance of the skeleton at a binder, and
-    // the kernel does not expose a term for reading.
-    Some(record(parts, f, out))
+    Term::apply(f, out)
 }

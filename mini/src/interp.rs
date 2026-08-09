@@ -7,11 +7,11 @@
 //! Interp::new()                                  -> Interp
 //! ip.sort(n)                                     -> Term          ⟦Sort n⟧
 //! ip.sort_typing(n)                              -> Thm           ⊢ ⟦Sort n⟧ ∈ ⟦Sort (n+1)⟧
-//! ip.app(f, a)                                   -> Term          ⟦f a⟧, recorded
+//! ip.app(f, a)                                   -> Term          ⟦f a⟧
 //! ip.abbrev(&body)                               -> Option<(Term, Thm)>
 //! ip.opaque()                                    -> Term
 //! ip.get_const(&key) / ip.put_const(key, interp)
-//! ip.skeleton(&t, v, &mut holes)                 -> Option<Term>
+//! ip.skeleton(&t, v, &mut holes)                 -> Term
 //! ```
 //!
 //! **What is reimplemented and what is reused.** `kernel` and `derived` are
@@ -49,7 +49,7 @@ use std::rc::Rc;
 use derived::cumul::apparatus::IndChain;
 use derived::inductive::Machine;
 use derived::prelude::{fast_forward, prelude, Prelude};
-use derived::skeleton::{self, Parts};
+use derived::skeleton;
 use derived::tower::Cumul;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -76,11 +76,6 @@ pub struct ConstInterp {
 pub struct Interp {
     pub env: Env,
     pub prelude: Rc<Prelude>,
-    /// The applicative structure of every term built through [`Interp::mk`],
-    /// which is what makes a term decomposable later. A *hint*, not a
-    /// theorem: a wrong entry yields a skeleton that fails to reassemble,
-    /// never a bad proof.
-    parts: Parts,
     /// The canonical binder slot every skeleton abstracts over.
     x_canon: FreeVar,
     /// The canonical hole variables, by index. They must be the same across
@@ -362,9 +357,8 @@ impl PiShape {
         }
     }
 
-    /// `⟦B⟧` at a point — the codomain's interpretation, rebuilt at `x` and
-    /// recorded. Constant in the binder-free clause, the fibre's skeleton
-    /// otherwise.
+    /// `⟦B⟧` at a point — the codomain's interpretation, rebuilt at `x`.
+    /// Constant in the binder-free clause, the fibre's skeleton otherwise.
     pub fn body_at(&self, ip: &mut Interp, x: &Term) -> Term {
         match self {
             PiShape::Dep { site, .. } => {
@@ -781,9 +775,10 @@ pub struct DepRec {
 /// **What `⟦T.rec.{σ}⟧`'s nest bottom is called**, and the equation that takes
 /// the name off again.
 ///
-/// `derived` assembles `drec` outside [`Interp::mk`], so the λ above it cannot
-/// skeletonise a body containing it; `crate::rec_dep`'s `dep_bottom` therefore
-/// binds `app(drec, t)` to a symbol of mini's own. That symbol is what a β
+/// `derived` assembles `drec` outside [`Interp::mk`], which while
+/// decomposability was a property of *who built a term* left the λ above unable
+/// to skeletonise a body containing it; `crate::rec_dep`'s `dep_bottom`
+/// therefore binds `app(drec, t)` to a symbol of mini's own. That symbol is what a β
 /// chain down the stored nest lands on, and this axiom is the **only** way back
 /// — `define_abbrev` mints a fresh symbol per call, so re-minting produces a
 /// second name related to this one by nothing.
@@ -796,9 +791,9 @@ pub struct DepRec {
 ///
 /// The same problem [`DepElim`] solves, at the one eliminator that is not built
 /// out of [`IndApparatus`]: `derived::rec_acc`'s `pack` is assembled inside
-/// `derived`, so the λ above the bottom cannot skeletonise a body containing it
-/// and [`crate::rec_acc_value`] binds `app(app(pack,⟦a⟧),⟦t⟧)` to a symbol of
-/// mini's own. A β chain down the stored nest lands on that symbol and this
+/// `derived`, which on the same argument left the λ above the bottom unable to
+/// skeletonise a body containing it, and [`crate::rec_acc_value`] binds
+/// `app(app(pack,⟦a⟧),⟦t⟧)` to a symbol of mini's own. A β chain down the stored nest lands on that symbol and this
 /// axiom is the **only** way back — `define_abbrev` mints a fresh symbol per
 /// call, so re-minting produces a second name related to this one by nothing.
 ///
@@ -1429,7 +1424,6 @@ impl Interp {
         let mut ip = Interp {
             env,
             prelude,
-            parts: Parts::new(),
             x_canon,
             hole_vars: Vec::new(),
             cumul,
@@ -1574,19 +1568,28 @@ impl Interp {
         }
     }
 
-    /// The applicative structure of a term built through [`Interp::mk`].
+    /// A term's applicative structure: the head symbol and its arguments, or
+    /// `None` if the term is a variable.
     ///
-    /// A *hint*, exactly as [`derived::skeleton::Parts`] is: the kernel does
-    /// not expose `Term`'s constructors for reading, so structure has to be
-    /// recorded on the way in. A wrong entry yields a decomposition that fails
-    /// to reassemble, never a bad proof.
-    pub fn parts_of(&self, t: &Term) -> Option<(FnSym, Vec<Term>)> { self.parts.get(t).cloned() }
-
-    /// `Term::apply`, remembered — the only way to build an applicative term
-    /// that may later have to be taken apart.
-    pub fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term {
-        skeleton::record(&mut self.parts, f, args)
+    /// Read off the term by [`kernel::Term::as_app`]. **It cannot miss**, and
+    /// that is the whole of the difference from what it replaced: this used to
+    /// be a lookup in a `parts: HashMap<Term, (FnSym, Vec<Term>)>` that every
+    /// builder had to write to, so a term the *kernel* built — a substitution
+    /// instance, or an endpoint of `derived::congr` — read back as structureless
+    /// and gapped the next decomposition. See [`derived::skeleton`] for the
+    /// table's cost and `PRELUDE-COST.md` §3.2 for the measurement.
+    pub fn parts_of(&self, t: &Term) -> Option<(FnSym, Vec<Term>)> {
+        t.as_app().map(|(f, args)| (f, args.to_vec()))
     }
+
+    /// `Term::apply`.
+    ///
+    /// Kept as a method because the call sites read as "the interpretation
+    /// builds this", and because it was for years the *only* sanctioned way to
+    /// build an applicative term — one that failed to go through it produced a
+    /// term nothing could take apart again. [`Interp::parts_of`] no longer
+    /// distinguishes them, so this is now plain construction.
+    pub fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term { Term::apply(f, args) }
 
     /// The canonical binder slot.
     pub fn x_canon(&self) -> FreeVar { self.x_canon }
@@ -1604,13 +1607,14 @@ impl Interp {
     /// subterms, which are pushed onto `holes` and replaced by canonical hole
     /// variables; `v` itself becomes [`Interp::x_canon`].
     ///
-    /// `None` means a subterm mentioning `v` was not built through
-    /// [`Interp::mk`] — the interpretation leaked a variable, which must
-    /// surface as a gap rather than be papered over.
-    pub fn skeleton(&mut self, t: &Term, v: FreeVar, holes: &mut Vec<Term>) -> Option<Term> {
-        // Destructured so the `hole_var` callback can borrow `env`/`hole_vars`
-        // while `parts` is borrowed mutably beside it.
-        let Interp { env, parts, hole_vars, x_canon, .. } = self;
+    /// **Total** — see [`derived::skeleton::skeleton`]. It used to answer
+    /// `None` for a subterm mentioning `v` that had not been built through
+    /// [`Interp::mk`], which was read as "the interpretation leaked a
+    /// variable"; the structure is now read off the term, so there is no such
+    /// term and nothing to leak.
+    pub fn skeleton(&mut self, t: &Term, v: FreeVar, holes: &mut Vec<Term>) -> Term {
+        // Destructured so the `hole_var` callback can borrow `env`/`hole_vars`.
+        let Interp { env, hole_vars, x_canon, .. } = self;
         let mut hv = |i: usize| -> FreeVar {
             while hole_vars.len() <= i {
                 let v = env.fresh_var();
@@ -1618,7 +1622,7 @@ impl Interp {
             }
             hole_vars[i]
         };
-        skeleton::skeleton(parts, *x_canon, &mut hv, t, v, holes)
+        skeleton::skeleton(*x_canon, &mut hv, t, v, holes)
     }
 
     // ─────────────────────────────────────────────────── the sort tower ──
@@ -1818,7 +1822,7 @@ impl Interp {
     /// therefore returned rather than stored.
     pub fn lam_site(&mut self, body_tm: &Term, w: FreeVar) -> Option<LamSite> {
         let mut holes = Vec::new();
-        let skel = self.skeleton(body_tm, w, &mut holes)?;
+        let skel = self.skeleton(body_tm, w, &mut holes);
         let k = holes.len();
         if let Some(c) = self.lams.get(&skel) {
             return Some(LamSite { holes, ..c.clone() })
@@ -1897,8 +1901,8 @@ impl Interp {
     /// caller holds, because it is the scope assumption the binder opened.
     ///
     /// **Nothing is searched.** The nest is taken apart with [`Interp::as_lam`],
-    /// which reads the graph symbol off the term the interpretation itself
-    /// recorded; the equation at each level is that symbol's own
+    /// which reads the graph symbol off the term itself; the equation at each
+    /// level is that symbol's own
     /// `beta_conditional_n` and its own defining axiom. A term that is not a
     /// graph — a nest shallower than the spine — is `None`, never a guess.
     pub fn beta_spine(
@@ -1960,18 +1964,21 @@ impl Interp {
         (*out.concl() == Formula::eq(spine, cur.clone())).then_some((cur, out))
     }
 
-    /// Rebuild an instance of a **recorded skeleton**, recording every node it
-    /// passes through.
+    /// Instantiate a skeleton: the holes at `holes`, the canonical binder slot
+    /// at `x`.
     ///
-    /// `inst_all` produces the same `Term` — instantiation happens inside the
-    /// kernel — but produces it *unrecorded*, and an unrecorded term cannot be
-    /// taken apart again. So a beta step's contractum, or an application's
-    /// result type, would arrive as an opaque blob and the very next
-    /// decomposition would fail. That is not a hypothetical: it is how a whole
-    /// class of curried applications was silently gapping.
+    /// A walk, not a search — the skeleton's own structure is read back with
+    /// [`Interp::parts_of`] and its leaves are the canonical variables, so
+    /// every node is either a hole, the slot, or an application to descend
+    /// into.
     ///
-    /// The skeleton itself is recorded (it was built out of recorded terms by
-    /// [`derived::skeleton::skeleton`]), so this is a walk, not a search.
+    /// `inst_all` produces the same `Term`, instantiation happening inside the
+    /// kernel, and this function exists because it once did not deliver the
+    /// same thing: a term's applicative structure lived in a side table that
+    /// only `Interp::mk` wrote to, so the kernel's own result arrived as an
+    /// opaque blob and the next decomposition of it failed. That was not a
+    /// hypothetical — it is how a whole class of curried applications was
+    /// silently gapping.
     pub fn rebuild(&mut self, skel: &Term, holes: &[Term], x: &Term) -> Term {
         if *skel == Term::var(self.x_canon) {
             return x.clone()
@@ -2002,9 +2009,14 @@ impl Interp {
     /// Without it every beta step ends at a symbol nothing else mentions, and
     /// the conversion that consumes it fails a shape check one composition
     /// later — which is how this was found.
+    ///
+    /// It used to open with a [`Interp::rebuild`] whose result was *discarded*:
+    /// `derived::inst_all` produces `⟦b[a]⟧` inside the kernel, so while
+    /// applicative structure lived in a side table the contractum arrived
+    /// unrecorded, and the rebuild was there to walk the same nodes through
+    /// `Interp::mk` and file them. `Interp::parts_of` reads structure off the
+    /// term, so the walk computed a term nobody read and it is gone.
     pub fn body_unfold(&mut self, site: &LamSite, a: Term) -> Option<Thm> {
-        let skel = site.skel.clone();
-        self.rebuild(&skel, &site.holes, &a);
         let mut args = site.holes.clone();
         args.push(a);
         derived::inst_all(&site.t_ax, &args)
@@ -2013,15 +2025,9 @@ impl Interp {
     /// `⊢ b(q⃗, a) = ⟦B[a]⟧` — a fibre unfolded at a point, for either the
     /// dependent or the `Prop` clause. Same argument as [`Interp::body_unfold`]:
     /// the application rules land on the symbol, and the caller's `⟦B[a]⟧` is
-    /// the skeleton instance.
-    fn fibre_unfold(
-        &mut self,
-        b_ax: &Thm,
-        skel: &Term,
-        holes: &[Term],
-        a: &Term,
-    ) -> Option<Thm> {
-        self.rebuild(skel, holes, a);
+    /// the skeleton instance — and the same discarded rebuild, gone for the
+    /// same reason.
+    fn fibre_unfold(&mut self, b_ax: &Thm, holes: &[Term], a: &Term) -> Option<Thm> {
         let mut args = holes.to_vec();
         args.push(a.clone());
         derived::inst_all(b_ax, &args)
@@ -2099,7 +2105,7 @@ impl Interp {
     /// so mini's fibre has arity `k+1` and needs the `_n` route.
     pub fn fibre_site(&mut self, body_ty_tm: &Term, w: FreeVar) -> Option<FibreSite> {
         let mut holes = Vec::new();
-        let skel = self.skeleton(body_ty_tm, w, &mut holes)?;
+        let skel = self.skeleton(body_ty_tm, w, &mut holes);
         let k = holes.len();
         if let Some(c) = self.fibres.get(&skel) {
             return Some(FibreSite { holes, ..c.clone() })
@@ -2163,8 +2169,7 @@ impl Interp {
         Some(FibreSite { holes, ..site })
     }
 
-    /// `b(q⃗, x)` — the fibre at a point, **recorded** so that a later skeleton
-    /// decomposition can walk into it.
+    /// `b(q⃗, x)` — the fibre at a point.
     pub fn fibre_at(&mut self, site: &FibreSite, x: Term) -> Term {
         let mut args = site.holes.clone();
         args.push(x);
@@ -2395,7 +2400,7 @@ impl Interp {
     /// thing lands in `U₀` by one lemma.
     pub fn cond_site(&mut self, body_ty_tm: &Term, w: FreeVar) -> Option<CondSite> {
         let mut holes = Vec::new();
-        let skel = self.skeleton(body_ty_tm, w, &mut holes)?;
+        let skel = self.skeleton(body_ty_tm, w, &mut holes);
         let k = holes.len();
         if let Some(c) = self.conds.get(&skel) {
             return Some(CondSite { holes, ..c.clone() })
@@ -2430,7 +2435,7 @@ impl Interp {
         Some(CondSite { holes, ..site })
     }
 
-    /// `b(q⃗, x)` for the `Prop` clause's fibre, recorded.
+    /// `b(q⃗, x)` for the `Prop` clause's fibre.
     pub fn cond_fibre_at(&mut self, site: &CondSite, x: Term) -> Term {
         let mut args = site.holes.clone();
         args.push(x);
@@ -2519,8 +2524,8 @@ impl Interp {
         }
         // …and off the fibre symbol onto `⟦B[a]⟧` itself, so the result type is
         // the term the caller's own interpretation would build.
-        let (b_ax, skel, holes) = (site.b_ax.clone(), site.skel.clone(), site.holes.clone());
-        let unfold = self.fibre_unfold(&b_ax, &skel, &holes, a)?;
+        let (b_ax, holes) = (site.b_ax.clone(), site.holes.clone());
+        let unfold = self.fibre_unfold(&b_ax, &holes, a)?;
         self.retarget_set(&out, &unfold)
     }
 
@@ -2561,8 +2566,8 @@ impl Interp {
         if *out.concl() != want {
             return None
         }
-        let (b_ax, skel, holes) = (site.b_ax.clone(), site.skel.clone(), site.holes.clone());
-        let unfold = self.fibre_unfold(&b_ax, &skel, &holes, a)?;
+        let (b_ax, holes) = (site.b_ax.clone(), site.holes.clone());
+        let unfold = self.fibre_unfold(&b_ax, &holes, a)?;
         self.retarget_set(&out, &unfold)
     }
 
@@ -2923,9 +2928,8 @@ mod tests {
         assert_ne!(c, c2);
     }
 
-    /// The skeleton decomposition is what makes a lambda body abstractable,
-    /// and it only works on terms built through [`Interp::mk`]. Both halves
-    /// are pinned: a recorded application decomposes, and the maximal
+    /// The skeleton decomposition is what makes a lambda body abstractable.
+    /// Both halves are pinned: an application decomposes, and the maximal
     /// binder-free subterm comes back as a hole.
     #[test]
     fn skeleton_abstracts_the_binder_and_holes_the_rest() {
@@ -2935,7 +2939,7 @@ mod tests {
         // `app(v, ⟦Prop⟧)` — mentions the binder, so it must be recorded.
         let t = ip.app(Term::var(v), closed.clone());
         let mut holes = Vec::new();
-        let sk = ip.skeleton(&t, v, &mut holes).expect("skeleton");
+        let sk = ip.skeleton(&t, v, &mut holes);
         assert_eq!(holes, vec![closed], "the binder-free subterm is the one hole");
         let expect = {
             let x = ip.x_canon();
@@ -2950,38 +2954,49 @@ mod tests {
         let other = ip.sort(3);
         let t2 = ip.app(Term::var(v2), other.clone());
         let mut holes2 = Vec::new();
-        let sk2 = ip.skeleton(&t2, v2, &mut holes2).expect("skeleton");
+        let sk2 = ip.skeleton(&t2, v2, &mut holes2);
         assert_eq!(sk, sk2, "one body shape, one skeleton");
         assert_eq!(holes2, vec![other]);
     }
 
-    /// A term that mentions the binder but was never recorded cannot be
-    /// decomposed, and that must be visible rather than silently wrong.
+    /// **A term the interpretation did not build decomposes exactly like one
+    /// it did.** Seen red first: on the design this replaces, `skeleton`
+    /// answered `None` here.
     ///
-    /// **This is the leak detector that matters, and the `fs`-clause removal
-    /// makes it guard every `Π` rather than only the dependent ones.**
-    /// `SCOPING.md` §10 names a *different* one as the change's single
-    /// irrecoverable loss — `pi_evidence`'s `!dep` branch turning "the
-    /// codomain's typing depends on the binder's hypothesis" into
-    /// `Gap::Skeleton` — and that one is real, is gone, and **never fired**:
-    /// it was at zero across the corpus in every measurement taken. The bug it
-    /// was credited with catching (`proj_data`'s term-formers building with
-    /// `Term::apply`, so no layer was in the `Parts` table) was caught *here*,
-    /// by `skeleton` answering `None`, which is a term-level check and a
-    /// strictly stronger one. See [`Interp::pi_evidence`]'s own note.
+    /// This is the regression for the whole change, and it is the mutation
+    /// that catches an unsound prune. The old `parts` table was written to by
+    /// `Interp::mk` and read by the decomposition, and *recordedness* was
+    /// therefore standing in for *decomposability* — a proxy that is wrong in
+    /// one direction and expensive in the other. Wrong, because the kernel
+    /// builds terms too: a substitution instance, or either endpoint of a
+    /// `derived::congr`, never passed through `mk` and read back as an opaque
+    /// atom. Expensive, because keeping the proxy true meant remembering every
+    /// term ever built, forever — 54 % of an `init-prelude` run's live heap
+    /// (`PRELUDE-COST.md` §3.2).
     ///
-    /// [`Interp::pi_evidence`]: crate::kernel::Checker
+    /// Both halves are what this test pins. Restore the table and any prune of
+    /// it — clearing it per declaration, bounding it, evicting from it — turns
+    /// this term back into an atom and the assertion below goes red, which is
+    /// precisely the 213 gaps `MINI_PARTS_RESET=1` measured. Reading the
+    /// structure off the term is the version with nothing to prune.
     #[test]
-    fn skeleton_refuses_an_unrecorded_term() {
+    fn skeleton_decomposes_a_term_the_interpretation_did_not_build() {
         let mut ip = Interp::new();
         let v = ip.env.fresh_var();
-        let f = ip.env.declare(1);
-        let leaked = Term::apply(f, vec![Term::var(v)]);
+        let closed = ip.sort(0);
+        let f = ip.env.declare(2);
+        // Built with `Term::apply`, behind mini's back — as `derived::congr`
+        // and every kernel-side instantiation build their terms.
+        let unbuilt = Term::apply(f, vec![Term::var(v), closed.clone()]);
         let mut holes = Vec::new();
-        assert!(
-            ip.skeleton(&leaked, v, &mut holes).is_none(),
-            "an unrecorded term mentioning the binder must fail, not be papered over"
-        );
+        let sk = ip.skeleton(&unbuilt, v, &mut holes);
+        assert_eq!(holes, vec![closed], "the binder-free subterm is still the one hole");
+        let expect = {
+            let x = ip.x_canon();
+            let h = ip.hole_var(0);
+            Term::apply(f, vec![Term::var(x), Term::var(h)])
+        };
+        assert_eq!(sk, expect, "and the skeleton is the same one a recorded term would give");
     }
 
     /// **The library's function-space typing**, end to end and at every level

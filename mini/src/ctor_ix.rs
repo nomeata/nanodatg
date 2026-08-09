@@ -161,9 +161,10 @@ const MIXED: &str = "a plain recursive field beside a function-typed one";
 /// # Why this is a declaration-time mint and a retained axiom
 ///
 /// The bottom of `⟦T.ctorᵢ⟧`'s nest needs a name of mini's own: `⟨Injᵢ⟨y⃗⟩,
-/// f(r⃗)⟩` is a term `derived` assembled, and no `λ` above it can skeletonise a
-/// body that mentions a field. That much [`one`] used to do for itself, at
-/// variables of its own, and it *worked* — for the constructor.
+/// f(r⃗)⟩` is a raw pair term `derived` assembled, and the rules above it are
+/// stated about a symbol at the constructor's own arity. That much [`one`] used
+/// to do for itself, at variables of its own, and it *worked* — for the
+/// constructor.
 ///
 /// It does not work for anybody else. `crate::rec_ix_prop`'s minor premise has
 /// to move the interpretation of `T.ctorᵢ p⃗ y⃗ r⃗` — which β-reduces to

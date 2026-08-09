@@ -64,11 +64,11 @@
 //!
 //! # The term needs a name of mini's own
 //!
-//! `irec` is assembled inside `derived`, so its applicative structure was never
-//! recorded through [`Interp::mk`](crate::interp::Interp::mk) and the `λ`s
-//! above it could not skeletonise a body that mentions the nest's binders. One
-//! [`derived::define_abbrev`] over those binders fixes it, exactly as
-//! [`crate::rec_dep`]'s value clause and [`crate::ctor_ix`] do.
+//! `irec` is assembled inside `derived`, which while decomposability was a
+//! property of who built a term left the `λ`s above it unable to skeletonise a
+//! body that mentions the nest's binders. One [`derived::define_abbrev`] over
+//! those binders fixes it, exactly as [`crate::rec_dep`]'s value clause and
+//! [`crate::ctor_ix`] do.
 //!
 //! # What this does not give
 //!

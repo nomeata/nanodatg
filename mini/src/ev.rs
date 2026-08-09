@@ -366,9 +366,15 @@ pub enum Gap {
     /// point and does not thread — a wiring question about the traversal, not a
     /// clause of §6.2 and not a `derived/` construction.
     StuckRecursor(Name),
-    /// The skeleton decomposition failed: a subterm mentioning the binder was
-    /// not built through `Interp::mk`, so the body cannot be abstracted. A mini
-    /// bug rather than a library gap.
+    /// A binder's body could not be turned into a body symbol. A mini bug
+    /// rather than a library gap.
+    ///
+    /// **No longer the skeleton decomposition's own failure**, which is total
+    /// since it started reading structure off the term (`derived::skeleton`).
+    /// What still lands here are the surrounding steps — an abbreviation that
+    /// would not define, a `Sealed` that would not close, a `to_body_symbol`
+    /// whose Leibniz step did not line up. The name is kept because it is the
+    /// ledger's key and its population is the same class of thing.
     Skeleton,
     /// `body_clause`/`term_clause` could not run, because inference on the
     /// expression failed. On an accepted file this should not happen.
@@ -405,10 +411,17 @@ pub enum Gap {
     /// step whose endpoints have themselves gapped. Never a library item: it
     /// always propagates from something else, per §0.4.
     NoEndpoint,
-    /// The interpretation being taken apart was not built by `Interp::mk`, or
-    /// not by the clause the rule expected — a `Π` whose interpretation is an
-    /// opaque constant, an application whose interpretation is `•`. Structural,
-    /// and always downstream of an absent interpretation.
+    /// The interpretation being taken apart was not built by the clause the
+    /// rule expected — a `Π` whose interpretation is an opaque constant, an
+    /// application whose interpretation is `•`. Structural, and always
+    /// downstream of an absent interpretation.
+    ///
+    /// It used to have a second population, and losing it is the point of the
+    /// change that removed the `parts` table: a term with perfectly good
+    /// applicative structure that had not been *recorded*. `Interp::parts_of`
+    /// reads the structure off the term, so a term is decomposable or not on
+    /// its own merits. Clearing that table per declaration turned 0 gaps into
+    /// 213, of which 108 were this kind and 69 were [`Gap::NoEndpoint`].
     NotDecomposable,
     /// The endpoint the caller handed in and the one inference computes for
     /// the same expression are **different terms** — `⟦·⟧` failed to be a

@@ -210,11 +210,11 @@ pub(crate) fn build(
         );
 
         // **A name of mini's own for `‖ind(p⃗,x⃗)‖`**, of arity `np + ni`.
-        // `trunc(ind(p⃗,x⃗))` is a term `derived` assembled, so it was never
-        // recorded through `Interp::mk` and its head is `trunc` at arity 1
-        // rather than the declaration at arity `np + ni`. One `define_abbrev`
-        // over the parameters *and the index variables* fixes both — the same
-        // move `build_trunc` makes at `ni = 0`, one binder family wider.
+        // `trunc(ind(p⃗,x⃗))` is a term `derived` assembled, and its head is
+        // `trunc` at arity 1 rather than the declaration at arity `np + ni`.
+        // One `define_abbrev` over the parameters *and the index variables*
+        // fixes that — the same move `build_trunc` makes at `ni = 0`, one
+        // binder family wider.
         let mut vars: Vec<FreeVar> = base.params.clone();
         vars.extend(tc.xvs.iter().copied());
         let (sym, ax) = derived::define_abbrev(kenv, &vars, &tc.carrier)

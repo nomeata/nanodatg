@@ -108,49 +108,36 @@ impl Conv {
 /// recursive half is structurally impossible here, because the only way to
 /// obtain a `Conv` is to compose one.
 ///
-/// # Both endpoints are recorded, and that is not bookkeeping
+/// # Both endpoints used to be *recorded*, and no longer have to be
 ///
 /// `derived::congr` states `⊢ app(⟦f⟧,⟦a⟧) = app(⟦f'⟧,⟦a'⟧)` and builds both
 /// sides with `Term::apply` **inside the kernel**, so neither passes through
-/// [`Interp::mk`] and neither lands in the `parts` table. A term's applicative
-/// structure is only ever a *recorded hint* — the kernel exposes no destructor
-/// — so an unrecorded endpoint is an endpoint that
-/// [`Checker::split_app`](crate::kernel) cannot take apart, and the very next
-/// congruence over it hands its children `None` and gaps as `no-endpoint`.
+/// [`Interp::mk`]. While a term's applicative structure lived in a side table
+/// that only `Interp::mk` wrote to, that made both endpoints terms
+/// [`Checker::split_app`](crate::kernel) could not take apart: the very next
+/// congruence over one handed its children `None` and gapped as
+/// `no-endpoint`.
 ///
-/// That is not hypothetical. `⟦m₁ (Aux.a0)⟧` — the reduct `whnf` reaches from
+/// That was not hypothetical. `⟦m₁ (Aux.a0)⟧` — the reduct `whnf` reaches from
 /// `Mot m₁ m₂ m₃ Tag.ta Aux.a0`, built by this function lifting the ι leg over
 /// the argument stack — was exactly such a term, while `⟦m₁ Amk0⟧` on the
 /// other side of the same conversion had come from `infer_type` through
 /// `Interp::app` and decomposed fine. Six conversions on
-/// `mutual_aux_encoding` died on that asymmetry.
+/// `mutual_aux_encoding` died on that asymmetry, and this function used to
+/// carry two `ip.mk` calls whose only purpose was to file the two sides in the
+/// table — building nothing, since `Term::apply` is deterministic and the
+/// theorem already spoke of both.
 ///
-/// So the two `mk` calls are the statement that a congruence *builds*
-/// applicative terms and owes the same record as any other builder. They
-/// construct nothing new: `Term::apply` is deterministic, so each `mk`
-/// reproduces a side the theorem already speaks of and files its structure
-/// beside it.
-///
-/// **Only the second is exercised today**, measured: deleting the `f1`/`a1`
-/// line kills nothing in the suite, deleting the `f2`/`a2` line kills the
-/// fixture. That is what the call sites predict — every one of them takes its
-/// left endpoint from a term the caller already held and had recorded, and it
-/// is the reduct that is new — and it is not a reason to drop the line, which
-/// costs one `HashMap` insert of a term already present and is the difference
-/// between "records the terms it builds" and "records the term this year's
-/// consumers happen to read".
+/// **The two calls are gone.** `Interp::parts_of` reads structure off the term
+/// with `kernel::Term::as_app`, so who built a term no longer decides whether
+/// it can be taken apart, and a builder owes no record. The asymmetry above is
+/// unrepresentable rather than repaired: there is no table to be absent from.
+/// `derived::skeleton`'s header carries what the table cost.
 pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     let ap = ip.prelude.ap.app;
     f.clone().zip(a.clone(), |ef, ea| {
-        let ends = ef.concl().as_eq().zip(ea.concl().as_eq());
         match derived::congr(&mut ip.env, ap, &[ef, ea]) {
-            Some(t) => {
-                if let Some(((f1, f2), (a1, a2))) = ends {
-                    ip.mk(ap, vec![f1, a1]);
-                    ip.mk(ap, vec![f2, a2]);
-                }
-                Ev::Proved(t)
-            }
+            Some(t) => Ev::Proved(t),
             None => Ev::missing(Gap::ConvCompose("symm")),
         }
     })

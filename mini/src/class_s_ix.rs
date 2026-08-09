@@ -219,9 +219,8 @@ fn former(
         let (ps, xs) = all.split_at(np);
         let (ps, xs) = (ps.to_vec(), xs.to_vec());
         let ip = c.interp().expect("threaded");
-        // Through the accessor, and then rebuilt through `Interp::mk` so the
-        // term is *decomposable* later; the two are compared rather than one
-        // being assumed to be the other.
+        // Through the accessor, and then rebuilt here; the two are compared
+        // rather than one being assumed to be the other.
         let Some(want) = cs.lic.at(&ps, &xs) else {
             return gap(Gap::IndexedFamily(name, "class (S) at an index: arity"))
         };

@@ -160,54 +160,32 @@ pub(crate) fn term(mach: &Machine, j: usize, z: Term) -> Term {
     proj_of(&mach.wt.sums.ap, &mach.proj, j, z)
 }
 
-/// The same term, built through [`Interp::mk`] so that its applicative
-/// structure is in the `Parts` hint table.
+/// The same term, at the apparatus this `Interp` holds — `None` if it holds
+/// none.
 ///
-/// **This is the one thing route (b) needs that no theorem supplies, and
-/// nothing about it was visible until the wiring ran.** `⟦projⱼ x⟧` is the
-/// interpretation of a λ *body*, and `Interp::lam_site` has to split that body
-/// around the binder — every subterm on the path from the root down to the
-/// bound variable must have been recorded on the way in, because the kernel
-/// does not expose `Term`'s constructors for reading. `proj_of` builds with
-/// `Term::apply`, as every term-former in `derived` does; here every layer
-/// mentions the binder, so **every** layer needs an entry, and without them the
-/// λ clause reports `Gap::Skeleton` — "the interpretation leaked a variable" —
-/// which is exactly what it should say and is what it did say.
+/// **This used to be a hand-rebuild of `proj_of`'s every layer through
+/// `Interp::mk`, and the reason it existed is worth keeping.** `⟦projⱼ x⟧` is
+/// the interpretation of a λ *body*, and `Interp::lam_site` has to split that
+/// body around the binder; while applicative structure lived in a side table
+/// that only `Interp::mk` wrote to, every subterm on the path from the root
+/// down to the bound variable had to have been *recorded on the way in*.
+/// `proj_of` builds with `Term::apply`, as every term-former in `derived`
+/// does, and here every layer mentions the binder, so **every** layer needed an
+/// entry — four of them, `π₁ p = ⋃(⋂p)` and `π₂ p = app({p}, π₁ p)` over it —
+/// and without them the λ clause reported `Gap::Skeleton`, "the interpretation
+/// leaked a variable". Which is what it should have said, and did.
 ///
-/// The layers are `proj_of`'s, in its order: `π₁ p = ⋃(⋂p)` is two, and
-/// `π₂ p = app({p}, π₁ p)` is two more over it. The result is compared against
-/// [`term`] before it is returned, so this cannot record the structure of a
-/// term that is not the one the theorems are about.
-///
-/// [`Interp::mk`]: crate::interp::Interp::mk
-fn term_recorded(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Term> {
-    let (inter, un, up, app) = {
-        let mach = &ip.ind_apparatus()?.mach;
-        (mach.proj.inter, mach.wt.sums.ap.sets.un, mach.wt.sums.ap.sets.up, mach.wt.sums.ap.app)
-    };
-    let fst = |ip: &mut crate::interp::Interp, p: Term| {
-        let i = ip.mk(inter, vec![p]);
-        ip.mk(un, vec![i])
-    };
-    let snd = |ip: &mut crate::interp::Interp, p: Term| {
-        let first = fst(ip, p.clone());
-        let sing = ip.mk(up, vec![p.clone(), p]);
-        ip.mk(app, vec![sing, first])
-    };
-    // `compⱼ(π₂(π₁ z))`: the tag-and-payload pair, its payload, `j` tails, one
-    // head — `proj_of`'s composition read left to right.
-    let tagpair = fst(ip, z.clone());
-    let mut cur = snd(ip, tagpair);
-    for _ in 0..j {
-        cur = snd(ip, cur);
-    }
-    let out = fst(ip, cur);
+/// `Interp::parts_of` now reads structure off the term, so the layers are
+/// visible because they are there and not because somebody filed them. The
+/// rebuild, and the equality check that guarded it against rebuilding a term
+/// the theorems are not about, are both gone: this is `proj_of`.
+fn term_at(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Term> {
     let mach = &ip.ind_apparatus()?.mach;
-    (out == term(mach, j, z)).then_some(out)
+    Some(term(mach, j, z))
 }
 
-/// **The inverse of [`term_recorded`]**: `πⱼ(z) ↦ z`, by peeling the recorded
-/// applicative structure.
+/// **The inverse of [`term_at`]**: `πⱼ(z) ↦ z`, by peeling the applicative
+/// structure.
 ///
 /// `whnf`'s projection arm needs `⟦s⟧` to reduce the subject *with* a
 /// certificate, and it holds `⟦projⱼ s⟧` already. Re-deriving `⟦s⟧` with
@@ -217,9 +195,8 @@ fn term_recorded(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Te
 /// does not finish. Measured, not feared — that was this change's first draft.
 ///
 /// Peeling costs `j + 3` [`Interp::parts_of`] lookups and no inference at all.
-/// It is a *hint* table, so a term that did not come through
-/// [`term_recorded`] — a proof-valued projection denoting `•`, an unrecorded
-/// endpoint — peels to `None`, and the caller falls back to the behaviour it
+/// A term whose shape is not `proj_of`'s — a proof-valued projection denoting
+/// `•`, say — peels to `None`, and the caller falls back to the behaviour it
 /// had before.
 ///
 /// [`Interp::parts_of`]: crate::interp::Interp::parts_of
@@ -279,7 +256,7 @@ pub(crate) fn subject_of(ip: &mut crate::interp::Interp, j: usize, t: &Term) -> 
 /// `⟦projⱼ x⟧` a term in `⟦x⟧`, so one Leibniz over `πⱼ` carries any equation
 /// about the subject up to the projection.
 ///
-/// Both endpoints go through [`term_recorded`] before the congruence is built.
+/// Both endpoints go through [`term_at`] before the congruence is built.
 /// `congr_of` would produce the same *term* without it, but not the same
 /// **`Parts` entries**, and the right endpoint is what the next reduction step
 /// peels with [`subject_of`]; an unrecorded one peels to `None` and the arm
@@ -301,7 +278,7 @@ pub(crate) fn stuck_leg(
         Ev::Gap(g) => return Ev::Gap(g.clone()),
     };
     let Some((a, b)) = eq.concl().as_eq() else { return Ev::missing(Gap::NoEndpoint) };
-    let (Some(la), Some(rb)) = (term_recorded(ip, j, a), term_recorded(ip, j, b)) else {
+    let (Some(la), Some(rb)) = (term_at(ip, j, a), term_at(ip, j, b)) else {
         return Ev::missing(Gap::NoEndpoint)
     };
     let Some((_, app, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
@@ -551,13 +528,12 @@ pub(crate) fn typing(
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // `π₀ ⟦s⟧ … π_{j-1} ⟦s⟧`, the rung's own arguments, and `πⱼ ⟦s⟧`, the
-    // projection's interpretation — all through `term_recorded`, so the λ
-    // clause above this one can split them around its binder.
+    // projection's interpretation.
     let pis: Vec<Term> = (0..j)
-        .map(|q| term_recorded(ip, q, subject.clone()))
+        .map(|q| term_at(ip, q, subject.clone()))
         .collect::<Option<_>>()
         .ok_or_else(|| miss!())?;
-    let tm = term_recorded(ip, j, subject.clone()).ok_or_else(|| miss!())?;
+    let tm = term_at(ip, j, subject.clone()).ok_or_else(|| miss!())?;
 
     // ── `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the theorem's own premise ───────────────────────
     let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
@@ -719,9 +695,9 @@ pub(crate) fn iota(
     //
     // `proj_of` spelled out through its free functions rather than through
     // `Proj`, because the congruence needs a `Term -> Term` closure and the
-    // apparatus is borrowed beside `env`. It is the same composition, and
-    // `term_recorded`'s own comparison against `term` is what pins that.
-    let lhs = term_recorded(ip, j, s_tm).ok_or_else(|| miss!())?;
+    // apparatus is borrowed beside `env`. It is the same composition, which is
+    // [`term_at`] and therefore [`term`] and therefore `proj_of` itself.
+    let lhs = term_at(ip, j, s_tm).ok_or_else(|| miss!())?;
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
     let g = move |t: Term| {
@@ -842,12 +818,12 @@ pub(crate) fn structure_eta(
 
     // ── step 2: `⊢ ⟦aᵢ⟧ = πᵢ(⟦x⟧)`, the probe's discarded conversions ───────
     //
-    // `πᵢ(⟦x⟧)` is built through `term_recorded` for the same reason `typing`
-    // does: these terms end up inside a λ body's interpretation.
+    // `πᵢ(⟦x⟧)` through `term_at`, as `typing` does, so that the checker's
+    // subject and the theorems' subject stay one function.
     let mut pis = Vec::with_capacity(k);
     for i in 0..k {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        pis.push(term_recorded(ip, i, x_tm.clone()).ok_or_else(|| miss!())?);
+        pis.push(term_at(ip, i, x_tm.clone()).ok_or_else(|| miss!())?);
     }
     let mut convs = Vec::with_capacity(k);
     for (i, pi) in pis.iter().enumerate() {
@@ -966,10 +942,10 @@ pub(crate) fn proj_congr(
     }
 
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    // Both sides through `term_recorded`, because either may end up inside a
-    // λ body's interpretation and `lam_site` has to split it around the binder.
+    // Both sides through `term_at`, so the term the rule speaks of is the one
+    // `proj_of` builds.
     let (lhs, rhs) = {
-        let l = term_recorded(ip, j, x1).ok_or_else(|| miss!())?;
+        let l = term_at(ip, j, x1).ok_or_else(|| miss!())?;
         let (_, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
         let g = move |t: Term| {

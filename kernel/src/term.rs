@@ -190,6 +190,43 @@ impl Term {
         Term::new(TermData::App(f, args))
     }
 
+    /// View this term as an application, if it is one: the symbol at the head
+    /// and its arguments, borrowed.
+    ///
+    /// The counterpart of [`Term::apply`], and the exact analogue of
+    /// [`Formula::as_eq`] one level down. **Reading a term is not a trusted
+    /// operation** — no amount of inspection lets a client build a
+    /// [`crate::Thm`], since the only constructors are the inference rules —
+    /// and it does not widen what a client can *build* either:
+    ///
+    /// * The only representable shape it exposes is [`TermData::App`]; a
+    ///   `Bound` index answers `None` here just as a `Free` does, so the
+    ///   constructor discipline that makes dangling indices unconstructible is
+    ///   untouched.
+    /// * The arguments handed back are locally closed whenever the whole term
+    ///   is, because `locally_closed` descends into an `App`'s arguments at the
+    ///   *same* depth. Every `Term` reachable by a client is locally closed —
+    ///   the only binder is `Formula::forall`, and no public accessor opens a
+    ///   `Forall` — so this hands back nothing a client could not already hold.
+    ///
+    /// # Why the kernel owes this
+    ///
+    /// Without it, a client that must take a term apart has to *remember* how
+    /// it built every term it may later decompose, in a side table keyed by the
+    /// term. That table was measured at **54 % of the live heap** of an
+    /// `init-prelude` run and 80 % of its live `Term` nodes, storing a second
+    /// copy of the argument vector the `App` node already holds — and, worse,
+    /// its misses were silent: a term the kernel itself had built (by
+    /// substitution, or inside a derived rule) was indistinguishable from a
+    /// term with no applicative structure, and decomposition of it failed.
+    /// See `PRELUDE-COST.md` §3.2 and `derived::skeleton`.
+    pub fn as_app(&self) -> Option<(FnSym, &[Term])> {
+        match self.data() {
+            TermData::App(f, args) => Some((*f, args)),
+            _ => None,
+        }
+    }
+
     /// Whether `v` occurs free in this term.
     pub fn occurs_free(&self, v: FreeVar) -> bool {
         match self.data() {

@@ -38,8 +38,9 @@
 //! denotation is a `Prop` and had to be a conditional singleton over a formula;
 //! here the denotation is a genuine set and `quot`/`rel_graph` are already
 //! arity-2 symbols of `derived`'s. The composite is built through
-//! [`Interp::mk`] at both nodes, which is what makes it decomposable again — an
-//! unrecorded node is the defect [`Interp::rebuild`]'s doc is about.
+//! [`Interp::mk`] at both nodes, which is what made it decomposable again back
+//! when decomposability was a property of who built a term — the defect
+//! [`Interp::rebuild`]'s doc is about.
 //!
 //! # Why the apparatus is lazy, and why there are two `rel_graph`s
 //!
@@ -143,7 +144,7 @@ impl QuotClause {
         ip.mk(self.q.rel_graph, vec![a.clone(), r.clone()])
     }
 
-    /// `⟦Quot α r⟧ = quot(A, rel_graph(A,r))`, recorded at both nodes.
+    /// `⟦Quot α r⟧ = quot(A, rel_graph(A,r))`, built at both nodes.
     pub fn carrier(&self, ip: &mut Interp, a: &Term, r: &Term) -> Term {
         let g = self.graph(ip, a, r);
         ip.mk(self.q.quot, vec![a.clone(), g])

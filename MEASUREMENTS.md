@@ -5745,3 +5745,127 @@ now enforced rather than asserted — `ci/check.sh` runs everything except the
 checker under `NANODATG_ASSERT_FEATURE_INERT`, which makes that constructor
 panic, and `ci/check-feature-inert.sh` watches the panic happen against a
 process that certainly does build one.
+
+## `Interp::parts` deleted: the kernel grew a term reader — 2026-08-09
+
+*The memory half of "the checker handles `init-prelude` at reasonable time and
+memory costs". `PRELUDE-COST.md` §3.2 measured one table at **54.4 % of the live
+heap** and **80 % of the live kernel `Term` nodes**, and §3.3 measured the naive
+prune — clearing it per declaration — at **−60.2 % heap and 213 new gaps**. This
+is what replaced it. Baseline `origin/master` at `0260925`; both binaries `test`
+profile (`opt-level = 3`, no LTO), `perf stat -e instructions` per `47b262b`,
+each run under its own `ulimit -v`.*
+
+### What the table was
+
+`derived::skeleton::Parts` was `HashMap<Term, (FnSym, Vec<Term>)>`, written by
+`Interp::mk` and read by the skeleton decomposition. **It is neither identity
+nor memoisation: the value is the key's own contents.** `Term` is
+`Rc<TermData>`, `TermData::App(FnSym, Vec<Term>)` is one of its three
+constructors, and `parts[Term::apply(f, args)]` was `(f, args)` — a second copy
+of the argument vector the node already holds. The table existed because
+`kernel::Term` had constructors and no reader (`data()` is `pub(crate)`).
+
+So the change is a reader: `Term::as_app(&self) -> Option<(FnSym, &[Term])>`,
+six lines, the exact analogue of the `Formula::as_eq` that has always been
+there. It exposes only `TermData::App`, so the constructor discipline that makes
+dangling de Bruijn indices unconstructible is untouched, and an `App`'s
+arguments are locally closed whenever the whole term is — it hands back nothing
+a client could not already hold. `ci/check-boundary.sh` is green; the kernel
+goes from 676 to 682 non-comment lines against a budget of 700.
+
+With it: `derived::skeleton::skeleton` reads structure off the term and is
+**total** (returns `Term`, not `Option<Term>`), `Interp::parts_of` is
+`t.as_app()`, `Interp::mk` is `Term::apply`, and the field is deleted. Two
+`rebuild` calls whose results were discarded — beta's and the fibre's second
+legs, there only to file the contractum's nodes in the table — go with it, as do
+`conv::app_cong`'s two endpoint-recording `mk` calls and `proj_data`'s
+`term_recorded`, which hand-rebuilt `proj_of`'s four layers through `mk` and is
+now `proj_of`.
+
+### What the 213 gaps were
+
+**Recordedness was standing in for decomposability**, and it was wrong in both
+directions. Wrong on the read side: a term the *kernel* built — a substitution
+instance, or either endpoint of a `derived::congr` — never passed through
+`Interp::mk` and read back as structureless, which is `mini/src/conv.rs`'s six
+conversions lost on `mutual_aux_encoding` and, at scale, §3.3's 108
+`not-decomposable` and 69 `no-endpoint`. Wrong on the write side: keeping the
+proxy true meant remembering every term ever built, forever. **Clearing the
+table breaks the proxy; deleting it removes the thing being approximated**, and
+the decomposition can no longer fail.
+
+### The numbers
+
+Instructions and peak RSS, separately.
+
+| workload | | baseline | reader | |
+| --- | --- | ---: | ---: | ---: |
+| 91 good tutorial exports | instructions | 405 375 599 994 | 402 689 993 069 | **−0.66 %** |
+| | peak RSS | 178 540 kB | **33 808 kB** | **−81.1 %** |
+| `Nat.ble_eq_true_of_le` closure, 47 decls | instructions | 2 251 144 138 254 | 2 232 215 740 074 | **−0.84 %** |
+| | peak RSS | 1 049 824 kB | **46 524 kB** | **−95.6 %** |
+
+Peak RSS on the corpus is the same file in both, `077_RBTree.id_spec`.
+
+**And the two declarations that stop `init-prelude` today, cut out with
+`scripts/decl-closure.py` and run alone.**
+
+| closure | | baseline | reader |
+| --- | --- | ---: | ---: |
+| **`Nat.mod_lt`, 159 decls** — the `Nat.mod*` cluster the file dies inside | outcome | **`SIGABRT` at a 12 GB `ulimit -v`**: `memory allocation of 3 825 205 264 bytes failed`, at 1 992 s | past that point and still running at 40 min, under 400 MB |
+| | peak RSS | **11 142 200 kB** | **378 152 kB at 40 min** (in flight) |
+| | instructions to the abort | 26 461 224 027 620 | — |
+| **`BitVec.decEq` + `BitVec.noConfusion`, 83 decls** | outcome | §4.2: killed by a 25-minute timeout **inside declaration 81 of 83**, 17 242 524 conversions | **completes**, 83 of 83, **25 335 661 conversions, `gapped 0`** |
+| | peak RSS | ≥ 3 841 600 kB | **106 172 kB** |
+| | instructions | — | 15 071 153 293 830, 1 096 s |
+
+**That is the memory half of the goal, answered.** The declaration cluster that
+kills `init-prelude` at 10 GB needs 11.1 GB in its own closure on `master` and
+hundreds of MB with the reader; §4.2's second wall, which no run had finished,
+finishes. What stops `init-prelude` now is **time** — `List.get.match_1` alone
+is 11.00 T instructions (§4.2) and this change moves none of it.
+
+**Time is unchanged and that is the expected sign.** §3.3's clear-per-declaration
+row *saved* 3.1 %, because clearing is 33 431 conversions that stop happening;
+removing the table changes no conversion at all, and the ≈0.7 % it returns is
+431 598 hash inserts and their `Vec` clones per 60 declarations.
+
+### The strong check
+
+**All 91 exports' `--verbose` output is byte-identical across the change** —
+every `facts`, `clauses`, `ledger`, `evidence`, `convs` and `untranslated` row,
+`accept 89 / decline 2 / reject 0`, `constEv 218/218`, `unsealed 0`,
+**`gapped 0`**, and the conversion counters to the digit. Two baseline runs were
+diffed against each other first, to establish that the output is deterministic
+at all: they agree on all 1 002 lines and differ by 0.02 % in instructions. The
+`Nat.ble_eq_true_of_le` closure's report is byte-identical too, at
+`proved=3 750 820  gapped=0`.
+
+`cargo test --workspace --exclude nanoda_lib`: **1 265 passed, 0 failed**.
+`cargo test -p nanoda_lib --features tg`: 28 + 72 + 6 passed, 0 failed.
+
+### The mutation, seen red first
+
+`mini/src/interp.rs`'s `skeleton_refuses_an_unrecorded_term` asserted that a
+term mentioning the binder that had not been built through `Interp::mk`
+decomposes to `None` — "an unrecorded term mentioning the binder must fail, not
+be papered over". It is now
+`skeleton_decomposes_a_term_the_interpretation_did_not_build`, and it asserts
+the opposite: the term decomposes to exactly the skeleton a recorded one would
+give. Run against `origin/master`'s code it panics —
+`MUTATION: must decompose` — which is the point. **Restore the table and any
+prune of it — clearing per declaration, bounding it, evicting from it — turns
+that term back into an atom and this test goes red**, which is precisely the
+213-gap failure in one assertion.
+
+### What did not change, and why
+
+`checker/src/tg.rs` keeps its own `parts` table and a private
+`skeleton_recorded`, **deliberately**. Pointing tg's wrapper at the total
+decomposition moves five of `checker/tests/tg_tutorial.rs`'s counter assertions
+— the projection clause is reached 3 times instead of 5, because a
+decomposition that used to fail now succeeds and an earlier rule fires instead.
+Those counters are tg's frontier record and re-baselining them is a change to
+make on purpose, not a side effect of a memory fix in another crate. The same
+one-line replacement is available there whenever somebody wants it.

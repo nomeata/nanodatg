@@ -95,7 +95,8 @@ Two instruments, both in `scripts/appsize-probe.diff`, neither landed:
   (the application typing rules), `conv::app_cong` (application congruence),
   and `Checker::beta_evidence` (β legs); plus a walker over the final
   constant store and over the `parts` registry — every term mini built
-  through `Interp::mk` and remembered.
+  through `Interp::mk` and remembered. (That registry has since been deleted;
+  see §3.2.)
 
 Corpus: the 91 `good/tutorial` exports, run individually (89 accept, 2
 decline), plus the `nested_model` fixture as a scale check (§3.5), debug
@@ -140,8 +141,18 @@ Aggregated over the 89 accepted runs:
 | population | total nodes | `app`-symbol nodes | share |
 |---|---:|---:|---:|
 | allocation traffic (every `Term::new`) | 232,840,323 | 24,140,674 | **10.4%** |
-| retained registry (`Interp::mk` parts table, DAG) | 1,452,685 | 199,579 | **13.7%** |
+| retained registry (`Interp::mk` parts table, DAG) — **the table is gone; see below** | 1,452,685 | 199,579 | **13.7%** |
 | final stored context (denotations + typing/defeq conclusions, DAG) | 15,722 | 104 | **0.66%** |
+
+**The middle row no longer names anything that exists.** `Interp::parts` was
+deleted on 2026-08-09 (MEASUREMENTS.md; `PRELUDE-COST.md` §3.4) — its value was
+a second copy of what the key's own `TermData::App` node already held, and
+`kernel::Term::as_app` reads it instead. Nothing about the *nodes* moved: the
+same terms are built and the same ones stay reachable from the store, so the
+`app` share in that row stands as a statement about retained structure. What is
+gone is the second `Vec` per node and the table's own pin on every term ever
+built, which was 54.4 % of an `init-prelude` run's live heap and 80 % of its
+live `Term` nodes. Read the row as "retained structure", not as "a registry".
 
 The rest of the traffic is free variables (3.7%), bound (8.3%), and — the
 bulk, 77.6% — applications of *other* symbols (minted fibre/nest symbols and

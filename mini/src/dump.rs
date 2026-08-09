@@ -887,11 +887,11 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
 /// Names for the terms `derived/` built, so the apparatus does not print as
 /// `⟨·⟩`.
 ///
-/// [`crate::blocker::show_term`] can name a term two ways: the label registry,
-/// and [`Interp::parts_of`], which only knows terms mini built through
-/// `Interp::mk`. A carrier, a `W`, an index space and a constructor term are
-/// all built *inside* `derived/`, so neither applies and every one of them
-/// prints `⟨·⟩`. They are recoverable here because the apparatus stores the
+/// [`crate::blocker::show_term`] recovers a term's spine from the term itself,
+/// but a symbol's *name* only from the label registry. A carrier, a `W`, an
+/// index space and a constructor term are all built *inside* `derived/`, which
+/// labels nothing, so without this every one of them prints as an anonymous
+/// `f<id>` spine. They are recoverable here because the apparatus stores the
 /// terms themselves; labelling is retroactive, since the registry is keyed by
 /// the term.
 ///

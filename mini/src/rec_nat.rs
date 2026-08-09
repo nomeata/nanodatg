@@ -301,8 +301,8 @@ fn value_bottom(ip: &mut Interp, nc: &NatClause, at: &At) -> Option<(Term, Thm)>
     let fired = Thm::mp(&rule, &derived::and_intro(&at.cz_mem, &step))?;
     let at_t = derived::inst_all(&fired, std::slice::from_ref(&at.t_tm))?;
     let mem = Thm::mp(&at_t, &at.t_mem)?;
-    // Through `Interp::mk`: the value mentions all three binders and the λ
-    // clause above has to abstract them. See `crate::direct`'s `Nat.succ` arm.
+    // Through `Interp::mk`, as the λ clause above once required of any value
+    // mentioning its binders. See `crate::direct`'s `Nat.succ` arm.
     let value = ip.mk(
         nc.nat.natrec,
         vec![at.cz_tm.clone(), at.cs_tm.clone(), at.t_tm.clone()],

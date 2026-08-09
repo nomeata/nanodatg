@@ -2267,10 +2267,18 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     params: HashMap<NamePtr<'t>, Term>,
     idxs: HashMap<u64, Term>,
 
-    /// The applicative structure of every term this backend built. The kernel
-    /// does not expose `Term`'s constructors for reading, and the skeleton
-    /// decomposition has to take terms apart, so the shape is recorded on the
-    /// way in.
+    /// The applicative structure of every term this backend built.
+    ///
+    /// **Redundant, and retained only because retiring it moves this backend's
+    /// frontier counters.** `kernel::Term::as_app` reads the same `(f, args)`
+    /// straight off the term, which is what `derived::skeleton` and `mini`'s
+    /// `Interp::parts_of` now do; a side table is a second copy of the
+    /// argument vector the term already holds, keyed by the term. On `mini`
+    /// the identical table measured **54 % of the live heap** of an
+    /// `init-prelude` run and 96 % of the peak RSS of a closure run
+    /// (`PRELUDE-COST.md` §3.2), and its misses were the silent kind: a term
+    /// the kernel itself built read back as structureless. See
+    /// [`skeleton_recorded`] for what the switch here would cost.
     parts: HashMap<Term, (FnSym, Vec<Term>)>,
     /// Where each lambda occurrence sits.
     lam_sites: HashMap<ExprPtr<'t>, LamSite<'t>>,
@@ -3238,9 +3246,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Build `f(args)` and remember its shape, so that [`Self::skeleton`] can
     /// take it apart again later.
-    fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term {
-        derived::skeleton::record(&mut self.parts, f, args)
-    }
+    fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term { record(&mut self.parts, f, args) }
 
     /// Accept `eq` as a proof that `redex` and `reduct` are equal, but only
     /// after checking it really is that equation. Every rule that concludes
@@ -3982,11 +3988,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// which would mean the interpretation had leaked a variable — a bug, and
     /// one that should surface as a gap rather than be papered over.
     ///
-    /// The decomposition itself is [`derived::skeleton::skeleton`] and is not
-    /// Lean-specific; what is supplied here is the term registry
-    /// [`Self::parts`], the canonical binder slot, and the *shared* hole
-    /// variables, which must be the same across every backend on the thread so
-    /// that two occurrences of one body shape decompose to the same skeleton.
+    /// **This backend decomposes through [`Self::parts`] and `mini` no longer
+    /// does**, and the difference is deliberate rather than an oversight.
+    /// `derived::skeleton::skeleton` reads structure off the term with
+    /// `Term::as_app` and is therefore total; pointing this wrapper at it moves
+    /// five of `checker/tests/tg_tutorial.rs`'s counter assertions — the
+    /// projection clause is reached 3 times instead of 5, because a
+    /// decomposition that used to fail now succeeds and an earlier rule fires
+    /// instead. Those counters are tg's own frontier record and re-baselining
+    /// them is a change to make on purpose, not a side effect of a memory fix
+    /// in another crate. So [`skeleton_recorded`] keeps the old behaviour here,
+    /// and `TgBackend::parts` keeps its reason to exist.
     fn skeleton(&mut self, t: &Term, v: FreeVar, holes: &mut Vec<Term>) -> Option<Term> {
         let shared = self.shared.clone();
         let mut hole_var = |i: usize| -> FreeVar {
@@ -3997,7 +4009,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             sh.hole_vars[i]
         };
-        derived::skeleton::skeleton(&mut self.parts, self.x_canon, &mut hole_var, t, v, holes)
+        skeleton_recorded(&mut self.parts, self.x_canon, &mut hole_var, t, v, holes)
     }
 
     /// Rebuild `t` with `subst` applied, registering every node built on the
@@ -7350,7 +7362,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let bridge = derived::inst_all(&sc.bridge.spine, &args)?;
         {
             let parts = &mut self.parts;
-            let mut mk = |f: FnSym, xs: Vec<Term>| derived::skeleton::record(parts, f, xs);
+            let mut mk = |f: FnSym, xs: Vec<Term>| record(parts, f, xs);
             ctor_nest_agrees(
                 &mut mk,
                 app,
@@ -13356,10 +13368,53 @@ fn pi_body_gap(c: Option<&CondEq>) -> &'static str {
 
 /// The applicative structure of the terms a match may take apart: the shape
 /// [`TgBackend::parts`] records on the way in.
+type Parts = HashMap<Term, (FnSym, Vec<Term>)>;
+
+/// `f(args)`, with its applicative structure remembered in `parts`.
 ///
-/// The type, the recording and the skeleton decomposition itself are
-/// [`derived::skeleton`]; nothing about them is Lean-specific.
-use derived::skeleton::Parts;
+/// The first recording of a term wins: the same term built twice has the same
+/// structure, so a later insertion could only be redundant.
+fn record(parts: &mut Parts, f: FnSym, args: Vec<Term>) -> Term {
+    let t = Term::apply(f, args.clone());
+    parts.entry(t.clone()).or_insert((f, args));
+    t
+}
+
+/// The skeleton decomposition **through a recording table** — `derived`'s, as
+/// it stood before `Term::as_app` existed, kept here because this backend's
+/// frontier counters are calibrated to it.
+///
+/// `None` when a subterm mentioning `v` was not passed through [`record`]. That
+/// is not a property of the term; it is a property of who built it, and
+/// `derived::skeleton`'s header says what believing otherwise cost. Retiring
+/// this in favour of the total decomposition is a one-line change plus a
+/// re-baseline of five assertions in `checker/tests/tg_tutorial.rs`, and it
+/// would let [`TgBackend::parts`] — the same table `PRELUDE-COST.md` §3.2
+/// measured at 54 % of `mini`'s live heap — go away here too.
+fn skeleton_recorded(
+    parts: &mut Parts,
+    x_canon: FreeVar,
+    hole_var: &mut dyn FnMut(usize) -> FreeVar,
+    t: &Term,
+    v: FreeVar,
+    holes: &mut Vec<Term>,
+) -> Option<Term> {
+    if !t.occurs_free(v) {
+        let h = hole_var(holes.len());
+        holes.push(t.clone());
+        return Some(Term::var(h))
+    }
+    if *t == Term::var(v) {
+        return Some(Term::var(x_canon))
+    }
+    let (f, args) = parts.get(t)?.clone();
+    let mut out = Vec::with_capacity(args.len());
+    for a in &args {
+        out.push(skeleton_recorded(parts, x_canon, hole_var, a, v, holes)?);
+    }
+    // Through `record`, so that the skeleton's own structure is recorded too.
+    Some(record(parts, f, out))
+}
 
 /// Match `have` against `want`, reading off which free variables of `have` have
 /// to become which subterms of `want`.

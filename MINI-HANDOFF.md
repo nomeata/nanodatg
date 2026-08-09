@@ -1029,13 +1029,20 @@ distinguishes the two.
 
 Three things the route did not mention, in descending order of what they cost.
 
-**1. The term has to be built through `Interp::mk`.** `⟦projⱼ x⟧` is the
+**1. The term had to be built through `Interp::mk`.** `⟦projⱼ x⟧` is the
 interpretation of a λ *body*, and `lam_site` splits that body around the binder:
-every subterm on the path down to the bound variable must be in the `Parts` hint
-table, because the kernel does not expose `Term`'s constructors for reading.
+every subterm on the path down to the bound variable had to be in the `Parts`
+hint table, because the kernel exposed no reader for `Term`'s constructors.
 `derived`'s term-formers build with `Term::apply`, as they should, and here
-*every* layer mentions the binder. `proj_data::term_recorded` mirrors `proj_of`
-layer for layer and compares the result against it.
+*every* layer mentions the binder, so `proj_data::term_recorded` mirrored
+`proj_of` layer for layer and compared the result against it.
+
+> **Closed by §15's owed item, and it is the whole of the memory half of
+> `init-prelude`.** `kernel::Term::as_app` landed; the table is gone;
+> `term_recorded` is now `term_at`, which is `proj_of`. Peak RSS on the corpus
+> fell 80.7 % and on a `Nat.ble_eq_true_of_le` closure 95.9 %, with all 91
+> exports' `--verbose` output byte-identical. See MEASUREMENTS.md, 2026-08-09,
+> and `PRELUDE-COST.md` §3.4.
 
 > **A term `derived` hands back is not yet a term the checker can put under a
 > binder.** Nothing in the three preceding rows could see this, because all
@@ -1239,9 +1246,12 @@ fired.** §10 names `pi_evidence`'s `!dep` guard, which turned "the codomain's
 typing depends on the binder's hypothesis" into `Gap::Skeleton`, as the change's
 one irrecoverable loss, and credits it with catching `proj_data`'s missing
 `Interp::mk` records (§11.1's finding 1). **It did not.** That bug was caught by
-`Interp::skeleton` answering `None` — a *term*-level check, strictly stronger,
-which survives the change and now runs on **every** `Π` instead of only the
-dependent ones. The `!dep` guard was measured at zero in every corpus run it
+`Interp::skeleton` answering `None` — a *term*-level check and strictly
+stronger, which for a while ran on **every** `Π` instead of only the dependent
+ones. **Neither detector exists now**, and that is the right outcome rather
+than a third loss: `Interp::skeleton` is total since the `parts` table went, so
+the defect it detected — a term built outside `Interp::mk` — is no longer a
+defect and cannot be represented. The `!dep` guard was measured at zero in every corpus run it
 existed for, and under `dprod` its condition is not a defect at all: a codomain
 whose term is binder-free and whose typing is not is simply *provable*, because
 the fibre premise lives under the binder.
@@ -1602,11 +1612,14 @@ and all 13 remaining nodes are `proj`.
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
 | `iota(RBTree.rec)` | 1 | a route at `whnf`'s ι site, over `IndexedDepRecursor::iota` |
 
-Plus two design items owed and not started: `Term::as_apply` into the kernel,
-and the three `skeleton()` sites branching on the Lean `Expr` rather than on
-`Parts` — which would collapse `Expr::has_bvar` and `Term::occurs_free` into one
-"mentions the binder" test, and §12 records why two that can disagree is what we
-keep paying for.
+Plus two design items owed. The first, **`Term::as_apply` into the kernel, is
+done** — it landed as `kernel::Term::as_app`, and it took `Interp::parts` with
+it: that table was 54.4 % of an `init-prelude` run's live heap, and its value
+was a second copy of what the key's own `TermData::App` node already held. See
+MEASUREMENTS.md, 2026-08-09. The second is still owed: the three `skeleton()`
+sites branch on the Lean `Expr` rather than on the interpretation, and
+collapsing `Expr::has_bvar` and `Term::occurs_free` into one "mentions the
+binder" test is what §12 records that we keep paying for.
 
 ---
 

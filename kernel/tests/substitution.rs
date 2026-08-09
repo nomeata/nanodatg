@@ -204,3 +204,34 @@ fn eq_leibniz_agrees_with_two_independent_substitutions() {
     }
     assert_eq!(checked, phis.len() * terms.len() * terms.len());
 }
+
+/// **The term reader is the inverse of the constructor, and it is the only
+/// shape it can see.**
+///
+/// `Term::as_app` exists so that a client does not have to remember how it
+/// built a term in order to take it apart again — the side table that used to
+/// do that was 54 % of an `init-prelude` run's live heap, storing a second copy
+/// of what each node already held (`PRELUDE-COST.md` §3.4). What has to stay
+/// true is that reading widens nothing: the reader must answer `None` on
+/// everything that is not an application, so that the constructor discipline
+/// keeping dangling de Bruijn indices unconstructible is untouched.
+#[test]
+fn a_term_reads_back_as_it_was_applied_and_nothing_else_reads_back_at_all() {
+    let (mut g, x, y, _z) = setup();
+    let f = g.declare(2);
+
+    let t = Term::apply(f, vec![Term::var(x), Term::var(y)]);
+    let (h, args) = t.as_app().expect("an application reads back");
+    assert_eq!(h, f);
+    assert_eq!(args, &[Term::var(x), Term::var(y)][..]);
+
+    // The round trip is the identity, so nothing about the term was lost in
+    // the constructor and nothing is invented by the reader.
+    assert_eq!(Term::apply(h, args.to_vec()), t);
+
+    // A variable is not an application. `Bound` is the case that matters and
+    // it cannot be tested from out here — there is no way to build one, which
+    // is the property being protected — so the assertion available is that the
+    // reader has exactly one `Some` case.
+    assert!(Term::var(x).as_app().is_none(), "a free variable is not an application");
+}

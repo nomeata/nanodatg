@@ -1257,12 +1257,11 @@ fn build_trunc(
     .ok_or(Gap::IndSpec(*ind_name, "truncation carrier"))?;
 
     // **A name of mini's own for `‖ind(p⃗)‖`.** The carrier is
-    // `trunc(ind(p⃗))`, a term `derived` assembled — so it was never recorded
-    // through `Interp::mk` and could not be taken apart again, and its head is
-    // `trunc` at arity 1 rather than the declaration at arity `np`. One
-    // `define_abbrev` over the parameters fixes both: the symbol has the arity
-    // the former's nest applies it at, and its defining equation carries the
-    // typing across. Same move, and the same reason, as the constructor term's.
+    // `trunc(ind(p⃗))`, a term `derived` assembled, whose head is `trunc` at
+    // arity 1 rather than the declaration at arity `np`. One `define_abbrev`
+    // over the parameters fixes that: the symbol has the arity the former's
+    // nest applies it at, and its defining equation carries the typing across.
+    // Same move, and the same reason, as the constructor term's.
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let (sym, ax) = derived::define_abbrev(kenv, &ind.params, &tc.carrier)
         .ok_or(Gap::IndSpec(*ind_name, "truncation abbreviation"))?;
@@ -2937,9 +2936,10 @@ pub(crate) fn former_at(
         // `H` is the *parameters*' conjunction; the index scopes are not in it.
         let mems = &mems[..np];
         let ip = c.interp().expect("threaded");
-        // Through `Interp::mk`, not `Term::apply`: a term the checker will have
-        // to take apart later must be in the `Parts` hint table, and
-        // `IndexedCarrier::ty_of` builds it raw.
+        // Through `Interp::mk` rather than `IndexedCarrier::ty_of`, which
+        // builds the same term raw. The two were not always interchangeable:
+        // a term the checker had to take apart later had to have been built
+        // through `mk`, or it read back as structureless.
         let carrier = ip.mk(ty_sym, ps.clone());
         let at = derived::inst_all(&u1, &ps);
         let ev = match at.and_then(|t| {
@@ -3401,19 +3401,20 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // **The carrier term has to be given a name of mini's own**, and this is
     // not decoration.
     //
-    // `⟨Injᵢ⟨y⃗⟩, f(r⃗)⟩` is assembled inside `derived`, so its applicative
-    // structure was never recorded through [`crate::interp::Interp::mk`] — and
-    // an unrecorded term that mentions a binder cannot be *skeletonised*, so the
-    // very next `λ` over a constructor field fails to abstract its body. That
-    // is a `Gap::Skeleton` at every recursive constructor, which is what the
-    // first measurement of this wiring showed.
+    // `⟨Injᵢ⟨y⃗⟩, f(r⃗)⟩` is assembled inside `derived`. While decomposability
+    // was a property of *who built* a term rather than of the term, that made
+    // it unskeletonisable: the very next `λ` over a constructor field failed to
+    // abstract its body — a `Gap::Skeleton` at every recursive constructor,
+    // which is what the first measurement of this wiring showed.
     //
     // One `define_abbrev` over the parameters and then the fields **in declared
-    // order** fixes it: the symbol is applied through `mk`, hence decomposable,
-    // and its own defining equation carries the membership across. The declared
-    // order is the right one because that is the order the Lean λ-nest binds
-    // them in, and the parameters come first for the same reason. The symbol is
-    // [`constructor`]'s, minted before the nest so that the axiom outlives it.
+    // order** fixed it, and still earns its keep now that the decomposition
+    // reads structure off the term: the symbol carries the declaration's own
+    // arity, and its defining equation carries the membership across. The
+    // declared order is the right one because that is the order the Lean λ-nest
+    // binds them in, and the parameters come first for the same reason. The
+    // symbol is [`constructor`]'s, minted before the nest so that the axiom
+    // outlives it.
     //
     // **The parameters are arguments of the symbol and not merely of the term
     // it abbreviates.** Under `RecArg::general` the term mentions `p⃗` through

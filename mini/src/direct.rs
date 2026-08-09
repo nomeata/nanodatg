@@ -634,13 +634,13 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
                     nc.nat.zero_mem().clone()
                 }
                 (Some((x, x_mem)), _, true) => {
-                    // **Through `Interp::mk`, not `Nat::succ_of`.** The term
-                    // mentions the binder, and `Interp::skeleton` — which the
-                    // λ clause one level up runs to abstract it — answers
-                    // `None` on any subterm mentioning the binder that was not
-                    // recorded. A `succ(x)` built directly by `derived` is such
-                    // a subterm, and the whole declaration then declines with
-                    // `Gap::Skeleton`, which is what it did.
+                    // Through `Interp::mk` rather than `Nat::succ_of`, and the
+                    // two are now the same `Term::apply`. They were not always
+                    // equivalent: `Interp::skeleton` used to answer `None` on
+                    // any subterm mentioning the binder that had not been
+                    // entered in a side table only `Interp::mk` wrote to, a
+                    // `succ(x)` built directly by `derived` was such a subterm,
+                    // and the whole declaration declined with `Gap::Skeleton`.
                     value = ip.mk(nc.nat.core().succ, vec![x.clone()]);
                     match nc.nat.succ_mem_at(x_mem) {
                         Ok(t) => t,

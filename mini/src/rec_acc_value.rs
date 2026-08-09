@@ -247,8 +247,8 @@ fn build(
 
     // ── the term, under a name of mini's own ────────────────────────────────
     //
-    // `pack` is assembled inside `derived`, so its applicative structure was
-    // never recorded through `Interp::mk` and the λ above this bottom could not
+    // `pack` is assembled inside `derived`, which while decomposability was a
+    // property of who built a term left the λ above this bottom unable to
     // skeletonise its body. One abbreviation over the nest's own binders fixes
     // it, exactly as `rec_dep::dep_bottom` does.
     // **`&mut ip.env`, not `Interp::ind_parts`.** `rec_dep::dep_bottom` reaches

@@ -77,7 +77,10 @@ cheaper, or makes the proofs need fewer of them. Step 4 is neither.
   of every term ever built through `Interp::mk` and is never pruned — is
   **54.4 % of the live heap** and holds **80 % of the live kernel `Term` nodes**.
   Certificate structure retained by `Interp::consts` is **0.5 %**. At most
-  **24 %** of the table's entries are ever read (§3).
+  **24 %** of the table's entries are ever read (§3). **It is gone**: the value
+  it stored was the key's own contents, and a six-line reader on `kernel::Term`
+  replaces it outright — peak RSS **−81.1 %** on the corpus and **−95.6 %** on a
+  closure, output byte-identical, `gapped 0` (§3.4).
 * **The memory is accumulation, and it tracks the conversions at ~241 bytes
   each.** The per-pair `Checker` — `frames` and `wt_memo`, what a "transient
   peak" reading would blame — never holds more than 35 frame entries and frees
@@ -86,13 +89,15 @@ cheaper, or makes the proofs need fewer of them. Step 4 is neither.
   it is the same story, through `parts`.
 
 **What that means for the goal — "the checker handles `init-prelude` at
-reasonable time and memory costs".** Time and memory are now two different
-problems with two different owners. Time is `Nat.rec` on symbolic successors,
-and step 4 does not address it. Memory is `parts`, and it is *independent of
-`Nat`*: at 241 B/conversion, any 30 M-conversion run needs ~7 GB and any 100 M
-run needs ~24 GB, whatever the conversions are about. **Bounding `parts` is the
-one lever in this document that pays off no matter how the `Nat` question is
-settled** (§3.3).
+reasonable time and memory costs".** Time and memory are two different problems
+with two different owners. Time is `Nat.rec` on symbolic successors, and step 4
+does not address it. Memory was `parts`, and it was *independent of `Nat`*: at
+241 B/conversion, any 30 M-conversion run needed ~7 GB and any 100 M run ~24 GB,
+whatever the conversions were about. It was the one lever here that paid off no
+matter how the `Nat` question is settled, and **it has been pulled** (§3.4).
+What is left of the memory half is bounded by the parsed export and the arena,
+which are flat at 32 MB; **the binding constraint on `init-prelude` is now time
+alone.**
 
 **Best estimate of what `init-prelude` costs with `Nat` genuinely solved —
 flagged as an estimate, and as a floor.** Projecting the measured
@@ -358,19 +363,26 @@ residue, 32.1 MB, is within 3 % of the 31.4 MB the acceptance pass peaks at
 before any interpretation runs (§1): the parsed export and the arena are
 **flat**.
 
-`derived/src/skeleton.rs` says what the table is, and its own header is why it
-is 54 % of the heap:
+`derived/src/skeleton.rs` said what the table was, and its own header was why
+it was 54 % of the heap:
 
 > `pub type Parts = HashMap<Term, (FnSym, Vec<Term>)>;`
 > … `record` builds `f(args)` and remembers its applicative structure in
 > `parts`; **every term the caller intends to decompose later must be built
 > through it.**
 
-It is a *hint* — "a wrong hint yields a skeleton whose reassembly fails to
-match, never a bad proof" — so no soundness rests on it. It has no eviction, no
-scope and no bound, and `Interp::mk` is the only way to build an interpretation
-term, so every term the interpretation ever constructs is retained for the life
-of the run together with a cloned `Vec` of its arguments.
+It was a *hint* — "a wrong hint yields a skeleton whose reassembly fails to
+match, never a bad proof" — so no soundness rested on it. It had no eviction, no
+scope and no bound, and `Interp::mk` was the only way to build an interpretation
+term, so every term the interpretation ever constructed was retained for the
+life of the run together with a cloned `Vec` of its arguments.
+
+**And the value it stored was the key's own contents.** `Term` is
+`Rc<TermData>` and `TermData::App(FnSym, Vec<Term>)` is one of its three
+constructors, so `parts[t]` was exactly what the node `t` points at, in a second
+`Vec`. The table existed because the kernel exposed no *reader* — `data()` is
+`pub(crate)` — and not because the information was anywhere else. §3.3 is
+written against that reading and is superseded by it.
 
 **Confirmed at scale, on two workloads, four orders of magnitude up.** The
 teardown above is at declaration 60, where the live heap is 92 MB. The probe
@@ -423,11 +435,78 @@ The 213 are `not-decomposable` 108, `no-endpoint` 69,
 `NoDefiningEquation(LT.lt)` 36. So `parts` genuinely *is* read across
 declaration boundaries and cannot simply be dropped at one. What the row
 establishes is the size of the prize: **the table costs nothing in time — it
-saves slightly more than it costs — and holds 60 % of the heap.** A prune that
-kept the cross-declaration entries and discarded the rest is worth about that
-much. This document does not claim to know how to identify them; it does
-observe that `skeleton` never misses, so the reads are a strict subset of the
-writes and a two-pass or reference-counted scheme has something to work with.
+saves slightly more than it costs — and holds 60 % of the heap.**
+
+### 3.4 The prune, and why there was none to find
+
+**The question this section asks — *which* entries may be discarded — has no
+answer, because the premise is wrong. There is nothing in the table to keep.**
+
+`skeleton::record` stored `(f, args)` under the key `Term::apply(f, args)`, and
+that key is an `Rc<TermData::App(f, args)>`: the value is a second copy of what
+the key already holds. What the table bought was not information, it was
+*access* — `kernel::Term` exposed constructors and no reader, so a client that
+had to take a term apart had to have remembered building it.
+
+So the fix is a reader. `kernel::Term::as_app(&self) -> Option<(FnSym, &[Term])>`
+is six lines, is the exact analogue of the `Formula::as_eq` that has always been
+there, and widens nothing: it can only expose `TermData::App`, and an `App`'s
+arguments are locally closed whenever the whole term is, so it hands back
+nothing a client could not already hold. With it, `derived::skeleton::skeleton`
+reads structure off the term and is **total**, `Interp::parts_of` is
+`t.as_app()`, `Interp::mk` is `Term::apply`, and the field is deleted.
+
+**The 213 gaps were the proxy failing, not entries being lost.** Recordedness
+was standing in for decomposability, and it was wrong in both directions.
+Wrong on the read side: a term the *kernel* built — a substitution instance, or
+either endpoint of a `derived::congr` — never passed through `Interp::mk` and
+read back as structureless, which is `mini/src/conv.rs`'s six lost conversions
+on `mutual_aux_encoding` and, generalised, the 108 `not-decomposable` and 69
+`no-endpoint` above. Wrong on the write side: keeping the proxy true meant
+remembering every term ever built, forever. Clearing the table breaks the proxy;
+deleting it removes the thing being approximated.
+
+Measured on the change, `test` profile, `perf stat -e instructions`, against
+`origin/master` at `0260925`:
+
+| workload | | baseline | reader | |
+| --- | --- | ---: | ---: | ---: |
+| 91 good tutorial exports | instructions | 405 375 599 994 | 402 689 993 069 | −0.66 % |
+| | peak RSS | 178 540 kB | **33 808 kB** | **−81.1 %** |
+| `Nat.ble_eq_true_of_le` closure, 47 decls | instructions | 2 251 144 138 254 | 2 232 215 740 074 | −0.8 % |
+| | peak RSS | 1 049 824 kB | **46 524 kB** | **−95.6 %** |
+
+**And the two declarations that stop `init-prelude` today, cut out with
+`scripts/decl-closure.py` and run alone.**
+
+| closure | | baseline | reader |
+| --- | --- | ---: | ---: |
+| **`Nat.mod_lt`, 159 decls** — the `Nat.mod*` cluster the file dies inside | outcome | **`SIGABRT` at a 12 GB `ulimit -v`**: `memory allocation of 3 825 205 264 bytes failed`, at 1 992 s | past that point and still running at 40 min, under 400 MB |
+| | peak RSS | **11 142 200 kB** | **378 152 kB at 40 min** (in flight) |
+| | instructions to the abort | 26 461 224 027 620 | — |
+| **`BitVec.decEq` + `BitVec.noConfusion`, 83 decls** | outcome | §4.2: killed by a 25-minute timeout **inside declaration 81 of 83**, 17 242 524 conversions | **completes**, 83 of 83, **25 335 661 conversions, `gapped 0`** |
+| | peak RSS | ≥ 3 841 600 kB | **106 172 kB** |
+| | instructions | — | 15 071 153 293 830, 1 096 s |
+
+**That is the memory half of the goal, answered.** The declaration cluster that
+kills `init-prelude` at 10 GB needs 11.1 GB in its own closure on `master` and
+hundreds of MB with the reader; §4.2's second wall, which no run had finished,
+finishes. What stops `init-prelude` now is **time** — `List.get.match_1` alone
+is 11.00 T instructions (§4.2) and this change moves none of it.
+
+All 91 exports' `--verbose` output is **byte-identical** across the change —
+every `facts`, `clauses`, `ledger`, `evidence`, `convs` and `untranslated` row,
+`accept 89 / decline 2 / reject 0`, `constEv 218/218`, `unsealed 0`,
+**`gapped 0`** — after two baseline runs were diffed against each other to
+establish that the output is deterministic at all. The closure's report is
+byte-identical too, at `proved=3 750 820  gapped=0`.
+
+**Time is unchanged and that is the expected sign.** §3.3's row has the table
+*saving* 3.1 % when cleared, because clearing is 33 431 conversions that stop
+happening; removing it changes no conversion at all, and the ≈0.7 % it returns
+is the 431 598 hash inserts and their `Vec` clones. The lever was always memory,
+and it is the whole of it: what remains at declaration 60 is §3.2's 32.1 MB
+residue, which is the parsed export and the arena and is flat.
 
 ## 4. Is there a second `Nat.modCore_lt`? Yes — `BitVec.decEq._proof_1`
 

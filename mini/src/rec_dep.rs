@@ -57,8 +57,8 @@
 //! * [`Interp::as_pi`](crate::interp::Interp::as_pi) says which of §6.2's three
 //!   `Π` clauses built each level, and the matching application rule consumes
 //!   the scope assumption the level's binder opened. Nothing is looked for: the
-//!   clause is read off the term the interpretation itself recorded, and the
-//!   membership is the assumption, not a lookup.
+//!   clause is read off the term itself, and the membership is the
+//!   assumption, not a lookup.
 //! * The scopes are then discharged and re-instantiated at the statement's own
 //!   arguments, which turns the interleaved `∀w. (w ∈ D → …)` family a binder
 //!   walk produces into the flat prenex conjunction `derived` states.
@@ -1153,10 +1153,10 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
 
     // ── the term, under a name of mini's own ────────────────────────────────
     //
-    // `drec` is assembled inside `derived`, so its applicative structure was
-    // never recorded through `Interp::mk` and the λ above it could not
-    // skeletonise its body. One abbreviation over the nest's own binders fixes
-    // it, exactly as `zoneb`'s constructor bottom does.
+    // `drec` is assembled inside `derived`, which while decomposability was a
+    // property of who built a term left the λ above it unable to skeletonise
+    // its body. One abbreviation over the nest's own binders fixes it, exactly
+    // as `zoneb`'s constructor bottom does.
     let raw = ap.apply(derived::subst_term(&dr.rec, &sub), cx.t_tm.clone());
     let (sym, ax) = {
         let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;

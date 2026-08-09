@@ -1457,8 +1457,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 Expr::App(f, a) => {
                     // Peeling an application is not a reduction: no leg. What
                     // it costs is taking `⟦f a⟧ = app(⟦f⟧,⟦a⟧)` apart, which is
-                    // one lookup in the applicative structure the
-                    // interpretation recorded on the way in.
+                    // one read of the term's own applicative structure.
                     let (f_tm, a_tm) = self.split_app(&cur_tm);
                     stack.insert(0, *a);
                     stack_tms.insert(0, a_tm);
@@ -2155,7 +2154,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// [`Checker::beta_premise`] collapses into this. It is false at the one
     /// caller that matters. `whnf_conv`'s `App` arm does not infer its
     /// argument: it **peels** `⟦a⟧ out of `⟦f a⟧` with
-    /// [`Checker::split_app`], one lookup in the recorded applicative
+    /// [`Checker::split_app`], one read of the term's own applicative
     /// structure and no typing anywhere. A `Typing` on that stack would have
     /// to be minted at the push, and the pushes outnumber the β steps that
     /// consume them — on `proj_reduced_carrier`, **252 962 `App`-arm pushes
@@ -2742,11 +2741,13 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// every corpus run it existed for. It was detecting *an input its own rule
     /// could not state*, not a defect: there is nothing wrong with a codomain
     /// whose term is binder-free and whose typing is not. The detector credited
-    /// with catching `proj_data`'s missing `Interp::mk` records is a different
-    /// and stronger one — `Interp::skeleton` answering `None`, which is
-    /// term-level, survives the change, and now runs on **every** `Π` instead
-    /// of only the dependent ones. `interp::tests::skeleton_refuses_an_unrecorded_term`
-    /// is its pin and says so.
+    /// with catching `proj_data`'s missing `Interp::mk` records was a
+    /// different and stronger one — `Interp::skeleton` answering `None`, which
+    /// was term-level rather than typing-level. That detector is gone too, and
+    /// for a better reason: the decomposition reads structure off the term, so
+    /// the defect it detected is unrepresentable rather than caught.
+    /// `interp::tests::skeleton_decomposes_a_term_the_interpretation_did_not_build`
+    /// is the pin on that.
     fn pi_evidence(
         &mut self,
         t1: &Typing,
