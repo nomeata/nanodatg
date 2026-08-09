@@ -57,7 +57,6 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::and_intro;
 use crate::discharge::{assuming, discharge};
 use crate::err::DResult;
 use crate::prim::{self, Shape};

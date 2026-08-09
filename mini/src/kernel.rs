@@ -1164,6 +1164,25 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // decline for the other; `118`'s twelve gapped
                                 // conversions were all this arm choosing the
                                 // wrong table. See [`crate::rec_acc_iota`].
+                                // **`Nat.rec`'s rule is `crate::iota_nat`'s.**
+                                // `Nat` takes `crate::direct::clause_for`, so
+                                // it has no class-(T) carrier and
+                                // `DepRecursor::iota` does not exist for it;
+                                // the arm below reports exactly that, and did,
+                                // 46 times on `nat_char_equations`. The split
+                                // is made off the clause for the reason `Acc`'s
+                                // is — so neither module declines for the
+                                // other.
+                                (Some(h), Some(ts), Some(inst))
+                                    if crate::iota_nat::selects(self, name) =>
+                                {
+                                    let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
+                                    crate::iota_nat::fire(
+                                        self, name, &inst, &rty, &h, &all, &ts, &cname,
+                                        &con_args, &rhs,
+                                    )
+                                    .map_err(Some)
+                                }
                                 (Some(h), Some(ts), Some(inst))
                                     if self
                                         .environment()

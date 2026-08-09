@@ -250,7 +250,7 @@ fn motive_cong(ip: &mut Interp, c_tm: &Term, eq: &Thm) -> Option<Thm> {
 /// Move a membership from `app(⟦C⟧, app(⟦Nat.succ⟧, x))` onto
 /// `app(⟦C⟧, succ x)`, which is where `derived` states the step.
 fn onto_succ(ip: &mut Interp, at: &At, x_tm: &Term, x_mem: &Thm, mem: &Thm) -> Option<Thm> {
-    let (_, succ_eq) = ip.beta_spine(&at.succ_former, &[x_tm.clone()], &[x_mem.clone()])?;
+    let (_, succ_eq) = ip.beta_spine(&at.succ_former, std::slice::from_ref(x_tm), std::slice::from_ref(x_mem))?;
     let cod_eq = motive_cong(ip, &at.c_tm, &succ_eq)?;
     ip.retarget_set(mem, &cod_eq)
 }
