@@ -853,17 +853,51 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         })
         .map(|(n, t)| t.map(|t| (n, t)).ok_or(Gap::IndSpec(*ind_name, "ctor type")))
         .collect::<Result<_, _>>()?;
-    // **The second and third branches of the trichotomy**
-    // (`INDEXED-DESIGN.md` §2.1). A resultant level that is not provably
-    // nonzero is class (S) or class (P), and *which* is read off the
-    // eliminator, computed from the declaration by [`large_eliminating`] —
-    // Carneiro §2.6.2, not the export's recursor. Class (S) is §5.3's
-    // subsingleton carrier and class (P) is the truncation clause, and **both
-    // are wired** — see the `class_s_ix::build` / `class_p_ix::build` calls at
-    // the foot of the indexed arm below. [`Gap::PropInductive`] is therefore no
-    // longer reached from here; what class (P) still declines is narrower and
-    // named at its own site (`REC_FUN`, a function-typed recursive field, for
-    // which the class-(T) `reindex_in_funspace` bridge has no counterpart).
+    // **The trichotomy** (`INDEXED-DESIGN.md` §2.1). Which carriers are
+    // *admissible* is not a choice and is decided first:
+    //
+    //   * the class-(T) W-carrier is a set of `(a, f)` pairs, so it is
+    //     admissible only where the declaration can never be a `Prop` —
+    //     [`provably_nonzero`] on its own level expression is exactly that;
+    //   * the class-(S) carrier is a subset of `{•}`, hence a member of every
+    //     rung, so it denotes a `Type`-valued declaration as faithfully as a
+    //     `Prop`-valued one and is admissible **wherever the declaration is a
+    //     subsingleton**, whatever its sort
+    //     (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3);
+    //   * class (P)'s truncation is what a non-subsingleton has left when the
+    //     W-carrier is inadmissible.
+    //
+    // So `provably_nonzero` does **not** decide the branch for a subsingleton;
+    // it decides only what a non-subsingleton gets. [`subsingleton`] is a
+    // structural test — one constructor, every non-recursive field a
+    // proposition or a result index, Carneiro §2.6.2 — and it is computed from
+    // the declaration, not read off the export's recursor.
+    //
+    // That is what makes the branch survive `monomorph`. `PUnit.{u} : Sort u`
+    // is not provably nonzero, but its copy `_at.1.1.PUnit : Sort 1` is, and
+    // under a `provably_nonzero`-first order the copy took the W branch and
+    // lost the `LeProp::subsingleton` that [`crate::unit_like`] and
+    // [`crate::proj_prop`]'s second route consume — four `tutorial/`
+    // declarations, `MONOMORPH.md` §4.3. A pass that renames declarations and
+    // grounds levels cannot touch a structural test.
+    //
+    // Where both carriers are admissible the choice is free, and
+    // [`collapsed_subsingleton`] is where mini exercises it: class (S) is taken
+    // over class (T) only at the shape whose §5.3 carrier `class_s` actually
+    // builds. Its header carries the measurement — without that narrowing the
+    // preference costs five `tutorial/` files.
+    //
+    // Below `provably_nonzero` nothing changes: `class_s` there used to be
+    // [`large_eliminating`], which with reason 1 already failed *is*
+    // [`subsingleton`]. Class (S) and class (P) are **both wired** — see the
+    // `class_s_ix::build` / `class_p_ix::build` calls at the foot of the
+    // indexed arm below. [`Gap::PropInductive`] is therefore not reached from
+    // here; what class (P) still declines is narrower and named at its own site
+    // (`REC_FUN`, a function-typed recursive field, for which the class-(T)
+    // `reindex_in_funspace` bridge has no counterpart).
+    let pnz = provably_nonzero(l);
+    let class_s =
+        if pnz { collapsed_subsingleton(c, ind_name) } else { subsingleton(c, ind_name) };
     // ── an indexed family: walk it, *then* decline ────────────────────────
     //
     // The decline used to be a declaration-level guard at the top of this
@@ -884,7 +918,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         // subsingleton carrier at an index, which `class_s::build` does not
         // take. The walk still runs, so the representability answer is not lost
         // to the decline.
-        if !provably_nonzero(l) {
+        if class_s || !pnz {
             let (shape, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
             let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
             if !spec.well_formed() {
@@ -897,7 +931,11 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
             // `derived/` and **both are wired**, immediately below; they remain
             // different constructions, which is why the branch is on `class_s`
             // rather than on a shared path.
-            let class_s = large_eliminating(c, ind_name);
+            //
+            // *(`class_s` is the one the trichotomy above already computed. It
+            // used to be a second call to [`large_eliminating`] here, which at
+            // this point in the old order was the same answer — reason 1 having
+            // failed — and is not the same answer now.)*
             // **The walk's products outlive the decline** — see [`IndexedWalk`].
             // Everything below was minted by `define_abbrev` inside `spec_of`
             // and is unrecoverable once this frame goes, and the
@@ -926,13 +964,12 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
     }
 
-    if !provably_nonzero(l) {
-        return if large_eliminating(c, ind_name) {
-            crate::class_s::build(c, ind_name, inst, np, &ind_ty, &ctor_tys)
-        } else {
-            // **Class (P), the truncation clause** (thesis.txt:1813-1815).
-            build_trunc(c, ind_name, inst, np, &ind_ty, &ctor_tys)
-        }
+    if class_s {
+        return crate::class_s::build(c, ind_name, inst, np, &ind_ty, &ctor_tys)
+    }
+    if !pnz {
+        // **Class (P), the truncation clause** (thesis.txt:1813-1815).
+        return build_trunc(c, ind_name, inst, np, &ind_ty, &ctor_tys)
     }
 
     // ── the `FnSym` boundary (WIRING-DESIGN.md §3.2) ──────────────────────
@@ -1080,12 +1117,11 @@ pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> boo
     // that case, and it caught exactly this while the function was being
     // written.
     let env = c.environment();
-    let Some(ConstantInfo::Inductive { ty, num_params, num_indices, ctors, .. }) = env.get(ind_name)
-    else {
+    let Some(ConstantInfo::Inductive { ty, num_params, num_indices, .. }) = env.get(ind_name) else {
         return false
     };
     let (np, ni) = (*num_params as usize, *num_indices as usize);
-    let (ty, ctors) = (*ty, ctors.clone());
+    let ty = *ty;
     // Reason 1, on the declaration's own level expression.
     if let Some(own) = peel(&ty, np + ni) {
         if let Expr::Sort(l) = &own.view() {
@@ -1094,7 +1130,32 @@ pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> boo
             }
         }
     }
-    // Reason 2: at most one constructor.
+    subsingleton(c, ind_name)
+}
+
+/// **Reason 2 of [`large_eliminating`] on its own: is this declaration a
+/// subsingleton?**
+///
+/// At most one constructor, and every non-recursive field of it either a
+/// proposition or one of the result indices — Carneiro's SS side condition,
+/// walked by [`ctor_le`]. This is the half of the LE judgement that does not
+/// look at a level, and it is asked separately because **it, and not
+/// [`provably_nonzero`], is what decides the carrier** (see [`build`]'s
+/// trichotomy).
+///
+/// A subsingleton has no two distinguishable elements at any instantiation, so
+/// §5.3's carrier `[tup(x⃗) ∈ acc(A_φ,R)] ⊆ {•}` is a faithful denotation of it
+/// whatever its sort is — `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3, and a subset
+/// of `{•}` is a member of every rung (`Tower::cond_in_u0` + `Rung::u0_mem` +
+/// `Rung::transitive`).
+pub(crate) fn subsingleton(c: &mut Checker<'_, '_>, ind_name: &Name) -> bool {
+    let env = c.environment();
+    let Some(ConstantInfo::Inductive { ty, num_params, num_indices, ctors, .. }) = env.get(ind_name)
+    else {
+        return false
+    };
+    let (np, ni) = (*num_params as usize, *num_indices as usize);
+    let (ty, ctors) = (*ty, ctors.clone());
     match ctors.len() {
         0 => return true,
         1 => {}
@@ -1102,6 +1163,66 @@ pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> boo
     }
     let Some(cty) = c.environment().get(&ctors[0]).map(|ci| *ci.ty()) else { return false };
     c.in_scope(|c| Ok::<bool, Gap>(ctor_le(c, ind_name, np, ni, &ty, &cty))).unwrap_or(false)
+}
+
+/// **The subsingleton whose §5.3 carrier is the one [`crate::class_s`]
+/// builds** — [`subsingleton`], and the shape under which that route produces
+/// [`LeProp`](derived::inductive::family::LeProp) rather than naming what is
+/// missing.
+///
+/// [`build`]'s trichotomy prefers class (S) to class (T) only here, and this is
+/// the whole of the narrowing. The three conditions are `class_s`'s own, in its
+/// header:
+///
+/// * **not indexed.** `LeProp` is stated at `ni = 0`; at an index the carrier
+///   is `LeCarrier`'s and it is not what [`crate::unit_like`] or
+///   [`crate::proj_prop`]'s second route read. The preference exists to produce
+///   `LeProp`, so it stops where `LeProp` does.
+/// * **exactly one constructor.** At zero, `A_φ` is provably empty and the
+///   carrier is fine, but the eliminator is ex falso and
+///   [`crate::recursor::CLASS_S_EMPTY`] is what a `Sort ℓ` declaration would
+///   get instead of a working `Empty.rec`.
+/// * **no recursive field.** With one, the interpretation is the `acc` and not
+///   `A_φ`, which `class_s` declines as `class (S): recursive constructor`.
+///
+/// # Why this is a narrowing and not the rule
+///
+/// The rule is [`build`]'s: a subsingleton's carrier is a subset of `{•}` and
+/// is admissible at every sort, so `provably_nonzero` does not get to decide
+/// anything about one. Where *both* branches are admissible the choice is free,
+/// and mini takes the branch it has a construction for. **Measured**, applying
+/// the preference without these three conditions moves five `tutorial/` files
+/// from `accept` to a gap: `033_empty` and `059_emptyRec` are `Empty : Sort 1`
+/// with no constructors, and `052`/`113`/`114` are `reduceCtorParam : Sort 1 →
+/// Sort 1`, one constructor with a recursive field. Each of them has a working
+/// class-(T) W-carrier today and would trade it for a named class-(S) decline.
+///
+/// Below `provably_nonzero` there is no such choice — the W-carrier is
+/// inadmissible, class (S) is the only branch a subsingleton has — so these
+/// conditions are **not** applied there and `False` keeps its `¬ψ` carrier and
+/// its missing eliminator. The narrowing is about which of two admissible
+/// carriers to build, never about whether to report a gap.
+pub(crate) fn collapsed_subsingleton(c: &mut Checker<'_, '_>, ind_name: &Name) -> bool {
+    let env = c.environment();
+    let Some(ConstantInfo::Inductive { num_indices, ctors, num_params, .. }) = env.get(ind_name)
+    else {
+        return false
+    };
+    if *num_indices != 0 || ctors.len() != 1 {
+        return false
+    }
+    let np = *num_params as usize;
+    let Some(cty) = env.get(&ctors[0]).map(|ci| *ci.ty()) else { return false };
+    // A recursive field, read off the constructor's own telescope — the same
+    // `has_const` test [`ctor_le`] makes, and no interpretation is built.
+    let Some(mut cur) = peel(&cty, np) else { return false };
+    while let Expr::Forall { ty, body } = &cur.clone().view() {
+        if crate::expr::has_const(ind_name, ty) {
+            return false
+        }
+        cur = *body;
+    }
+    subsingleton(c, ind_name)
 }
 
 /// The `LE ctor` half: the single constructor's fields, in order.

@@ -89,6 +89,7 @@ pub mod ledger;
 pub mod minor_ix;
 pub mod mutual_aux;
 pub mod modelgen;
+pub mod mono_name;
 pub mod nat_clause;
 pub mod nested;
 pub mod nested_splice;

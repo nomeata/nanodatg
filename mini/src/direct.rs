@@ -235,8 +235,22 @@ impl Clause {
 
 /// The table. One comparison on the name [`crate::zoneb::ensure`] was asked
 /// about — never a scan, and never a shape match.
+///
+/// **Through `monomorph`'s root prefix.** The key is a name, and `monomorph`
+/// (`MONOMORPH.md` §1.1) is entitled to rewrite one: `Acc.{u}` at `[0]` reaches
+/// here as `_at.1.0.Acc`, the row did not fire, the general walk met
+/// `Acc.intro`'s depth-2 recursive telescope and declined it. `Eq` and `Nat`
+/// survived only because they are *carried built-ins* (`MONOMORPH.md` §3) and
+/// keep their names, which is an accident of that list and not a property of
+/// this table. [`crate::mono_name::strip`] is the identity on an unprefixed
+/// name, so the unmonomorphized case is unchanged and there is no branch.
+///
+/// Stripping is safe here for the reason the module header already gives: a
+/// name is not evidence. A declaration that reaches a row it is not is refused
+/// by the arity check and by the derivation's own shape checks, and that
+/// argument does not care how the name was spelled.
 pub fn clause_for(n: &Name) -> Option<Clause> {
-    let NameView::Str(pre, s) = n.view() else { return None };
+    let NameView::Str(pre, s) = crate::mono_name::strip(n).view() else { return None };
     if !pre.is_anon() {
         return None
     }
