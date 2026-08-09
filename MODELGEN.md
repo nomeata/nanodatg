@@ -694,23 +694,27 @@ streams* — `IO.println` per line, no accumulation — so the memory failure
 parameter, so a library user would have to redirect the process's stdout, but
 that is a wart and not an obstacle.)
 
-**It is nevertheless the wrong writer for this tool, for three reasons that are
-about what is being written and not about the format.**
+**There are two proposals here and they have different answers.** Writing from
+an `Environment` is a fact about `lean4export`'s *driver* — `dumpConstant`,
+which resolves a name against `env` and reads a `ConstantInfo`'s fields — and
+not about its *emitters*: `getIdx`, `dumpName`, `dumpLevel` and `dumpExprAux`
+take a `Name`, a `Level` and an `Expr` and are told nothing else about where
+they came from. So:
 
-1. **The output is not what the environment holds.** Both tools replay into an
-   `Environment` — that is why `inferProjType` works — but they emit *records*,
-   and the two are deliberately allowed to differ. A declaration the replay
-   rejects is reported and still written (`monomorph`'s `rejected`, §4.1's
-   oracle); an environment-based writer would silently omit it, turning an
-   oracle into a hole. Worse, `MONOMORPH.md` §9.7 measures the environment
-   **silently losing** declarations on Mathlib — 1,726 `AsyncConsts.add` panics
-   over 767 name pairs — so an environment-based writer would inherit exactly
-   the hazard that document names as the thing to be careful about.
-2. **Mode B has no environment.** `monomorph --mono-recursors` renames recursors
-   to `…._elim.⟨w⟩`, which no kernel will accept as a recursor at all. It is a
-   pure post-pass over records. Writing it requires a record writer, so reuse
-   buys one of two writers rather than none.
-3. **Byte-identity would go.** The claim above — a file with nothing to change
+* **(a) Reuse the driver.** Hand `dumpConstant` an `Environment` and let it
+  write the file. **This is refuted, and the three reasons below are its
+  refutation** — every one of them is about what the driver can see and in what
+  order, and none of them touches (b).
+* **(b) Reuse the emitters.** Lift `getIdx`, `dumpName`, `dumpLevel` and
+  `dumpExprAux`, and drive them from our own record stream. **Nothing below
+  refutes this.** It is a code-duplication question with no correctness or
+  performance content, and it is answered on its own terms further down.
+
+### Why not (a)
+
+Three reasons, all about what is being written and not about the format.
+
+1. **Byte-identity would go.** The claim above — a file with nothing to change
    comes back byte-identical, measured over 73 — rests on re-interning the
    *parsed* records in the input's own order. `lean4export` chooses its own
    order (`dumpDeps`, depth-first from a constant list), skips `unsafe`
@@ -719,15 +723,77 @@ about what is being written and not about the format.**
    rather than from what the file said. Where Lean's answer differs from the
    file's the round trip stops being the identity — `monomorph`'s `recRegen`
    counts 2,027 such recursors on Mathlib — and every back-reference index in
-   the file shifts regardless.
+   the file shifts regardless. **This is the strongest of the three**, because
+   it costs a property that is measured and relied on rather than a case that
+   might not arise.
+2. **Mode B has no environment.** `monomorph --mono-recursors` renames recursors
+   to `…._elim.⟨w⟩`, which no kernel will accept as a recursor at all. It is a
+   pure post-pass over records. Writing it requires a record writer, so (a) buys
+   one of two writers rather than none — and the writer it does not buy is
+   exactly the record-driven one (b) proposes.
+3. **The output is not what the environment holds.** Both tools replay into an
+   `Environment` — that is why `inferProjType` works — but they emit *records*,
+   and the two are deliberately allowed to differ. A declaration the replay
+   rejects is reported and still written (`monomorph`'s `rejected`, §4.1's
+   oracle; `Mono.lean`'s emission loop pushes the declaration on both arms);
+   `dumpConstant` panics on a name the environment does not have, so under (a)
+   that declaration is not written at all. Worse, `MONOMORPH.md` §9.7 measures
+   the environment **silently losing** declarations on Mathlib — 1,726
+   `AsyncConsts.add` panics over 767 name pairs — so (a) would inherit exactly
+   the hazard that document names as the thing to be careful about.
 
-So: **keep the writer.** What was genuinely missing from it was streaming, and
-that is `Export.stream` plus its two consumers in `Modelgen/Format.lean`. The
-duplication that remains is the format itself, and it is held in agreement by
-measurement rather than by construction: `monotest` checks that
-`Export.writeTo`, `Export.render` and the input file all agree byte for byte on
-a real export, which is the property that would break first if `lean4export`
-changed the format under us.
+### What (b) would buy, and why it is not taken
+
+The writer is **211 lines of code** in `Modelgen/Format.lean`: 6 for `Writer`,
+**93** for the name, level and expression emitters, 78 for the six declaration
+emitters, 31 for `Export.stream` and its two consumers. Only the 93 are in scope
+for (b) — the declaration emitters read `EDecl`, `ECtor`, `ERec` and `EIndType`
+where `lean4export`'s read `ConstantInfo`, `InductiveVal` and `RecursorVal`, and
+rewriting one into the other is new code and not lifted code. So (b) collapses
+the format definition for the **three simplest record kinds** and leaves it
+hand-written for the **six with the most fields**, which is where a key-order
+mistake is likeliest.
+
+And the 93 are not lifted as they stand. Three edits come first, and after them
+what remains of the original is the shape of three JSON objects:
+
+* `dumpExprAux`'s `natVal` and `strVal` arms call `dumpNatDeps` and
+  `dumpStrDeps`, which look `Nat`, `Char.ofNat` and `String.ofList` up in the
+  environment and emit **their declarations** in the middle of an expression.
+  Driven from records that is precisely wrong: it splices environment-derived
+  declarations into a file whose declaration order is the input's.
+* `getIdx` calls `IO.println`, so the monad is `ReaderT Context (StateT State
+  IO)` and `Context` carries an `Environment` these functions otherwise never
+  read. `Writer` is a pure `Writer × Nat`, which is what lets `Export.stream` be
+  polymorphic in `m` and `Export.render` be a `StateM String`. Taking `getIdx`
+  unchanged makes `render` an `IO` action and gives up the one-fold-two-consumers
+  property that is what keeps `render` and `writeTo` byte-identical.
+* `dumpExpr` strips `mdata` by rebuilding each expression through `removeMData`,
+  which needs a 21-line memo (`noMDataExprs`) to be affordable. `Writer.expr`
+  strips it at the point of interning — one arm, no rebuild — so that memo comes
+  with a cost we do not currently pay.
+
+**Its dedup is ours.** `visitedNames`, `visitedLevels` and `visitedExprs` are
+`HashMap Name/Level/Expr Nat` under Lean's own `BEq` and `Hashable`, indexed by
+`m.size`, seeded `.anonymous ↦ 0` and `.zero ↦ 0` — the same three tables as
+`Writer`, key for key. `noMDataExprs` is the only structure it has that we lack,
+and the point above is that it exists to pay for a design we do not have. This
+is also **not** the dedup `MONOMORPH.md` §9.8 measures at 2.26×: that is
+*in-memory* sharing lost during the rewrite, where the writer's re-interning is
+what already brings the output back to 3.2 % larger than the input on 15.8 %
+more declarations. `lean4export` has nothing to add to either.
+
+The one difference worth having is presizing — `visitedExprs` is created at
+`emptyWithCapacity 10000000` where `Writer.exprs` starts at 4096. That is a
+one-line change to our own code, it needs no reuse, and it is unmeasured.
+
+So: **keep the writer, and the reason is (a)'s three, not a general objection to
+sharing code.** What was genuinely missing from it was streaming, and that is
+`Export.stream` plus its two consumers. The duplication that remains is the
+format itself, and it is held in agreement by measurement rather than by
+construction: `monotest` checks that `Export.writeTo`, `Export.render` and the
+input file all agree byte for byte on a real `lean4export` output, which is the
+property that would break first if `lean4export` changed the format under us.
 
 ---
 

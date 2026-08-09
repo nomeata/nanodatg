@@ -255,9 +255,14 @@ no test of ours would have.
   materialising lines, not the parsed data** — peak was reached before a single
   JSON object was parsed. Chunked reading took the parse from 23.9 GB to 5.5 GB,
   which is 1.00× the file's own bytes.
-* **We keep our own writer rather than reusing `lean4export`'s.** It writes from
-  an `Environment`; we emit records that deliberately differ, including
-  declarations the replay rejected but that must still be written through.
+* **We keep our own writer rather than reusing `lean4export`'s driver.** What is
+  ruled out is letting `dumpConstant` write from an `Environment`, and the reason
+  is byte-identity: it emits in its own dependency order and re-derives
+  `numNested`, `isRec`, `hints` and `all` from what Lean worked out rather than
+  from what the file said, so a file with nothing to change would no longer come
+  back unchanged. Its *record emitters* are environment-free and could be lifted;
+  that is a ~90-line code-sharing question with no correctness content, and
+  `MODELGEN.md` §3.1 works through why it is not worth the fork it would need.
 * **Level substitution memoises on `(Expr, σ restricted to the expression's own
   level parameters)`.** Pruning σ to what an expression actually mentions is what
   makes entries shared across instantiations that differ elsewhere; memoising
