@@ -278,7 +278,12 @@ done < <(declared_features)
 for d in $MEMBER_DIRS; do
   [[ -f "$d/Cargo.toml" ]] || continue
   p="$(pkg_name "$d")"
-  declared_features | grep -q "^$d $p " && continue
+  # `grep -c`, not `grep -q`: under `pipefail`, `-q`'s early exit SIGPIPEs
+  # `declared_features` the moment a *later* member also declares features —
+  # the whole pipeline then reports failure for a member whose row matched.
+  # Latent while `checker` was the last (and only) feature-declaring member;
+  # exposed the day `mini` declared one. `-c` reads the stream to the end.
+  [[ "$(declared_features | grep -c "^$d $p ")" -gt 0 ]] && continue
   matrix=$((matrix+1))
   hits=$(grep -rlE 'cfg!?\([^)]*feature[[:space:]]*=' --include='*.rs' "$d/src" "$d/tests" 2>/dev/null)
   if [[ -n "$hits" ]]; then

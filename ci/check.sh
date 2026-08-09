@@ -189,8 +189,11 @@ step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
 # alone is 17.76 T instructions, so that one file cost 53.3 T per run of this
 # script — and two thirds of it bought nothing. `stepcount` and `tg` are
 # `nanoda_lib`'s features; `kernel` and `derived` do not link `nanoda_lib` at
-# all, and `mini` links it for the export parser and the level pre-pass and
-# never enters `tc.rs`. So the feature runs are `-p nanoda_lib`.
+# all, and `mini` links it for the export parser, the level pre-pass and the
+# shared `tg::EnvCore` — never `tc.rs`. So the feature runs are
+# `-p nanoda_lib`, plus one narrow `-p mini --features tg` step for the
+# cross-engine seam suite (`mini` declares `tg = ["nanoda_lib/tg"]` for
+# exactly that file).
 #
 # Narrowing a matrix is how coverage is lost, so the premise is checked rather
 # than believed, in three places:
@@ -218,6 +221,11 @@ step "tests (stepcount)"         cargo test -p nanoda_lib --features stepcount
 # The real Tarski-Grothendieck backend: builds actual kernel derivations, and
 # must not change what the checker accepts.
 step "tests (tg backend)"        cargo test -p nanoda_lib --features tg
+# Both engines over one shared `EnvCore` in one process — the environment-
+# unification seam (ENV-UNIFY.md §3.3). `mini/tests/envshare_tg.rs` needs the
+# checker's backend compiled in, hence the feature; the ungated half of the
+# suite (`mini/tests/envshare.rs`) already ran in the plain step above.
+step "tests (cross-engine core)" cargo test -p mini --features tg --test envshare_tg
 
 echo
 if (( ${#skipped[@]} )); then

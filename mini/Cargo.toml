@@ -38,6 +38,15 @@ num-bigint = "0.4.4"
 # was measured at 22.6% of a `mutual` run on its own.
 rustc-hash = "1.1"
 
+[features]
+# The cross-engine seam test (`mini/tests/envshare_tg.rs`): both engines over
+# one `nanoda_lib::tg::EnvCore` in one process, which needs the checker's TG
+# backend actually wired in as the certifier. The shared-core *plumbing* is
+# unconditional — `Interp::over` and `tg::install_shared_core` compile in
+# every build; only driving the checker's evidence path needs the feature.
+# `ci/check.sh` runs it with `cargo test -p mini --features tg`.
+tg = ["nanoda_lib/tg"]
+
 [[bin]]
 name = "mini"
 path = "src/main.rs"
