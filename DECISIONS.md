@@ -2947,23 +2947,53 @@ discipline as measuring completeness against Lean rather than against our own
 fixtures. **The deletion mode B offers can be taken later; the oracle does not
 come back once given up.**
 
-**Mode A costs nothing new, which is what makes the choice cheap.** The checker
-already carries `canon_level` (`tg.rs:3722`), `interp_level` (`:3749`),
-`interp_sort` (`:3835`), `interp_levels` (`:3860`) and `audit_instantiation`
-(`:3902`), and already keys interpretations by `(name, levels)`. Under mode A
-every declaration except a recursor is ground and a recursor carries exactly one
-parameter, so the surviving work is substituting one ground level into a
+**The level machinery mode A needs already exists.** The checker carries
+`canon_level` (`tg.rs:3722`), `interp_level` (`:3749`), `interp_sort`
+(`:3835`), `interp_levels` (`:3860`) and `audit_instantiation` (`:3902`), and
+already keys interpretations by `(name, levels)`. Under mode A every
+declaration except a recursor is ground and a recursor carries exactly one
+parameter, so the surviving level work is substituting one ground level into a
 recursor type — existing machinery at |σ| = 1. Nothing is built to support mode
 A; the ~500 lines of level scheduling are merely not deleted yet.
 
-**The switch trigger, named so it cannot drift.** Move to mode B if either holds:
-a recursor's motive universe is **not ground at some use site**, or the
-`(name, σ)` schedule for recursors becomes a **source of gaps** rather than a
-pass-through. Both are countable, and the count is the deliverable of the
-mode-A probe rather than an argument.
+**The switch trigger, named so it cannot drift, and now counted.** Move to mode
+B if either holds: a recursor's motive universe is **not ground at some use
+site**, or the `(name, σ)` schedule for recursors becomes a **source of gaps**
+rather than a pass-through. `MONOMORPH.md` §4.3 is the count, over every
+`monomorph` output of `vendor/arena-tests/good` outside `perf/`
+(`scripts/mono-motive-ground.py`): **331 distinct motive instantiations, 33
+non-ground, and 0 of the 33 reached from a ground declaration** — every one is
+a recursor naming itself or a mutual sibling at its *own* motive parameter
+inside its own ι rules, which the enclosing σ grounds. **The first leg of the
+trigger is nowhere near firing.**
+
+**The second leg has fired, and it is not about levels — which is why the
+decision stands.** `mini` over the 91 `tutorial/` exports goes from 89 accepted
+and fully certified to 85, with four new gaps (`086_projProp3`, `102_unitEta1`,
+`117_accRecType`, `118_accRecReduction`). Neither cause is level scheduling and
+**both are present in mode B identically**, so neither is an argument for
+switching: `mini::zoneb::provably_nonzero` reads the declaration's *own* level
+expression by design (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3), which
+monomorphization deletes — `_at.1.1.PUnit : Sort 1` stops being class (S) and
+loses the `LeProp::subsingleton` that `unit_like` consumes — and
+`mini::direct::clause_for` is keyed on the bare names `Eq`, `Acc`, `Nat`, of
+which only the first two are carried built-ins, so `_at.1.0.Acc` falls to the
+general walk. Both are wiring in `mini/`; **"mode A costs the checker nothing
+new" was true of the level axis and false of the file as a whole.**
+
+**And mode B would not have bought the deletion.** Measured on the same output:
+`init-prelude` under mode B still carries **14 level-carrying declarations**,
+including `Eq.rec.{u,u_1}` and `List.rec.{u_1,u}` and one non-ground motive
+instantiation, because the carried built-ins (§3) are not `foldElim`'s to
+rename. The axis mode B moves is 147 → 14, not 147 → 0, so a mode-B consumer
+still needs `interp_level`, `interp_levels` and `audit_instantiation` and still
+meets a recursor at an open motive universe.
 
 **Rejected — mode B now, on the grounds that the owner's stated aim was a
-checker that "could completely ignore levels".** It would reach that aim, but
-mode A does not obstruct it: the two differ by a flag, not a rewrite. Taking B
-first buys a deletion and pays with the only external check we have on the
-files we are about to certify at scale.
+checker that "could completely ignore levels".** It would not reach that aim
+(the paragraph above), and mode A does not obstruct the deletion anyway: the
+two differ by a flag, not a rewrite. Taking B first buys a partial deletion and
+pays with the only external check we have on the files we are about to certify
+at scale — measured: `nanoda` accepts 91/91 mode-A tutorial exports and panics
+on 50 of 91 mode-B ones, and Lean finds 0 of `init-prelude`'s 139 mode-A
+recursors differing from its own against 254 of 260 under mode B.
