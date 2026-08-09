@@ -148,6 +148,47 @@ A certified mirror of the checker's `leq` decision procedure (recursing
 exactly where the Rust decision procedure recurses, emitting these lemmas) is
 the clean architecture; it is **designed, not built** (§5).
 
+### 1.6 Constants: the `(name, levels)` key becomes application
+
+Today `⟦f.{σ}⟧` is a **0-ary symbol per ground instantiation**, and every
+table in the translation layer is keyed `(name, interpreted levels)` to keep
+the instantiations apart. Under quantification a declaration with `k` level
+parameters becomes **one `k`-ary symbol** `f̂` with one defining axiom
+
+```text
+⊢ ∀u⃗. f̂(u⃗) = ⟦body⟧(u⃗)         — kernel `define`/`define_abbrev`, params = u⃗
+```
+
+and a use of `f` at levels `ℓ⃗` interprets as `f̂(ℓ̂⃗)` — the keying *becomes*
+application, `⟦f.{σ}⟧` is the instance `f̂(σ̄)`, and the per-σ symbol tables
+(`Shared::const_syms`, mini's `ConstKey`-keyed stores) collapse one dimension.
+This is the target-side economy the ground schedule cannot have: two
+instantiations of one declaration are two `ax_inst`s of one axiom, not two
+translations.
+
+### 1.7 Ten candidate obstructions, attacked
+
+Each of the following was checked against the tree rather than assumed; none
+survives as an obstruction. (1) `imax` under `simplify` — mirrored by
+`ite0` + `succ_ne_zero`. (2) Per-σ inductive tables — the branch decider is
+already per-declaration (`zoneb`'s eliminator trichotomy), and
+`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.2 shows class-(T) carriers are
+level-free; only the membership theorem quantifies. (3) The recursor's
+eliminating universe — becomes one more quantified variable; it is precisely
+today's `Undet` residue. (4) Proof irrelevance — lives in the `v = 0` branch
+of the case split, where `u0_subsingleton` applies as today. (5) Non-numeral
+ground levels — the target *evaluates*; no syntactic numeral matching.
+(6) The fibre-size wall — orthogonal axis, and superseded anyway (`wpath`).
+(7) Completeness of the level-defeq mirror — the checker's `leq` case-splits
+on a parameter being `0`/`succ`; the target mirrors it with `Order::cases`,
+and every structural step is a `⊆`-lattice fact. (8) `DeclUniverse` at a
+variable rung — the underlying lemmas are `∀c`-shaped over `U(c)` and
+instantiate at `c := app(lvl, n)`; no new mathematics, one more quantifier.
+(9) Prop-clause skeleton symbols (`chi`) — level-free formulas; `ite0`
+composes them unchanged. (10) Universe closure at a variable rung — the
+tower's `∀c` closure theorems apply at `c := app(lvl, n)` directly; not even
+`is_universe` is needed, though it is available (§ verdict).
+
 ## 2. Why quantification is sound where the schedule was — the two-line argument
 
 The ground schedule is sound because Lean's own semantics quantifies levels at
