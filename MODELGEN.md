@@ -286,9 +286,13 @@ this tool emits.
 on the extensional application of a `Quot`, at `Quot.sound` — and it is a
 theorem here, with `congrArg` inlined to one `Eq.rec` the way
 [`Modelgen.Gen.congrFunFor`] already is. An **axiom** would have been worse than
-useless rather than merely inelegant: `mini` declines every non-standard axiom
-(`mini/src/axiom.rs`), so a fabricated `funext` axiom would trade a decline here
-for a decline downstream and widen the trust surface to buy nothing.
+useless rather than merely inelegant: `mini` declines a non-standard axiom
+anything in the file refers to (`mini/src/axiom.rs`,
+`mini/src/unused_axiom.rs`), and a fabricated `funext` would be referred to by
+every proof that used it, so it would trade a decline here for a decline
+downstream and widen the trust surface to buy nothing. The narrowing at `#121`
+does not soften that: it exempts axioms **nothing** depends on, which is exactly
+what a spliced `funext` would not be.
 
 Four properties hold this down, and each is measured:
 

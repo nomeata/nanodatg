@@ -33,10 +33,18 @@ thing that could be wrong. A dropped `natVal` node simply becomes unreachable.
 What the residue bought the first time it was run: `mini` got 1 459 declarations
 and 3 078 scheduled pairs into `convert::load` — against `declars=0` on the
 unfiltered file — and stopped on `non-standard axiom: sorryAx`. So the blocker
-after `Nat` is not nesting; it is a one-line policy decline on an axiom that
+after `Nat` was not nesting; it was a one-line policy decline on an axiom that
 **nothing in the file uses** (`sorryAx` is a leaf: removing it drops exactly one
-declaration of 1 248). Nesting is behind that, and it is one declaration
-(`Lean.Syntax`, `numNested = 2`) by `scripts/arm-coverage.py`.
+declaration of 1 248).
+
+**That blocker is gone (`#121`).** `mini/src/unused_axiom.rs` narrows the rule
+to axioms something in the file refers to, and it computes the leaf reading
+above rather than taking it on trust: on the residue it reports `used = []`,
+`unused = ["sorryAx"]`. Mini ignores the declaration, names it on the verdict
+line, and carries on into the interpretation pass — where the wall is `Nat`
+again, and is cost rather than a decline (`MEASUREMENTS.md`). Nesting is behind
+that, and it is one declaration (`Lean.Syntax`, `numNested = 2`) by
+`scripts/arm-coverage.py`.
 
 Usage:
     python3 scripts/nat-reach.py [export.ndjson]        # default: init-prelude

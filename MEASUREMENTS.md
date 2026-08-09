@@ -5605,23 +5605,65 @@ test targets are, which under resolver 2 changes `num-bigint`'s features and so
 same source at the same opt-level. `ci/check.sh` keeps its build and test halves
 on the same side of that line so nothing is compiled twice.
 
-### `init-prelude`, past its first two blockers (#87)
+### `init-prelude`, past its first three blockers (#87, #121)
 
 `scripts/nat-reach.py` closes the declarations reaching a nat literal above
 mini's cap of 10 forward under `const`: **77 carry one directly and 529 of
 1 777 (29.8 %) fall with them**. Run against the complement, mini gets
 **1 459 declarations and 3 078 scheduled pairs** through `convert::load` —
-against `declars=0` on the unfiltered file — and declines on
+against `declars=0` on the unfiltered file — and used to decline on
 `non-standard axiom: sorryAx`, which is a **leaf** (removing it drops exactly
 one declaration of 1 248).
 
-Drop that too and **mini does not finish**: killed by a 3 000 s timeout at
-**14.8 GB RSS with no verdict printed**, on the *release* profile. Not the
-memory cap (20 GB), not a decline — fifty minutes is not enough to reach the
-first line of output. That is the first observation of init-prelude's cost at
-all, every previous run having died at `convert::load`, and 14.8 GB is already
-past the 4 GB a seat runs under. Note there is no cheap split available:
-`--acceptance-only` changes the exit code, not the work.
+**`sorryAx` is no longer a blocker, and the leaf reading is now computed rather
+than inferred.** `#121` narrowed the axiom rule to the axioms something in the
+file refers to (`mini/src/unused_axiom.rs`), and on the residue
+`unused_axiom::classify` reports `used = []`, `unused = ["sorryAx"]` over all
+1 245 mini declarations — one non-standard axiom in the file and nothing
+anywhere refers to it. Mini ignores it, names it on the verdict line, and goes
+on.
+
+**What is behind it is `Nat`, again, and it is cost.** Measured on the *release*
+profile at `f8d7dc2` (which is `82e2df9` plus `#121`, so it is **after** the
+arena port and after `#115`), `perf stat -e instructions`, `ulimit -v` 10 GB,
+`MINI_CONV_TRACE=1` for per-declaration progress:
+
+| | |
+| --- | --- |
+| kernel pass (`kernel::add`, the acceptance axis) | **1 245 of 1 245**, complete |
+| interpretation pass completed | **231** declarations of 1 245; it died inside the 232nd, `Nat.mod_lt` |
+| conversions at that point | `proved` 30 347 733, `sealed` 29 029 789, **`gapped` 0** |
+| instructions | **20 848 572 753 087** (20.85 T) |
+| task-clock | 1 555 s |
+| how it ended | **`SIGABRT` — the allocator hit the 10 GB `ulimit -v`**, not a timeout |
+
+Three things in that table were not known before and none is a guess.
+**The whole file type-checks**: every declaration of the residue passes
+`kernel::add` — inferable from the trace alone, because `MINI_CONV_TRACE`'s rows
+come from `Ledger::run`, which does not start until the kernel loop has
+finished. **`gapped` is 0 at 231 declarations** — nothing mini reached is
+unrepresentable; it is slow, and the slow part is `Nat`. And **the wall is
+memory rather than time**: the run ended by itself.
+
+The trace says where the cost is. Declarations 197–199 (`Nat.sub_le`,
+`Nat.succ_sub_succ_eq_sub`, `Nat.sub_lt`) each cost tens of thousands of
+conversions; `Nat.modCore_lt` alone takes the count from 7.8 M to 20.2 M, and
+`Nat.mod_lt` from 20.2 M to 30.3 M and then off the cliff.
+
+The 3 000 s / **14.8 GB RSS with no verdict** on record above this line was
+taken before both the arena port and `#115` and is **superseded**. The shape of
+the answer changed: it is not "no output in fifty minutes" any more, it is "231
+declarations, 20.85 T, and then 10 GB is not enough". A run under a larger cap
+would go further and the next number to take is where 14.8 GB now lands. `Nat`
+remains 29.8 % of the file and is a separate problem, and there is still no
+cheap split: `--acceptance-only` changes the exit code, not the work.
+
+**Both halves of that measurement are deterministic and were seen twice.** An
+earlier run of the same command on `8e2e45b` — before `#115` — stopped at
+*exactly* the same declaration with *exactly* the same `proved`/`sealed`
+figures, and differed only in taking 1 800 s to get there instead of 1 555 s.
+The stopping point is a property of the file; the wall clock is a property of
+the tree.
 
 ## `ci/check.sh` end to end, and what the feature matrix cost — 2026-08-09
 

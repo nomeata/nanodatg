@@ -369,8 +369,9 @@ to avoid:
   tutorial exports exactly as mini-lean does (mini-lean accepts all 91; it and
   the suite were co-developed — owner's statement), **or decline it by name
   with a reason**. Two are declined: `031_letTypeDep` and `032_letRed` declare
-  axioms of their own, whose inhabitation no work anywhere can derive
-  (`mini::convert::is_standard_axiom`). This axis is about the *port* being
+  axioms of their own **and refer to them**, and no work anywhere can derive
+  their inhabitation (`mini::convert::is_standard_axiom`, narrowed to the
+  referred-to ones by `mini::unused_axiom`). This axis is about the *port* being
   correct and is reachable early.
 * **Evidence completeness.** Every accepted step carries a real kernel
   derivation — zero gaps on the 89 mini still checks. This axis was described as "gated on the
@@ -442,6 +443,13 @@ three — `Quot.sound`, `propext`, `Classical.choice` — are a different case:
 the set-theoretic model *validates* them, so each is a `derived/` obligation
 and stays in scope. `mini::convert::is_standard_axiom` is the line.
 
+**One narrowing, `#121`.** The argument above is about a symbol something in the
+file *depends on*. An axiom **nothing in the file refers to** opens no pair, so
+there is no `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` to be stuck at and nothing to be evidence for;
+it is ignored — kernel-checked, then dropped before the interpretation pass, and
+named on the verdict line so the skip is visible. `mini::unused_axiom` states
+what "refers to" covers and why one pass rather than a fixed point.
+
 **`Cause::Assumption` is therefore retired**, and the retirement is what the
 decline buys. Once the boundary is enforced at the frontend, the only axioms
 left are ones the model validates, so `Gap::Axiom` names a *construction*
@@ -492,8 +500,8 @@ nothing else; `scripts/mini-vs-nanoda.sh` is the call site that needs it.
 
 **`2`'s population is the arena's contract and does not grow.** It is the
 kernel arena's code for an *unsupported feature* at file level: two corpus
-exports declaring a non-standard axiom (`031`, `032`) and mutual inductives at
-the parser. A declaration mini could not translate inside a file it accepted is
+exports declaring a non-standard axiom their own declarations refer to (`031`,
+`032`) and mutual inductives at the parser. A declaration mini could not translate inside a file it accepted is
 **not** one of these — it is a `4`. The word "decline" was doing both jobs and a
 brief written from the wrong sense nearly routed the second to exit `2`;
 `mini/src/zoneb.rs`'s header now separates the three senses, and the internal

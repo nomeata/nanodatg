@@ -6356,3 +6356,214 @@ each by its own mutation and neither by the other's.
   without one still does. If a successor makes it `Err`, every declaration
   whose fields mention earlier fields starts declining at the bridge instead of
   at the step that needed it.
+
+---
+
+## §43. `#121`: an unused non-standard axiom is ignored, and `init-prelude`'s third blocker is gone
+
+**The owner's decision, verbatim:** *make the checker just ignore that unused
+axiom declaration; we cannot generate evidence for it.* `mini/src/unused_axiom.rs`
+is the whole of it, and its header carries the principle at the site:
+
+> We cannot generate evidence for it, and nothing depends on it, so there is
+> nothing to be evidence **for**.
+
+`#56` made mini decline every file declaring a non-standard axiom, because a
+user axiom's inhabitation is not derivable in principle and a run that stops at
+the first missing derivation would stop there for ever. That is a statement
+about the axiom's **consequences**, and every consequence reaches the ledger
+through a *reference*: the obligation an axiom creates is
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` at a `(declaration, σ)` pair, and a pair for an axiom
+nothing mentions is owed to nobody. So the rule narrows from *"a file whose
+theorems **may** rest on an underivable inhabitation is out of scope"* to *"a
+file whose theorems **do** rest on one is out of scope"*. A used non-standard
+axiom declines exactly as before, same reason string, same exit 2. **Nothing
+that was in scope leaves it, and nothing that enters it brings an obligation
+with it.**
+
+### How "unused" is computed, and what a reference is
+
+`unused_axiom::classify(&decls, is_nonstandard)` runs in
+`run::check_file_with`, **after** the kernel pass and **before** the
+interpretation pass. Both halves of that position are load-bearing:
+
+* **The whole file, not the prefix.** An axiom unused where it is declared may
+  be used four hundred declarations later, so the question cannot be answered as
+  the declarations stream past — which is why the frontend's
+  `Facts::nonstandard_axioms` list is *gone* rather than reused. `check_file_with`
+  has the whole list and asks there.
+* **After the kernel.** The ignored axiom's *type* is still checked, so
+  `axiom bad : (fun x => x)` goes on being **rejected**, exactly as mini-lean
+  rejects it. Dropping the declaration at the frontend would have widened
+  acceptance silently. `#56`'s own reason — four `bad/tutorial` fixtures that
+  declare a helper axiom before their ill-typed declaration — survives unchanged.
+
+**A reference is a constant occurrence, never a name.** `referenced` collects
+every `Expr::Const` name and every `Expr::Proj`'s `ind`, over an axiom's type, a
+`def`/`theorem`/`opaque`'s type **and** value, an inductive's type and every
+constructor's, and every member of a `mutual` block. Nothing pattern-matches
+`sorryAx`; the rule is a *property* — non-standard, and unreferenced — which is
+the discipline `_auxCarrier` and `proj(PProd)` were paid for. `Expr::Proj`'s head
+is collected even though an axiom cannot be one, because `expr::has_const`
+deliberately does **not** descend into it and a walk written by analogy with that
+function would have a hole.
+
+Three populations are not walked and the header argues each: `Declaration::Quot`
+carries no file expression at all; the export's **recursors** are dropped and
+mini generates its own from `(ty, ctors)`, so a constant occurring only there is
+referenced by nothing mini checks; and `mutual_aux::expand` /
+`nested_splice::recognise` are computed *from* this list after the walk, with
+`modelgen`'s spliced model arriving before the parser.
+
+**One pass, not a fixed point.** An axiom is used if *any* declaration refers to
+it, including a declaration nothing else refers to and including an unused
+axiom. Iterating would call more axioms unused; the unsound direction is calling
+a **used** one unused, so a single pass is the conservative side. The walk is
+iterative and memoised on `E` — an arena pointer, so identity is structural —
+and costs one visit per distinct node over the whole file.
+
+### The corpus ratchet held, and both declines were checked rather than trusted
+
+`accept 89 / decline 2 / reject 0`, `constEv 218/218`, `typeEv 218`, `pairs 218`,
+`unsealed 0`, `gapped 0`, `untranslated 0/0/0`, `lazyFills 0` — every one
+unchanged, and `ci/check.sh` green end to end.
+
+**Stronger than the counters, and cheap: all 91 exports' `--verbose` output is
+byte-identical.** Diffed against `82e2df9` line by line, 911 lines each, the
+*only* difference anywhere is one appended `ignoredAxioms=0` on each of the 89
+`ledger` rows — stripping that one field with `sed` makes the two files `cmp`-equal.
+(The two declining exports print no ledger, which is why it is 89 and not 91.)
+
+The expectation was that both corpus declines *use* their axioms. They do, and
+`tutorial::both_corpus_declines_use_their_axioms` asserts it out of the exports
+rather than leaving it to be believed:
+
+| export | axioms | where the reference is |
+| --- | --- | --- |
+| `031_letTypeDep` | `aDepProp`, `mkADepProp` | `aDepProp` in `mkADepProp`'s **axiom statement** and in `letTypeDep`'s **type**, in no value; `mkADepProp` in `letTypeDep`'s **value** |
+| `032_letRed` | `aProp` | only in `letRed`'s **value** |
+
+### The two fixtures, both seen red, and nine mutations
+
+`unused_axiom_ignored.lean` — two unused non-standard axioms beside an inductive
+and two defs. Before the change: `decline non-standard axiom: unusedProp`. Now:
+
+```text
+unused_axiom_ignored.ndjson  accept  5 declarations  ignored axioms: unusedProp, unusedRel
+ledger  declars=3  pairs=2  …  ignoredAxioms=2  ignored:unusedProp=1  ignored:unusedRel=1
+```
+
+Five declarations accepted by the kernel, **three** walked by the ledger, and
+**two** pairs where an axiom that kept its pair would give four. Exit **0**.
+
+`used_axiom_declines.lean` — `spareAx` and `alsoSpare` unused and declared
+**first**, `usedOnlyInAValue` referenced from `viaValue`'s value and nowhere
+else. Before the change: `decline non-standard axiom: spareAx` — the old rule
+naming an axiom nothing uses. Now: `decline non-standard axiom: usedOnlyInAValue`,
+exit 2. Two unused axioms rather than one, so "the first", "the second" and "any
+fixed position" are three different wrong answers.
+
+| mutation | unit test | fixtures | corpus |
+| --- | --- | --- | --- |
+| **`used-as-unused`** — the must-kill | kill | kill | kill |
+| `skip-def-value` | kill | kill | **kill** |
+| `skip-def-type` | kill | live | live |
+| `skip-axiom-type` | kill | live | live |
+| `skip-ind-type` | kill | live | live |
+| `skip-ctor-type` | kill | live | live |
+| `skip-mutual` | kill | live | live |
+| `skip-proj-head` | kill | live | live |
+| `skip-let-value` | kill | live | live |
+
+**The corpus witnesses exactly one arm of the walk, and that is measured rather
+than argued.** Drop `Declaration::Def`'s `value` and `032_letRed` **accepts** —
+`accept 2 declarations … ignored axioms: aProp` — so `decline 2` becomes
+`decline 1`. Drop *both* type arms and `031_letTypeDep` does **not** accept: its
+two axioms witness each other, and what moves is the reason string, `aDepProp` →
+`mkADepProp`, which `tutorial_good_all_accepted` compares exactly. *(A first
+draft of this paragraph, and of the fixture header, said `031` accepted. It does
+not; corrected in place.)* Every other arm's only witness anywhere is the unit
+test.
+
+**The unit test had to be rebuilt before it could kill anything.** Its first
+shape put the def's type reference inside `lam(cst("inDefType"), …)`, whose
+binder type *is* the def's type again — so `skip-def-type` found the constant in
+the value and survived. Every use in it now occurs in exactly one place, with
+`let`'s three sub-expressions, `app`'s two and `lam`'s two carrying separate
+names, so a dropped arm moves exactly one axiom into `unused` and the failure
+names it. **A reachability test whose reference sites alias is a test of one arm
+wearing the label of two.**
+
+### The skip is visible, and deliberately not debt
+
+`#64`'s lesson is that *a declined declaration with no scheduled pair is
+invisible*, and an ignored axiom has **no pair by construction** — every counter
+in the ledger is indexed by one. So `Ledger::ignored_axioms` is a list of names
+rather than a count: `ignoredAxioms=N` plus one `ignored:<name>=1` per axiom on
+the `ledger` row, and `ignored axioms: <names>` on the verdict line.
+
+It is **not** in `Uncertified` or `Untranslated` and does not reach exit 4, and
+the reason is the decision itself: both of those are lists of obligations mini
+*owes*, and nothing rests on an unused axiom, so there is no claim to be short
+of. Folding it in would make a run that owes nothing exit 4 and would blunt the
+two counters that do mean debt. `ledger.rs`'s
+`a_new_ledger_field_must_be_classified` — the exhaustive destructuring with no
+`..` — is where that classification is written down, and a tenth counter cannot
+join without answering the same question.
+
+### `init-prelude`: the wall is now cost, and the file type-checks
+
+`sorryAx` was the file's third blocker and it is gone. On the `Nat`-filtered
+residue (`scripts/nat-reach.py --write`; 1 245 mini declarations),
+`unused_axiom::classify` reports `used = []`, `unused = ["sorryAx"]` — one
+non-standard axiom, referred to by nothing — so `#87`'s "it is a leaf" is now
+**computed** rather than inferred from a line count, and mini ignores it and
+carries on.
+
+What is behind it is `Nat`, and it is **cost**. Release profile at `f8d7dc2`,
+`perf stat -e instructions`, `ulimit -v` 10 GB, `MINI_CONV_TRACE=1`:
+
+| | |
+| --- | --- |
+| kernel pass, the acceptance axis | **1 245 of 1 245**, complete |
+| interpretation pass completed | **231** declarations; it died inside the 232nd, `Nat.mod_lt` |
+| conversions there | `proved` 30 347 733, `sealed` 29 029 789, **`gapped` 0** |
+| instructions / task-clock | **20.85 T** / 1 555 s |
+| how it ended | **`SIGABRT`** — the allocator hit the 10 GB cap, not a timeout |
+
+**The whole residue type-checks.** That is inferable from the trace alone and
+did not need an instrument: `MINI_CONV_TRACE`'s rows come from `Ledger::run`,
+which does not start until the kernel loop has finished, so one `convtrace` line
+is proof that all 1 245 passed `kernel::add`. The wall is not acceptance.
+
+**`gapped 0` at 231 declarations** says nothing mini reached is
+unrepresentable — it is slow, not stuck — and the trace says where: 197–199
+(`Nat.sub_le`, `Nat.succ_sub_succ_eq_sub`, `Nat.sub_lt`) cost tens of thousands
+of conversions each, `Nat.modCore_lt` takes the count 7.8 M → 20.2 M, and
+`Nat.mod_lt` 20.2 M → 30.3 M and then off the cliff.
+
+`#87`'s **3 000 s / 14.8 GB with no verdict** is superseded and
+`MEASUREMENTS.md` says so in place. It was taken before both the arena port and
+`#115`; the answer is no longer "no output in fifty minutes" but "231
+declarations, 20.85 T, and then 10 GB is not enough". **The stopping point is
+deterministic and was seen twice**: the same command on `8e2e45b`, before
+`#115`, stopped at the same declaration with the same `proved`/`sealed` figures
+and differed only in taking 1 800 s rather than 1 555 s to get there. The
+stopping point is a property of the file; the wall clock is a property of the
+tree.
+
+`init-prelude` does **not** pass, and was not expected to.
+
+### For a successor
+
+* **The `Nat` bridge is the only thing between here and a verdict on
+  `init-prelude`.** `scripts/nat-reach.py`'s 529 declarations (29.8 %) are the
+  filtered-out ones; what the trace above adds is that the *remaining* 1 245 are
+  also mostly `Nat`, by cost rather than by representability.
+* **`gapped 0` at 231 declarations is a claim about reach, not about size.** It
+  says nothing mini touched in the first 231 was unrepresentable. It does not say
+  the other 1 014 are, and the first `Lean.Syntax` (nested, `numNested = 2`) is
+  behind them.
+* **If a fourth `Ledger` list arrives, `Ledger::ignored_axioms`'s two doc
+  sections are the template**: say why it is visible and say which side of
+  `Uncertified` it falls on. The destructuring test will not let it be skipped.
