@@ -5813,18 +5813,24 @@ Peak RSS on the corpus is the same file in both, `077_RBTree.id_spec`.
 
 | closure | | baseline | reader |
 | --- | --- | ---: | ---: |
-| **`Nat.mod_lt`, 159 decls** — the `Nat.mod*` cluster the file dies inside | outcome | **`SIGABRT` at a 12 GB `ulimit -v`**: `memory allocation of 3 825 205 264 bytes failed`, at 1 992 s | past that point and still running at 40 min, under 400 MB |
-| | peak RSS | **11 142 200 kB** | **378 152 kB at 40 min** (in flight) |
-| | instructions to the abort | 26 461 224 027 620 | — |
+| **`Nat.mod_lt`, 159 decls** — the `Nat.mod*` cluster the file dies inside | outcome | **`SIGABRT` at a 12 GB `ulimit -v`**: `memory allocation of 3 825 205 264 bytes failed`, at 1 992 s | **completes**, 159 of 159, **66 569 578 conversions, `gapped 0`** |
+| | peak RSS | **11 142 200 kB** | **501 984 kB** |
+| | instructions | 26 461 224 027 620, to the abort | 38 790 399 776 432, 2 825 s |
 | **`BitVec.decEq` + `BitVec.noConfusion`, 83 decls** | outcome | §4.2: killed by a 25-minute timeout **inside declaration 81 of 83**, 17 242 524 conversions | **completes**, 83 of 83, **25 335 661 conversions, `gapped 0`** |
 | | peak RSS | ≥ 3 841 600 kB | **106 172 kB** |
 | | instructions | — | 15 071 153 293 830, 1 096 s |
 
-**That is the memory half of the goal, answered.** The declaration cluster that
-kills `init-prelude` at 10 GB needs 11.1 GB in its own closure on `master` and
-hundreds of MB with the reader; §4.2's second wall, which no run had finished,
-finishes. What stops `init-prelude` now is **time** — `List.get.match_1` alone
-is 11.00 T instructions (§4.2) and this change moves none of it.
+**That is the memory half of the goal, answered, and the `Nat.mod_lt` row is
+the sharpest form of it.** That closure runs **66 569 578 conversions** — more
+than twice the 30 347 733 at which the whole file died — and peaks at 490 MB.
+At §3.1's measured 241 B per conversion it would have needed **16 GB**; it
+needs **7.5 B**, and the figure is *flat* rather than a slope, because what was
+growing was the table and not the work. Both walls this document found are
+memory-free now: the `Nat.mod*` cluster completes, and §4.2's `BitVec` pair,
+which no run had ever finished, completes.
+
+What stops `init-prelude` is **time** — `List.get.match_1` alone is 11.00 T
+instructions (§4.2) and this change moves none of it.
 
 **Time is unchanged and that is the expected sign.** §3.3's clear-per-declaration
 row *saved* 3.1 %, because clearing is 33 431 conversions that stop happening;
