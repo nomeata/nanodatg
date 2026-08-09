@@ -629,8 +629,8 @@ certified, `1` rejected, `2` declined, `4` accepted with a gap:
 | | `0` | `1` | `2` | `4` |
 | --- | ---: | ---: | ---: | ---: |
 | original | 89 | 0 | 2 | 0 |
-| mode A, when this was measured | **85** | 0 | 2 | **4** |
-| mode A, today | 89 | 0 | 2 | 0 |
+| mode A, before the two fixes below | **85** | 0 | 2 | **4** |
+| mode A, with them | 89 | 0 | 2 | 0 |
 | mode B | 67 | **20** | 2 | 2 |
 
 The two declines are `031_letTypeDep` and `032_letRed`, which declare a
@@ -699,8 +699,18 @@ not a loss.) The two behaviours have fixtures of their own —
 latter the only fixture in the tree that is `monomorph`'s output rather than
 `lean4export`'s.
 
-`perf stat -e instructions` over the 91 exports, measured before the fix: mini
-retires **419.80 G** on the originals and **385.11 G** on mode A, −8.3 %.
+`perf stat -e instructions` over the 91 exports, one `mini` per file with the
+`modelgen` filter on: mini retires **420.04 G** on the originals and
+**392.75 G** on mode A, **−6.5 %**.
+
+The originals reproduce the 419.80 G measured before the fix to within 0.06 %,
+which is what says the two runs are comparable; mode A moved **up**, from
+385.11 G, and that is the fix showing rather than a regression. A gap does no
+work — the four declarations that stopped being certified stopped being
+*translated*, and 385.11 G was the corpus with `_at.1.1.PUnit`'s class-(S)
+carrier, both `Acc` copies' clauses and their eliminators simply not built. The
+7.6 G difference is the cost of building them, and mode A is still 6.5 % under
+the originals because the levels really are gone.
 
 ---
 
