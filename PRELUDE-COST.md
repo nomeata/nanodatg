@@ -61,8 +61,13 @@ conversions are `whnf` reduction legs rather than def-eq decisions (§2.3). §1.
 already attributes the null result to the residue having had its literals
 deleted; **this is the stronger statement, and it survives on the unfiltered
 file too** — a literal-pair rule has no literal pair to match in any of these
-closures. The lever that moves this wall makes *symbolic* `Nat.rec` reduction
-cheaper, or makes the proofs need fewer of them. Step 4 is neither.
+closures. Step 4 is not the lever that moves this wall — **and neither is
+cheaper *symbolic* `Nat.rec` reduction, which is what this paragraph first
+concluded.** `MATCHER-WALL.md` §2.4's flat profile of the
+`BitVec.decEq._proof_1` closure puts **1.58 % of `mini`'s samples in `mini/`**,
+47.4 % in `kernel/` and 44.0 % in glibc `malloc`/`free`: the reduction those
+77.6 % of conversions perform is about 2 % of the run, and the derivation built
+alongside it is 93 %. The lever is on the certified path.
 
 **Three further results, each measured here.**
 
@@ -90,8 +95,13 @@ cheaper, or makes the proofs need fewer of them. Step 4 is neither.
 
 **What that means for the goal — "the checker handles `init-prelude` at
 reasonable time and memory costs".** Time and memory are two different problems
-with two different owners. Time is `Nat.rec` on symbolic successors, and step 4
-does not address it. Memory was `parts`, and it was *independent of `Nat`*: at
+with two different owners. Time is **not** `Nat.rec` on symbolic successors, as
+this document first read it — `MATCHER-WALL.md` §2.4 profiles `mini` on the
+`BitVec.decEq._proof_1` closure and finds **1.58 % of samples in `mini/`**
+against 47.4 % in `kernel/` and 44.0 % in glibc `malloc`/`free`. The reduction
+is 2 % of the run and the derivation built alongside it is 93 %, so step 4 does
+not address the time, and neither would a cheaper symbolic `Nat.rec`. Memory
+was `parts`, and it was *independent of `Nat`*: at
 241 B/conversion, any 30 M-conversion run needed ~7 GB and any 100 M run ~24 GB,
 whatever the conversions were about. It was the one lever here that paid off no
 matter how the `Nat` question is settled, and **it has been pulled** (§3.4).
@@ -683,13 +693,17 @@ rather than a proxy — and it is the half `Nat` does not touch.
   and 26 % of the recorded conversions, and the three `Nat.mod*` declarations
   plus the aborted 232nd are the other 70 % — the split *within* those three is
   `1ba1220`'s, not this study's.
-* **`List.get.match_1`'s cost has a lower bound and no upper one.** It did not
-  finish in either run — the second ended at an 8 GB cap after 11.00 T. What it
-  would cost to completion, and therefore whether the residue can be finished at
-  all at any memory budget, is unknown.
-* **The closures were run, not profiled.** They say *whether* a declaration is a
-  wall, not what inside it is expensive. A `perf record` on
-  `List.get.match_1` is the obvious next measurement and was not taken.
+* **`List.get.match_1`'s cost had a lower bound and no upper one *here*.** It
+  did not finish in either run of this study — the second ended at an 8 GB cap
+  after 11.00 T. It has since been completed: `MATCHER-WALL.md` §2.1 runs its
+  own 51-declaration closure at `d8c027f` to **10 333 463 323 859 instructions,
+  169 744 kB, 31 698 088 conversions, 22 gaps**, so the upper bound exists and
+  the memory question is closed for this declaration.
+* **The closures were run, not profiled *here*.** They say *whether* a
+  declaration is a wall, not what inside it is expensive. The `perf record` this
+  bullet called for has since been taken — `MATCHER-WALL.md` §2.4, flat rather
+  than call-graph and on the `BitVec.decEq._proof_1` closure rather than
+  `List.get.match_1` — and it moved the verdict above.
 * **The `BitVec` closure did not finish either** — a 25-minute timeout inside
   declaration 81 of 83, so `BitVec.decEq._proof_2` and `BitVec.decEq` are
   unmeasured and the 17.24 M is a lower bound too.
