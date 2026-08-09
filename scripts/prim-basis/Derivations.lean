@@ -1,28 +1,41 @@
 /-
 # Layer 3 evidence: models from the five primitives, compiled
 
-Every construction the `--prim-models` layer emits is prototyped here in a
-`prelude` file (no Init, term mode only — which is what an `Expr` generator
-can build). The five primitives are declared at Lean's own shapes, exactly
-as the splice inserts them; `funext` is axiomatized at the statement
-`Modelgen.ensureFunext` derives (the layer uses the derived one).
+Every construction the `--prim-models` layer (`modelgen/Modelgen/
+Simple.lean`) emits is prototyped here in a `prelude` file — no Init, term
+mode only, which is what an `Expr` generator can build. The five primitives
+are declared at Lean's own shapes, exactly as the splice inserts them.
 
 Compiled at `leanprover/lean4:v4.29.1` with zero errors. Each `example …
-:= rfl' _` line is a definitional-ι check; each `theorem` is a
-propositional one.
+:= rfl' _` line is a definitional-ι check.
 
-Two elaborator artefacts of `prelude` mode, neither of which touches the
-generator (it builds explicit `Expr`s and never elaborates): constructor
-applications with implicit arguments trip a missing-`CoeFun` path, so the
-constructors are used through wrapper `def`s (`rfl'`, `pair`, `prec`, `J`);
-and the five wrappers plus every model `def` are `noncomputable` because
-the compiler backend is absent.
+Three verified sharpenings of the commission:
 
-Sharpening of the commission verified here: the `Sigma` primitive must be
-**`PSigma`-shaped** (`{α : Sort u} → (α → Sort v) → Sort (max 1 u v)`).
-`Subtype`, structures with `Prop` fields, and every `Prop`-fibred pair
-below need a Σ over `Sort`, which Lean's `Type`-only `Sigma` cannot give
-without `PLift` — a sixth inductive.
+* the `Sigma` primitive must be **`PSigma`-shaped** (`{α : Sort u} →
+  (α → Sort v) → Sort (max 1 u v)`): `Subtype`, structures with `Prop`
+  fields, and every `Prop`-fibred pair below need a Σ over `Sort`, which a
+  `Type`-only `Sigma` cannot give without `PLift` — a sixth inductive;
+* level pads can be **definitionally canonical**: every element of
+  `D 1 := Σ'(_ : ⊤), ⊤` (with `⊤ := ∀ C : Prop, C → C`) is *defeq* to its
+  canonical element by structure eta plus proof irrelevance, and the
+  same holds through `D (a+1) := (α : Sort a) → D 1` and
+  `D (max a b) := Σ'(_ : D a), D b` — so the non-recursive Type route
+  consumes **no `funext`, no `Quot`, and not even `Eq.rec`**: the ι
+  equations below hold by `rfl` with no transport anywhere;
+* the Prop route needs no primitive at all beyond `Eq` for the ι
+  statements: the carrier is the impredicative Church encoding, dependent
+  elimination at a `Prop` motive is definitional proof irrelevance, and
+  large elimination — granted by the subsingleton rule, so every field is
+  a proposition — is extraction, `t Tᵢ (fun f⃗ => fᵢ)`.
+
+Elaborator artefacts of `prelude` mode, none of which touches the generator
+(it emits explicit `Expr`s and never elaborates): constructor applications
+with implicit arguments trip a missing-`CoeFun` path, so constructors are
+used through wrapper `def`s (`rfl'`, `pair`, `prec`); the unifier's
+Nat-offset fast path looks up `Nat.add`/`HAdd.hAdd`/`OfNat.ofNat` by name
+and crashes without them, so stubs are declared (the generator never
+mentions them); and everything is `noncomputable` because the compiler
+backend is absent.
 -/
 prelude
 set_option autoImplicit false
@@ -64,11 +77,6 @@ class OfNat (α : Type u) (n : Nat) where
 instance instOfNatNat (n : Nat) : OfNat Nat n :=
   ⟨n⟩
 
-/- funext, at the statement the prelude splice derives (from Quot +
-Quot.sound in the real layer; an axiom here — same statement). -/
-axiom funext {α : Sort u} {β : α → Sort v} {f g : (x : α) → β x}
-  (h : (x : α) → Eq (f x) (g x)) : Eq f g
-
 /- ── wrappers (prelude-mode elaborator convenience only) ───────────── -/
 
 noncomputable def rfl' {α : Sort u} (a : α) : Eq a a := @Eq.refl α a
@@ -80,65 +88,39 @@ noncomputable def prec {α : Sort u} {β : α → Sort v} {motive : PSigma β �
     (m : (fst : α) → (snd : β fst) → motive (pair fst snd)) (t : PSigma β) :
     motive t := @PSigma.rec α β motive m t
 
-noncomputable def J {α : Sort u} {a : α} (motive : (b : α) → Eq a b → Sort v)
-    (m : motive a (rfl' a)) {b : α} (h : Eq a b) : motive b h :=
-  @Eq.rec α a motive m b h
+/- ── the shared kit, as the generator emits it (inline) ────────────── -/
 
-noncomputable def symmEq {α : Sort u} {a b : α} (h : Eq a b) : Eq b a :=
-  J (fun x _ => Eq x a) (rfl' a) h
+/-- `⊤ := ∀ C : Prop, C → C` — pure Π, no primitive consumed. -/
+abbrev TrueP : Prop := (C : Prop) → C → C
+noncomputable def TrueP.I : TrueP := fun _ c => c
 
-/- ── shared kit the generator emits inline ─────────────────────────── -/
+/-- `D 1`: every element is **defeq** to `canon1` — structure eta turns it
+into a `mk` of two proofs and proof irrelevance closes the components. -/
+abbrev D1 : Type := PSigma (fun _ : TrueP => TrueP)
+noncomputable def canon1 : D1 := pair TrueP.I TrueP.I
 
-/-- `Sing (a+1)`: an inhabited, propositionally-singleton type at exactly
-`Sort (a+1)`, for any level `a`. The Π's body is never `Prop`, so
-`imax (a+1) (max 1 a) = a+1` on the nose. -/
-abbrev SingS : Sort (u + 1) :=
-  (α : Sort u) → PSigma (fun f : α → α => Eq f (fun x => x))
+/-- The defeq-singleton property of `D 1`, witnessed definitionally: no
+`funext`, no `Eq.rec`. -/
+example (s : D1) : Eq s canon1 := rfl' s
 
-noncomputable def SingS.canon : SingS.{u} :=
-  fun α => pair (fun x => x) (rfl' (fun x => x))
+/-- `D (a+1) := (α : Sort a) → D 1`, at exactly `Sort (a+1)` because the
+body is never `Prop`; still a defeq singleton (η for functions, then the
+`D 1` argument). -/
+abbrev DS : Sort (u + 1) := (α : Sort u) → D1
+noncomputable def DS.canon : DS.{u} := fun _ => canon1
 
-/-- Uniqueness, from `funext` and one `J` per component. The `J` runs along
-`symmEq h : id = f`, so the transported pair stays well-typed; its base
-case is `rfl'` because the leftover proof component is definitionally
-irrelevant. -/
-theorem SingS.uniq (s : SingS.{u}) : Eq s SingS.canon.{u} :=
-  funext fun α =>
-    prec (motive := fun p => Eq p (pair (β := fun f' : α → α => Eq f' (fun x => x))
-        (fun x => x) (rfl' (fun x => x))))
-      (fun f h =>
-        J (fun g _ =>
-            (hg : Eq g (fun x : α => x)) →
-              Eq (pair (β := fun f' : α → α => Eq f' (fun x => x)) g hg)
-                 (pair (fun x => x) (rfl' (fun x => x))))
-          (fun _ => rfl' (pair (β := fun f' : α → α => Eq f' (fun x => x))
-            (fun x => x) (rfl' (fun x => x))))
-          (symmEq h) h)
-      (s α)
+example (s : DS.{u}) : Eq s DS.canon.{u} := rfl' s
 
-/-- `Sing (max a b)` from `Sing a` and `Sing b`: at `Sort (max 1 u v)`,
-which is `Sort (max u v)` whenever either side is never-zero. -/
-abbrev SingM (A : Sort u) (B : Sort v) : Sort (max 1 u v) :=
-  PSigma (fun _ : A => B)
+/-- `D (max a b) := Σ'(_ : D a), D b` — here at `max (u+1) 1 = u+1` for the
+`max`-composition shape; defeq singleton again (structure eta, then the
+components). -/
+abbrev DM : Sort (max (u + 1) 1) := PSigma (fun _ : DS.{u} => D1)
+noncomputable def DM.canon : DM.{u} := pair DS.canon canon1
 
-noncomputable def SingM.canon (A : Sort u) (B : Sort v) (a : A) (b : B) :
-    SingM A B := pair a b
-
-theorem SingM.uniq (A : Sort u) (B : Sort v) (a : A) (b : B)
-    (ua : (x : A) → Eq x a) (ub : (x : B) → Eq x b)
-    (s : SingM A B) : Eq s (SingM.canon A B a b) :=
-  prec (motive := fun p => Eq p (SingM.canon A B a b))
-    (fun x y =>
-      J (motive := fun a' _ =>
-          Eq (pair (β := fun _ : A => B) x y) (pair (β := fun _ : A => B) a' b))
-        (J (motive := fun b' _ =>
-            Eq (pair (β := fun _ : A => B) x y) (pair (β := fun _ : A => B) x b'))
-          (rfl' (pair (β := fun _ : A => B) x y)) (ub y))
-        (ua x))
-    s
+example (s : DM.{u}) : Eq s DM.canon.{u} := rfl' s
 
 /-- An empty type at exactly `Sort w` for never-zero `w`:
-`Σ' (h : False), False.rec h` is at `Sort (max 1 0 w) = Sort w`. -/
+`Σ'(h : False), False.rec h` is at `Sort (max 1 0 w) = Sort w`. -/
 abbrev EmptyAt : Sort (max 1 w) :=
   PSigma (fun h : False => False.rec (motive := fun _ => Sort w) h)
 
@@ -148,46 +130,43 @@ noncomputable def EmptyAt.elim {motive : Sort v} (e : EmptyAt.{w}) : motive :=
 
 /- ── Type route, worked: Bool ──────────────────────────────────────── -/
 
-
 namespace BoolM
 
-/-- The fibre family: tag 0 ↦ nullary chain, tag 1 ↦ nullary chain, else
-empty. Written as the generator writes it: a `Nat.rec` cases tower. -/
+/-- The fibre family: tag 0 ↦ `D 1`, tag 1 ↦ `D 1`, else empty — a
+`Nat.rec` cases tower, exactly as the generator writes it. -/
 abbrev F (n : Nat) : Type :=
   Nat.rec (motive := fun _ => Type)
-    SingS.{0}
+    D1
     (fun n₁ _ => Nat.rec (motive := fun _ => Type)
-      SingS.{0}
+      D1
       (fun _ _ => EmptyAt.{1})
       n₁)
     n
 
 abbrev self : Type := PSigma F
 
-noncomputable def ctor_0 : self := pair (β := F) Nat.zero SingS.canon.{0}
-noncomputable def ctor_1 : self := pair (β := F) (Nat.succ Nat.zero) SingS.canon.{0}
+noncomputable def ctor_0 : self := pair (β := F) Nat.zero canon1
+noncomputable def ctor_1 : self := pair (β := F) (Nat.succ Nat.zero) canon1
 
-/-- `Bool.rec`'s shape at the model's names, verbatim modulo renaming. -/
+/-- `Bool.rec`'s shape at the model's names. The pad binders `f` are used
+*nowhere*: the minors' types close by defeq (`f ≡ canon1`), which is the
+whole point of the `D`-pads. -/
 noncomputable def rec_0 {motive : self → Sort u}
     (h0 : motive ctor_0) (h1 : motive ctor_1) (t : self) : motive t :=
   prec (motive := fun t' => motive t')
     (fun n => Nat.rec
         (motive := fun n' => (f : F n') → motive (pair (β := F) n' f))
-        (fun f =>
-          J (fun s _ => motive (pair (β := F) Nat.zero s)) h0 (symmEq (SingS.uniq f)))
+        (fun _ => h0)
         (fun n₁ _ => Nat.rec
           (motive := fun n₂ =>
             (f : F (Nat.succ n₂)) → motive (pair (β := F) (Nat.succ n₂) f))
-          (fun f =>
-            J (fun s _ => motive (pair (β := F) (Nat.succ Nat.zero) s)) h1
-              (symmEq (SingS.uniq f)))
-          (fun n₂ _ f => EmptyAt.elim.{u, 1} f)
+          (fun _ => h1)
+          (fun n₂ _ f => EmptyAt.elim f)
           n₁)
         n)
     t
 
-/-- ι, definitional: the transports sit on closed self-equalities, which
-proof irrelevance plus ι erase. -/
+/-- ι, definitional — nothing to erase, because nothing was transported. -/
 example {motive : self → Sort u} (h0 : motive ctor_0) (h1 : motive ctor_1) :
     Eq (rec_0 h0 h1 ctor_0) h0 := rfl' h0
 example {motive : self → Sort u} (h0 : motive ctor_0) (h1 : motive ctor_1) :
@@ -199,11 +178,11 @@ end BoolM
 
 namespace OptionM
 
-/-- tag 0 ↦ `none`'s chain (`Sing (u+1)`), tag 1 ↦ `some`'s chain (the
-field alone), else empty. All at `Type u` exactly. -/
+/-- tag 0 ↦ `none`'s chain — the pad `D (u+1)` alone — tag 1 ↦ `some`'s
+chain — the field alone — else empty. All at `Type u` exactly. -/
 abbrev F (α : Type u) (n : Nat) : Type u :=
   Nat.rec (motive := fun _ => Type u)
-    SingS.{u}
+    DS.{u}
     (fun n₁ _ => Nat.rec (motive := fun _ => Type u)
       α
       (fun _ _ => EmptyAt.{u+1})
@@ -214,7 +193,7 @@ abbrev self (α : Type u) : Type u := PSigma (F α)
 
 variable {α : Type u}
 
-noncomputable def ctor_0 : self α := pair (β := F α) Nat.zero SingS.canon.{u}
+noncomputable def ctor_0 : self α := pair (β := F α) Nat.zero DS.canon.{u}
 noncomputable def ctor_1 (a : α) : self α := pair (β := F α) (Nat.succ Nat.zero) a
 
 noncomputable def rec_0 {motive : self α → Sort v} (hnone : motive ctor_0)
@@ -222,14 +201,12 @@ noncomputable def rec_0 {motive : self α → Sort v} (hnone : motive ctor_0)
   prec (motive := fun t' => motive t')
     (fun n => Nat.rec
         (motive := fun n' => (f : F α n') → motive (pair (β := F α) n' f))
-        (fun f =>
-          J (fun s _ => motive (pair (β := F α) Nat.zero s)) hnone
-            (symmEq (SingS.uniq f)))
+        (fun _ => hnone)
         (fun n₁ _ => Nat.rec
           (motive := fun n₂ =>
             (f : F α (Nat.succ n₂)) → motive (pair (β := F α) (Nat.succ n₂) f))
           (fun a => hsome a)
-          (fun n₂ _ f => EmptyAt.elim.{v, u+1} f)
+          (fun n₂ _ f => EmptyAt.elim f)
           n₁)
         n)
     t
@@ -270,7 +247,7 @@ noncomputable def rec_0 {motive : self α p → Sort v}
         (fun f =>
           prec (motive := fun f' => motive (pair (β := F α p) Nat.zero f'))
             (fun val property => hmk val property) f)
-        (fun n₁ _ f => EmptyAt.elim.{v, max 1 u} f)
+        (fun n₁ _ f => EmptyAt.elim f)
         n)
     t
 
@@ -289,7 +266,7 @@ abbrev self : Type := PSigma (fun _ : Nat => EmptyAt.{1})
 
 noncomputable def rec_0 {motive : self → Sort u} (t : self) : motive t :=
   prec (motive := fun t' => motive t')
-    (fun n f => EmptyAt.elim.{u, 1} f)
+    (fun n f => EmptyAt.elim f)
     t
 
 end EmptyM
