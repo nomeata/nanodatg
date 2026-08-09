@@ -608,8 +608,11 @@ that consumes mode B still needs `interp_level`, `interp_levels` and
 | 91 `tutorial/` mode A | **91/91 accept** | — |
 | 91 `tutorial/` mode B | 41 accept, **50 panic** | — |
 
-Mode B's six agreements are the carried built-ins' recursors, the only ones it
-does not rename. §4.2 measured this on a four-recursor fixture; at
+Mode B's six agreements are exactly the recursors it has nothing to rename:
+`Eq.rec` and `List.rec`, carried built-ins (§3), and `Or.rec`, `Nat.le.rec`,
+`Nat.le.below.rec` and `ByteArray.IsValidUTF8.rec`, which are small-eliminating
+and carry no motive universe to fold. §4.2 measured this on a four-recursor
+fixture; at
 `init-prelude` scale the ratio is 254/260, so **"Lean is an oracle for mode B"
 is not merely unproven, it is refuted**, and the same holds of `nanoda`.
 
