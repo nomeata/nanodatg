@@ -217,6 +217,39 @@ pub trait Certifier<'t, 'p> {
         self.admit(ctx, a, b, Admit::Proj.name())
     }
 
+    /// **Two locals with one id**: from a certificate that the declared types
+    /// are definitionally equal, conclude `a ≡ b` for two `Local`s carrying the
+    /// same de Bruijn level.
+    ///
+    /// A rule rather than an admission because the common case needs no axiom:
+    /// the TG backend keys a level-local's kernel variable by its level **and
+    /// its interpreted declared type** (`LocalKey`), so two same-level locals
+    /// whose types interpret to the same term *are* one variable and the
+    /// equation is reflexivity. The residue — same level, types definitionally
+    /// equal but interpreting to different terms — is two distinct variables,
+    /// and no rule relates them; a backend reports that residue as its own gap.
+    ///
+    /// `ty_eq` is the checker's certificate for the two declared types. It is
+    /// the evidence `def_eq_local` used to establish and throw away
+    /// (`THREADING-CENSUS.md`, `def_eq_local` row); it is handed over rather
+    /// than dropped so the rule can consume it — the escape ledger counts
+    /// receipt — and so the residue case has the premise in hand if a
+    /// two-variable bridge ever exists.
+    ///
+    /// The default delegates to [`Certifier::admit`] under `def_eq_local`, so a
+    /// backend that does not key variables this way keeps reporting the gap the
+    /// checker used to report.
+    fn local_eq(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        ty_eq: Self::Cert,
+    ) -> Self::Cert {
+        let _ = ty_eq;
+        self.admit(ctx, a, b, Admit::Local.name())
+    }
+
     /// **Projection reduction**: `(mk a₁ … aₙ).i a⃗ ≡ aⱼ a⃗`, one step of
     /// weak-head normalisation.
     ///
@@ -872,6 +905,13 @@ pub enum Admit {
     /// over the spine. Constructed nowhere in the crate.
     App,
     /// Two `Local`s with the same id (`def_eq_local`).
+    ///
+    /// **No longer raised by the checker.** The comparison is a rule on the
+    /// backend boundary ([`Certifier::local_eq`]), fed by the binder types'
+    /// own certificate — which this arm used to establish and discard. The
+    /// variant stays because `local_eq`'s *default* implementation delegates
+    /// to [`Certifier::admit`] under this reason string, so a backend without
+    /// the rule still reports its gaps here.
     Local,
     /// Two projections of def-eq structures (`def_eq_proj`).
     ///
@@ -907,6 +947,15 @@ pub enum Admit {
     /// 4.
     Cache,
     /// `Bool.true`-normalisation shortcut in `def_eq`.
+    ///
+    /// **No longer raised.** The shortcut's whole content is `whnf(x_n) =
+    /// Bool.true`, and every leg of that was already in hand or in the trace
+    /// memo: `x ≡ x_n` from the entry reduction, `x_n ≡ whnf(x_n)` from the
+    /// recorded trace, and `whnf(x_n)` *is* `y_n` by hash-consing. The
+    /// shortcut now composes them (`def_eq`, the `Bool.true` branch) instead
+    /// of admitting; the individual reduction steps account for themselves
+    /// under their own rules. Kept so the label stays enumerable and a
+    /// reappearance in [`admit_report`] would be visible as a regression.
     BoolTrue,
     /// Weak-head normalisation: `e` reduces to `whnf(e)`, reason unrecorded.
     ///

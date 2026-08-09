@@ -14601,6 +14601,48 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.cert(ctx, out)
     }
 
+    /// **Two locals with one id**, decided by [`LocalKey`]'s own grain.
+    ///
+    /// A level-local's kernel variable is keyed by level **and** interpreted
+    /// declared type, so the claim splits exactly along the key:
+    ///
+    /// * the two types interpret to the same term — one key, one variable,
+    ///   and the equation is reflexivity, derived outright;
+    /// * the types are merely definitionally equal — two keys, two variables,
+    ///   and no rule of this backend relates two distinct free variables. The
+    ///   step stays a gap, under the label the checker used to admit under.
+    ///
+    /// `ty_eq` is consumed either way — receipt is what the escape ledger
+    /// counts — but the residue case cannot use it: `⊢ ⟦A⟧ = ⟦A'⟧` relates the
+    /// *types*, and what the claim needs is an equation between the two
+    /// *variables*, which only an interpretation choice (one variable per
+    /// def-eq class of types) could supply. That choice is exactly what
+    /// [`LocalKey`] rejects — a memo key must not depend on a definitional
+    /// equality judgement — so the gap is genuine and stays counted.
+    fn local_eq(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        ty_eq: TgCert,
+    ) -> TgCert {
+        // Taken before it is inspected, like every premise (see `consume`).
+        let _receipt = self.consume(&ty_eq);
+        let (Expr::Local { id: ia, .. }, Expr::Local { id: ib, .. }) =
+            (ctx.read_expr(a), ctx.read_expr(b))
+        else {
+            return self.note_admit("def_eq_local: not a pair of locals")
+        };
+        if ia != ib {
+            return self.note_admit("def_eq_local: two different ids")
+        }
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        self.note_admit(crate::certify::Admit::Local.name())
+    }
+
     /// **Proof irrelevance**, from the premises the checker handed over.
     ///
     /// Carneiro's Theorem 6.7 on each side — a proposition denotes a subset of
@@ -16183,6 +16225,184 @@ mod tests {
                 );
             })
         })
+        .unwrap()
+    }
+
+    /// **`def_eq_local` is a rule, split along [`LocalKey`]'s own grain.**
+    ///
+    /// The census's `def_eq_local` row: two locals with one id used to admit
+    /// (`Admit::Local`) after establishing — and discarding — that their
+    /// declared types are def-eq. Under `LocalKey` the honest answer splits:
+    ///
+    /// * same level, types interpreting to the **same term** — one kernel
+    ///   variable, so reflexivity is a complete derivation (`l1` / `l2`, which
+    ///   differ only in binder name);
+    /// * same level, types **merely definitionally equal** — two kernel
+    ///   variables, no rule relates them, and the step must stay a counted gap
+    ///   rather than become a forged reflexivity (`l1` / `l3`, whose type is
+    ///   one beta step away).
+    ///
+    /// Both directions are load-bearing. Mutation-verified: reverting
+    /// `local_eq` to a bare admit turns the first assertion red; making it
+    /// return reflexivity without comparing interpretations turns the second
+    /// red.
+    #[test]
+    fn def_eq_local_splits_along_the_local_key() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_tc(crate::env::EnvLimit::Empty, |tc| {
+                let x = tc.ctx.str1("x");
+                let y = tc.ctx.str1("y");
+                let zero = tc.ctx.zero();
+                let one = tc.ctx.succ(zero);
+                let ty_a = tc.ctx.mk_sort(zero);
+                let sort1 = tc.ctx.mk_sort(one);
+                let style = crate::expr::BinderStyle::Default;
+
+                // Same level, same declared type, different binder *name* — two
+                // distinct `ExprPtr`s (a `Local` hashes its name) that
+                // interpret to one variable.
+                let l1 = tc.ctx.remake_dbj_level(x, style, ty_a, 3);
+                let l2 = tc.ctx.remake_dbj_level(y, style, ty_a, 3);
+                assert_ne!(l1, l2, "the two locals must be two nodes, or nothing is tested");
+                let r = tc.def_eq(l1, l2);
+                let cert = r.expect("same id at one type must still be def-eq");
+                assert!(
+                    cert.is_proved(),
+                    "one LocalKey means one variable: reflexivity, not an admit — got {cert:?}"
+                );
+                assert!(
+                    crate::certify::is_unconditional(&cert),
+                    "reflexivity of a variable rests on nothing"
+                );
+
+                // Same level, type one beta step away: `(λ z : Sort 1. z) A`
+                // is def-eq to `A` but interprets to a different term, so this
+                // is *two* variables and the rule must decline, not forge.
+                let v0 = tc.ctx.mk_var(0);
+                let id_lam = tc.ctx.mk_lambda(x, style, sort1, v0);
+                let ty_b = tc.ctx.mk_app(id_lam, ty_a);
+                let l3 = tc.ctx.remake_dbj_level(x, style, ty_b, 3);
+                let r2 = tc.def_eq(l1, l3);
+                let cert2 = r2.expect("the checker's verdict is unchanged: same id, def-eq types");
+                assert!(
+                    matches!(cert2, TgCert::Admitted(_)),
+                    "two distinct variables have no equating rule — this must stay a counted gap, got {cert2:?}"
+                );
+            })
+        })
+        .unwrap()
+    }
+
+    /// **The `Bool.true` shortcut composes the legs it already holds.**
+    ///
+    /// `def_eq`'s shortcut — `y_n` is `Bool.true` and `whnf(x_n)` reduces to
+    /// it — used to discard the entry legs *and* the recorded reduction and
+    /// answer `Admit::BoolTrue`. Every leg was in hand: `x ≡ x_n` from the
+    /// no-unfolding reduction, `x_n ≡ whnf(x_n)` from the trace memo, and
+    /// `whnf(x_n)` *is* `y_n` by hash-consing. The census (§1.4) called the
+    /// composition mechanical; this pins it.
+    ///
+    /// Two subjects, deliberately: `boolId` alone exercises the pure delta
+    /// middle leg (`Proved`, resting on the defining equation and nothing
+    /// else), and `(λ b : Bool. b) boolId` puts a beta leg on the entry
+    /// reduction as well, so the `x_leg` composition — not just the middle —
+    /// is load-bearing. Under the admitting shortcut both were
+    /// `Admitted("bool_true")`.
+    #[test]
+    fn bool_true_shortcut_composes_its_legs() {
+        crate::tests::util::test_export_file(
+            Some(std::path::Path::new("test_resources/BoolTrue/config.json")),
+            |export| {
+                export.with_tc(crate::env::EnvLimit::PpUnlimited, |tc| {
+                    let bool_true = tc.ctx.c_bool_true().expect("the export declares Bool.true");
+                    let no_levels = tc.ctx.alloc_levels_slice(&[]);
+                    let n_bool = tc.ctx.str1("Bool");
+                    let c_bool = tc.ctx.mk_const(n_bool, no_levels);
+                    let n_boolid = tc.ctx.str1("boolId");
+                    let bool_id = tc.ctx.mk_const(n_boolid, no_levels);
+
+                    // One delta step: the middle leg is the defining equation,
+                    // a complete unconditional derivation.
+                    let r = tc.def_eq(bool_id, bool_true);
+                    let cert = r.expect("boolId unfolds to Bool.true");
+                    assert!(
+                        cert.is_proved() && crate::certify::is_unconditional(&cert),
+                        "a delta step to Bool.true is fully derived, not admitted — got {cert:?}"
+                    );
+
+                    // A beta step on the entry leg as well: the composition has
+                    // to thread `x ≡ x_n` through, not only the middle. The
+                    // beta step's domain obligation may be carried as an
+                    // antecedent, so `Conditional` is as green as `Proved`
+                    // here; only an admission is the old, discarded answer.
+                    let n_b = tc.ctx.str1("b");
+                    let style = crate::expr::BinderStyle::Default;
+                    let v0 = tc.ctx.mk_var(0);
+                    let id_lam = tc.ctx.mk_lambda(n_b, style, c_bool, v0);
+                    let x2 = tc.ctx.mk_app(id_lam, bool_id);
+                    let r2 = tc.def_eq(x2, bool_true);
+                    let cert2 = r2.expect("(λ b. b) boolId reduces to Bool.true");
+                    assert!(
+                        !matches!(cert2, TgCert::Admitted(_)),
+                        "every leg exists — the composite must not be an admission, got {cert2:?}"
+                    );
+                })
+            },
+        )
+        .unwrap()
+    }
+
+    /// **`infer_app` composes the `ensure_pi` reduction leg into the head's
+    /// typing** — the census's silently dropped leg (§1.2, `infer_app` row).
+    ///
+    /// `f : (λ T : Sort 1. T) Arrow` applied to `p : Bool`: the head's type
+    /// must be beta-reduced (then delta-unfolded) before the `Π` appears, so
+    /// the head's typing — stated at the *unreduced* type — has to be
+    /// converted along that reduction or the application rule's premise is
+    /// about the wrong type. `ty_bridge`'s delta-only rescue cannot cross the
+    /// beta step, which is what makes this fixture red before the leg is
+    /// composed: the typing came out `Gap` (`ty_app`), and comes out `Derived`
+    /// once `infer_app` converts via `ty_conv`.
+    #[test]
+    fn ensure_pi_leg_is_composed_into_the_head_typing() {
+        crate::tests::util::test_export_file(
+            Some(std::path::Path::new("test_resources/BoolTrue/config.json")),
+            |export| {
+                export.with_tc(crate::env::EnvLimit::PpUnlimited, |tc| {
+                    let no_levels = tc.ctx.alloc_levels_slice(&[]);
+                    let n_bool = tc.ctx.str1("Bool");
+                    let c_bool = tc.ctx.mk_const(n_bool, no_levels);
+                    let n_arrow = tc.ctx.str1("Arrow");
+                    let c_arrow = tc.ctx.mk_const(n_arrow, no_levels);
+                    let style = crate::expr::BinderStyle::Default;
+
+                    // `(λ T : Sort 1. T) Arrow` — one beta step, then one
+                    // delta step, away from `Π b : Bool. Bool`.
+                    let n_t = tc.ctx.str1("T");
+                    let zero = tc.ctx.zero();
+                    let one = tc.ctx.succ(zero);
+                    let sort1 = tc.ctx.mk_sort(one);
+                    let v0 = tc.ctx.mk_var(0);
+                    let id_lam = tc.ctx.mk_lambda(n_t, style, sort1, v0);
+                    let f_ty = tc.ctx.mk_app(id_lam, c_arrow);
+
+                    let n_f = tc.ctx.str1("f");
+                    let n_p = tc.ctx.str1("p");
+                    let f = tc.ctx.mk_dbj_level(n_f, style, f_ty);
+                    let p = tc.ctx.mk_dbj_level(n_p, style, c_bool);
+                    let app = tc.ctx.mk_app(f, p);
+
+                    let r = tc.infer(app, crate::tc::InferFlag::Check);
+                    assert_eq!(r.ty, c_bool, "the application lands in Bool");
+                    assert!(
+                        matches!(r.cert, TgTyping::Derived { .. }),
+                        "the head typing must be converted along the ensure_pi leg and \
+                         carried into the application rule — got {:?}",
+                        r.cert
+                    );
+                })
+            },
+        )
         .unwrap()
     }
 

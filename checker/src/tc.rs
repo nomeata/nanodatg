@@ -483,6 +483,23 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
+    /// [`Self::ensure_pi`], returning the reduction leg `e ≡ Π…` as well.
+    ///
+    /// `None` means `e` was already a `Π` and reflexivity applies. The leg is
+    /// what `infer_app` composes into the head's typing via `ty_conv` — the
+    /// silently dropped `ensure_pi` leg of `THREADING-CENSUS.md` §1.2, which
+    /// `TgBackend::ty_bridge` used to compensate for with a delta-only re-walk.
+    fn ensure_pi_with_cert(&mut self, e: ExprPtr<'t>) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
+        if let Pi { .. } = self.ctx.read_expr(e) {
+            return (e, None)
+        }
+        let (whnfd, leg) = self.whnf_with_cert(e);
+        match self.ctx.read_expr(whnfd) {
+            Pi { .. } => (whnfd, leg),
+            _ => panic!("ensure_pi could not produce a pi"),
+        }
+    }
+
     pub(crate) fn infer_sort_of(&mut self, e: ExprPtr<'t>, flag: InferFlag, site: Dropped) -> LevelPtr<'t> {
         let whnfd = self.infer_then_whnf(e, flag, site);
         match self.ctx.read_expr(whnfd) {
@@ -882,8 +899,29 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     }
                 }
                 _ => {
-                    let as_pi = self.ctx.inst(fun, ctx.as_slice());
-                    let as_pi = self.ensure_pi(as_pi);
+                    let as_pi0 = self.ctx.inst(fun, ctx.as_slice());
+                    // The derivation in hand — when there is one — is stated at
+                    // exactly `as_pi0`: each `ty_app` step claimed the type
+                    // `inst(fun, ctx)`. Reducing to the `Π` therefore has a leg
+                    // the typing must be converted along, or the certificate is
+                    // left claiming membership in the unreduced type while the
+                    // walk continues at the reduced one. That leg used to be
+                    // silently dropped (no `Dropped` entry, no compose —
+                    // `THREADING-CENSUS.md` §1.2), and `TgBackend::ty_bridge`
+                    // compensated delta-only. The certificate is only built
+                    // when a derivation is live to consume it, so the null
+                    // backend — under which `applied` is always `None` — pays
+                    // nothing.
+                    let as_pi = if let Some(so_far) = applied {
+                        let (as_pi, leg) = self.ensure_pi_with_cert(as_pi0);
+                        if let Some(leg) = leg.as_ref() {
+                            cert = self.certifier.ty_conv(self.ctx, so_far, as_pi0, as_pi, cert, leg);
+                            applied = (!typing_is_gap(&cert)).then_some(so_far);
+                        }
+                        as_pi
+                    } else {
+                        self.ensure_pi(as_pi0)
+                    };
                     match self.ctx.read_expr(as_pi) {
                         Pi { .. } => {
                             // Only clear what we just instantiated.
@@ -1388,6 +1426,22 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
     pub fn whnf(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> { self.whnf_reduce(e).0 }
 
+    /// [`Self::whnf`], with the certificate for `e ≡ whnf(e)`.
+    ///
+    /// The full-reduction counterpart of
+    /// [`Self::whnf_no_unfolding_aux_with_cert`]: the trace was recorded either
+    /// way (recording is unconditional and three words a step), so this is the
+    /// same derive-on-demand, done over the memo entry that includes the delta
+    /// steps. `certify_reduct`'s store-back guard only recognises the
+    /// no-unfolding memo, so a certificate built here is rebuilt per call — its
+    /// *sub*-reductions still hit their own stored certificates, which is where
+    /// the sharing lives.
+    fn whnf_with_cert(&mut self, e: ExprPtr<'t>) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
+        let (r, trace) = self.whnf_reduce(e);
+        let cert = self.certify_reduct(e, r, &trace);
+        (r, cert)
+    }
+
     /// Weak-head normalisation, recording the steps it takes.
     ///
     /// Recording is unconditional and nearly free — three words per step, no
@@ -1721,14 +1775,28 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
+    /// Two `Local`s carrying the same id, their binder types definitionally
+    /// equal.
+    ///
+    /// The side condition's certificate used to be established and dropped and
+    /// the conclusion admitted. It is now handed to [`Certifier::local_eq`],
+    /// which can settle the common case with no axiom at all: the TG backend
+    /// identifies a level-local's kernel variable by level **and** interpreted
+    /// declared type (`LocalKey`), so when the two types interpret to the same
+    /// term the two locals *are* one variable and reflexivity is the whole
+    /// derivation. Same level at types merely definitionally equal is two
+    /// variables, and stays a gap — reported by the rule, under the same
+    /// `def_eq_local` label this arm used to admit under.
     fn def_eq_local(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         match self.ctx.read_expr_pair(x, y) {
-            (Local { id: x_id, binder_type: tx, .. }, Local { id: y_id, binder_type: ty, .. }) =>
-                if x_id == y_id && self.def_eq(tx, ty).is_some() {
-                    self.admit(x, y, Admit::Local)
-                } else {
-                    None
-                },
+            (Local { id: x_id, binder_type: tx, .. }, Local { id: y_id, binder_type: ty, .. }) => {
+                if x_id != y_id {
+                    return None
+                }
+                let ty_eq = self.def_eq(tx, ty)?;
+                crate::certify::bump_certified();
+                Some(self.certifier.local_eq(self.ctx, x, y, ty_eq))
+            }
             _ => None,
         }
     }
@@ -1905,9 +1973,33 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         let (y_n, y_leg) = self.whnf_no_unfolding_aux_with_cert(y, true);
 
         if ((!self.ctx.has_fvars(x_n)) || self.ctx.eager_mode) && Some(y_n) == self.ctx.c_bool_true() {
-            let x_nn = self.whnf(x_n);
+            // Reduce first, certify only on the licensing branch: when `x_nn`
+            // is not `Bool.true` this whole probe concluded nothing, and
+            // deriving a certificate for it would be work no conclusion rests
+            // on (the trace is recorded either way, so the first path that
+            // does conclude something pays instead).
+            let (x_nn, x_nn_trace) = self.whnf_reduce(x_n);
             if Some(x_nn) == self.ctx.c_bool_true() {
-                return self.admit(x, y, Admit::BoolTrue)
+                // Every leg of this shortcut is in hand: `x ≡ x_n` (`x_leg`),
+                // `x_n ≡ x_nn` from the trace just recorded, and `x_nn` *is*
+                // `y_n` — both are the hash-consed `Bool.true` constant — so
+                // the middle leg is already stated about `x_n ≡ y_n`. A `None`
+                // leg means no step was taken, i.e. `x_n` was `Bool.true`
+                // itself, and the middle is reflexivity. This used to be
+                // `Admit::BoolTrue` with all three legs discarded.
+                let x_nn_leg = self.certify_reduct(x_n, x_nn, &x_nn_trace);
+                let mid = match x_nn_leg {
+                    Some(c) => Some(c),
+                    None => {
+                        crate::certify::bump_certified();
+                        Some(self.certifier.refl(self.ctx, x_n))
+                    }
+                };
+                // Early return, deliberately: like the quick-check early return
+                // below, this path has never reached the `eq_cache.union` at
+                // the bottom, and which pairs get cached is nanoda's behaviour,
+                // not this change's to alter.
+                return self.compose_whnf_legs(x, y, y_n, mid, x_leg, y_leg)
             }
         }
 

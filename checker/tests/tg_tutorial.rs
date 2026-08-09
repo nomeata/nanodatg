@@ -1611,7 +1611,24 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // endpoints and hands the rule Carneiro's Theorem 6.7 premises. See
     // [`projection_reduction_is_a_rule_fed_by_inference`] for what closes and
     // by which route.
-    assert!(gaps > 0 && gaps <= 15423, "init-prelude: {gaps} gaps, ratchet 15423 — the general ι path regressed");
+    //
+    // **15423 → 15542, and the rise is one row: the boundary-escape count.**
+    // `infer_app` now certifies the `ensure_pi` reduction of the head's type
+    // and converts the head's typing along it (`THREADING-CENSUS.md` §1.2's
+    // silently dropped leg; stage 2's first slice). A leg with a beta step
+    // carries that step's domain obligation as an antecedent, and the leg is
+    // handed to `ty_conv` *borrowed* — deliberately unconsumed, see
+    // `Certifier::ty_conv`'s doc — so every conditional leg is counted at the
+    // boundary: +119 in `gap: undischarged assumption … survived to the
+    // boundary`, and nowhere else (every other gap row is flat or falls;
+    // `ty_app` holes fall 481 → 418). Before this, the same reductions
+    // happened *uncertified* — the obligations existed and were invisible.
+    // Bought: +252 derived kernel theorems, +111 conversions carried, and 7
+    // declaration typings stored (19 → 26) whose antecedent-free derivations
+    // the composed leg completed. Stage 1's binder context is what discharges
+    // these antecedents; a further rise with no such purchase still fails
+    // here.
+    assert!(gaps > 0 && gaps <= 15542, "init-prelude: {gaps} gaps, ratchet 15542 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1640,7 +1657,13 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // were — `⟦α⟧ ∈ U₀` for these α rests on the ambient locals' typings. Bought
     // by 32 gaps, and it is the *same* trade as the one recorded above, run
     // backwards.
-    assert!(esc <= 2138, "init-prelude: {esc} escapes, ratchet 2138 — the general ι path regressed");
+    // 2138 → 2257 with the `ensure_pi` leg composed into the head typing —
+    // the same +119 as the gap ratchet above, one row, one mechanism: a
+    // conditional reduction certificate now exists where the reduction used
+    // to run uncertified, and `ty_conv` borrows rather than consumes it. See
+    // the gap ratchet's paragraph for what it buys and why the over-report is
+    // the safe direction; stage 1 is what brings both counters down.
+    assert!(esc <= 2257, "init-prelude: {esc} escapes, ratchet 2257 — the general ι path regressed");
 }
 
 /// **How much of the prelude is actually translated** — the declaration-typing
@@ -1749,11 +1772,21 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
 
     // Ratchets, in the direction that says progress. `stored` and `hit` may only
     // rise; `cond`, `gap` and `miss_cond` may only fall.
-    assert!(stored >= 19, "only {stored} declaration typings stored, was 19");
+    // 19 → 26 stored (and 2674 → 2667 never-derived) when `infer_app` began
+    // composing the `ensure_pi` leg into the head's typing: seven value
+    // typings that used to run out of evidence at the unreduced head type now
+    // complete antecedent-free and pass `Sealed`.
+    assert!(stored >= 26, "only {stored} declaration typings stored, was 26");
     assert!(hit >= 1308, "only {hit} uses answered from the store, was 1308");
     assert!(cond <= 198, "{cond} typings derived and discarded, was 198");
-    assert!(gap <= 2674, "{gap} typings with no certificate at all, was 2674");
-    assert!(miss_cond <= 1161, "{miss_cond} misses against a discarded typing, was 1161");
+    assert!(gap <= 2667, "{gap} typings with no certificate at all, was 2667");
+    // 1161 → 1165 with the same change. `cond` itself is unchanged at 198:
+    // no typing was newly discarded — the store's *ask* traffic shifted, and
+    // four more of the (unchanged) misses land on keys whose typing was
+    // derived under antecedents. A rise here with `cond` flat is attribution
+    // churn, not new discarding; a rise *with* `cond` is the regression this
+    // pin is for.
+    assert!(miss_cond <= 1165, "{miss_cond} misses against a discarded typing, was 1165");
     // Sanity: the store is consulted, and it mostly misses. Stated so that a
     // change that stops consulting it fails here rather than reading as a win.
     assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
