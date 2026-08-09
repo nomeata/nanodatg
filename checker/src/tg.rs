@@ -2526,6 +2526,12 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     terms: HashMap<ExprPtr<'t>, Clause>,
     /// Memoised delta-unfolding of a type down to its `Sort`.
     exposed_sorts: HashMap<ExprPtr<'t>, Option<LevelPtr<'t>>>,
+    /// Memoised [`TgBackend::open_level`]: one more than the maximum de Bruijn
+    /// *level* embedded in the expression (0 for an expression with no level
+    /// locals). A function of the node, so the binder-open level the
+    /// interpretation chooses is too — which is what makes `⟦·⟧` independent
+    /// of the ambient counter at interpretation time.
+    open_levels: HashMap<ExprPtr<'t>, u16>,
     /// A copy of the shared canonical bound-variable slot, so that the common
     /// read-only use needs no borrow.
     x_canon: FreeVar,
@@ -3435,6 +3441,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             props: HashMap::new(),
             terms: HashMap::new(),
             exposed_sorts: HashMap::new(),
+            open_levels: HashMap::new(),
             x_canon,
             has_types: HashMap::new(),
             const_active: Vec::new(),
@@ -4262,6 +4269,53 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some((lam, Graph { t, t_def, lam_ax }))
     }
 
+    /// One more than the largest de Bruijn **level** occurring in `e` — the
+    /// first level at which the interpretation may open a binder of `e`
+    /// without colliding with anything `e` already mentions.
+    ///
+    /// A function of the node, memoised, and that is the load-bearing
+    /// property: the level (and so, with the interpreted domain, the
+    /// [`LocalKey`] and the kernel variable) an interpretation binder opens at
+    /// must not depend on *when* the interpretation is asked. On a closed
+    /// telescope this numbering coincides with the checker's own (0, 1, 2, …),
+    /// so checker-embedded locals and interpretation opens of one telescope
+    /// agree on their variables.
+    fn open_level(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> u16 {
+        if let Some(l) = self.open_levels.get(&e) {
+            return *l
+        }
+        let l = match ctx.read_expr(e) {
+            Expr::Local { id, binder_type, .. } => {
+                let own = match id {
+                    crate::expr::FVarId::DbjLevel(n) => n.saturating_add(1),
+                    crate::expr::FVarId::Unique(_) => 0,
+                };
+                own.max(self.open_level(ctx, binder_type))
+            }
+            Expr::App { fun, arg, .. } => {
+                let f = self.open_level(ctx, fun);
+                f.max(self.open_level(ctx, arg))
+            }
+            Expr::Lambda { binder_type, body, .. } | Expr::Pi { binder_type, body, .. } => {
+                let t = self.open_level(ctx, binder_type);
+                t.max(self.open_level(ctx, body))
+            }
+            Expr::Let { binder_type, val, body, .. } => {
+                let t = self.open_level(ctx, binder_type);
+                let v = self.open_level(ctx, val);
+                t.max(v).max(self.open_level(ctx, body))
+            }
+            Expr::Proj { structure, .. } => self.open_level(ctx, structure),
+            Expr::Sort { .. }
+            | Expr::Const { .. }
+            | Expr::Var { .. }
+            | Expr::NatLit { .. }
+            | Expr::StringLit { .. } => 0,
+        };
+        self.open_levels.insert(e, l);
+        l
+    }
+
     /// Interpret `λ binder:dom. body`.
     ///
     /// **Two clauses**, exactly as [`Self::interp_pi`] has two, and decided by
@@ -4300,13 +4354,68 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ) -> Option<Term> {
         let dom = self.interp(ctx, binder_type);
 
-        // Open the binder at a fresh local, with a kernel variable reserved for
-        // it up front so the interpretation of the body puts that variable in
-        // exactly the bound occurrences.
-        let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-        let key = unique_key(ctx, local)?;
-        let v = self.env_mut().fresh_var();
-        self.locals.insert(key, v);
+        // Open the binder at a de Bruijn level that is a **function of the
+        // expression** — one more than the largest level `e` embeds
+        // ([`Self::open_level`]) — so the binder's kernel variable is keyed by
+        // `(level, ⟦binder_type⟧)` ([`LocalKey::Level`]) and an identical
+        // binder shape reuses the same variable, and with it every memoised
+        // statement about the opened body (the interpretation memo's entries
+        // for the body's subterms above all). A `mk_unique` local here minted
+        // a fresh variable per occurrence, which made those entries
+        // unreachable by construction: the opened body's `ExprPtr` could
+        // never recur.
+        //
+        // *Not* the ambient `dbj_level_counter`, deliberately. The checker
+        // asks for interpretations at many depths, and a counter-relative
+        // open makes `⟦·⟧` depend on when it is first asked: the same `Π`
+        // shape interpreted once mid-inference (checker binders open,
+        // embedded checker locals in the expression) and once at the
+        // declaration boundary got different skeletons, which turned
+        // `073_boolRecEqns` fully-derived into one `pi congruence` gap. An
+        // expression-derived level is depth-independent, collides with
+        // nothing `e` mentions (it is above every embedded level), lines up
+        // with the checker's own numbering on a closed telescope — and needs
+        // no open/close discipline at all, so there is no early-exit hazard
+        // and the checker's counter is never touched.
+        let level = self.open_level(ctx, e);
+        let local = ctx.remake_dbj_level(binder_name, binder_style, binder_type, level);
+        self.interp_lambda_at(ctx, e, level, local, dom, body)
+    }
+
+    /// The body of [`Self::interp_lambda`], at its opened binder.
+    fn interp_lambda_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        level: u16,
+        local: ExprPtr<'t>,
+        dom: Term,
+        body: ExprPtr<'t>,
+    ) -> Option<Term> {
+        // The variable, obtained **exactly the way the body's occurrences
+        // will obtain it** — through the interpretation itself (the `Local`
+        // arm, expression memo included). Computing the `(level, ⟦type⟧)` key
+        // here and minting on a miss is not equivalent: the same `Local` node
+        // can already carry a memoised interpretation from an earlier walk
+        // whose key no longer matches (the key contains the *interpreted*
+        // type, which may mention other keyed variables), and the body would
+        // then resolve through the memo while the open minted a second
+        // variable — one binder split across two variables, a skeleton that
+        // misses its own binder, and a completeness regression the claim
+        // checks turn into gaps. Measured on `073_boolRecEqns` before this
+        // was routed through `interp`: one new gap and a Prop-clause count
+        // collapse. Consistency with the body, not the key itself, is the
+        // load-bearing property.
+        let key = LocalKey::Level(level, dom.clone());
+        let pre_existing = self.exprs.contains_key(&local) || self.locals.contains_key(&key);
+        note_binder_var(pre_existing);
+        let tlocal = self.interp(ctx, local);
+        let mut lfvs = Vec::new();
+        tlocal.free_vars(&mut lfvs);
+        let v = match lfvs.as_slice() {
+            [v] if tlocal == Term::var(*v) => *v,
+            _ => return None,
+        };
         let body_open = ctx.inst(body, &[local]);
 
         // Which clause. Asked at the *opened* body and stamped on `e`, exactly
@@ -4696,8 +4805,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// binder's occurrences left as the opaque `bvar` symbol. That is enough
     /// for an opaque `pi(A,B)`, and not enough for a dependent product: the
     /// fibre `b(h⃗,x)` has to be a function *of* the binder, so the binder has
-    /// to be a variable the definition can abstract. So the binder is opened at
-    /// a fresh local, exactly as in [`Self::interp_lambda`].
+    /// to be a variable the definition can abstract. So the binder is opened,
+    /// at a keyed de Bruijn level, exactly as in [`Self::interp_lambda`].
     ///
     /// Two things fall out of that, both good. Non-dependence is now decided
     /// **exactly** — "the interpreted body does not mention this binder's
@@ -4746,10 +4855,36 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
         }
 
-        let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-        let key = unique_key(ctx, local)?;
-        let v = self.env_mut().fresh_var();
-        self.locals.insert(key, v);
+        // An expression-derived de Bruijn-level open, for
+        // [`Self::interp_lambda`]'s reasons — reuse by `(level, ⟦type⟧)` key,
+        // depth-independence, no counter and no close.
+        let level = self.open_level(ctx, e);
+        let local = ctx.remake_dbj_level(binder_name, binder_style, binder_type, level);
+        self.interp_pi_at(ctx, e, level, local, dom, body)
+    }
+
+    /// The body of [`Self::interp_pi`], at its opened binder.
+    fn interp_pi_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        level: u16,
+        local: ExprPtr<'t>,
+        dom: Term,
+        body: ExprPtr<'t>,
+    ) -> Option<Term> {
+        // See `interp_lambda_open`: the variable comes from `interp` so it is
+        // the one the body's occurrences resolve to, memo included.
+        let key = LocalKey::Level(level, dom.clone());
+        let pre_existing = self.exprs.contains_key(&local) || self.locals.contains_key(&key);
+        note_binder_var(pre_existing);
+        let tlocal = self.interp(ctx, local);
+        let mut lfvs = Vec::new();
+        tlocal.free_vars(&mut lfvs);
+        let v = match lfvs.as_slice() {
+            [v] if tlocal == Term::var(*v) => *v,
+            _ => return None,
+        };
         let body_open = ctx.inst(body, &[local]);
         let bt = self.interp(ctx, body_open);
         // Asked once, here, and stamped on `e`: the decision has to be a
@@ -5812,13 +5947,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // One level per Lean argument up to and including the major premise.
         // Each binder is opened at a local with a kernel variable reserved for
         // it first, so that the interpretation of the *next* domain puts that
-        // variable exactly where the binder was — the same discipline
-        // `interp_lambda` follows.
+        // variable exactly where the binder was.
         //
-        // On a reuse walk the variable comes from the **stored** nest rather
-        // than from `fresh_var`, because the stored theorems are stated over
-        // those variables. This is `walk_spec`'s reuse discipline, at a
-        // recursor instead of a constructor.
+        // These stay `mk_unique` opens — deliberately, where `interp_lambda`
+        // and `interp_pi` moved to keyed de Bruijn levels: the variable here
+        // must be able to match a nest **stored by another declaration's
+        // backend** (next comment), which is an identity a per-declaration
+        // `(level, type)` key cannot transport. On a reuse walk the variable
+        // comes from the **stored** nest rather than from `fresh_var`, because
+        // the stored theorems are stated over those variables; nothing else is
+        // taken from the store until `reuse_rec_nest` has checked the walk
+        // against it. This is `walk_spec`'s reuse discipline, at a recursor
+        // instead of a constructor.
         let Declar::Recursor(r) = self.decls.get_declar(&name)? else { return None };
         let (uparams, ty) = (r.info.uparams, r.info.ty);
         let depth = r.major_idx() + 1;
@@ -9938,8 +10078,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // The binder is opened rather than left loose: a bare de Bruijn
             // index has no type this walk can read, and every `λ` whose body is
             // the binder would answer `Undet`.
+            //
+            // Opened at an expression-derived de Bruijn level
+            // ([`Self::open_level`]), not a `mk_unique` local: this walk needs
+            // no kernel variable at all, only a `Local` node whose type it can
+            // read — and a level-local makes `opened` a *stable* `ExprPtr`, so
+            // the memo above answers for every identical `λ` instead of
+            // exactly once, and `opened` is the same node `interp_lambda`
+            // builds, so the two walks share it.
             Expr::Lambda { binder_name, binder_style, binder_type, body, .. } => {
-                let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+                let level = self.open_level(ctx, e);
+                let local = ctx.remake_dbj_level(binder_name, binder_style, binder_type, level);
                 let opened = ctx.inst(body, &[local]);
                 self.term_clause(ctx, opened)
             }
@@ -13633,17 +13782,25 @@ fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<T
 /// The key of [`TgBackend::locals`] — which Lean local a kernel free variable
 /// stands for. See the field's doc for the full argument; in brief:
 ///
-/// * A **`Level`** local is a checker-telescope binder. Its level is a stack
-///   position that [`TcCtx::replace_dbj_level`] hands back on close, so the
-///   level alone recurs at unrelated binders and the interpreted declared type
-///   completes the identity: same level and type — the same variable, and
-///   nothing left to differ in; different type — a different variable, so no
-///   memoised statement can cross.
+/// * A **`Level`** local is a binder open — the checker's own telescopes, and
+///   since 2026-08-09 the interpretation's too
+///   ([`TgBackend::interp_lambda`]/[`TgBackend::interp_pi`] open at the
+///   expression-derived level [`TgBackend::open_level`] computes). The
+///   checker's levels are stack positions [`TcCtx::replace_dbj_level`] hands
+///   back on close, so the level alone recurs at unrelated binders and the
+///   interpreted declared type completes the identity: same level and type — the same variable, and nothing left
+///   to differ in (which is what lets an identical binder shape reuse its
+///   variable and every memoised statement about it); different type — a
+///   different variable, so no memoised statement can cross.
 /// * A **`Unique`** local's id is never reused within a `TcCtx`
 ///   (`util.rs`'s monotonic counter), so the id alone already identifies the
 ///   binder opening it stands for. Its type is deliberately *not* part of the
 ///   key: the recursive-field reservations ([`TgBackend::walk_spec`]) must
-///   reserve a variable for a binder whose type is never interpreted at all.
+///   reserve a variable for a binder whose type is never interpreted at all,
+///   and [`TgBackend::rec_nest`] reserves variables that must match a nest
+///   *stored by another declaration's backend* — an identity no
+///   `(level, type)` key can transport, which is why its positional
+///   `cached.vars` hint plus the [`nest_agrees`] claim-check stays.
 ///
 /// The two variants are distinct constructors, so the halves of the key space
 /// cannot alias — the property the old `(1 << 32)` bit encoded.
@@ -15111,6 +15268,23 @@ fn note_ind_ty(derived: bool) {
 /// declared `False`, not that the anchor failed.
 pub fn false_anchors() -> u64 { FALSE_ANCHORS.load(std::sync::atomic::Ordering::Relaxed) }
 
+/// **Binder opens in the interpretation** — `interp_lambda`/`interp_pi` —
+/// split by whether the `(level, ⟦type⟧)` key already had a kernel variable.
+///
+/// The reuse count is the payoff of opening these binders at de Bruijn levels
+/// instead of `mk_unique` locals: a reused variable means the opened body's
+/// interpretation-memo entries (and every memoised statement about them) are
+/// reachable again, where a unique local made them dead on arrival. Reported
+/// so the payoff is a number per run, not an assumption.
+static BINDER_VARS_MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BINDER_VARS_REUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record one interpretation binder open.
+fn note_binder_var(reused: bool) {
+    let c = if reused { &BINDER_VARS_REUSED } else { &BINDER_VARS_MINTED };
+    c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Record one step taken on trust.
 pub fn merge_one(reason: &'static str) {
     let mut g = TOTALS.lock().expect("tg totals poisoned");
@@ -16199,6 +16373,14 @@ pub fn global_report() -> String {
             "⟦False⟧ anchored: ⊢ ∀x. ¬(x ∈ ⟦False⟧) at the interpretation's own term",
         ));
     }
+    let (bv_minted, bv_reused) = (BINDER_VARS_MINTED.load(Relaxed), BINDER_VARS_REUSED.load(Relaxed));
+    if bv_minted + bv_reused > 0 {
+        s.push_str(&format!(
+            "  {:<width$}  {:>12}\n",
+            "interpretation binder opens: variables minted / reused at a (level, type) key",
+            format!("{bv_minted} / {bv_reused}"),
+        ));
+    }
     s.push_str(&ht_report());
     s.push_str(&pop_report());
     s.push_str(&ty_report());
@@ -16373,6 +16555,88 @@ mod tests {
                     be.interp(ctx, third),
                     "the same level at the same type must be the same variable across reopenings"
                 );
+            })
+        })
+        .unwrap()
+    }
+
+    /// **The interpretation's own binder opens reuse kernel variables by
+    /// `(level, type)`.**
+    ///
+    /// `interp_lambda` used to open every binder at a `mk_unique` local: a
+    /// fresh kernel variable per occurrence, so two α-identical lambdas —
+    /// distinct `ExprPtr`s that differ only in the binder's *name* — never
+    /// shared a variable, and every interpretation-memo entry about the opened
+    /// body was unreachable from the second occurrence by construction. Opened
+    /// at the expression-derived de Bruijn level ([`TgBackend::open_level`])
+    /// and keyed by `(level, ⟦domain⟧)`, they share.
+    ///
+    /// **Three lambdas, deliberately** — same shape twice (`l1`, `l2`, binder
+    /// names apart) and the same shape at a different domain (`l3`): with only
+    /// two, a key that drops the type still passes the sharing half, so the
+    /// split needs its own witness — the same three-atom argument as
+    /// [`a_level_local_is_identified_by_level_and_type`]. A fourth subject
+    /// (`l4`) embeds a level-0 local of the same domain type in its body, and
+    /// pins [`TgBackend::open_level`]'s collision clause: the binder must open
+    /// *above* every level its body mentions, or it captures the embedded
+    /// local's variable. The final assertions pin that no counter moves: the
+    /// opens touch neither `dbj_level_counter` (there is nothing to close) nor
+    /// `unique_counter` (nothing on this path mints a unique local).
+    ///
+    /// Mutation-verified: reverting the open to `mk_unique` fails the sharing
+    /// assertion; making `open_level` return 0 unconditionally fails `l4`'s
+    /// no-capture assertion.
+    #[test]
+    fn interpretation_binders_share_variables_by_level_and_type() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+
+                let x = ctx.str1("x");
+                let y = ctx.str1("y");
+                let zero = ctx.zero();
+                let one = ctx.succ(zero);
+                let (ty_a, ty_b) = (ctx.mk_sort(zero), ctx.mk_sort(one));
+                let style = crate::expr::BinderStyle::Default;
+                let v0 = ctx.mk_var(0);
+
+                // λ (x : Prop). x and λ (y : Prop). y — α-identical, two nodes.
+                let l1 = ctx.mk_lambda(x, style, ty_a, v0);
+                let l2 = ctx.mk_lambda(y, style, ty_a, v0);
+                // λ (x : Type). x — the same shape at another domain.
+                let l3 = ctx.mk_lambda(x, style, ty_b, v0);
+                assert_ne!(l1, l2, "two nodes, or nothing is tested");
+
+                let t1 = be.interp(ctx, l1);
+                let t2 = be.interp(ctx, l2);
+                let t3 = be.interp(ctx, l3);
+                assert_eq!(t1, t2, "α-identical lambdas must interpret to one term");
+                assert_ne!(t1, t3, "a different domain is a different function");
+
+                let var_of = |be: &TgBackend<'_, '_, '_>, e| be.lam_sites.get(&e).map(|s| s.var);
+                let (v1, v2, v3) = (var_of(&be, l1), var_of(&be, l2), var_of(&be, l3));
+                assert!(v1.is_some() && v2.is_some() && v3.is_some(), "all three are Type-clause lambdas");
+                assert_eq!(v1, v2, "one (level, type) key, one kernel variable — this is the reuse");
+                assert_ne!(v1, v3, "a different domain type must keep its own variable");
+
+                // A binder whose body embeds a level-0 local of the same
+                // domain type: the open must land above it, not on it.
+                let x0 = ctx.remake_dbj_level(x, style, ty_a, 0);
+                let body4 = ctx.mk_app(v0, x0);
+                let l4 = ctx.mk_lambda(y, style, ty_a, body4);
+                let t_x0 = be.interp(ctx, x0);
+                be.interp(ctx, l4);
+                let v4 = var_of(&be, l4).expect("l4 is a Type-clause lambda");
+                assert_ne!(
+                    Term::var(v4),
+                    t_x0,
+                    "the binder captured the embedded level-0 local — open_level must sit above every embedded level"
+                );
+
+                // No counter moves: nothing to close, and nothing unique.
+                assert_eq!(ctx.dbj_level_counter, 0, "an interpretation open must not touch the checker's counter");
+                assert_eq!(ctx.unique_counter, 0, "the lambda path must not mint unique locals");
             })
         })
         .unwrap()

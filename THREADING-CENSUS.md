@@ -233,6 +233,29 @@ would produce certificates with no consumer.
 | `replace_dbj_level` (`util.rs:733`) | pops the counter | **close**: discharge — `implies_intr` + `gen` (kernel), or pop the context stack | none |
 | `mk_unique` (`util.rs:718`) | free locals for inductive/quot telescopes — opened, never closed | see §3: these are the only genuinely ambient locals | — |
 
+**The interpretation's own binder opens (2026-08-09).** `tg.rs` used to open
+every binder it interprets under (`interp_lambda`, `interp_pi`, the
+`term_clause` λ-arm) at a `mk_unique` local — a fresh kernel variable per
+occurrence, so no memoised statement about an opened body was ever reachable
+from a second occurrence, defeating for the interpretation's own population
+exactly what `LocalKey` provides. They now open at an **expression-derived**
+de Bruijn level (`TgBackend::open_level` — one more than the largest level the
+expression embeds; memoised, a function of the node), keyed
+`(level, ⟦type⟧)`, with the variable obtained *through the interpretation
+itself* so it is the one the body's occurrences resolve to. Not the ambient
+counter, deliberately: a counter-relative open made `⟦·⟧` depend on when it
+was first asked and cost `073_boolRecEqns` a `pi congruence` gap; the
+expression-derived level is depth-independent, needs no open/close
+discipline, and coincides with the checker's own numbering on a closed
+telescope. Measured on `init-prelude`: 100 853 opens mint / **213 705 reuse**
+(68 %), the gap/derivation ledger unchanged row for row, obligations
+discharged +8, and **instructions 198.97 G → 193.81 G (−2.6 %)**.
+`mk_unique` remains at the reserve-first sites (`rec_nest`, `walk_spec`) and
+the ambient `inductive.rs`/`quot.rs` telescopes — `rec_nest`'s positional
+`cached.vars` hint is the cross-declaration identity `LocalKey` cannot
+transport, and it is claim-checked by `nest_agrees` before any stored
+statement is reused (task #135, determined benign).
+
 Key verified fact: **the binder that introduces `w` always knows `A`** — every
 `Local` node carries `binder_type`, and both open paths (`mk_dbj_level`,
 `mk_unique`) take it as an argument. The backend's `ty_local` and

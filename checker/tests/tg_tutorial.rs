@@ -737,8 +737,18 @@ fn the_two_clauses_of_the_interpretation_never_disagree() {
     // ratchets so that deleting either branch — which no disagreement row would
     // notice, since the `Type` clause is a function too — fails the build.
     // Measured at `DEFAULT_LEVELS = [0, 1]`.
+    //
+    // These are **event** counts — one per `interp` traversal that took the
+    // clause — not term counts. 962 → 353 applications when the
+    // interpretation's binder opens moved to expression-derived de Bruijn
+    // levels: an α-identical opened body is now one `ExprPtr`, so its
+    // subterms interpret once and hit the memo thereafter, and every memo hit
+    // is a traversal that no longer happens. The clause is exercised exactly
+    // as before — the per-file disagreement rows above stay at zero, and the
+    // prelude's gap/derivation ledger is unchanged row for row — there are
+    // simply fewer traversals to count.
     assert!(lam_point >= 88, "only {lam_point} λs took §6.2's Prop clause, expected at least 88");
-    assert!(app_point >= 962, "only {app_point} applications took §6.2's Prop clause, expected at least 962");
+    assert!(app_point >= 300, "only {app_point} applications took §6.2's Prop clause, expected at least 300");
     // The `Prop` lambda's own typing rule, `cond_intro`, reached through
     // inference: 17 of these 104 are it, and they are all of it — no `has_type`
     // obligation in this corpus is about a proof `λ`. Deleting the rule takes
@@ -1780,13 +1790,14 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     assert!(hit >= 1308, "only {hit} uses answered from the store, was 1308");
     assert!(cond <= 198, "{cond} typings derived and discarded, was 198");
     assert!(gap <= 2667, "{gap} typings with no certificate at all, was 2667");
-    // 1161 → 1165 with the same change. `cond` itself is unchanged at 198:
-    // no typing was newly discarded — the store's *ask* traffic shifted, and
-    // four more of the (unchanged) misses land on keys whose typing was
-    // derived under antecedents. A rise here with `cond` flat is attribution
-    // churn, not new discarding; a rise *with* `cond` is the regression this
-    // pin is for.
-    assert!(miss_cond <= 1165, "{miss_cond} misses against a discarded typing, was 1165");
+    // 1161 → 1165 with the same change, and 1165 → 1214 when the
+    // interpretation's binder opens moved to keyed de Bruijn levels. `cond`
+    // itself is unchanged at 198 both times: no typing was newly discarded —
+    // the store's *ask* traffic shifted, and more of the (unchanged) misses
+    // land on keys whose typing was derived under antecedents. A rise here
+    // with `cond` flat is attribution churn, not new discarding; a rise
+    // *with* `cond` is the regression this pin is for.
+    assert!(miss_cond <= 1214, "{miss_cond} misses against a discarded typing, was 1214");
     // Sanity: the store is consulted, and it mostly misses. Stated so that a
     // change that stops consulting it fails here rather than reading as a win.
     assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
