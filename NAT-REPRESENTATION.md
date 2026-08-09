@@ -951,24 +951,58 @@ route. Second, the module states a standing rule against exactly this
 (`direct.rs:57–62`): *"The table takes **no fourth row** … a declaration that
 seems to want one is evidence that the general clause is missing a case."*
 
-Both blockers vanish under the recommendation, because `Nat` keeps the general
-clause.
+**Both blockers were said to vanish under the recommendation, because `Nat`
+would keep the general clause. §6.0 chose otherwise, so they do not vanish —
+they are the work.** They are not, however, blockers in the sense of §7.2's
+paragraph: the standing rule against a fourth row is a rule against a *collapse
+that happens to be convenient*, and `⟦Nat⟧ = ω` is not one. It is the same kind
+of row `Acc` is — a construction the general route does not have and cannot
+reach — and the general route's `⟦Nat⟧` is a W-type carrier that no binary
+numeral can be a term of. What is real is the first blocker, and it is
+engineering: the two bottoms are `[φ]`/`•`-shaped and need a second route.
 
-### 7.3 What the recommendation hardcodes instead
+### 7.3 What the direct clause has to supply — read off the code
 
-Nothing at the *interpretation* axis. At the *reduction* axis, in `mini`, keyed
-by name exactly as Lean's kernel is:
+*(This section used to open "Nothing at the **interpretation** axis", which was
+the superseded §6 recommendation's answer and is now the wrong one: with one
+carrier, the literal clause is only expressible if `⟦Nat⟧` **is** `ω`, so the
+interpretation axis is exactly where the change starts.)*
 
-* `Expr::NatLit(n)` → `⟦natLit n⟧ := val(b_n)` (replacing `nat_unfold`), with
-  the literal↔`succ` step now carrying a real certificate from (V4) instead of
-  being reflexivity;
-* a `whnf` interception of the fifteen names at literal arguments, producing
-  `⊢ ⟦Nat.op⟧(val b, val b′) = val(b″)` from the bridge lemma plus a Θ(bits)
-  digit computation;
-* the apparatus (`B`'s carrier, recursor, `val`, the bridges) built lazily and
-  cached on the `Interp`, which is exactly how `AccClause` is built and cached
-  (`mini/src/acc.rs:43–55`) — that is the part of `Acc`'s route that does carry
-  over.
+Twelve edits, verified against the tree at `8e2e45b`. `derived/` owes **none**
+of them: `nat::Nat` has the carrier, both ι rules and `ω ∈ U₁`, `nat::Eval` has
+the numerals and the arithmetic, and `nat::natrec_mem` — added for this — has
+the recursor's typing.
+
+| # | site | what it supplies |
+|---|---|---|
+| 1 | `direct.rs:165` `enum Clause` | a `Nat` variant |
+| 2 | `direct.rs:191` `fn arity` | `(0, 0, 2)` — no parameters, no indices, two constructors |
+| 3 | `direct.rs:204` `clause_for` | `"Nat"` |
+| 4 | `direct.rs:292` `former_bottom` | a **non-`[φ]` route**: the term `ω` and `Nat::omega_mem` raised to `⟦Sort 1⟧`, instead of `tower.cond_in_u0` |
+| 5 | `direct.rs:418` `ctor_bottom` | a **non-`•` route**: `Nat.zero ↦ 0` with `Nat::zero_mem`, `Nat.succ ↦ succ(x)` with `Nat::succ_mem_at` |
+| 6 | `recursor.rs:157` | `Some(Clause::Nat) => rec_nat::ensure(…)` |
+| 7 | new `mini/src/rec_nat.rs` | the bottom of `Nat.rec`'s nest — at `u₁ = 0`, `•` and `induction_scheme` at `φ(z) := • ∈ app(C,z)`; at `u₁ ≥ 1`, `natrec(c,g,t)` and `nat::natrec_mem` |
+| 8 | new `mini/src/iota_nat.rs` | `selects`/`fire`, the sibling of `iota_dep` and `iota_model`, out of `Nat::iota_zero`/`iota_succ` |
+| 9 | `interp.rs:132`/`154` | a `NatClause` cached beside `direct`/`acc`, lazy with a failure flag (`acc.rs:43–55`) |
+| 10 | `kernel.rs:2478` | `⟦natLit n⟧ := Eval::numeral(n)` with `Eval::mem`, replacing `nat_unfold`'s `n`-deep recursion |
+| 11 | `kernel.rs:1650` | `whnf`'s `NatLit` arm now **owes a `step!`** — see below |
+| 12 | `convert.rs` `> 10` | lift, and state the effect on the exit-2 population |
+
+**The constructors and the recursor do not have to be reified by hand.**
+`Checker::lam_nest` (`kernel.rs:2920`) walks the Lean `Π` binders and builds the
+function set from whatever the bottom returns, which is how `Acc.intro` gets
+`⟦Acc.intro⟧ ∈ dprod₀(…)`. So row 5 owes `⊢ succ(x) ∈ ω` under the scope
+`x ∈ ω` and nothing about function spaces, and row 7 owes
+`⊢ natrec(c,g,t) ∈ app(C,t)` and nothing about the four-deep nest above it.
+
+**`Eval::succ` is already row 11's evidence.** `whnf`'s `NatLit` arm currently
+emits no `step!` at all, on the stated ground that `⟦natLit n⟧` *is* the
+interpretation of `Nat.succ (natLit (n−1))` so the unfolding is reflexivity at
+the term level. Under the binary clause that ceases to be true and the arm owes
+an equation — and the equation is `Eval::succ(n−1)`,
+`⊢ succ(num(n−1)) = num(n)`, read backwards, composed with `⟦Nat.succ⟧`'s own
+β-rule from `Interp::beta_spine`. Nothing new is needed in `derived/`; the cost
+is Θ(trailing ones of `n−1`), `O(1)` on the common case.
 
 The name-keyed table is the same trust surface Lean's kernel has, with one
 difference argued in §8.
