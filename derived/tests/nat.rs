@@ -778,3 +778,70 @@ fn the_comparison_certificate_scales_with_bit_length_and_not_with_value() {
     );
     let _ = &nat;
 }
+
+/// **Peeling one `succ` off a numeral costs bits, never the value** — the
+/// measurement `whnf`'s literal arm rests on.
+///
+/// A checker that reduces `natLit n` to `Nat.succ (natLit (n−1))` owes the
+/// equation `num(n) = succ(num(n−1))`, and [`Eval::succ`] is it. What makes
+/// that a *step* rather than a program is that its cost is Θ(trailing ones of
+/// `n`) — so the sharp form is the one below: `succ` at an **even** numeral
+/// costs the same at 16, 32, 64 and 100 bits, because no digit past the last
+/// one is touched. No implementation whose cost depends on the value can
+/// satisfy that, and a unary one could not even be run at `2¹⁰⁰`.
+///
+/// The all-ones row is the other end: every digit carries, and the cost rises
+/// with the bit length and not faster. Both rows are needed — the even row
+/// alone would pass under an implementation that had no recursion at all, and
+/// the odd row alone would pass under a quadratic one.
+///
+/// **Measured: 2 inferences flat on the even row, and `13·bits + 1` on the
+/// all-ones row** (209/417/833 at 16/32/64). The even row is the sharp one and
+/// it is sharp against more than unary: a `succ` routed through `add(n, 1)`
+/// would be Θ(bits) at *every* argument and would fail it, while still looking
+/// perfectly fast next to a successor tower. That is the shape a silent
+/// fallback takes once the obvious one is ruled out.
+#[test]
+fn peeling_a_successor_costs_bits_and_not_the_value() {
+    let mut env = Env::new();
+    let (nat, add, bin) = full(&mut env);
+
+    let cost = |env: &mut Env, n: u128| -> u64 {
+        let mut ev = Eval::new(&nat, &add, &bin);
+        let thm = ev.succ(env, n).expect("succ at a numeral");
+        assert!(thm.hyps().is_empty());
+        assert_eq!(
+            *thm.concl(),
+            Formula::eq(nat.succ_of(ev.numeral(n)), ev.numeral(n + 1)),
+            "succ did not conclude `succ(num n) = num(n+1)`"
+        );
+        ev.inferences()
+    };
+
+    // Even, at four widths. The numerals differ — 17, 33, 65 and 101 nodes —
+    // so this is not four runs on one term.
+    let even: Vec<u64> = [16u32, 32, 64, 100].iter().map(|b| cost(&mut env, 1u128 << b)).collect();
+    assert_eq!(
+        even.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        1,
+        "succ on an even numeral is not constant across widths: {even:?}"
+    );
+    assert!(even[0] > 0, "succ cost nothing at all, which cannot be a certificate");
+
+    // All ones: every digit carries. Linear in the width, checked on second
+    // differences so that a quadratic term cannot hide — the same sharp form
+    // `the_certificate_scales_with_bit_length_and_not_with_value` uses.
+    let ones = |b: u32| -> u128 { (1u128 << b) - 1 };
+    let (at16, at32, at64) =
+        (cost(&mut env, ones(16)), cost(&mut env, ones(32)), cost(&mut env, ones(64)));
+    let per_bit_low = (at32 - at16) as i64 / 16;
+    let per_bit_high = (at64 - at32) as i64 / 32;
+    assert_eq!(
+        per_bit_low, per_bit_high,
+        "carrying costs more per bit at 64 bits than at 32: {at16}/{at32}/{at64}"
+    );
+    assert!(at64 > even[0], "the all-ones case should cost more than the even one");
+
+    eprintln!("MEASURED  succ at an even numeral (2^16 … 2^100) = {} inferences, flat", even[0]);
+    eprintln!("MEASURED  succ at all-ones 16/32/64 bits = {at16}/{at32}/{at64} inferences");
+}
