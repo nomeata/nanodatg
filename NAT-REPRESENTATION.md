@@ -114,10 +114,38 @@ Three things this settles.
   again before any typechecking. The literal guard was hiding it.
 * **The wall after the load gate is `kernel::nat_unfold`'s own copy of the
   guard**, and it is reached while checking a *type*, not a value:
-  `UInt32.ofBitVec`, whose blocking literal is the `32` in `BitVec 32`. Raising
-  the kernel cap to 100 moves the wall one declaration on, to
-  `Nat.isValidChar` and its `55296`. So the two guards are not redundant and
-  the load-time one is not the last thing to remove.
+  `UInt32.ofBitVec`, whose blocking literal is the `32` in `BitVec 32`. So the
+  two guards are not redundant and the load-time one is not the last thing to
+  remove.
+
+#### 1.3.2 Climbing the kernel cap — where unary actually dies
+
+The same run with `kernel::nat_unfold`'s cap raised, each in
+`( ulimit -v 4194304; timeout … )`. This is the measurement that says what the
+binary literal clause is buying, and it does not say what one expects:
+
+| kernel cap | first literal it must expand | outcome |
+|---|---|---|
+| 10 (shipped) | — | `reject UInt32.ofBitVec`, ~1 s |
+| 11 | 32 | `reject UInt32.ofBitVec`, ~1 s |
+| 100 | 55296 | `reject Nat.isValidChar`, ~1 s |
+| 1000 | 55296 | `reject Nat.isValidChar`, ~1 s |
+| 100000 | 55296 | **no verdict in 600 s**; peak RSS 166 MB |
+
+**Unary is a cost wall long before it is a memory wall.** A 55296-deep
+`Nat.succ` tower did not come near the 4 GB cap — 166 MB, two orders of
+magnitude under it — and still could not be typed in ten minutes, because
+`infer_type` on `natLit n` recurses `n` levels and each level is a full
+interpretation. The 3 000 s / 14.8 GB observation recorded elsewhere for this
+file is about the *rest* of it; the literal path on its own dies of time.
+
+That matters for how step 3 is briefed. `whnf` peeling one `succ` off a
+literal is cheap and always will be; what is not survivable is anything that
+peels `n` of them, and at `n = 55296` — a *small* literal by this file's
+standards, four orders of magnitude under `UInt32.size` — the failure is
+already total. So the accelerated operations are not an optimisation over the
+successor path, they are the only path, and a fast path that silently falls
+back to `succ` is indistinguishable from having no clause at all.
 
 **And `maxNatLit` is wrong in that row, which is a defect and not a rounding.**
 The file's largest literal is `UInt64.size` = 2⁶⁴ = `18446744073709551616`;
