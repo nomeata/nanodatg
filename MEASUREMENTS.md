@@ -5641,6 +5641,11 @@ the whole reason `47b262b` says counters decide.
 **71.18 T saved, 66.0 %**, and 47.1 min → 16.4 min. Both runs ended
 `all checks passed`.
 
+Re-run after rebasing onto `0b7fa3b`, which is three arena-expression commits
+further on and is therefore *not* comparable with the pair above: **39.29 T,
+1 142 s (19.0 min)**, `all checks passed`, no step SKIPped. Quote that one for
+"how long is `ci/check.sh`" and the pair above for "what did the matrix cost".
+
 **The coverage is the same set of tests, and that is checked rather than
 argued.** `Running …` on stderr and libtest's results on stdout are both ordered
 and 1:1, so they zip into an inventory of (test target, test name, outcome). The
