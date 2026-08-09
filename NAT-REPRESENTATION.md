@@ -84,6 +84,51 @@ not "no literals". The 4 GB cap was never approached.
 So the honest statement of where the project is: **the nat-literal work is not a
 performance item, it is the load-time gate that keeps `init-prelude` out.**
 
+#### 1.3.1 The rows the aborted conversion was hiding — measured
+
+The paragraph above says the facts row is not usable evidence. Here is the row
+that *is*, obtained by lifting `convert.rs`'s guard (and only that guard —
+`kernel::nat_unfold`'s second line of defence was left at 10, so no literal can
+expand and no unary blow-up is reachable):
+
+```
+$ ( ulimit -v 4194304; timeout 600 ./target/release/mini --no-modelgen \
+      --nested --mutual --verbose good/init-prelude.ndjson )
+init-prelude.ndjson	reject	UInt32
+The mini kernel does not support nat literals larger than 10
+… while checking type of constructor UInt32.ofBitVec
+facts	declars=2059	natLits=35	maxNatLit=18446744073709551615	strLits=25	scheduledPairs=3861
+clauses	interpreted=212737	remaining=243	… natLit=3103	strLit=32
+```
+
+Three things this settles.
+
+* **The file loads.** `2059` declarations and `3861` scheduled pairs reach the
+  checker, against `declars=0` unfiltered and the `1459`/`3078` that
+  `scripts/nat-reach.py --write` bought by *deleting* the literal-bearing
+  closure. Nothing else in `convert::load` refuses the whole file.
+* **`--nested` and `--mutual` are both needed to get there, and nesting is a
+  load-time decline, not an interpretation gap.** With the literal guard lifted
+  and those flags off, the next refusal is
+  `declined: Nested inductive Lean.Syntax not supported` at `convert.rs:489` —
+  again before any typechecking. The literal guard was hiding it.
+* **The wall after the load gate is `kernel::nat_unfold`'s own copy of the
+  guard**, and it is reached while checking a *type*, not a value:
+  `UInt32.ofBitVec`, whose blocking literal is the `32` in `BitVec 32`. Raising
+  the kernel cap to 100 moves the wall one declaration on, to
+  `Nat.isValidChar` and its `55296`. So the two guards are not redundant and
+  the load-time one is not the last thing to remove.
+
+**And `maxNatLit` is wrong in that row, which is a defect and not a rounding.**
+The file's largest literal is `UInt64.size` = 2⁶⁴ = `18446744073709551616`;
+`facts` reports `18446744073709551615`. `mini`'s `Expr::NatLit` is a `u64` and
+both parse sites spelled the conversion `.parse().unwrap_or(u64::MAX)`, so 2⁶⁴
+— **the value this whole exercise is named after** — silently became 2⁶⁴ − 1.
+It was harmless only because every value above ten is declined on the next
+line. `convert::literal_value` now declines it by name instead, ahead of the
+guard being lifted and independently of it; §1.4's table is otherwise
+unchanged and its `2⁶⁴` entry is the correct one.
+
 ### 1.4 What `init-prelude` actually contains — measured statically
 
 35 literals; the distribution over `init-prelude` ∪ `grind-ring-5`:

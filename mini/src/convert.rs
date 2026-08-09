@@ -710,7 +710,7 @@ impl Cv {
                 // anything that does not fit is above 10 and declined anyway.
                 let s = crate::arena::read_nat_lit_decimal(ptr)
                     .ok_or_else(|| declined("nat literal not found in the arena"))?;
-                let n: u64 = s.parse().unwrap_or(u64::MAX);
+                let n = literal_value(&s)?;
                 facts.nat_lits += 1;
                 facts.max_nat_lit = facts.max_nat_lit.max(n);
                 if n > 10 {
@@ -733,9 +733,56 @@ impl Cv {
     }
 }
 
+/// A nat literal's value, as a `u64`, or a **decline that names the overflow**.
+///
+/// `mini`'s [`Expr::NatLit`](crate::expr::Expr::NatLit) is a `u64` and the
+/// arena's is arbitrary precision, so the conversion is partial and the
+/// partiality is not hypothetical: `init-prelude` declares `UInt64.size` as
+/// `18446744073709551616` = 2⁶⁴, which is the **first value past the type** —
+/// and `.parse().unwrap_or(u64::MAX)`, the spelling this replaces, turned it
+/// into `2⁶⁴ − 1`.
+///
+/// That was harmless only because every value above ten is declined two lines
+/// below, so the wrong number was never used for anything but the
+/// `facts maxNatLit` column — where it was already visibly wrong, reporting
+/// `18446744073709551615` for a file whose largest literal is
+/// `18446744073709551616`. The moment the `> 10` guard is lifted for the
+/// binary literal clause the clamp becomes silent value corruption at exactly
+/// the value the whole exercise is named after, so it is closed here, ahead of
+/// that change and independently of it.
+///
+/// The decline is its own reason and not the `> 10` one, because the two are
+/// different facts about the export and a single message would make the
+/// measurement above unreadable a second time.
+fn literal_value(s: &str) -> LR<u64> {
+    s.parse().map_err(|_| {
+        declined(format!("nat literal {s} does not fit in the 64 bits mini's Expr::NatLit has"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **2⁶⁴ is a decline, not `2⁶⁴ − 1`.** The boundary is pinned from both
+    /// sides — `u64::MAX` is the largest value that fits and must survive
+    /// intact — because a clamp passes any test that only looks at the value
+    /// *below* the boundary, and because the two neighbours differ by one and
+    /// the wrong answer is exactly the smaller of them.
+    #[test]
+    fn a_literal_past_sixty_four_bits_declines_rather_than_clamping() {
+        assert_eq!(literal_value("0").ok(), Some(0));
+        assert_eq!(literal_value("11").ok(), Some(11));
+        assert_eq!(literal_value("18446744073709551615").ok(), Some(u64::MAX));
+        // 2⁶⁴ — `UInt64.size` in `init-prelude`, and the first value past the type.
+        assert!(
+            literal_value("18446744073709551616").is_err(),
+            "2⁶⁴ was accepted, which can only be by clamping it to 2⁶⁴ − 1"
+        );
+        // …and the reason says which fact about the export it is.
+        let e = format!("{:?}", literal_value("18446744073709551616").unwrap_err());
+        assert!(e.contains("64 bits"), "the decline does not name the overflow: {e}");
+    }
 
     /// **The whitelist is three names, matched component by component.**
     ///
