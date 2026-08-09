@@ -2278,7 +2278,7 @@ pub fn b0_install_shared(mut env: Env, x_canon: FreeVar, hole_vars: Vec<FreeVar>
             pi_exts: HashMap::new(),
             pi_infos: HashMap::new(),
             pi_by_dprod: HashMap::new(),
-            pi_bridges: HashMap::new(),
+            dprod_fs: None,
             prop_infos: HashMap::new(),
             prop_by_chi: HashMap::new(),
             undet_syms: HashMap::new(),
