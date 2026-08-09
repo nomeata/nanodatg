@@ -335,7 +335,12 @@ copy, all parameters zero. `--default 0,1` gives two copies of every such
 declaration, and closes over each.
 
 The instruction chose `[0]` "to avoid duplication", and the measurement agrees:
-on `init-prelude`, 601 of 1777 groups are demanded by nothing.
+on `init-prelude`, 601 of 1777 groups are demanded by nothing. **That phrase is
+carrying more than it looks like**: the default *propagates*, so `[0]` — which
+coincides with the instantiation real uses overwhelmingly already demand — adds
+almost no copies, while `[1]` cascades. On Mathlib the same file comes out at
+776,723 declarations at `[0]` and **1,004,445 at `[1]`** (§9.13.2). The default
+is a size decision as much as a completeness one.
 `checker/src/instantiations.rs`'s `DEFAULT_LEVELS` is `[0, 1]` for a reason that
 does not apply here — there the default decides *how a declaration is checked*,
 and `Sort 0` and `Sort 1` are two different checking problems, so both are
@@ -1964,3 +1969,181 @@ is where the allocator happened to be.
 Wall times are a comment, as always: they run 727/690 and 816/698 across a pair
 whose instruction counts differ by under 2 %, which is the standing rule
 demonstrating itself.
+
+## 9.13 Is the speedup proof irrelevance? — the default at `[1]`, measured
+
+**The hypothesis.** §2.2 gives a declaration nothing demands the instantiation
+`--default`, which is `[0]`; `Sort 0` is `Prop`, where a checker gets proof
+irrelevance for free. On Mathlib **164,481 of 654,504 groups — a quarter of the
+file — take that default**, so the worry that §9.5's checker ratio measures the
+*default* rather than monomorphization is not a remote one.
+
+**The verdict: it is not proof irrelevance, and the mechanism is measured rather
+than inferred.** At `--default 1` the checker ratio does fall, 2.345× → 1.763×.
+But the fall decomposes exactly, and **90 % of it is duplication**:
+
+> the check's cost grows **1.3306×** from `[0]` to `[1]`, which is
+> **1.2932× more declarations × 1.0289× per declaration**.
+
+Per declaration — the quantity the hypothesis is actually about — **97.2 % of
+the speedup survives**: 2.7163× at `[0]` against 2.6399× at `[1]`. And a
+step-counting build shows the residual 2.9 % is not proof irrelevance either:
+the rule's share of all reduction steps is **lowest at `[0]`** of the three legs.
+
+### 9.13.1 The three legs, full Mathlib
+
+The flag needed no writing — `--default N[,N...]` is already `opts.defaults` in
+`Modelgen/Mono.lean`, defaulting to `#[0]`, exactly as §2.2 says. Both binaries
+were copied into the measuring worktree and used from there so that a concurrent
+rebuild could not swap them: `nanoda_pinned` sha256 `0b53a6b4…`,
+`monomorph_pinned` sha256 `c1a77023…`, both built from `8e2e45b`. Every run is
+`perf stat` around `time -f` in a subshell with `ulimit -v`; nothing waited for a
+quiet machine, only for memory.
+
+| run | declarations | **instructions** | cycles | wall | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `nanoda` on `mathlib.ndjson` | 670,630 | **22,841,246,641,227** | 12,423,568,349,388 | 2836.23 s | 10,710,220 KB |
+| `monomorph` mode A `--default 0` | — | **5,121,632,759,491** | 3,152,898,139,150 | 715.85 s | 20,331,576 KB |
+| `nanoda` on that output | 776,723 | **9,739,263,187,191** | 5,306,071,752,157 | 1200.00 s | 10,765,460 KB |
+| `monomorph` mode A `--default 1` | — | **5,595,240,159,261** | 3,781,879,599,290 | 855.14 s | 24,928,100 KB |
+| `nanoda` on that output | 1,004,445 | **12,959,095,865,251** | 7,179,812,419,247 | 1620.08 s | 13,314,724 KB |
+
+**The baseline was re-taken rather than reused, and it reproduced**:
+22,841,246,641,227 against the amortization triangle's 22,822,856,168,440 is
+**+0.081 %**, and peak RSS 10,710,220 against 10,715,200 KB is 0.05 %. The `[0]`
+check reproduced to **0.21 %** (9,739,263,187,191 against 9,759,549,740,309) and
+the `[0]` pass wrote a **byte-identical** output, 5,816,542,757 bytes, the same
+count to the digit as that section recorded. So the arena work since then did
+not move this workload, and the two series may be read against each other.
+
+| | `[0]` | `[1]` |
+| --- | ---: | ---: |
+| checker alone | **2.3453×** | **1.7626×** |
+| pass + check, against one direct check | **1.5370×** | **1.2310×** |
+| per declaration | **2.7163×** | **2.6399×** |
+
+**The amortization claim survives the change of default**: even at `[1]`, pass
+plus check is 18.554 T against 22.841 T direct, so monomorphizing still pays for
+itself on the first check.
+
+### 9.13.2 `[1]` is a bigger file, not the same file at another level
+
+This is the whole of the effect, and §2.2's one-line rationale — `[0]` "to avoid
+duplication" — turns out to be carrying far more weight than the sentence
+suggests. **The default propagates.** A defaulted group emitted at `σ = 0⃗`
+demands its dependencies at instantiations the file's real uses overwhelmingly
+already demand, so it adds no copies; at `σ = 1⃗` those demands are fresh and
+they cascade. Copies per group, same 654,504 groups:
+
+| copies | 1 | 2 | 3 | 4 | 5 | … | max |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| `[0]` | 612,744 | 21,342 | 9,840 | 3,933 | 2,808 | … | **118** |
+| `[1]` | 507,111 | 84,559 | 28,849 | 15,922 | 6,257 | … | **218** |
+
+**93.6 % of groups sit at one instantiation at `[0]`; 77.5 % at `[1]`**, and the
+tail nearly doubles — one group becomes 218 declarations. The output grows from
+5,816,542,757 to 7,754,476,064 bytes and from 776,723 to 1,004,445 declarations,
+and the pass's own peak from 20.3 to 24.9 GB.
+
+The prefixes show the same shape and show it is not a Mathlib-tail artefact:
+
+| | groups | carried | defaulted | out at `[0]` | out at `[1]` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `init-prelude` | 1777 | 22 | 601 | 2244 | **2496** (1.112×) |
+| 10 M prefix | 69,040 | 31 | **93** | 80,521 | **123,151** (1.529×) |
+| Mathlib | 654,504 | 31 | 164,481 | 776,723 | **1,004,445** (1.293×) |
+
+**Ninety-three defaulted groups inflate the 10 M output by 53 %** — which is
+also why the ladder could not have settled this question on its own: defaulting
+is a *tail* phenomenon (0.13 % of groups at 10 M against 25 % on the whole file),
+so the low rungs get the cascade without the population that causes it. The
+10 M rung disagrees with the full file on the sign of the per-declaration term —
+`[1]` is 4.3 % *cheaper* per declaration there, 2.9 % dearer here — and the full
+file is the one to quote.
+
+### 9.13.3 Both defaults are accepted; the recursor sets differ
+
+`recRegen` — recursors Lean's kernel minted differently from the export's own,
+§4.1 — moves with the default, as it must, since `Prop` is where K-likeness and
+large elimination are decided:
+
+| | `recRegen` at `[0]` | at `[1]` | replay rejected | `nanoda` |
+| --- | ---: | ---: | ---: | --- |
+| `init-prelude` | 32 of 128 | **51** | 0 / 0 | clean / clean |
+| 10 M prefix | 396 | **648** | 0 / 0 | clean / clean |
+| Mathlib | 2027 | **3090** | 0 / 0 | clean / clean |
+
+**No declaration is rejected at either default** — not by the pass's own replay
+(`rejected: 0`) and not by `nanoda`, which reports "no typechecker errors" on all
+five checks above. So the "well-typed only at level 0" hazard did not
+materialise on this corpus. That is a result and not an absence of one: it is
+what §4.1's *asking the kernel for the recursor* rather than substituting into
+the export's own is for, and `recRegen` rising from 2027 to 3090 is that
+machinery doing 1063 more pieces of work and getting them right.
+
+### 9.13.4 The rule itself, counted
+
+`checker/src/stepcount.rs` buckets every conversion step by rule and compiles to
+nothing without `--features stepcount`, so "is it proof irrelevance?" can be
+counted instead of inferred from a ratio. Full Mathlib, the same three inputs
+(`nanoda_sc`, sha256 `fd6c7120…`):
+
+| step kind | raw input | `[0]` output | `[1]` output | raw / `[0]` |
+| --- | ---: | ---: | ---: | ---: |
+| `def_eq` calls | 1,040,349,926 | 482,062,012 | 617,316,895 | 2.158 |
+| beta | 2,328,027,286 | 1,053,653,507 | 1,324,297,553 | 2.209 |
+| delta | 702,442,242 | 322,101,303 | 391,089,415 | 2.181 |
+| iota | 10,160,141 | 6,581,288 | 7,514,425 | 1.544 |
+| proj | 209,812,231 | 90,238,592 | 123,014,729 | 2.325 |
+| quot | 214,376 | 95,770 | 120,872 | 2.238 |
+| **proof irrelevance** | **9,749,769** | **4,147,593** | **5,819,562** | **2.351** |
+| **TOTAL reduction steps** | **3,268,819,206** | **1,480,726,743** | **1,857,046,976** | **2.208** |
+
+**Proof irrelevance falls by 2.351× against a 2.208× average — it is not an
+outlier, it is slightly ahead of the mean.** Its share of all reduction steps
+runs **0.2983 % → 0.2801 % → 0.3134 %** across raw, `[0]` and `[1]`: the `[0]`
+output, the one a quarter of which was moved into `Prop`, has the **lowest**
+share of the three. Per declaration the rule fires **5.34** times at `[0]` and
+**5.79** at `[1]` — *more* at level 1, the wrong sign for the hypothesis twice
+over.
+
+A rule firing in three steps per thousand cannot produce a factor of 2.2, and it
+does not become more frequent when the file is moved to `Prop`. What the table
+shows instead is that **every** conversion rule falls by about the same factor.
+That is consistent with the removal of level machinery — with no level variables
+there is nothing to substitute, no `max`/`imax` to normalise and no level
+unification inside `def_eq`, and `def_eq` calls fall 2.158× — but this section
+measured the *uniformity*, not that attribution, and the attribution is left as
+the reading it is.
+
+**`init-prelude` is the one place the hypothesis visibly happens, and it is
+worth quoting for scale**: proof irrelevance fires 7 times on the input, **41**
+at `[0]` and 9 at `[1]`. Directionally exactly as predicted — and 34 extra
+firings against **38,266 reduction steps saved**, three orders of magnitude too
+small to be the cause of anything.
+
+### 9.13.5 What the residual 2.9 % is not, and what was not measured
+
+The per-declaration term is `[1]` costing **1.0289×** what `[0]` costs. Two of
+the three candidate explanations are measured out: it is not proof irrelevance
+(§9.13.4, which moves the other way), and it is not conversion steps at all —
+`[1]` does **1848.8** reduction steps per declaration against `[0]`'s **1906.4**,
+i.e. *fewer*. So the extra instructions are outside the conversion checker, and
+the obvious remaining candidate is the 1.333× larger file and the larger
+environment over it. **That candidate is not measured here**, and the 2.9 % is
+booked as unattributed rather than assigned to it.
+
+Also not measured: mode B at either default (§4.2's checker does not exist);
+`--default 0,1`, which §2.2 notes is the reading `checker/src/instantiations.rs`
+takes and which would emit both copies; and any default above 1.
+
+**One incidental defect, pre-existing.** `mathlib-work/mathlib-A-new.ndjson`,
+the 5,816,574,517-byte mode A output written by the `modelgen`-writer variant,
+**does not check**: `nanoda` panics at `checker/src/tc.rs:416`, `declaration not
+found in infer_const, Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM`,
+exit 101. This is not new and not caused here — `mathlib-work/log-nanoda-full-new.txt`
+recorded the identical panic on 2026-08-08 at 266.89 s and 6,514,308 KB, against
+274.57 s and 6,512,492 KB reproducing it now. The `[0]` output measured above
+was regenerated by `monomorph_pinned` and is a **different file**, 31,760 bytes
+smaller and byte-identical to the amortization triangle's, which checks clean.
+**Any measurement resting on `mathlib-A-new.ndjson` should be re-taken.**

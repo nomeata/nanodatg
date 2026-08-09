@@ -5445,6 +5445,20 @@ conclusion survives — it pays for itself the *first* time, with room to spare 
 and the number that was being quoted for it does not. **The checker alone is
 2.34×, not 2.53×.**
 
+**Both figures are at `monomorph --default 0`, and the default is load-bearing —
+through duplication, not through `Prop`.** A quarter of Mathlib's groups are
+demanded by nothing and take that default (164,481 of 654,504), so the question
+of whether `Sort 0` was buying the checker proof irrelevance had to be settled
+rather than assumed. `MONOMORPH.md` §9.13 settles it against: at `--default 1`
+the checker ratio is **1.763×** and pass-plus-check **1.231×**, and the whole of
+the gap decomposes as **1.2932× more declarations × 1.0289× per declaration** —
+90 % duplication. **Per declaration 97.2 % of the speedup survives the change of
+level** (2.7163× against 2.6399×), and a step-counting build puts proof
+irrelevance at 0.2801 % of reduction steps on the `[0]` output against 0.2983 %
+on the input — *lower*, where the hypothesis needs it higher. So quote these
+numbers as "at the default", not as "at `Prop`"; what monomorphization removes
+is level machinery, uniformly across every conversion rule.
+
 ### Wall against instructions: they agree on direction, not on magnitude
 
 Three wall-derived answers to one question — 2.53× recorded, 2.28× from the very
