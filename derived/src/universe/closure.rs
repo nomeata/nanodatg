@@ -38,10 +38,12 @@
 //! Each of the three clause transfers is the same pointwise argument: if
 //! `y ∈ U(x)` and (say) `z ⊆ y`, then for each universe `u ∋ x` we have `y ∈ u`,
 //! and `C₂(u)` puts `z` in `u` as well; being in every such `u` *is* being in
-//! `U(x)`. So `is_universe(U(x))` — whose fourth clause is open, see
-//! [`crate::universe::inaccessibility_reduction`] — is never needed. That
-//! observation is [`least_universe_transfer`], and it is the half of the
-//! characteristic property every proof here uses over and over.
+//! `U(x)`. So `is_universe(U(x))` is never needed — and must not be used here:
+//! it is a theorem ([`crate::universe::least_universe_is_universe`]) whose
+//! `C₁`, `C₂` and `C₃` conjuncts are precisely the three transfers below, so an
+//! appeal to it in this file would be circular. That observation is
+//! [`least_universe_transfer`], and it is the half of the characteristic
+//! property every proof here uses over and over.
 //!
 //! [`universe_power_closed`] is the one lemma that needs two clauses at once and
 //! neither alone: `C₃` puts *some* `p ∈ u` above every subset of `y`, so
@@ -309,7 +311,9 @@ pub fn universe_sub_mem(env: &mut Env) -> DResult<Thm> {
 /// intersection by exactly the argument [`least_universe_closed_sub`] uses for
 /// `C₂`: if `y ∈ U(x)` and `z ∈ y`, then for each universe `u ∋ x` we have
 /// `y ∈ u`, and `C₁(u)` puts `z` in `u` as well; being in every such `u` is
-/// being in `U(x)`. `is_universe(U(x))` is not needed and is not available.
+/// being in `U(x)`. `is_universe(U(x))` is not needed, and could not be used:
+/// this theorem is its `C₁` conjunct
+/// ([`crate::universe::least_universe_is_universe`]).
 ///
 /// This is what countermodel A at the end of this file used to refute, and it
 /// is the fact everything downstream was missing: `w ∈ y ∈ U(x)` now gives
@@ -539,9 +543,10 @@ pub fn least_universe_closed_pow(
 /// This is `is_universe(U(x))` minus its first and last conjuncts: the
 /// predicate is `C₁ ∧ (C₂ ∧ (C₃ ∧ C₄))`, `C₁` (transitivity) is
 /// [`crate::universe::least_universe_transitive`] on its own, and what is
-/// proved here is `C₂ ∧ C₃`. See
-/// [`crate::universe::inaccessibility_reduction`] for what stands between this and the whole
-/// predicate.
+/// proved here is `C₂ ∧ C₃`. The remaining conjunct `C₄` is
+/// [`crate::universe::least_universe_inaccessible`], and the four together are
+/// [`crate::universe::least_universe_is_universe`] — which is why nothing in
+/// this file may appeal to the whole predicate.
 pub fn least_universe_closure(
     env: &mut Env,
     lu: FnSym,

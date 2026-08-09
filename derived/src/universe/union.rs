@@ -8,8 +8,9 @@
 //! ```
 //!
 //! The second carries **no hypothesis at all** — it is the usual transfer
-//! through the intersection, so `is_universe(U(c))` (whose inaccessibility
-//! clause is open) is never needed. Callers need none of the derivation below.
+//! through the intersection, so `is_universe(U(c))` is never needed. (It is a
+//! theorem, [`crate::universe::least_universe_is_universe`], but nothing here
+//! uses it.) Callers need none of the derivation below.
 //!
 //! # The argument
 //!
@@ -852,7 +853,7 @@ pub fn universe_union_closed(
 ///
 /// The transfer [`super::least_universe_pairing`] uses: a closure property that
 /// holds in *every* universe holds in their intersection, so
-/// `is_universe(U(c))` — whose inaccessibility clause is open — is not needed.
+/// `is_universe(U(c))` is not needed.
 ///
 /// `union_closed` must be [`universe_union_closed`] for this very `un`; a
 /// mismatched theorem is declined.

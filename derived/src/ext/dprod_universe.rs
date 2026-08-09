@@ -172,10 +172,11 @@ pub fn dprod_in_universe_of(
 /// [`crate::funspace::funspace_in_universe`], and it is reached the same way:
 /// the binary union that blocks the general form is not closed over but stepped
 /// around, by choosing the universe after the union has been formed. What it
-/// does *not* give is membership in a universe fixed in advance — going from
-/// `U(A ∪ ⋃img(A))` to a prescribed `U(c)` needs `U(c)` to be a universe, whose
-/// inaccessibility clause is open, and is in any case what
-/// [`dprod_in_universe_of`] already states directly.
+/// does *not* give is membership in a universe fixed in advance. Universehood
+/// is not what is missing — `is_universe(U(c))` is a theorem
+/// ([`crate::universe::least_universe_is_universe`]). What is missing is
+/// `(A ∪ ⋃img(A)) ∈ U(c)`, a **membership** condition on the prescribed `c`,
+/// and that is exactly what [`dprod_in_universe_of`] already states directly.
 ///
 /// `general` is **not** pinned before it is used, and cannot conveniently be:
 /// it is the two-binder statement above, and the only thing the [`Thm::mp`]

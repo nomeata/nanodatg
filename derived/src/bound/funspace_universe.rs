@@ -46,9 +46,14 @@ use super::least::least_universe_subset;
 /// [`crate::bound::funspace_mem_universe`], transferred through the intersection exactly as
 /// [`crate::bound::least_universe_closed`] is.
 ///
-/// `is_universe(U(c))` is not available, so this is not an instance: for each
-/// universe `u ∋ c` we have `x ∈ u` and `U(c) ⊆ u`, so [`crate::wtype::fs_mono`]
-/// re-aims `f` at `u` and [`crate::bound::funspace_mem_universe`] applies there.
+/// Reached by transfer, not by instantiation — though instantiation would now
+/// work: `is_universe(U(c))` is a theorem
+/// ([`crate::universe::least_universe_is_universe`]) and discharges
+/// [`crate::bound::funspace_mem_universe`]'s antecedent at `u := U(c)`. This
+/// derivation predates that and has not been re-derived against it. What it
+/// does: for each universe `u ∋ c` we have `x ∈ u` and `U(c) ⊆ u`, so
+/// [`crate::wtype::fs_mono`] re-aims `f` at `u` and
+/// [`crate::bound::funspace_mem_universe`] applies there.
 pub fn least_universe_funspace_mem(
     env: &mut Env,
     s: &Sums,

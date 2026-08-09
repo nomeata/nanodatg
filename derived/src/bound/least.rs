@@ -11,12 +11,15 @@
 //!
 //! # Why this is not [`super::closure`] at `u := U(c)`
 //!
-//! Because `is_universe(U(c))` is **not available**: its inaccessibility clause
-//! is open, see [`crate::universe::inaccessibility_reduction`]. So the closure
-//! property has to be transferred rather than instantiated, and the transfer is
-//! the one [`crate::universe::least_universe_pairing`] makes — a property that
-//! holds in *every* universe holds in `U(c)`, because `U(c) ⊆ u` for every
-//! universe `u ∋ c`.
+//! Not because it cannot be. `is_universe(U(c))` is a theorem
+//! ([`crate::universe::least_universe_is_universe`]), so [`super::closure`]'s
+//! antecedent discharges at `U(c)` and the instance is exactly the statement
+//! above. The derivation here transfers the closure property instead of
+//! instantiating it, and has not been re-derived against the theorem. The
+//! transfer is the one [`crate::universe::least_universe_pairing`] makes — a
+//! property that holds in *every* universe holds in `U(c)`, because `U(c) ⊆ u`
+//! for every universe `u ∋ c` — and it needs nothing about `U(c)` but that
+//! inclusion.
 //!
 //! The one wrinkle is that the hypothesis moves the wrong way:
 //! `f ∈ fs(B(a), U(c))` has to become `f ∈ fs(B(a), u)` before

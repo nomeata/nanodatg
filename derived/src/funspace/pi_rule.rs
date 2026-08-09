@@ -10,8 +10,10 @@
 //! ```
 //!
 //! The last two carry **no hypothesis about `U(c)`** — in particular not
-//! `is_universe(U(c))`, whose inaccessibility clause is still open. Callers
-//! need none of the derivations below.
+//! `is_universe(U(c))`, which is a theorem
+//! ([`crate::universe::least_universe_is_universe`]) but is not what the
+//! derivations below use: they run off the closure clauses, transferred through
+//! the intersection. Callers need none of the derivations below.
 //!
 //! # What changed
 //!

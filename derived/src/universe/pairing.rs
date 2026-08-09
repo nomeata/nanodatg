@@ -20,8 +20,10 @@
 //!
 //! This is the one closure property `C₄` really does deliver, and it delivers it
 //! for an *arbitrary* universe — so it transfers to `U(x)` through the
-//! intersection without `is_universe(U(x))` being available. `a` and `b` are
-//! members, so `{a,b} ⊆ u`, and `C₄` offers `{a,b} ≈ u` or `{a,b} ∈ u`;
+//! intersection, with no appeal to `is_universe(U(x))`. (That is a theorem,
+//! [`crate::universe::least_universe_is_universe`]; the transfer predates it
+//! and does not use it.) `a` and `b` are members, so `{a,b} ⊆ u`, and `C₄`
+//! offers `{a,b} ≈ u` or `{a,b} ∈ u`;
 //! [`upair_not_equinumerous`] kills the first disjunct, because a two-element
 //! set cannot be equinumerous with a set that has **three** distinct members.
 //! `∅`, `𝒫∅` and `𝒫𝒫∅` are three such members of every universe that has any
@@ -524,8 +526,8 @@ pub fn upair_not_equinumerous(env: &mut Env, up: FnSym, up_ax: &Thm) -> DResult<
 /// three distinct members [`universe_three_members`] supplies. This is the one
 /// closure property `C₄` really does deliver, and it needs no hypothesis about
 /// `u` beyond `is_universe(u)` — which is what lets it transfer to `U(x)`
-/// through the intersection ([`least_universe_pairing`]) without
-/// `is_universe(U(x))` ever being proved.
+/// through the intersection ([`least_universe_pairing`]) with no appeal to
+/// `is_universe(U(x))` at all.
 pub fn universe_pairing(
     env: &mut Env,
     up: FnSym,
@@ -611,10 +613,11 @@ pub fn universe_pairing(
 /// The transfer that [`crate::universe::least_universe_closed_sub`] and
 /// [`crate::universe::least_universe_closed_pow`] use, applied to [`universe_pairing`]: a
 /// closure property that holds in *every* universe holds in their
-/// intersection, so `is_universe(U(c))` — whose fourth (inaccessibility) clause
-/// is open — is not needed. This was once the only one of the four closure
-/// properties one would want for `U(c)` that was true; the other three are
-/// theorems now (`crate::universe`'s "Settled" list).
+/// intersection, so `is_universe(U(c))` is not needed. (It is a theorem,
+/// [`crate::universe::least_universe_is_universe`], but the transfer does not
+/// go through it.) This was once the only one of the four closure properties
+/// one would want for `U(c)` that was true; the other three are theorems now
+/// (`crate::universe`'s "Settled" list).
 pub fn least_universe_pairing(
     env: &mut Env,
     lu: FnSym,

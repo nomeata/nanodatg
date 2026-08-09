@@ -7,10 +7,10 @@
 //! ```
 //!
 //! One function, [`sum_in_universe`]. It carries **no hypothesis about
-//! `U(c)`** — in particular not `is_universe(U(c))`, whose inaccessibility
-//! clause is still open ([`crate::universe::inaccessibility_reduction`]) — and
-//! no side condition on the summands. Callers need none of the derivation
-//! below.
+//! `U(c)`** — in particular not `is_universe(U(c))`, which is a theorem
+//! ([`crate::universe::least_universe_is_universe`]) but is not what the
+//! derivation uses — and no side condition on the summands. Callers need none
+//! of the derivation below.
 //!
 //! # What it is made of
 //!

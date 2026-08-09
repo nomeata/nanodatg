@@ -48,14 +48,17 @@
 //!
 //! # Why this is not circular, and what it needs from the axiom
 //!
-//! `is_universe(U(c))` is **not** available — its inaccessibility clause is
-//! open, see [`crate::universe::inaccessibility_reduction`] — so
-//! [`least_universe_closed`] cannot be [`universe_closed`] at `u := U(c)`. It
-//! is the same transfer through the intersection that
-//! [`crate::universe::least_universe_pairing`] makes: a closure property that
-//! holds in *every* universe holds in `U(c)`, because `U(c) ⊆ u` for every
-//! universe `u ∋ c` and [`crate::wtype::fs_mono`] moves a function into the
-//! larger codomain.
+//! [`least_universe_closed`] is not derived as [`universe_closed`] at
+//! `u := U(c)`, although it could be: `is_universe(U(c))` is a theorem
+//! ([`crate::universe::least_universe_is_universe`]), so that instance's
+//! antecedent discharges. The derivation below takes the other route and has
+//! not been re-derived against the theorem. It is the same transfer through the
+//! intersection that [`crate::universe::least_universe_pairing`] makes: a
+//! closure property that holds in *every* universe holds in `U(c)`, because
+//! `U(c) ⊆ u` for every universe `u ∋ c` and [`crate::wtype::fs_mono`] moves a
+//! function into the larger codomain. That route needs nothing about `U(c)`
+//! beyond the inclusion, which is why the whole of this module was reachable
+//! while `C₄(U(c))` was still open.
 //!
 //! Three clauses of `ax_tarski` do the work. `C₁` (transitivity, added
 //! 2026-07-31) is what makes `f ⊆ u`: a member of `f ∈ fs(x,u)` is a pair
@@ -129,7 +132,7 @@
 //! | [`subset`] | 2 | `f ⊆ u` for `f ∈ fs(x,u)`, and [`funspace_pairs`] |
 //! | [`member`] | 3 | `f ∈ u` for the same `f` — the long one |
 //! | [`closure`] | 4 | [`fibres_in`], and `closed(A,B,u)` for an arbitrary universe |
-//! | [`least`] | 5 | the transfer of step 4 to `U(c)`, where `is_universe` is unavailable |
+//! | [`least`] | 5 | the transfer of step 4 to `U(c)`, through the intersection |
 //! | [`rules`] | 6 | [`At`], and the three W-type rules with the bound antecedent gone |
 //! | [`funspace_universe`] | 7 | `f ∈ U(c)`, and `fs(a,b) ⊆ U(c)` — note the `⊆` |
 //! | [`chain`] | — | [`Bound`], the whole chain assembled once |

@@ -44,8 +44,11 @@
 //!                  → closed(A,B,U(c)))       [crate::bound::least_universe_closed]
 //! ```
 //!
-//! the second by transfer through the intersection, since `is_universe(U(c))`
-//! is not available. So the antecedent below is **discharged at `U(c)`**, and
+//! the second by transfer through the intersection rather than by instantiating
+//! the first at `u := U(c)` — the transfer needs nothing about `U(c)` beyond
+//! `U(c) ⊆ u`. (`is_universe(U(c))` is a theorem,
+//! [`crate::universe::least_universe_is_universe`]; [`crate::bound`] just does
+//! not go through it.) So the antecedent below is **discharged at `U(c)`**, and
 //! [`crate::bound::sup_mem_at`], [`crate::bound::w_inversion_at`] and
 //! [`crate::bound::w_rect_at`] are W1, W3 and structural induction carrying
 //! only the typing conditions on `A` and `B`.

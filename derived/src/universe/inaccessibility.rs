@@ -214,8 +214,9 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResu
 ///
 /// A one-line corollary: [`crate::universe::mem_least_universe`] at the term `U(x)`. What it
 /// does *not* say is that the tower is strictly increasing in universe-hood —
-/// that needs `is_universe(U(x))`, whose fourth (inaccessibility) clause is
-/// open (see [`inaccessibility_reduction`]).
+/// that needs `is_universe(U(x))`, which is [`least_universe_is_universe`],
+/// proved separately below. The two together do make `x ∈ U(x) ∈ U(U(x)) ∈ ⋯` a
+/// tower of universes; this corollary on its own does not.
 pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);

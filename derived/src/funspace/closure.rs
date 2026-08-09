@@ -1,4 +1,4 @@
-//! Closure properties of `U(x)`, from the two clauses that *are* proved for it.
+//! Closure properties of `U(x)`, from the clauses `C₂` and `C₃` on their own.
 //!
 //! # Interface
 //!
@@ -12,12 +12,15 @@
 //! # Why these are re-derived here
 //!
 //! [`crate::universe::universe_power_closed`] proves the same thing from
-//! `is_universe(u)`, which is **not available for `U(x)`** — its fourth clause
-//! is open, see [`crate::universe::inaccessibility_reduction`]. What *is*
-//! available is `C₂(U(x))` and `C₃(U(x))` separately
-//! ([`crate::universe::least_universe_closed_sub`] and
-//! [`crate::universe::least_universe_closed_pow`]), and those two are all the
-//! argument ever used, so it is rerun against them.
+//! `is_universe(u)`, and that form *can* now be instantiated at `U(x)`:
+//! `is_universe(U(x))` is a theorem
+//! ([`crate::universe::least_universe_is_universe`]). These two are stated at
+//! the clause level anyway — they take `C₂` and `C₃` as separate hypotheses at
+//! whatever term the caller has, which is what
+//! [`crate::universe::least_universe_closed_sub`] and
+//! [`crate::universe::least_universe_closed_pow`] supply — and those two
+//! clauses are all the argument ever used, so it is rerun against them.
+//! Neither entry has been re-derived against the whole predicate.
 //!
 //! Neither clause suffices alone for [`pow_closed`]: `C₃` puts *some* `p ∈ u`
 //! above every subset of `y`, so `𝒫y ⊆ p`; `C₂` then pulls `𝒫y`, a subset of the
