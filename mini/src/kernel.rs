@@ -2641,10 +2641,15 @@ impl<'e, 'i> Checker<'e, 'i> {
             // let an absent one through", for one reason that has since been
             // removed at its source: `axiom A : Prop`, `def id : A → A` was a
             // codomain whose membership mini did not have. Mini now **declines
-            // any export that declares an axiom of its own**
-            // (`crate::convert::is_standard_axiom`), so that codomain cannot
-            // reach this clause from a file at all, and the strong form is
-            // back. `⟦A⟧ ∈ U₀` for a *declared* `A` was briefly derived instead
+            // any export that declares an axiom of its own and refers to it**
+            // (`crate::convert::is_standard_axiom`,
+            // `crate::unused_axiom`), so that codomain cannot reach this clause
+            // from a file at all, and the strong form is back. The narrowing to
+            // *referred to* costs nothing here and the example above is why:
+            // `def id : A → A` **is** a reference to `A`, so the very shape
+            // that could reach this clause is the shape that still declines.
+            //
+            // `⟦A⟧ ∈ U₀` for a *declared* `A` was briefly derived instead
             // (`Interp::opaque_in_sort`, `cc0f898`), which bought the same
             // absence at the price of narrowing the model; that construction
             // is gone and this guard did not follow it.

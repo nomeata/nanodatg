@@ -31,9 +31,17 @@
 //! | `3` | blocked — `--block` only, see below | neither |
 //! | `4` | accepted, and something is uncertified **or untranslated** | certification |
 //!
+//! **A third column, and it is deliberately not an exit code.**
+//! `ignored axioms:` names the non-standard axioms the file declares that
+//! *nothing in it refers to* — see [`mini::unused_axiom`]. They are on the line
+//! because a declaration with no scheduled pair is otherwise invisible, and off
+//! the exit code because they are not debt: nothing rests on them, so there is
+//! no claim to be short of.
+//!
 //! `0`–`2` are `Main.lean`'s and mean exactly what they do there, and `2`'s
 //! population is the arena's contract — two corpus exports declaring a
-//! non-standard axiom, plus mutual inductives at the parser. **A declaration
+//! non-standard axiom **their own declarations use**, plus mutual inductives at
+//! the parser. **A declaration
 //! mini could not translate does not go there**; it is a `4`, because the file
 //! was genuinely accepted and what is untrue is only the claim that all of it
 //! was translated.
@@ -127,7 +135,14 @@ fn main() {
             // first, because it is the wider statement: it says a piece of the
             // file has no image at all, where `uncertified:` says an image
             // exists and a theorem about it does not.
-            let cols: String = [notrans.column(), unc.column()]
+            // `ignored axioms:` last, and it is the only one of the three that
+            // is not debt: it says the file declares a symbol no evidence
+            // exists for and that **nothing in the file rests on it**. It is
+            // on the line for `#64`'s reason — a declaration with no scheduled
+            // pair is otherwise invisible — and off the exit code for the
+            // reason `mini::ledger::Ledger::ignored_axioms` gives.
+            let ignored = out.ledger.as_ref().and_then(mini::ledger::Ledger::ignored_column);
+            let cols: String = [notrans.column(), unc.column(), ignored]
                 .into_iter()
                 .flatten()
                 .map(|c| format!("\t{c}"))

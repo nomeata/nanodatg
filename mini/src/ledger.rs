@@ -520,6 +520,32 @@ pub struct Ledger {
     /// is something mini knowingly did not translate, in a file it accepted,
     /// and it reaches the verdict line and the exit code on its own.
     pub untranslated: Untranslated,
+    /// **Non-standard axioms this run ignored** — declared by the file,
+    /// referred to by nothing in it, and therefore not walked at all: no
+    /// translation, no `(declaration, σ)` pair, no decline.
+    /// [`crate::unused_axiom`] is the rule and the argument for it.
+    ///
+    /// # Why it is here rather than nowhere
+    ///
+    /// An ignored declaration is the exact shape of absence `#64` cost this
+    /// project a release to notice: *a declined declaration with no scheduled
+    /// pair is invisible*. Every counter above is indexed by a pair, and this
+    /// one has none by construction, so without a list of its own the file
+    /// would read `accept … ` with nothing whatever to say that it contains a
+    /// symbol no evidence exists for. It is **named**, not merely counted, for
+    /// the same reason [`Untranslated::by_reason`] is.
+    ///
+    /// # Why it is not in [`Uncertified`] or [`Untranslated`]
+    ///
+    /// Neither of those is a list of things mini could not do; both are lists
+    /// of **obligations mini owes**. `Uncertified` is what the ledger asked for
+    /// and did not get, `Untranslated` is what the boundary recorded a refusal
+    /// for, and an entry in either is debt against a claim some other
+    /// declaration rests on. An unused axiom is not debt: nothing rests on it,
+    /// so there is no claim to be short of. Folding it in would make a run that
+    /// owes nothing exit 4, which is the opposite of the decision — and would
+    /// blunt the two counters that do mean debt.
+    pub ignored_axioms: Vec<String>,
     /// **The first blocker**, when the run was armed. `Some` means the run
     /// stopped here and the counters above are partial by design.
     pub first_blocker: Option<crate::blocker::Blocker>,
@@ -973,7 +999,23 @@ impl Ledger {
         for (k, v) in &self.blocked {
             s.push_str(&format!("\t{k}={v}"));
         }
+        // **Counted and named**, and on the row rather than only in a column,
+        // because the column is a summary and this is the whole population.
+        // See [`Ledger::ignored_axioms`].
+        s.push_str(&format!("\tignoredAxioms={}", self.ignored_axioms.len()));
+        for n in &self.ignored_axioms {
+            s.push_str(&format!("\tignored:{n}=1"));
+        }
         s
+    }
+
+    /// The verdict line's column for [`Ledger::ignored_axioms`], or `None` when
+    /// there is nothing to say. Named, not just counted: the point of the
+    /// column is that a reader of an `accept` line sees *which* symbol the file
+    /// carries no evidence for.
+    pub fn ignored_column(&self) -> Option<String> {
+        (!self.ignored_axioms.is_empty())
+            .then(|| format!("ignored axioms: {}", self.ignored_axioms.join(", ")))
     }
 
     /// The evidence axis, as its own row: what was derived, and what the rest
@@ -1398,6 +1440,17 @@ mod tests {
                 // An attribution of the three above.
                 by_reason: _,
             },
+            // ── visible, and deliberately not debt ───────────────────────
+            // A non-standard axiom nothing in the file refers to. Not in the
+            // set, and the reason is the whole of the decision behind it: an
+            // entry in `Uncertified` or `Untranslated` is an obligation some
+            // other declaration rests on, and nothing rests on this one — so
+            // there is no claim to be short of and nothing for exit 4 to be
+            // about. It gets a list, a `ledger` row and a verdict column so
+            // that it is *visible* without being *owed*.
+            // [`crate::unused_axiom`] argues it; `Ledger::ignored_axioms`
+            // says why a list rather than a count.
+            ignored_axioms: _,
             // ── `--block`'s own output; partial by design ────────────────
             first_blocker: _,
             // ── an instrument, and not on either axis ────────────────────

@@ -358,8 +358,11 @@ fn tutorial_has_no_untranslated_records() {
         // **Two exports produce no dump at all**, and that is an *arena
         // decline* — a verdict about the file, exit 2 — rather than anything
         // this section is about: `031_letTypeDep` and `032_letRed` declare a
-        // non-standard axiom, so mini refuses the file before any store
-        // exists. `tutorial.rs`'s `DECLINED_NONSTANDARD_AXIOM` names both; they
+        // non-standard axiom **their own declarations refer to**, so mini
+        // refuses the file before any store exists. (An axiom nothing refers
+        // to is ignored instead — `mini::unused_axiom` — and such a file gets
+        // a dump like any other.) `tutorial.rs`'s
+        // `DECLINED_NONSTANDARD_AXIOM` names both; they
         // are counted here rather than skipped by name, so that a *third*
         // export losing its dump fails this test instead of passing quietly.
         if !out.contains("── untranslated") {

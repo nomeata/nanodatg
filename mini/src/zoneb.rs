@@ -50,7 +50,9 @@
 //! 1. **The arena decline.** [`crate::run::Verdict::Declined`], `mini` **exit
 //!    2**, the kernel arena's code for an unsupported *feature*, at *file*
 //!    level. Two corpus exports take it (`031`, `032`, each declaring a
-//!    non-standard axiom) and mutual inductives take it at the parser. **That
+//!    non-standard axiom **their own declarations refer to** — one nothing
+//!    refers to is ignored instead, `crate::unused_axiom`) and mutual
+//!    inductives take it at the parser. **That
 //!    set is the arena's contract and must not grow**; nothing in this module
 //!    can put a file into it.
 //! 2. **No translation, recorded.** `IndApparatus::untranslated`,

@@ -111,4 +111,5 @@ pub mod recursor;
 pub mod run;
 pub mod scope;
 pub mod unit_like;
+pub mod unused_axiom;
 pub mod zoneb;

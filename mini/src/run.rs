@@ -28,6 +28,14 @@
 //! kernel has accepted the file, and the comment at the site says why the
 //! order is load-bearing.
 //!
+//! **The second cause needs the axiom to be *used*.** A non-standard axiom
+//! nothing in the file refers to is ignored — kernel-checked like any other
+//! declaration, then dropped before the interpretation pass, so it is not
+//! translated and schedules no pair — and named in
+//! [`crate::ledger::Ledger::ignored_axioms`] so the skip is visible.
+//! [`crate::unused_axiom`] is the rule, the argument that it is a narrowing
+//! rather than a reversal, and the enumeration of what "refers to" covers.
+//!
 //! [`Options::block`] adds the blocking mode of MINI-DESIGN.md §0.6. It is not
 //! a verdict either: a blocked file was *accepted*, and the report says which
 //! `(declaration, σ)` the evidence axis stopped at.
@@ -155,7 +163,7 @@ impl Outcome {
 pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::default()) }
 
 pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
-    let loaded = match convert::load_with(
+    let mut loaded = match convert::load_with(
         path,
         convert::LoadOptions {
             mutual: opts.mutual,
@@ -178,6 +186,13 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     };
     let census = Census::of(&loaded.decls);
     let mut facts = loaded.facts.clone();
+    // **Which of the file's non-standard axioms anything in the file refers
+    // to** — over the *whole* file, which is why it is computed here and not
+    // as the declarations stream past: an axiom unused at the point of
+    // declaration may be used four hundred declarations later.
+    // [`crate::unused_axiom`] states what "refers to" covers and why an unused
+    // one may be ignored.
+    let axioms = crate::unused_axiom::classify(&loaded.decls, |n| !convert::is_standard_axiom(n));
     let mut env = Environment::empty();
     let mut accepted = 0usize;
     for decl in &loaded.decls {
@@ -193,17 +208,17 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
         }
         accepted += 1;
     }
-    // **A user-declared axiom takes the file out of scope.** Its inhabitation
-    // is not derivable in principle, so a run that stops at the first missing
-    // derivation would stop there for ever; `convert::is_standard_axiom` is
-    // where the line is drawn and why.
+    // **A user-declared axiom something in the file uses takes the file out of
+    // scope.** Its inhabitation is not derivable in principle, so a run that
+    // stops at the first missing derivation would stop there for ever;
+    // `convert::is_standard_axiom` is where the line is drawn and why.
     //
     // *After* the kernel pass, not before, and the position is load-bearing:
     // four `bad/tutorial` fixtures declare a helper axiom ahead of the
     // ill-typed declaration they are about, and declining at the parser would
     // have turned four rejections into declines — a weaker claim, made
     // silently, on the axis that is supposed to be exact.
-    if let Some(n) = loaded.facts.nonstandard_axioms.first() {
+    if let Some(n) = axioms.used.first() {
         return Outcome {
             verdict: Verdict::Declined { reason: format!("non-standard axiom: {n}") },
             facts: loaded.facts,
@@ -212,6 +227,24 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
             ledger: None,
             dump: None,
         }
+    }
+    // **An unused one is ignored**, and the drop happens here — after the
+    // kernel, before the interpretation pass — so that both halves are true at
+    // once: its *type* is still checked, so a file declaring `axiom bad : (fun
+    // x => x)` goes on being rejected exactly as mini-lean rejects it, and
+    // nothing downstream ever sees the declaration, so it is not translated and
+    // schedules no pair. `crate::unused_axiom` is the rule and the argument.
+    //
+    // The list is carried to [`Ledger::ignored_axioms`] below rather than
+    // discarded: `#64`'s lesson is that a declaration with no scheduled pair is
+    // invisible, and this one has none by construction.
+    let ignored_axioms: Vec<String> = axioms.unused.iter().map(|n| n.to_string()).collect();
+    if !axioms.unused.is_empty() {
+        let drop: std::collections::HashSet<crate::expr::Name> =
+            axioms.unused.iter().copied().collect();
+        loaded.decls.retain(
+            |d| !matches!(d, crate::env::Declaration::Axiom { name, .. } if drop.contains(name)),
+        );
     }
     // The interpretation pass runs only on a file mini accepted: MINI-DESIGN
     // §0's two axes, kept apart.
@@ -278,6 +311,11 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
         .dump
         .as_ref()
         .map(|f| crate::dump::render(&mut ip, &ex.decls, &ex.schedule, f));
+    // The same reason as the path below: `Ledger::run` is a function of the
+    // declarations it was handed, and the ignored ones are precisely the ones
+    // it was *not* handed. Recording them on the ledger is what keeps the skip
+    // visible; the ledger never inferred it.
+    led.ignored_axioms = ignored_axioms;
     // `Ledger::run` never learns the path; filling it here keeps the ledger a
     // function of the declarations alone.
     if let Some(b) = led.first_blocker.as_mut() {

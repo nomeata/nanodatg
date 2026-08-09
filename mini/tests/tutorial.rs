@@ -138,7 +138,8 @@ const DECLINED_BY_NANODAS_PARSER: &[&str] = &[
     "133_DupConCon.ndjson",
 ];
 
-/// The good fixtures mini declines because they declare an axiom of their own.
+/// The good fixtures mini declines because they declare an axiom of their own
+/// **and refer to it**.
 ///
 /// `mini::convert::is_standard_axiom` is the rule and the argument: Lean's own
 /// three axioms are validated by the set-theoretic model and are therefore
@@ -146,14 +147,70 @@ const DECLINED_BY_NANODAS_PARSER: &[&str] = &[
 /// derivable *in principle* — no work anywhere discharges it. A run that stops
 /// at the first missing derivation would stop at one of these for ever, so
 /// they are taken out of scope at the frontend, by name and with a reason.
+/// [`mini::unused_axiom`] narrows that to the axioms something in the file
+/// **refers to**; both of these qualify, and
+/// [`both_corpus_declines_use_their_axioms`] is where that is checked.
 ///
 /// mini-lean accepts both; the divergence is recorded here rather than papered
 /// over, exactly as [`DECLINED_BY_NANODAS_PARSER`] records the other one.
 ///
 /// `123_quotSoundType` is deliberately **not** here: it declares `Quot.sound`,
 /// which is Lean's own, and it goes on being checked.
+///
+/// **Both of these *use* their axioms**, which is why
+/// [`mini::unused_axiom`]'s narrowing — an unused non-standard axiom is
+/// ignored rather than declined — leaves this list exactly as it is.
+/// [`both_corpus_declines_use_their_axioms`] checks that rather than assuming
+/// it, and reads the two reference kinds apart.
 const DECLINED_NONSTANDARD_AXIOM: &[(&str, &str)] =
     &[("031_letTypeDep.ndjson", "aDepProp"), ("032_letRed.ndjson", "aProp")];
+
+/// **The two corpus declines use their axioms**, so the narrowing cannot move
+/// them — measured, not assumed.
+///
+/// [`mini::unused_axiom`] ignores a non-standard axiom nothing in the file
+/// refers to. The `accept 89 / decline 2` ratchet holds only if both declining
+/// exports genuinely refer to theirs, and "it should" is the reasoning this
+/// project has been burned by. What the two contain, read out of the exports:
+///
+/// | export | axioms | where the reference is |
+/// | --- | --- | --- |
+/// | `031_letTypeDep` | `aDepProp`, `mkADepProp` | `aDepProp` in `mkADepProp`'s **axiom statement** and in `letTypeDep`'s **type**, in no value; `mkADepProp` in `letTypeDep`'s **value** |
+/// | `032_letRed` | `aProp` | only in `letRed`'s **value** |
+///
+/// So the corpus is itself a test of **one** arm of the reachability walk, and
+/// it was measured rather than argued: drop `Declaration::Def`'s `value` and
+/// `032` accepts — `accept 2 declarations … ignored axioms: aProp` — so
+/// `decline 2` becomes `decline 1`. Dropping both *type* arms does **not** make
+/// `031` accept, because its two axioms witness each other; what moves is the
+/// reason string, from `aDepProp` to `mkADepProp`, which
+/// [`tutorial_good_all_accepted`] compares exactly. Every other arm's only
+/// witness anywhere is `mini::unused_axiom`'s `every_reference_kind_is_a_use`.
+#[test]
+fn both_corpus_declines_use_their_axioms() {
+    let dir = good_dir();
+    if skip_guard::no_inputs(&dir, ndjson_files(&dir).len()) {
+        return
+    }
+    for (file, first_used) in DECLINED_NONSTANDARD_AXIOM {
+        let loaded = mini::convert::load(&dir.join(file)).expect("the corpus export loads");
+        let c = mini::unused_axiom::classify(&loaded.decls, |n| {
+            !mini::convert::is_standard_axiom(n)
+        });
+        assert!(
+            c.unused.is_empty(),
+            "{file} declares a non-standard axiom nothing refers to ({:?}), so it would now be \
+             **accepted** and the decline ratchet has moved. That is a finding about the \
+             corpus, not a licence to re-baseline it.",
+            c.unused.iter().map(|n| n.to_string()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            c.used.first().map(|n| n.to_string()).as_deref(),
+            Some(*first_used),
+            "{file}'s decline names the first *used* non-standard axiom"
+        );
+    }
+}
 
 fn good_dir() -> PathBuf { repo_root().join("vendor/arena-tests/good/tutorial") }
 fn bad_dir() -> PathBuf { repo_root().join("vendor/arena-tests/bad/tutorial") }

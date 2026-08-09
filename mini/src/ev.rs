@@ -97,13 +97,17 @@ pub enum Gap {
     /// have** — reached only once the axiom's *type* has interpreted, so that
     /// the missing thing really is the inhabitation and not the statement.
     ///
-    /// No **file** brings anything else here: `mini::convert::is_standard_axiom`
-    /// declines an export that declares an axiom of its own at the frontend,
-    /// before the interpretation pass runs at all (`mini::run::check_file_with`;
-    /// an in-memory fixture calling `Ledger::run` directly bypasses that, which
-    /// is where this variant's own tests live), precisely
-    /// because a user axiom's inhabitation is not derivable in principle and
-    /// therefore is not work. What is left — `Quot.sound`, `propext`,
+    /// No **file** brings anything else here, and it takes two rules rather
+    /// than one to say why. `mini::convert::is_standard_axiom` plus
+    /// `mini::unused_axiom` dispose of a user-declared axiom before the
+    /// interpretation pass runs at all (`mini::run::check_file_with`; an
+    /// in-memory fixture calling `Ledger::run` directly bypasses both, which is
+    /// where this variant's own tests live): one something in the file **refers
+    /// to** declines the whole export, precisely because its inhabitation is
+    /// not derivable in principle and therefore is not work, and one nothing
+    /// refers to is **dropped** before the walk, so it opens no pair and can
+    /// reach no clause. Either way there is no route from a file to this
+    /// variant at a non-standard name. What is left — `Quot.sound`, `propext`,
     /// `Classical.choice` — the set-theoretic model *validates*: a quotient is
     /// a set of equivalence classes, in which `Quot.sound` is a theorem;
     /// `Prop` is `{∅, {•}}`, in which `propext` is; and the kernel already
@@ -443,10 +447,13 @@ pub enum Gap {
 /// **There is no `Assumption` axis, and its absence is a decision rather than
 /// an omission.** It meant "not derivable in principle, and counting it as
 /// debt would misreport it as reachable" — which was the right thing to say
-/// about a user-declared axiom. Such an axiom no longer reaches the ledger:
+/// about a user-declared axiom. Such an axiom no longer reaches the ledger, by
+/// either of two routes: if anything in the file **refers to** it,
 /// `mini::convert::is_standard_axiom` declines the whole export at the
 /// frontend, by name and with a reason, because a run that stops at the first
-/// missing derivation would otherwise stop at one for ever. The boundary is
+/// missing derivation would otherwise stop at one for ever; if nothing does,
+/// `mini::unused_axiom` drops the declaration before the walk, so it opens no
+/// pair to be short of. The boundary is
 /// now enforced where it can be acted on, and a `Cause` that could only be
 /// reached by a hole in that boundary is better spelled as its absence than as
 /// a row pinned at zero. Everything that still reaches here is work; the only

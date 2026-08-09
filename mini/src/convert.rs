@@ -67,15 +67,16 @@ pub struct Facts {
     pub recursor_shape_mismatches: Vec<String>,
     /// `(declaration, instantiation)` pairs the pre-pass scheduled.
     pub scheduled_pairs: usize,
-    /// Axioms the export declares that are **not** one of Lean's own — see
-    /// [`is_standard_axiom`]. Recorded here rather than declined here, because
-    /// *where* the decline happens decides whether the negative corpus keeps
-    /// its teeth: [`crate::run::check_file_with`] declines only after the
-    /// kernel has accepted the file, so `bad/tutorial`'s `044`, `047`, `050`
-    /// and `054` — all of which declare a helper axiom before the ill-typed
-    /// declaration the fixture is about — go on being **rejected** instead of
-    /// quietly becoming declines.
-    pub nonstandard_axioms: Vec<String>,
+    // **There is no `nonstandard_axioms` list here, and its absence is the
+    // point.** The frontend used to record one and
+    // [`crate::run::check_file_with`] used to decline on its first entry. The
+    // decline now asks [`crate::unused_axiom::classify`] instead, because the
+    // question is no longer "is there one" but "does anything refer to it",
+    // and that is a property of the whole declaration list rather than of a
+    // declaration as it goes past. Leaving the list behind would have left two
+    // answers to one question, computed in two places, with only one of them
+    // read.
+    //
     /// `mutual … end` blocks seen, blocks `mutual_aux::encode` could express,
     /// and recursor rules stated as theorems. Filled by
     /// [`crate::run::check_file_with`] after the kernel pass, not here — the
@@ -233,6 +234,14 @@ fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 /// no judgement about it is claimed. `mini/tests/tutorial.rs` records the
 /// exports this covers.
 ///
+/// **One narrowing, and it is not an exception to the paragraph above.** An
+/// axiom this predicate rejects and **nothing in the file refers to** is
+/// *ignored* rather than declined: it creates no obligation for any pair,
+/// because every consequence of an axiom reaches the ledger through a
+/// reference to it. [`crate::unused_axiom`] is the whole of that rule, the
+/// argument for it, and what "refers to" is checked to cover. A **used**
+/// non-standard axiom declines here exactly as it always has.
+///
 /// # Structurally, not by rendering
 ///
 /// The components are matched the way [`crate::axiom::clause_for`] matches
@@ -241,7 +250,7 @@ fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 /// component containing a dot, renders as `Quot.sound` and a `to_string()`
 /// comparison would wave it through as Lean's own. The pin is this module's
 /// `a_dotted_component_is_not_a_standard_axiom`.
-fn is_standard_axiom(n: &Name) -> bool {
+pub fn is_standard_axiom(n: &Name) -> bool {
     let NameView::Str(pre, s) = n.view() else { return false };
     match pre.view() {
         NameView::Anon => &*s == "propext",
@@ -425,9 +434,12 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
             let lparams = cv.uparams(info.uparams)?;
             match d {
                 Declar::Axiom { info } => {
-                    if !is_standard_axiom(&name) {
-                        facts.nonstandard_axioms.push(name.to_string());
-                    }
+                    // Nothing is recorded about a non-standard axiom here:
+                    // whether it takes the file out of scope depends on what
+                    // the *rest* of the file refers to, and this loop has seen
+                    // only the prefix. [`crate::unused_axiom`] asks that
+                    // question of the finished list, and `Facts`' fields say
+                    // why the list this one used to keep is gone.
                     decls.push(Declaration::Axiom {
                         name,
                         lparams,

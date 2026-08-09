@@ -2291,3 +2291,103 @@ fn reducing_a_proof_is_reflexivity_and_the_walk_says_so() {
          walk that no longer happens:\n{out}"
     );
 }
+
+/// **An unused non-standard axiom is ignored; a used one still declines** —
+/// both polarities, and neither means anything without the other.
+///
+/// `mini::convert::is_standard_axiom` used to take **any** file declaring a user
+/// axiom out of scope, and that single line is what held `init-prelude`: it declares
+/// `sorryAx`, **nothing in it uses `sorryAx`**, and the decline landed *after*
+/// 1 459 declarations and 3 078 scheduled pairs had already come through
+/// `convert::load`. `mini::unused_axiom` narrows the rule to the axioms
+/// something in the file actually refers to, and states why that is a narrowing
+/// and not a reversal.
+///
+/// # What each half rules out
+///
+/// `unused_axiom_ignored.ndjson` is passed by a checker that ignores **every**
+/// axiom; `used_axiom_declines.ndjson` is passed by one that ignores **none**.
+/// Between them:
+///
+/// | wrong implementation | which half fails, and how |
+/// | --- | --- |
+/// | the old rule — decline on the first non-standard axiom | the ignored half declines; the used half reports `spareAx` instead of `usedOnlyInAValue` |
+/// | ignore every non-standard axiom | the used half is **accepted** — the must-kill |
+/// | treat a used axiom as unused | the same |
+/// | a walk that reads declarations' types but not their values | the same, because `usedOnlyInAValue` occurs only in `viaValue`'s value |
+/// | report only the first ignored axiom | the ignored half's verdict column and `ignoredAxioms=2` |
+/// | ignore the axiom but let it keep its pair | `pairs` on the ignored half |
+///
+/// # The visible-skip half
+///
+/// `#64`'s lesson is that *a declined declaration with no scheduled pair is
+/// invisible*, and an ignored axiom has no pair **by construction** — every
+/// counter in the ledger is indexed by one. So the verdict line carries the
+/// names and the `ledger` row carries the count, and both are asserted here.
+/// Exit `0` is asserted too, and deliberately: `Uncertified` and `Untranslated`
+/// are obligations mini *owes*, and nothing in the file rests on either axiom.
+#[test]
+fn an_unused_axiom_is_ignored_and_a_used_one_still_declines() {
+    fn raw(name: &str) -> (Option<i32>, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+            .arg("--no-modelgen")
+            .arg("--verbose")
+            .arg(fixture(name))
+            .output()
+            .expect("spawn mini");
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string())
+    }
+
+    // ── in scope, and the skip is visible ────────────────────────────────
+    let (code, out) = raw("unused_axiom_ignored.ndjson");
+    let v = out.lines().next().unwrap_or_default().to_string();
+    assert_eq!(
+        code,
+        Some(0),
+        "an unused non-standard axiom must not take the file out of scope, and must not be \
+         debt either:\n{out}"
+    );
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec![
+            "unused_axiom_ignored.ndjson",
+            "accept",
+            "5 declarations",
+            "ignored axioms: unusedProp, unusedRel"
+        ],
+        "the ignored axioms must be **named** on the verdict line — a count alone would let a \
+         reader think the file is a file with nothing missing from it:\n{out}"
+    );
+    let l = row(&out, "ledger");
+    assert_eq!(l.get("ignoredAxioms"), Some(&2), "both must be counted in the ledger:\n{out}");
+    assert!(
+        out.lines().any(|x| x.contains("\tignored:unusedProp=1"))
+            && out.lines().any(|x| x.contains("\tignored:unusedRel=1")),
+        "…and named there too:\n{out}"
+    );
+    // **No pair, and this is the half that says "not translated".** `N` opens
+    // none (an inductive schedules no pair) and `nZero`/`nSucc` open one each,
+    // so an axiom that kept its pair would read 4.
+    assert_eq!(l.get("pairs"), Some(&2), "an ignored axiom must schedule no pair:\n{out}");
+    assert_eq!(l.get("declars"), Some(&3), "…and must not be walked at all:\n{out}");
+    let e = evidence(&out);
+    assert_eq!(e.get("constEv"), Some(&2), "and the rest of the file still certifies:\n{out}");
+
+    // ── out of scope, exactly as before ──────────────────────────────────
+    let (code, out) = raw("used_axiom_declines.ndjson");
+    let v = out.lines().next().unwrap_or_default().to_string();
+    assert_eq!(code, Some(2), "a **used** non-standard axiom is still an arena decline:\n{out}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec![
+            "used_axiom_declines.ndjson",
+            "decline",
+            "non-standard axiom: usedOnlyInAValue"
+        ],
+        "the reason must name the axiom that is **used**, not the first one declared:\n{out}"
+    );
+    assert!(
+        !v.contains("spareAx") && !v.contains("alsoSpare"),
+        "reporting an unused axiom as the reason is the old rule, unnarrowed:\n{out}"
+    );
+}
