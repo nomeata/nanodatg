@@ -202,7 +202,30 @@ Mathlib, tail 118 copies in category theory) is what it removes.
 
 ## 3. What is built on this branch (all in `derived/src/levels/`, tested)
 
-<!-- filled in as constructions land -->
+Every item is a real construction over the LCF kernel — no axioms added,
+`kernel/` untouched — with its own file, interface header, and integration
+test pinning shapes at independently rebuilt formulas. Status markers: [x]
+landed and green, [ ] not landed.
+
+* [x] **`ite0`** (`ite0.rs`, tests `levels_ite0.rs`) — the conditional term
+  former `ite0(g,a,b)`, by `∃!`-definitional extension, classical cases on
+  `g = ∅`. Exports `when_zero`/`when_nonzero`. Both computation directions
+  pinned (`ite0(∅,a,b) = a`; `ite0(succ ∅,a,b) = b` through `succ_ne_zero`).
+* [ ] **`order`** (`order.rs`) — trichotomy on ω (previously recorded as "this
+  development does not have" it, `cumul/stages.rs:34`), the zero/succ case
+  principle, `⊆ ↔ (∈ ∨ =)`, and `max = ∪`: closure in ω, upper bound,
+  absorption.
+* [ ] **`utower`** (`utower.rs`) — the recursion theorem at `G := U(·)`,
+  seed ω: `app(lvl,0) = ω`, `∀n∈ω. app(lvl,succ n) = U(app(lvl,n))`,
+  `is_universe` at every successor rung, the climb `lvl(n) ∈ lvl(succ n)`,
+  `ω ∈ lvl(succ n)`, and the numeral bridges to the existing tower's rungs.
+* [ ] **`srt`** (`srt.rs`) — `srt(n) = ite0(n, U₀, app(lvl,n))`:
+  `⟦Sort ·⟧` as one term function of a *variable* level; sort-in-sort,
+  cumulativity along `∈` and `⊆`, `U₀`-absorption at the bottom.
+* [ ] **`rules`** (`rules.rs`) — the flagship: Π-formation at
+  `imax(u,v)` with the Prop/Type split as `ite0` *inside the term*, one
+  theorem, both branches; plus the demonstrations (`a : Type u ⊢ (a → a) :
+  Type u` at a variable `u`; the `PUnit`-shaped `1 ∈ srt(u)` at every `u`).
 
 ## 4. What it costs
 
@@ -272,4 +295,25 @@ passing today's suites.
 
 ## 6. What is deliberately not claimed
 
-<!-- honest shortfalls -->
+Named so nothing is hidden behind the verdict. As of this branch:
+
+* **The checking pipeline is not rewritten.** The suites this project measures
+  against (`ci/check.sh`'s eleven-plus steps, the arena corpus, mini-vs-nanoda)
+  run exactly as on master — that is asserted, not improved. The quantified
+  design is *demonstrated* at the `derived/` layer and prototyped at one
+  checker seam (§3–§4), not shipped end to end. §5.3's steps 1–5 are the
+  remaining volume, and every one of them is ordinary plumbing whose shape is
+  known; none is blocked on mathematics.
+* **The dependent product at a variable rung** is stated here for the
+  non-dependent `fs` form; the dependent `dprod` form goes through
+  `Tower::family`'s per-fibre scheme the same way and is not derived on this
+  branch.
+* **The certified level-`leq` mirror (§1.5)** is designed, not built.
+* **The store schema for `∀u⃗∈ω` certificates** (what replaces
+  `(name, Vec<u32>)`-keyed sealed theorems) is designed (§1.6, §5.3), not
+  built.
+* **Performance of quantified checking is unmeasured**, because the pipeline
+  is not rewritten; what is measured is the construction cost of the new
+  apparatus and the invariance of today's counters (§4). No claim is made
+  either way about end-to-end speed; the owner has said a regression would
+  not stop this line, and nothing here needed that allowance yet.
