@@ -169,7 +169,65 @@ Mathlib, tail 118 copies in category theory) is what it removes.
 
 ## 5. The checker-side map
 
-<!-- census of groundness assumptions + integration plan -->
+A full census of where "levels are ground at translation time" is load-bearing
+was taken on this branch (2026-08-09, against `f1925ae`). The short form, with
+the integration consequence for each. "Checker" is `nanoda_lib`'s `tg`
+backend; "mini" is the evidence-threaded port that is the live driver.
+
+### 5.1 Where groundness is assumed
+
+| site | what assumes it | quantified replacement |
+|---|---|---|
+| `checker/src/instantiations.rs` (511 lines; `Inst = Vec<u32>`, `DEFAULT_LEVELS`, the published `SCHEDULE`) | the whole pre-pass exists to answer "which ground σ must this declaration be checked at" | retired as the *checking* driver; survives (optionally) as the instantiation engine that specialises the final `∀u⃗∈ω` theorems to the σ a downstream consumer asks about |
+| `TcCtx::sigma` / `under_sigma` (`checker/src/util.rs:304,354`; 5 call sites) | substitute numerals, then `simplify` | substitution becomes identity; `interp_level`'s `Param` arm becomes the *main* arm |
+| `interp_sort`'s `_` arm (`tg.rs:3853`) | `Max`/`IMax`/`Param` fall to an opaque `sort(t)` with no facts | `srt(ℓ̂)` (§1.2) with the §1.3 fact kit |
+| `Clause::{Prop,Type,Undet}` dispatch (`tg.rs:9583 clause_after`, `tc.rs:1043 infer_pi`) | reads the level shape after σ; `Undet` = axiom-free symbol + `TyGap::PiUndet` | `Undet` becomes the `ite0` clause (§1.4); the 12 residual `PiUndet` typing sites on `init-prelude` are the first live beneficiaries |
+| const/ind/ctor tables keyed `(name, interpreted levels)` (`Shared::*`, `TgBackend::{ind_syms, ctor_rules, …}`, mini's `ConstKey = (Name, Vec<u32>)`) | one entry per ground instantiation | one entry per *declaration*, keyed by canonical level *expressions*; ground keys become the numeral instances |
+| mini `ground::eval` → `Gap::SymbolicLevel` (~40 mint sites), `Interp::sort(n: u32)`, `CUMUL_HEIGHT = 8` | a symbolic level is a sanctioned dead end; the tower is consulted at a `usize` | the dead end becomes the entry point; `srt(ℓ̂)` has no height limit (`CUMUL_HEIGHT` retires — the internal ladder is ω-long) |
+| `zoneb`'s `provably_nonzero` / eliminator trichotomy | already **per-declaration, not per-σ** — the module doc insists on it | unchanged: this is the one part of the pipeline that is already level-polymorphic in spirit |
+
+### 5.2 The hypothesis mechanism already exists
+
+The design needs `uᵢ ∈ ω` carried as an assumption through a translation.
+**Neither crate needs a new mechanism:**
+
+* mini: `Scopes::assume(φ)` (`mini/src/scope.rs:273`) takes an *arbitrary*
+  formula into the kernel sequent's Γ and discharges it with
+  `discharge_assumption` — the second of exactly two `Thm::assume` sites in
+  the program, built for `derived::acc`'s induction hypothesis. `u ∈ ω` is one
+  more such formula, opened at declaration entry and discharged (then
+  `gen`-quantified) at declaration exit.
+* checker: the formula-level antecedent lists (`CondEq`, the `assms`
+  threading of `has_type_local`, `guard_and_generalise`) carry membership
+  formulas; `Formula::mem(u, ω)` is one more.
+
+The kernel is untouched either way; sequent hypotheses were priced for exactly
+this shape (`kernel/src/thm.rs`, the `mk_union` note citing
+THREADING-CENSUS §2).
+
+### 5.3 Integration order (mini first)
+
+1. **Level interpretation**: params to fresh free variables under `u ∈ ω`
+   (via `Scopes::assume`); `0̂/succ/max/imax` per §1.1; `Interp::sort` takes
+   the ω-term instead of a `u32`.
+2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
+   where `CanonLevels` is the canonicalised level-expression vector (the
+   `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
+   inherits the key change mechanically.
+3. **Clause dispatch grows the third clause** (`ite0`), consuming
+   `levels::rules`.
+4. **Level defeq mirror** (§1.5): a certified `leq` that follows the checker's
+   own decision procedure, splitting on `n = ∅ ∨ ∃m∈ω. n = succ m` where the
+   procedure splits on a parameter.
+5. **The schedule retires** from the checking loop (`Ledger::run`'s per-σ
+   loop flattens to per-declaration); ground demands become `ax_inst`s of the
+   stored `∀`-theorems at numeral terms plus the §1.2 bridge equations.
+
+Steps 1–2 are mechanical but wide (every `ConstKey` consumer). Steps 3–4 are
+where the new mathematics is consumed. Step 5 is the payoff. **None of this is
+done on this branch beyond the prototype named in §3**; the volume estimate,
+not any mathematical step, is what stands between this branch and a variant
+passing today's suites.
 
 ## 6. What is deliberately not claimed
 
