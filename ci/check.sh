@@ -82,6 +82,17 @@ step "mini vs nanoda"            ./ci/check-mini-vs-nanoda.sh
 # SKIPs.
 step "mini-vs-nanoda self-test"  ./ci/check-mini-vs-nanoda.sh --self-test
 
+# Two binaries, one path. `mini/tests/*` spawn `CARGO_BIN_EXE_mini`, which is
+# the uplift path `target/debug/mini`, and `dev` and `test` both uplift there —
+# so while their settings differ, `cargo build` and `cargo test` leave
+# *different* `mini` binaries at the one name and a prebuilt test binary run out
+# of `deps/` gets whichever was last. That silently corrupted two measurement
+# runs. The root `Cargo.toml` now gives the two profiles identical settings, so
+# cargo builds one artefact; this is what keeps them identical. ~0.6 s, no
+# inputs, and it watches its own falsifier on every run.
+step "dev/test uplift"           ./ci/check-uplift.sh
+step "uplift self-test"          ./ci/check-uplift.sh --self-test
+
 step "workspace builds"          cargo build --workspace --all-targets
 
 # ── SKIP is not PASS, one layer down ────────────────────────────────────────

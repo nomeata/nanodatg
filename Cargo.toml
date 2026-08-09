@@ -29,17 +29,47 @@ lto = true
 # what the `?`-censuses and the `#[track_caller]` shims in `derived/src/prim.rs`
 # actually read — while dropping the type and variable information that made up
 # the bulk. Raise this to 2 locally if you need a debugger, but do not commit it.
-[profile.dev]
-debug = "line-tables-only"
-
-# `opt-level = 1`, not 3. The corpus run is compute-heavy, which is why 3 was
-# chosen — but 3 was measured to be *unbuildable* on this machine even at
-# `CARGO_BUILD_JOBS=1`: a seat hit SIGKILL compiling `derived` and only got
-# through with `CARGO_PROFILE_TEST_OPT_LEVEL=1`. An optimisation level that
+#
+# ── `dev` and `test` must stay byte-for-byte the same set of settings ────────
+#
+# Not a tidiness rule: `mini/tests/*` spawn the `mini` binary through
+# `CARGO_BIN_EXE_mini`, which cargo expands to the *uplift* path
+# `target/debug/mini` — and `dev` and `test` both uplift there. While the two
+# profiles differed, `cargo build` put an `opt-level = 0` binary at that path
+# and `cargo test` put an `opt-level = 1` one, and whichever command ran last
+# won. Measured on this tree before the settings were matched: the two files
+# were 44 859 744 and 61 052 224 bytes and had different inodes, at one path.
+# A prebuilt test binary run straight out of `target/debug/deps/` — which is
+# what a measuring seat does, and what `perf stat` is pointed at — therefore
+# spawned whichever `mini` the last cargo command happened to leave. That
+# **corrupted two measurement runs before it was noticed**, and the numbers
+# looked plausible; see MEASUREMENTS.md.
+#
+# Cargo compares profiles by their settings and not by their name, precisely so
+# that "dev" and "test" can be one unit when they agree. Making them agree
+# collapses the two builds into one artefact, so there is nothing left to
+# disagree about — and it halves what `ci/check.sh` compiles, since its
+# "workspace builds" step and its `cargo test` steps stop building every crate
+# twice.
+#
+# `ci/check-uplift.sh` holds this: it builds a throwaway crate carrying these
+# two sections verbatim and fails if `cargo build` and `cargo test` land
+# different files on the one path. Change one of these two tables and it goes
+# red the same run.
+#
+# `opt-level = 1`, not 3, in both. The corpus run is compute-heavy, which is
+# why 3 was chosen — but 3 was measured to be *unbuildable* on this machine
+# even at `CARGO_BUILD_JOBS=1`: a seat hit SIGKILL compiling `derived` and only
+# got through with `CARGO_PROFILE_TEST_OPT_LEVEL=1`. An optimisation level that
 # cannot be compiled buys nothing. Level 1 keeps the inlining that matters for
 # the conversion loop while costing a fraction of 3's peak compiler memory; if
 # a corpus run becomes intolerably slow, measure it before raising this back,
 # and record the number here.
+[profile.dev]
+opt-level = 1
+overflow-checks = true
+debug = "line-tables-only"
+
 [profile.test]
 opt-level = 1
 overflow-checks = true

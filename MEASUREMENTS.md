@@ -5571,15 +5571,36 @@ counts kernel instructions too. Read them as "each heavy test is about 10 T",
 not as a decomposition; re-take all three in one sitting if the split has to be
 exact.
 
-**A profile trap that corrupted two runs before it was noticed.** `cargo build`
-uplifts an **opt-level 0** `mini` to `target/debug/mini` (54 389 712 bytes; no
-`-C opt-level` in the `dev` profile), `cargo test` builds an **opt-level 1** one
-(45 041 256 bytes, `-C opt-level=1`), and both uplift to the *same path*. If
-cargo judges the test-profile binary fresh it does **not** re-uplift: after
-`cargo build --bin mini`, `cargo test --test nested --no-run` finished in 0.48 s
-and left the opt-level-0 binary in place — which is what `CARGO_BIN_EXE_mini`,
-and therefore every subprocess test, then runs. A cold tree is safe; a warm one
-is not, and nothing says so.
+**A profile trap that corrupted two runs before it was noticed — closed
+2026-08-09.** `cargo build` uplifted an **opt-level 0** `mini` to
+`target/debug/mini` (54 389 712 bytes; no `-C opt-level` in the `dev` profile),
+`cargo test` built an **opt-level 1** one (45 041 256 bytes, `-C opt-level=1`),
+and both uplifted to the *same path*. `CARGO_BIN_EXE_mini` is that path —
+confirmed by `strings` on any mini test binary — so every subprocess test ran
+whichever of the two the last cargo command happened to leave there.
+
+Re-derived on `f68890c` before the fix, the two files were 44 859 744 and
+61 052 224 bytes with different inodes. **Cargo itself is consistent**: after
+`cargo build --bin mini`, `cargo test --test dump --no-run` re-uplifted in
+0.01 s, so the earlier "it does not re-uplift" reading does not reproduce and is
+not what bit. What bites is the artefact that outlives the command — a test
+binary in `target/debug/deps/`, which is what a measuring seat points `perf` at.
+That reads the path, and a `cargo build` in another window is enough to change
+what the path means.
+
+**The fix is that there is now only one binary.** Cargo compares profiles by
+their settings and not by their name, precisely so `dev` and `test` can be one
+unit when they agree, so the root `Cargo.toml` gives the two tables identical
+contents. `ci/check-uplift.sh` builds a throwaway crate carrying those two
+sections verbatim and fails if `cargo build` and `cargo test` land different
+inodes at the one path; its self-test feeds it the pre-fix pair and requires the
+red. Measured: same inode after both commands, 0.6 s for the check.
+
+A second, milder collision on the same path remains and is *cost*, not
+correctness: `nanoda_lib`'s dev-dependencies are in the graph whenever its own
+test targets are, which under resolver 2 changes `num-bigint`'s features and so
+`mini`'s bytes (61 238 368 with them, 61 056 280 without). Both binaries are the
+same source at the same opt-level.
 
 ### `init-prelude`, past its first two blockers (#87)
 

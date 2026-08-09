@@ -2805,3 +2805,56 @@ sound, and it should be written that way.
 here already rest on counters and are unaffected; a good part of the rest has a
 counter twin that carries the claim without its clock. The census tabulates
 both.
+
+## 2026-08-09 — `dev` and `test` carry identical settings, because they share one uplift path
+
+**Chosen.** `[profile.dev]` and `[profile.test]` in the root `Cargo.toml` are
+byte-for-byte the same set of settings (`opt-level = 1`, `overflow-checks =
+true`, `debug = "line-tables-only"`), and `ci/check-uplift.sh` keeps them that
+way.
+
+**The defect.** Every `mini/tests/*` suite spawns `env!("CARGO_BIN_EXE_mini")`,
+which cargo expands to the *uplift* path `target/debug/mini` — confirmed by
+`strings` on the test binaries. `dev` and `test` both uplift there, so while
+their settings differed `cargo build` left a 44 859 744-byte opt-level-0 binary
+at that name and `cargo test` a 61 052 224-byte opt-level-1 one, at different
+inodes. It **corrupted two measurement runs before it was noticed** and the
+numbers looked plausible.
+
+**Corrected on re-derivation:** cargo itself re-uplifts, so the recorded "after
+`cargo build --bin mini`, `cargo test --no-run` leaves the opt-level-0 binary in
+place" does not reproduce (measured: it re-uplifted in 0.01 s). What bites is
+the artefact that outlives the command — a prebuilt test binary in
+`target/debug/deps/`, which is exactly what a measuring seat points `perf` at,
+and which reads whatever the last cargo command left at the path.
+
+**Why identical settings and not a guard on the read.** Cargo compares profiles
+by their settings and not by their name, specifically so that `dev` and `test`
+can deduplicate into one unit. Making them agree means there is one `mini`, so
+there is nothing to disagree about — the failure mode is removed rather than
+detected. It also stops `ci/check.sh` compiling every crate twice.
+
+**Rejected — a runtime check in the harness that the spawned binary is the
+right one.** There is nothing at runtime that distinguishes an opt-level-0 build
+from an opt-level-1 one without asking cargo, and inferring it from
+`target/debug/.fingerprint` or from how many `mini-<hash>` files sit in `deps/`
+gives false reds on any tree with stale artefacts. It would also mean editing
+all seven `mini/tests` suites, which are contended.
+
+**The guard, watched firing.** `ci/check-uplift.sh` copies the two profile
+tables verbatim into a throwaway crate with one bin and one integration test,
+runs `cargo build` then `cargo test --no-run`, and compares the **inode** at the
+uplift path. Two cells on every run: the repo's profiles must agree, and a
+deliberately divergent pair must be *detected* — the falsifier, so a green cell
+one is not vacuous. `--self-test` re-runs the script against the pre-fix
+`dev`/`test` pair and requires exit 1, against a manifest with no profile tables
+and requires exit 1, and against a matched pair and requires exit 0. 0.6 s and
+1.2 s, no corpus, no toolchain.
+
+**A second collision on the same path is left standing and documented, because
+it is cost and not correctness.** `nanoda_lib`'s dev-dependencies are in the
+graph whenever its own test targets are, which under resolver 2 changes
+`num-bigint`'s features and so `mini`'s bytes (61 238 368 with, 61 056 280
+without) at the same source and the same opt-level. `ci/check.sh`'s build step
+is therefore split the same way its test steps are, so nothing is compiled
+twice.
