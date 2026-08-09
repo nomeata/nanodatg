@@ -2876,9 +2876,13 @@ coverage; and every `#![cfg(feature = "X")]` suite must live in a package some
 ## 2026-08-09 — `dev` and `test` carry identical settings, because they share one uplift path
 
 **Chosen.** `[profile.dev]` and `[profile.test]` in the root `Cargo.toml` are
-byte-for-byte the same set of settings (`opt-level = 1`, `overflow-checks =
+byte-for-byte the same set of settings (`opt-level = 3`, `overflow-checks =
 true`, `debug = "line-tables-only"`), and `ci/check-uplift.sh` keeps them that
-way.
+way. *(The level was 1 when this was written and is 3 since
+CACHING-DESIGN.md's step 2 — a headroom condition re-measured rather than
+assumed, argued at the table itself. What this entry decides is the
+**identity** of the two tables, which is independent of the level: raise or
+lower it in both, or `check-uplift.sh` goes red the same run.)*
 
 **The defect.** Every `mini/tests/*` suite spawns `env!("CARGO_BIN_EXE_mini")`,
 which cargo expands to the *uplift* path `target/debug/mini` — confirmed by

@@ -118,8 +118,11 @@ if [[ "${1:-}" == --self-test ]]; then
     exit 1
   fi
   # …and the matched pair the repo now carries must pass, or the two cells
-  # above are agreeing with each other about nothing.
-  printf '[profile.dev]\nopt-level = 1\noverflow-checks = true\ndebug = "line-tables-only"\n\n[profile.test]\nopt-level = 1\noverflow-checks = true\ndebug = "line-tables-only"\n' \
+  # above are agreeing with each other about nothing. What is checked is the
+  # two tables being *identical*, not what they say, so this cell tracks the
+  # root manifest's level whenever that moves — it was 1 and is 3 since
+  # CACHING-DESIGN.md's step 2.
+  printf '[profile.dev]\nopt-level = 3\noverflow-checks = true\ndebug = "line-tables-only"\n\n[profile.test]\nopt-level = 3\noverflow-checks = true\ndebug = "line-tables-only"\n' \
     > "$TMP/match.toml"
   UPLIFT_MANIFEST="$TMP/match.toml" "$0" >/dev/null 2>&1
   rc=$?

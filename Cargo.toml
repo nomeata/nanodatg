@@ -57,20 +57,44 @@ lto = true
 # different files on the one path. Change one of these two tables and it goes
 # red the same run.
 #
-# `opt-level = 1`, not 3, in both. The corpus run is compute-heavy, which is
-# why 3 was chosen — but 3 was measured to be *unbuildable* on this machine
-# even at `CARGO_BUILD_JOBS=1`: a seat hit SIGKILL compiling `derived` and only
-# got through with `CARGO_PROFILE_TEST_OPT_LEVEL=1`. An optimisation level that
-# cannot be compiled buys nothing. Level 1 keeps the inlining that matters for
-# the conversion loop while costing a fraction of 3's peak compiler memory; if
-# a corpus run becomes intolerably slow, measure it before raising this back,
-# and record the number here.
+# `opt-level = 3` in both — and it is a **headroom condition, not a settled
+# choice**. Read the next paragraph before treating it as one.
+#
+# 3 was taken out once, at `9902ef1`: a seat hit SIGKILL compiling `derived`
+# even at `CARGO_BUILD_JOBS=1`, and only got through with
+# `CARGO_PROFILE_TEST_OPT_LEVEL=1`. That was *not* debug information — the
+# commit order refutes it, `70409b7` (line tables) is 01:00 and the kill is
+# 01:14, already at line tables. It was memory: `user-1001.slice` caps at
+# 50.2 GiB, 48.25 GiB of tmpfs was pinned outside the sandbox, and `rustc`'s
+# peak here is 1.25 GB against well under 1 GiB free. An optimisation level
+# that cannot be compiled buys nothing, and that was the right call under
+# those conditions.
+#
+# Re-measured before raising it back, rather than assumed to have aged out.
+# On a slice holding 25.8 GB of its 53.87 GB with 376 MB in the tmpfs — 28 GB
+# of headroom — `cargo build --workspace --exclude nanoda_lib --all-targets`
+# at `CARGO_BUILD_JOBS=2` is **exit 0, 3 m 19, 1 253 564 kB peak `rustc`
+# RSS**: PROFILE.md's 1.25 GB figure to three digits, so it is the *free*
+# memory that moved and not the requirement.
+#
+# What it buys, `perf stat -e instructions` per `47b262b`, at
+# CACHING-DESIGN.md step 1's configuration: `mini/tests/nested.rs`
+# 8 408 759 079 586 → **7 782 754 492 560** (−7.4%) and the 91 good tutorial
+# exports 431.28 G → **404.27 G** (−6.3%), with all 820 lines of the corpus's
+# `--verbose` output byte-identical across the change.
+#
+# So: if your slice is short of a couple of GB free — check
+# `/sys/fs/cgroup/user.slice/user-1001.slice/memory.{current,max}` and whether
+# the tmpfs is full again — you will hit `9902ef1`'s kill. Build locally with
+# `CARGO_PROFILE_TEST_OPT_LEVEL=1` rather than committing a change to this
+# table, and if the condition has gone away for good, say so here with the
+# measurement that shows it.
 [profile.dev]
-opt-level = 1
+opt-level = 3
 overflow-checks = true
 debug = "line-tables-only"
 
 [profile.test]
-opt-level = 1
+opt-level = 3
 overflow-checks = true
 debug = "line-tables-only"
