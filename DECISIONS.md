@@ -2929,3 +2929,41 @@ graph whenever its own test targets are, which under resolver 2 changes
 without) at the same source and the same opt-level. `ci/check.sh`'s build step
 is therefore split the same way its test steps are, so nothing is compiled
 twice.
+
+## 2026-08-09 — `monomorph` mode A first: the level axis stays, because the oracle is worth more than the deletion
+
+**The choice.** The checker is built against `monomorph`'s **mode A** output —
+recursors keep the eliminating (motive) universe as a level parameter — and not
+against mode B (`--mono-recursors`, `Modelgen/Mono.lean:60`), which folds that
+universe into the name and leaves no level variable anywhere. The owner set the
+question and left the call open, suggesting mode A be tried first.
+
+**The reason is the oracle, not the effort.** A mode-A file is checkable by
+Lean's own kernel and by `nanoda`, because both require recursors to be
+level-polymorphic. A mode-B file is checkable by nobody but us. We are about to
+close gaps at scale in `checker/`, which is precisely when an independent answer
+to *"is this file actually well-typed?"* is worth most — and it is the same
+discipline as measuring completeness against Lean rather than against our own
+fixtures. **The deletion mode B offers can be taken later; the oracle does not
+come back once given up.**
+
+**Mode A costs nothing new, which is what makes the choice cheap.** The checker
+already carries `canon_level` (`tg.rs:3722`), `interp_level` (`:3749`),
+`interp_sort` (`:3835`), `interp_levels` (`:3860`) and `audit_instantiation`
+(`:3902`), and already keys interpretations by `(name, levels)`. Under mode A
+every declaration except a recursor is ground and a recursor carries exactly one
+parameter, so the surviving work is substituting one ground level into a
+recursor type — existing machinery at |σ| = 1. Nothing is built to support mode
+A; the ~500 lines of level scheduling are merely not deleted yet.
+
+**The switch trigger, named so it cannot drift.** Move to mode B if either holds:
+a recursor's motive universe is **not ground at some use site**, or the
+`(name, σ)` schedule for recursors becomes a **source of gaps** rather than a
+pass-through. Both are countable, and the count is the deliverable of the
+mode-A probe rather than an argument.
+
+**Rejected — mode B now, on the grounds that the owner's stated aim was a
+checker that "could completely ignore levels".** It would reach that aim, but
+mode A does not obstruct it: the two differ by a flag, not a rewrite. Taking B
+first buys a deletion and pays with the only external check we have on the
+files we are about to certify at scale.
