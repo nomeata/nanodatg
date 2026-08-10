@@ -325,6 +325,17 @@ fn eval<'t, 'p: 't>(ctx: &TcCtx<'t, 'p>, l: LevelPtr<'t>, env: &FxHashMap<NamePt
     }
 }
 
+/// [`collect_consts`], for the declaration-frontier dump in `tg.rs`.
+#[cfg(feature = "stepcount")]
+pub(crate) fn collect_consts_pub<'t, 'p: 't>(
+    ctx: &TcCtx<'t, 'p>,
+    e: ExprPtr<'t>,
+    seen: &mut FxHashSet<ExprPtr<'t>>,
+    out: &mut FxIndexSet<(NamePtr<'t>, crate::util::LevelsPtr<'t>)>,
+) {
+    collect_consts(ctx, e, seen, out)
+}
+
 /// Every `Const` occurrence reachable from `e`, pushed onto `out`.
 ///
 /// Iterative rather than recursive: an export file's expressions are a deep

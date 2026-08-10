@@ -7150,3 +7150,97 @@ is the one the goal statement was always about.
   diagnostic counter for "the `Π` is an application only the term knows" is
   **0**. The defect does not recur here, and that is measured rather than
   assumed.
+
+### Why 26: it is a wall, not a bootstrap — 2026-08-10
+
+*The framing the entry above produced was that the goal is one recursion needing
+a base. **Measured, that is wrong**, and being wrong about it is the most useful
+thing this stage has established: it redirects the work from ordering to a
+single missing capability.*
+
+The hypothesis was testable and this is the test. If the goal were a
+bootstrapping problem, the declarations that fail should be blocked by *other
+declarations*, and sealing a few heavily-named ones should unblock many.
+
+Aggregate counters cannot answer it — they say how many fail, not which, and
+"is the next failure blocked by the last" is a question about individual
+declarations in walk order. So: one line per declaration with a value (outcome,
+gap tag, name, and the constants its **value** mentions), env-gated, analysed by
+`scripts/decl-frontier.py`.
+
+#### One tag
+
+| declarations with a value | 2 891 |
+|---|---:|
+| sealed | 26 (17 distinct names) |
+| derived only under antecedents | 198 |
+| **no certificate at all** | **2 667** |
+| …by tag: **`ty_premise_missing`** | **2 667** |
+
+**One tag, 2 667 of 2 667.** One blocker repeated, not a long tail — the two
+possibilities the census was built to separate, separated on the first run.
+
+#### And it is not the dependency graph
+
+A dependency blocks only if it is **itself a value-carrying declaration that is
+not sealed**. A reference to an inductive, a constructor or a recursor is not a
+blocker: `derived`'s own theorems serve those, which is why `CtorApp` fires
+3 291 times against `has_type_app`'s 492. Counting them as blockers is the easy
+mistake and the first cut of this analysis made it — it collapsed the ready set
+to 20 and would have "confirmed" the bootstrap story.
+
+| unsealed (2 865), by number of blocking declarations | |
+|---|---:|
+| **0** | **1 040** |
+| 1 / 2 / 3 / 4 / 5 / 6+ | 591 / 408 / 263 / 273 / 99 / 191 |
+
+**1 040 declarations — 36 % — have nothing blocking them and fail anyway**,
+every one tagged `ty_premise_missing`. In walk order they are `Eq.ndrec`,
+`cast`, `rfl`, `Nat.lt`, `Pow.casesOn`, `HPow.hPow`. And the cascade is flat:
+sealing the ten most-named blockers (`Eq.ndrec`, `OfNat.ofNat`, `instOfNatNat`,
+`eq_of_heq`, `Unit`, …) moves the ready set from 1 040 to **1 126**. Eighty-six,
+for ten base cases.
+
+**The dependency graph is not the constraint.** The base is not missing; the
+declarations at the base fail for the same reason as everything else.
+
+#### What the reason actually is
+
+`TyGap::Premise` means "a rule was asked and one of its premises was already a
+hole", which is true of every cascade and identifies nothing. Split across the
+five sites that raise it:
+
+| which rule found its own premise a hole | 12 982 |
+|---|---:|
+| **`ty_conv`: the subject's own typing** | **8 045** |
+| **`ty_app`: the argument's** | **4 693** |
+| `ty_conv`: the typing was there, the *equality* was admitted | 244 |
+| `ty_app`: the **function's** typing | **0** |
+| `ty_app`: both | **0** |
+| `ty_lam`: the body's, under the binder | **0** |
+| `ty_let`: the body's | **0** |
+
+Four zeros, and they are the finding. The structural rules never lack their
+premise: a lambda's body is always typed, a `let`'s body is always typed, and a
+function's typing is present at **every one** of the 4 693 applications whose
+*argument* is missing. The entire within-declaration cascade is two things —
+**a conversion whose subject has no typing, and an application's argument**.
+
+That is the same population this stage has been measuring all along, arriving
+from the other end: `domain_obligation`'s raw hoists are arguments without
+typings, and here they are again as the reason 2 667 declarations are not
+translated. It is one obstacle seen at two layers, not two.
+
+#### What this changes
+
+The goal is **not** approached by ordering the declarations better or by
+hand-sealing base cases; both were plausible before this measurement and neither
+survives it. It is approached by typing **arguments** and **conversion
+subjects** — and the honest position after nine measurements is that the eight
+refuted routes were all attempts at exactly that, seven of which paid for their
+answers in escapes. The one that worked, `target_head_step`, worked because it
+made an existing clause reach terms it was already shaped for.
+
+The open lead is unchanged and it is outside `checker/`: a function-space
+membership for reduced spines, which would give `has_type` a way to type an
+application without an `ExprPtr` — 4 693 of these are applications.

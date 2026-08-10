@@ -9534,6 +9534,40 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// This is still threading debt and is counted as such: 198 certificates
     /// were computed and thrown away. [`Dt::MissCond`] is how many uses would
     /// benefit if that changed.
+    /// One line per declaration with a value: sequence, outcome, gap reason,
+    /// name, and the constants its **value** mentions.
+    ///
+    /// Env-gated (`NANODATG_DUMP_DECLS`) and off by default. The aggregate rows
+    /// say *how many* declarations fail and why; this says *which*, in walk
+    /// order, with the edges — which is what the questions "is it a frontier or
+    /// a wall" and "what does the next one unblock" need and no counter can
+    /// answer. `scripts/decl-frontier.py` reads it.
+    #[cfg(feature = "stepcount")]
+    fn dump_decl(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        typing: &TgTyping,
+        val: ExprPtr<'t>,
+    ) {
+        use std::io::Write;
+        let Some(path) = std::env::var_os("NANODATG_DUMP_DECLS") else { return };
+        let (outcome, why) = match typing {
+            TgTyping::Derived { hyps, .. } if hyps.is_empty() => ("derived", ""),
+            TgTyping::Derived { .. } => ("conditional", ""),
+            TgTyping::Gap(w) => ("gap", *w),
+        };
+        let sp = self.spell(ctx, name);
+        let mut seen = Default::default();
+        let mut out = Default::default();
+        crate::instantiations::collect_consts_pub(ctx, val, &mut seen, &mut out);
+        let deps: Vec<String> = out.iter().map(|(n, _)| self.spell(ctx, *n).to_string()).collect();
+        let line = format!("{}\t{outcome}\t{why}\t{sp}\t{}\n", self.seq, deps.join(","));
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
     fn store_declar_typing(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9579,11 +9613,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 self.shared.borrow_mut().declined_cond.insert(key.clone());
                 None
             }
-            TgTyping::Gap(_) => {
+            TgTyping::Gap(why) => {
                 note_dt(Dt::Gap);
+                note_gap_why(why);
                 None
             }
         };
+        #[cfg(feature = "stepcount")]
+        self.dump_decl(ctx, name, &typing, val);
         let Some(thm) = thm else { return };
         // The handed-in theorem must be about this declaration's value and
         // declared type; a certificate is never taken on its label.
@@ -15509,6 +15546,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // Decline before interpreting anything: a hole for a premise concludes
         // nothing, and interpreting the two types is not free.
         let Some((thm, hyps)) = Self::ty_parts(&typing) else {
+            note_prem(PremSite::ConvSubject);
             return self.ty_miss(crate::certify::TyGap::Premise)
         };
         let (tf, tt) = (self.interp(ctx, from), self.interp(ctx, to));
@@ -15523,7 +15561,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let (eq_thm, eq_hyps): (&Thm, &[Formula]) = match eq {
             TgCert::Proved(t) => (t, &[]),
             TgCert::Conditional { thm, hyps } => (thm, hyps.as_slice()),
-            TgCert::Admitted(_) => return self.ty_miss(crate::certify::TyGap::Premise),
+            TgCert::Admitted(_) => {
+                note_prem(PremSite::ConvEq);
+                return self.ty_miss(crate::certify::TyGap::Premise)
+            }
         };
         let hyps2 = merge_hyps(&hyps, eq_hyps);
         let h = conj_of(&hyps2);
@@ -15620,6 +15661,11 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         a: TgTyping,
     ) -> TgTyping {
         let (Some((hf, used_f)), Some((ha, used_a))) = (Self::ty_parts(&f), Self::ty_parts(&a)) else {
+            note_prem(match (Self::ty_parts(&f).is_some(), Self::ty_parts(&a).is_some()) {
+                (false, false) => PremSite::AppBoth,
+                (false, true) => PremSite::AppFun,
+                _ => PremSite::AppArg,
+            });
             return self.ty_miss(crate::certify::TyGap::Premise)
         };
         let Expr::Pi { binder_type, .. } = ctx.read_expr(fun_ty) else {
@@ -15672,6 +15718,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         b: TgTyping,
     ) -> TgTyping {
         let Some((at_v, inner)) = Self::ty_parts(&b) else {
+            note_prem(PremSite::LamBody);
             return self.ty_miss(crate::certify::TyGap::Premise)
         };
         // Interpreting the lambda registers its graph symbol and site.
@@ -15802,6 +15849,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         b: TgTyping,
     ) -> TgTyping {
         let Some((thm, hyps)) = Self::ty_parts(&b) else {
+            note_prem(PremSite::LetBody);
             return self.ty_miss(crate::certify::TyGap::Premise)
         };
         let te = self.interp(ctx, e);
@@ -16951,6 +16999,51 @@ const N_TH_STEP: usize = 17;
 static TH_STEP: [std::sync::atomic::AtomicU64; N_TH_STEP] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_TH_STEP];
 fn note_ths(k: ThStep) { TH_STEP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Which inference rule found *its own premise* already a hole.
+///
+/// `TyGap::Premise` accounts for **2 667 of 2 667** declaration-typing gaps, so
+/// as one number it says only "something upstream inside this declaration was
+/// missing" — which is true of every cascade and identifies nothing. These are
+/// the five sites that raise it, so the row names the rule instead.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum PremSite {
+    /// `ty_conv`: the subject's own typing was a hole.
+    ConvSubject,
+    /// `ty_conv`: the typing was there and the *equality* was admitted.
+    ConvEq,
+    /// `ty_app`: the function's typing was a hole.
+    AppFun,
+    /// `ty_app`: the argument's.
+    AppArg,
+    /// `ty_app`: both.
+    AppBoth,
+    /// `ty_lam`: the body's typing under the binder.
+    LamBody,
+    /// `ty_let`: the body's.
+    LetBody,
+}
+const N_PREM: usize = 7;
+static PREM: [std::sync::atomic::AtomicU64; N_PREM] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_PREM];
+fn note_prem(k: PremSite) { PREM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// **Why a declaration's typing was not derived at all**, by the tag
+/// [`TgTyping::Gap`] already carries.
+///
+/// 2 667 of the 2 891 value-carrying declarations reach `Dt::Gap`, and that one
+/// number cannot distinguish *one blocker repeated* from *a long tail*. Those
+/// want opposite responses, so the tags are kept apart. A `BTreeMap` rather than
+/// an array because the tags are `&'static str`s owned by
+/// [`crate::certify::TyGap`] and adding one there must not need an edit here.
+static GAP_WHY: std::sync::Mutex<Option<std::collections::BTreeMap<&'static str, u64>>> =
+    std::sync::Mutex::new(None);
+fn note_gap_why(why: &'static str) {
+    if let Ok(mut g) = GAP_WHY.lock() {
+        *g.get_or_insert_with(Default::default).entry(why).or_insert(0) += 1;
+    }
+}
 
 /// Every exit of [`TgBackend::has_type_app`] — the clause that would serve the
 /// **3 213 `CtorReach::ConstMatches`**, the oldest open item of this stage.
@@ -18708,6 +18801,45 @@ fn ht_report() -> String {
             if n > 0 {
                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
             }
+        }
+    }
+    // Why the declarations that carry a value were not typed. One row per tag,
+    // sorted, with the total stated so the rows can be checked to sum.
+    if let Ok(g) = GAP_WHY.lock() {
+        if let Some(m) = g.as_ref() {
+            let total: u64 = m.values().sum();
+            if total > 0 {
+                s.push_str(&format!(
+                    "    {:<width$}  {total:>10}\n",
+                    "…and why inference justified nothing, by tag"
+                ));
+                let mut rows: Vec<(&&str, &u64)> = m.iter().collect();
+                rows.sort_by_key(|(t, n)| (std::cmp::Reverse(**n), **t));
+                for (t, n) in rows {
+                    s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …{t}")));
+                }
+            }
+        }
+    }
+    // Which rule found its own premise already a hole. `TyGap::Premise` is
+    // 2 667 of 2 667 declaration gaps, so the tag alone identifies nothing.
+    let pr = |k: PremSite| PREM[k as usize].load(Relaxed);
+    let pr_total: u64 = PREM.iter().map(|c| c.load(Relaxed)).sum();
+    if pr_total > 0 {
+        s.push_str(&format!(
+            "    {:<width$}  {pr_total:>10}\n",
+            "…and which rule found ITS OWN premise a hole"
+        ));
+        for (l, k) in [
+            ("ty_app: the function's typing", PremSite::AppFun),
+            ("ty_app: the argument's", PremSite::AppArg),
+            ("ty_app: both", PremSite::AppBoth),
+            ("ty_lam: the body's, under the binder", PremSite::LamBody),
+            ("ty_conv: the subject's own typing", PremSite::ConvSubject),
+            ("ty_conv: the typing was there, the EQUALITY was admitted", PremSite::ConvEq),
+            ("ty_let: the body's", PremSite::LetBody),
+        ] {
+            s.push_str(&format!("    {:<width$}  {:>10}\n", format!("      …{l}"), pr(k)));
         }
     }
     // The application clause, every exit. Printed whole, zeros included:
