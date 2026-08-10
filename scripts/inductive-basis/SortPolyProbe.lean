@@ -103,6 +103,15 @@ inductive F0 : B2 → Sort u
   | a : F0 .tt
   | b : F0 .ff
 
+-- P11: the PSigma SHAPE at `Sort (max u v)` — the `max 1` question. The
+--     ELABORATOR refuses this (SortPolyNeg N2's rule); the KERNEL admits it,
+--     with small elimination (one constructor, arguments neither Props nor
+--     indices). Core's `PSigma : Sort (max 1 u v)` is therefore the price of
+--     large elimination (never-zero resultant), not a kernel admission
+--     boundary.
+inductive S0 (α : Sort u) (β : α → Sort v) : Sort (max u v)
+  | mk : (a : α) → β a → S0 α β
+
 -- P10: a mutual pair at Sort u — admitted, small (block size > 1).
 mutual
   inductive MA : Sort u
@@ -132,6 +141,8 @@ example : ∀ {motive : ∀ b, F0.{u} b → Prop},
 example : ∀ {motive_1 : MA.{u} → Prop} {motive_2 : MB.{u} → Prop},
     (∀ b, motive_2 b → motive_1 (.mk b)) → (∀ a, motive_1 a → motive_2 (.mk a)) →
     ∀ t, motive_1 t := @MA.rec
+example : ∀ {α : Sort u} {β : α → Sort v} {motive : S0 α β → Prop},
+    (∀ a b, motive (.mk a b)) → ∀ t, motive t := @S0.rec
 
 -- ── Level-arithmetic facts the constructions lean on ───────────────────────
 
