@@ -6733,3 +6733,54 @@ What it would take is a way to type an argument that does not go through
 `infer` — which is the same research question the open arguments raise, and not
 this tranche's. The finding is recorded at
 `TypeChecker::beta_arg_typing` so the next reader meets it before the idea.
+
+### Can the type be read off instead of inferred? — 4 119 of 16 502, and the obstacle that remains — 2026-08-10
+
+*The research question the previous five results converged on was "a way to
+type an argument that does not go through `infer`". A fully applied
+constructor is the candidate: its type is its declared type,
+level-substituted and instantiated at its own arguments — a substitution into
+something the environment already holds, no reduction, no new obligations.
+Measured before anything was built.*
+
+`TgBackend::declared_type_shape` runs at every raw hoist about a term no
+application check visited, and measures the **whole** claim rather than the
+shape: for a saturated head it builds the instantiated declared type,
+interprets it, and compares it to the domain actually being asked.
+
+| of the 16 468 | |
+|---|---:|
+| **constructor, saturated, instantiated type *is* the domain** | **906** |
+| constructor, saturated, type is not the domain | 153 |
+| **constant, saturated, instantiated type *is* the domain** | **3 213** |
+| constant, saturated, type is not the domain | 450 |
+| constant, partially applied | 3 |
+| not an application of a constant at all | 11 743 |
+
+**4 119 — 25 % of the residue — have a target the declared type hits exactly.**
+No conversion, so no `def_eq`, so no reduction: the cost that disqualified the
+open arguments, the inner binders and the two inference-flag variants is simply
+absent for this population. That is the first route measured this session whose
+cost is structurally zero rather than merely small.
+
+**But the type is not the membership, and that distinction is the whole of the
+remaining work.** Reading `Eq.refl a : a = a` off the environment gives the
+*type*; the certificate `⊢ ⟦Eq.refl a⟧ ∈ ⟦a = a⟧` still has to be derived, and
+the constructor rule that derives it (`HtClause::CtorApp`, already firing 3 291
+times a run) needs `⟦aᵢ⟧ ∈ ⟦Aᵢ⟧` for each argument. So these 4 119 are cases
+where the rule *applies* and its recursion did not complete — the same
+untypeable-argument cascade, met one level up.
+
+That is not a dead end, and the reason is the shape of the debt rather than its
+size. The rule is **conditional**: `⊢ (a₁ ∈ A₁ ∧ …) → c a⃗ ∈ T[a⃗]`. Hoisting
+those per-argument antecedents instead of the whole membership is strictly
+better debt, and this project has already measured why — the 2026-08-10 handoff
+closed ten escapes for exactly this reason: *"the raw hoist assumed the whole
+membership, which no binder discharges; the handoff carries per-local
+antecedents, which binders do discharge."* The named next tranche is therefore
+not "type these 4 119" but **"stop hoisting the whole membership where the
+constructor rule can decompose it"**, and its measurable is escapes, which is
+the counter every other route moved the wrong way.
+
+The 11 743 remainder — dominated by the 223 distinct closed lambdas — is not
+reachable this way and stays where §2 leaves it.

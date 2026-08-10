@@ -583,10 +583,31 @@ tranche, and they are engineering, not arithmetic:
   **worse than the 16 502 the shipped code reaches by doing less**. Recorded at
   `TypeChecker::beta_arg_typing` and in `MEASUREMENTS.md` so it is not rebuilt.
 
-  So both remaining directions now reduce to one research question: **a way to
-  type an argument that does not go through `infer`.** Every route that types
-  more by inferring more has now been measured, and each pays for its answers
-  with obligations that escape.
+  So both remaining directions reduced to one research question — **a way to
+  type an argument that does not go through `infer`** — and that question now
+  has a measured answer for a quarter of the residue. A fully applied
+  constructor's type *is* its declared type, level-substituted and instantiated
+  at its own arguments: a substitution into what the environment already holds,
+  with no reduction and so none of the cost that disqualified every route
+  above. Measured over the 16 468 (`TgBackend::declared_type_shape`, which
+  builds and interprets the instantiated type rather than reading the shape):
+  **906 saturated constructors and 3 213 saturated constants whose instantiated
+  declared type *is* the domain being asked** — 4 119, 25 % — against 603
+  saturated-but-not-matching, 3 partial, and 11 743 that are not constant
+  applications at all (dominated by the 223 distinct closed lambdas).
+
+  **The type is not the membership, and that is the remaining work.** The
+  certificate still needs the constructor rule, and that rule
+  (`HtClause::CtorApp`, already firing 3 291 times a run) needs `⟦aᵢ⟧ ∈ ⟦Aᵢ⟧`
+  per argument — so these 4 119 are cases where the rule applies and its
+  recursion did not complete. What makes it a route anyway is the *shape* of
+  the debt: the rule is conditional, `⊢ (a₁ ∈ A₁ ∧ …) → c a⃗ ∈ T[a⃗]`, and
+  per-argument antecedents are debt a binder can discharge where a whole
+  hoisted membership is not — the 2026-08-10 handoff closed ten escapes for
+  exactly that reason. **The next tranche is therefore not "type these 4 119"
+  but "stop hoisting the whole membership where the constructor rule can
+  decompose it", and its measurable is escapes** — the counter every rejected
+  route moved the wrong way.
 
 *Measurables, restated:* the `raw hoists by cause` row and its two new
 cross-cuts (`lambda typing declines, by cause`; the subject/skeleton reach

@@ -10686,6 +10686,72 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Classify an argument whose typing obligation `has_type` could not
     /// discharge, so that the remaining work is a table rather than a guess.
+    /// **Can this subject's type be *read off* rather than inferred?**
+    ///
+    /// Every route that types more by inferring more has been measured and
+    /// each pays for its answers with obligations that escape
+    /// (`THREADING-CENSUS.md` §2), so the open question is whether any of the
+    /// residue can be typed without `infer` at all. A **fully applied
+    /// constructor** is the candidate: its type is its declared type,
+    /// level-substituted and instantiated at its own arguments — a
+    /// substitution into something the environment already holds, with no
+    /// reduction and no new obligations. `Eq.refl a : a = a` is not inferred,
+    /// it is read.
+    ///
+    /// This measures how much of the residue that would reach, and it measures
+    /// the *whole* claim rather than the shape alone: for a saturated head the
+    /// instantiated type is actually built and interpreted, and compared to the
+    /// domain being asked. `Matches` is the population a read-off rule closes
+    /// outright; `SaturatedNoMatch` is the population that would still need a
+    /// conversion, i.e. `def_eq`, i.e. reduction — which is the cost that
+    /// disqualified every previous route.
+    fn declared_type_shape(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        dom: &Term,
+    ) -> CtorReach {
+        let Some((_f, name, levels, args)) = ctx.unfold_const_apps(e) else {
+            return CtorReach::NotAConstApp
+        };
+        let Some((is_ctor, info)) = ctx
+            .export_file
+            .declars
+            .get(&name)
+            .map(|d| (matches!(d, crate::env::Declar::Constructor(..)), *d.info()))
+        else {
+            return CtorReach::NotAConstApp
+        };
+        let ty = ctx.subst_expr_levels(info.ty, info.uparams, levels);
+        // Peel one `Π` per argument. Fewer `Π`s than arguments means the type
+        // only reveals its remaining arity after reduction, which is exactly
+        // the case a read-off rule cannot serve.
+        let mut t = ty;
+        for _ in 0..args.len() {
+            let Expr::Pi { body, .. } = ctx.read_expr(t) else {
+                return if is_ctor { CtorReach::CtorOverApplied } else { CtorReach::ConstOverApplied }
+            };
+            t = body;
+        }
+        // Saturated exactly when nothing is left to apply.
+        let saturated = !matches!(ctx.read_expr(t), Expr::Pi { .. });
+        let inst = ctx.inst(t, &args);
+        if ctx.has_fvars(inst) && !ctx.has_fvars(e) {
+            // The instantiated type mentions something the subject does not;
+            // not a read-off.
+            return CtorReach::Other
+        }
+        let matches = self.interp(ctx, inst) == *dom;
+        match (is_ctor, saturated, matches) {
+            (true, true, true) => CtorReach::CtorMatches,
+            (true, true, false) => CtorReach::CtorSaturatedNoMatch,
+            (true, false, _) => CtorReach::CtorPartial,
+            (false, true, true) => CtorReach::ConstMatches,
+            (false, true, false) => CtorReach::ConstSaturatedNoMatch,
+            (false, false, _) => CtorReach::ConstPartial,
+        }
+    }
+
     fn ht_shape(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> HtMiss {
         let head = |b: &mut Self, ctx: &mut TcCtx<'t, 'p>, h: ExprPtr<'t>| match ctx.read_expr(h) {
             Expr::Const { name, .. } => {
@@ -11063,6 +11129,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                             (Some(s), false) if s < here => SkelReach::OpenEarlier,
                             (Some(_), false) => SkelReach::OpenHere,
                         });
+                        note_ctor_reach(self.declared_type_shape(ctx, arg, dom));
                         if fv.is_empty() {
                             if self.shared.borrow_mut().closed_unknown.insert(ta.clone()) {
                                 CLOSED_UNKNOWN_DISTINCT
@@ -16695,6 +16762,42 @@ static CLOSED_UNKNOWN_DISTINCT: std::sync::atomic::AtomicU64 =
 static CU_SHAPE: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
 
+/// See [`TgBackend::declared_type_shape`]. `*Matches` is the population a
+/// read-off rule closes with no inference and no reduction.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum CtorReach {
+    /// Fully applied constructor whose declared type, instantiated, **is** the
+    /// domain being asked. Closed by reading, not inferring.
+    CtorMatches,
+    /// Fully applied constructor whose instantiated type is not the domain — a
+    /// conversion away, and conversion is reduction.
+    CtorSaturatedNoMatch,
+    /// Constructor applied to fewer arguments than its type has binders.
+    CtorPartial,
+    /// More arguments than the declared type has `Π`s without reducing.
+    CtorOverApplied,
+    /// As `CtorMatches`, for a non-constructor constant.
+    ConstMatches,
+    ConstSaturatedNoMatch,
+    ConstPartial,
+    ConstOverApplied,
+    /// A constant application whose instantiated type mentions variables the
+    /// subject does not.
+    Other,
+    /// Not an application of a constant at all — a lambda, a `Π`, a local, a
+    /// literal. 223 of the 407 distinct closed subjects are lambdas, so this
+    /// row is expected to dominate and its size is the point.
+    NotAConstApp,
+}
+const N_CTOR_REACH: usize = 10;
+static CTOR_REACH: [std::sync::atomic::AtomicU64; N_CTOR_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_CTOR_REACH];
+#[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+fn note_ctor_reach(k: CtorReach) {
+    CTOR_REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 const N_SKEL: usize = 6;
 static SKEL: [std::sync::atomic::AtomicU64; N_SKEL] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_SKEL];
@@ -17554,6 +17657,23 @@ fn ht_report() -> String {
                 sr(SubjReach::OpenHere),
                 sr(SubjReach::ClosedUnknown),
                 sr(SubjReach::OpenUnknown),
+            ));
+        }
+        let cr = |k: CtorReach| CTOR_REACH[k as usize].load(Relaxed);
+        let cr_total: u64 = CTOR_REACH.iter().map(|c| c.load(Relaxed)).sum();
+        if cr_total > 0 {
+            s.push_str(&format!(
+                "      …can the type be READ OFF instead of inferred: ctor {} match + {} saturated-no-match + {} partial + {} over; const {} match + {} saturated-no-match + {} partial + {} over; {} other, {} not a constant application\n",
+                cr(CtorReach::CtorMatches),
+                cr(CtorReach::CtorSaturatedNoMatch),
+                cr(CtorReach::CtorPartial),
+                cr(CtorReach::CtorOverApplied),
+                cr(CtorReach::ConstMatches),
+                cr(CtorReach::ConstSaturatedNoMatch),
+                cr(CtorReach::ConstPartial),
+                cr(CtorReach::ConstOverApplied),
+                cr(CtorReach::Other),
+                cr(CtorReach::NotAConstApp),
             ));
         }
         let sk = |k: SkelReach| SKEL[k as usize].load(Relaxed);
