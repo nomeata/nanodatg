@@ -6713,6 +6713,30 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         (*out.concl() == Formula::mem(te.clone(), ty.clone())).then_some(out)
     }
 
+    /// The same, in **subject** position: carry `⊢ rung ∈ ty` to `⊢ te ∈ ty`.
+    ///
+    /// A sort can be the thing being typed as well as the type — `⟦Prop⟧ ∈
+    /// ⟦Type 0⟧` is a rung on *both* sides — so the bridge is needed in both
+    /// positions and they are two different Leibniz instances. Keeping them
+    /// apart rather than writing one two-sided helper is deliberate: a caller
+    /// that needs only one must not silently pay for, or be silently given,
+    /// the other.
+    fn transport_subject_to_srt(
+        &mut self,
+        thm: &Thm,
+        te: &Term,
+        rung: &Term,
+        ty: &Term,
+        bridge: &Thm,
+    ) -> Option<Thm> {
+        let back = derived::eq_symm(&mut self.env_mut(), bridge)?;
+        let w = self.env_mut().fresh_var();
+        let leib =
+            Thm::eq_leibniz(rung.clone(), te.clone(), w, Formula::mem(Term::var(w), ty.clone()));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, thm)?;
+        (*out.concl() == Formula::mem(te.clone(), ty.clone())).then_some(out)
+    }
+
     fn ind_ty_mem(&mut self, te: &Term, ty: &Term) -> Option<Thm> {
         if let Some(t) = self.ind_ty_mems.get(&(te.clone(), ty.clone())) {
             return t.clone()
@@ -9970,6 +9994,34 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// before it is returned, so a mistake here yields a gap and not a theorem
     /// about the wrong terms.
     fn domain_premise(&mut self, ta: &Term, dom: &Term) -> Option<Thm> {
+        // The ground bridge, on whichever side is a unified sort. All three of
+        // this rule's arms are stated over rungs — `x ∈ U(x)`, `U₀ ∈ U(ω)`,
+        // `fs(a,a) ∈ U(a)` — and a sort can be the subject as well as the
+        // target (`⟦Prop⟧ ∈ ⟦Type 0⟧` is a rung twice over), so both positions
+        // are bridged and the result carried back through both. `LEVELPOLY.md`
+        // §5.5: three of the six dark rules, closed by the seam `IndTy`
+        // established.
+        let ba = self.rung_of_srt(ta);
+        let bd = self.rung_of_srt(dom);
+        if ba.is_some() || bd.is_some() {
+            let ra = ba.as_ref().map_or_else(|| ta.clone(), |(r, _)| r.clone());
+            let rd = bd.as_ref().map_or_else(|| dom.clone(), |(r, _)| r.clone());
+            let inner = self.domain_premise(&ra, &rd)?;
+            let mid = match &bd {
+                Some((rung, bridge)) => {
+                    let (rung, bridge) = (rung.clone(), bridge.clone());
+                    self.transport_to_srt(&inner, &ra, &rung, dom, &bridge)?
+                }
+                None => inner,
+            };
+            return match &ba {
+                Some((rung, bridge)) => {
+                    let (rung, bridge) = (rung.clone(), bridge.clone());
+                    self.transport_subject_to_srt(&mid, ta, &rung, dom, &bridge)
+                }
+                None => Some(mid),
+            }
+        }
         let want = Formula::mem(ta.clone(), dom.clone());
         let out = if *ta == self.pre.u0() && *dom == self.pre.u1() {
             // `⟦Prop⟧ ∈ ⟦Type 0⟧`, which is `U₀ ∈ U(ω)` and so *not* an instance
@@ -10285,9 +10337,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // what makes `Sort` work, and `fs(a,a) ∈ U(a)`. Both are term-level and
         // cheap, so they are tried before anything is taken apart.
         if let Some(t) = self.domain_premise(&te, ty) {
-            let by = if te == self.pre.u0() && *ty == self.pre.u1() {
+            // Classify on the **rung** spellings. `domain_premise` bridges a
+            // unified sort on either side before it runs, so classifying on the
+            // raw terms would send every arm to `FsDiag` the moment the
+            // vocabulary is unified — the rule would still be right and the
+            // report would be a lie. Measured: 51 `x ∈ U(x)` and 17 `U₀ ∈ U₁`
+            // silently became 68 `fs(a,a) ∈ U(a)` before this.
+            let rte = self.rung_of_srt(&te).map_or_else(|| te.clone(), |(r, _)| r);
+            let rty = self.rung_of_srt(ty).map_or_else(|| ty.clone(), |(r, _)| r);
+            let by = if rte == self.pre.u0() && rty == self.pre.u1() {
                 HtClause::U0MemU1
-            } else if *ty == Term::apply(self.pre.u_sym, vec![te.clone()]) {
+            } else if rty == Term::apply(self.pre.u_sym, vec![rte.clone()]) {
                 HtClause::MemU
             } else {
                 HtClause::FsDiag

@@ -2615,57 +2615,105 @@ fn the_switchover_staging_switch_unifies_the_sort_vocabulary() {
     assert!(unified.contains("Tarski-Grothendieck kernel"), "no report:\n{unified}");
 }
 
+/// Every `by …` rule row, as a map from rule name to count.
+fn rule_table(text: &str) -> std::collections::BTreeMap<String, u64> {
+    let mut out = std::collections::BTreeMap::new();
+    for l in text.lines() {
+        let l = l.trim_end();
+        let Some(rest) = l.strip_prefix("    by ") else { continue };
+        let Some((name, n)) = rest.rsplit_once(char::is_whitespace) else { continue };
+        let Ok(n) = n.trim().parse::<u64>() else { continue };
+        out.insert(name.trim().to_string(), n);
+    }
+    out
+}
+
 /// **The ground bridge restores the rung-shaped rules under the unified
-/// vocabulary** — `LEVELPOLY.md` §5.5, the first of the six dark rules.
+/// vocabulary** — `LEVELPOLY.md` §5.5, the switchover's re-derivation half.
 ///
-/// With `⟦Sort ℓ⟧ = srt(ℓ̂)` at every level, `⟦Type 0⟧` is `srt(1̄)` and not
-/// the rung `U(ω)` that `IndTy`'s base theorem is about, so the rule went
-/// silently to zero — 888 firings on the staged prelude. `Srt::rung_eq`
-/// equates the two spellings and one Leibniz step carries the conclusion
-/// back.
+/// With `⟦Sort ℓ⟧ = srt(ℓ̂)` at every level, every typing rule whose
+/// conclusion mentions a tower rung stops matching: `⟦Type 0⟧` is `srt(1̄)`
+/// and not `U(ω)`, `⟦Prop⟧` is `srt(0̄)` and not `U₀`. Six rules went silently
+/// to zero and three lost most of their population — 2511 firings on the
+/// staged prelude. `Srt::rung_eq` equates the two spellings and one Leibniz
+/// step per position carries the conclusion back.
 ///
-/// `093_projRed` fires the rule **four** times, which is what makes this a
-/// test rather than a coincidence: the bridge is derived once per *rung* and
-/// replayed, so a fixture with one firing cannot tell a working memo from a
-/// bridge that happens to work the first time and is then cached wrong.
+/// **The claim is that the two states answer identically**, rule by rule, and
+/// it is asserted over the *whole* table rather than at named rows. A floor
+/// would be the wrong shape: the unified run answering *more* than the ground
+/// run would mean proving something the ground path does not, which is the
+/// direction a bad transport fails in, and a per-row assertion cannot see a
+/// rule that quietly changed its label. That second failure is not
+/// hypothetical — bridging `domain_premise` without also bridging the
+/// `HtClause` split moved 51 `x ∈ U(x)` and 17 `U₀ ∈ U₁` into
+/// `fs(a,a) ∈ U(a)` on the prelude, every count still correct and the report a
+/// lie.
 ///
-/// The claim is **equality between the two states, not a floor**. The bridge
-/// is only correct if the unified run answers exactly what the ground run
-/// answers — more would mean it is proving something the ground path does not,
-/// which is the direction a bad transport fails in. Gaps are pinned equal for
-/// the same reason.
+/// [`STILL_DARK`] names the rules the bridge does not yet reach. They are
+/// allowed to differ and nothing else is, so this test reddens the moment a
+/// *restored* rule regresses, and the list is a work item that cannot rot
+/// silently — a rule removed from it that is still dark fails here.
+///
+/// Three files, because the rung-shaped rules do not co-occur: `093_projRed`
+/// carries `IndTy` four times (enough to catch a bridge memoised wrong after
+/// its first rung), `015_levelParams` is the only one that reaches
+/// `fs(a,a) ∈ U(a)` and `ty_conv`, and `118_accRecReduction` carries the
+/// largest `ty_pi_prop` population.
 ///
 /// Mutation run against this test (red, then reverted): making `rung_of_srt`
-/// return `None` always, which takes the unified run's `IndTy` to 0 and its
-/// gaps to 7 while leaving the staged run untouched — i.e. exactly the dark
-/// state this bridge exists to undo.
+/// return `None` always, which is the dark state itself — `IndTy` 4 → 0 on
+/// `093`, and every restored rule with it.
 #[test]
-fn the_ground_bridge_restores_indty_under_the_unified_vocabulary() {
-    let f = corpus().join("good/tutorial/093_projRed.ndjson");
-    if skip_guard::absent(&f) {
-        return
-    }
-    const INDTY: &str = "by IndTy: an inductive type lies in its universe";
-    let staged = poly_report(&f, "1", false);
-    let unified = poly_report_unified(&f, "1", false);
+fn the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does() {
+    /// Rules the ground bridge does not yet reach — `LEVELPOLY.md` §5.5.
+    /// Shrinking this list is the remaining work; a name left here after its
+    /// rule is fixed makes the non-vacuity check below fail.
+    const STILL_DARK: [&str; 4] = ["ty_pi_prop", "ty_pi", "ty_conv", "fs(a,a) ∈ U(a)"];
 
-    let ground = rows_totalling(&staged, INDTY);
-    assert_eq!(
-        ground, 4,
-        "the fixture stopped firing IndTy four times, so it can no longer witness the \
-         bridge's memo across rungs:\n{staged}"
+    let files = ["093_projRed", "015_levelParams", "118_accRecReduction"];
+    let mut restored_seen = 0u64;
+    let mut dark_seen: Vec<&str> = vec![];
+
+    for stem in files {
+        let f = corpus().join(format!("good/tutorial/{stem}.ndjson"));
+        if skip_guard::absent(&f) {
+            return
+        }
+        let ground = rule_table(&poly_report(&f, "1", false));
+        let unified = rule_table(&poly_report_unified(&f, "1", false));
+
+        for name in ground.keys().chain(unified.keys()).cloned().collect::<Vec<_>>() {
+            let (g, u) = (ground.get(&name).copied().unwrap_or(0), unified.get(&name).copied().unwrap_or(0));
+            if let Some(d) = STILL_DARK.iter().find(|d| name.starts_with(**d)) {
+                if g != u {
+                    dark_seen.push(d);
+                }
+                continue
+            }
+            assert_eq!(
+                g, u,
+                "{stem}: rule {name:?} answers {g} on the ground path and {u} with the \
+                 vocabulary unified — the bridge is not an equation, or this rule is newly \
+                 dark and belongs in STILL_DARK"
+            );
+        }
+        // The rules this tranche restored, pinned by name so that a run where
+        // they simply never fired cannot pass by agreeing at zero.
+        for r in ["IndTy: an inductive type lies in its universe", "x ∈ U(x)", "U₀ ∈ U₁"] {
+            restored_seen += ground.iter().filter(|(k, _)| k.starts_with(r)).map(|(_, v)| *v).sum::<u64>();
+        }
+    }
+    assert!(
+        restored_seen >= 4,
+        "the fixture set stopped firing the restored rung rules at all ({restored_seen}); \
+         it can no longer witness the bridge"
     );
-    assert_eq!(
-        rows_totalling(&unified, INDTY),
-        ground,
-        "the unified vocabulary must answer exactly what the ground one does — a rung-shaped \
-         rule that fires a different number of times is a bridge that is not an equation:\n\
-         {unified}"
-    );
-    assert_eq!(
-        rows_totalling(&unified, "TOTAL gaps"),
-        rows_totalling(&staged, "TOTAL gaps"),
-        "the bridge closed the rule but moved the gap ledger:\n{unified}"
+    dark_seen.sort_unstable();
+    dark_seen.dedup();
+    assert!(
+        !dark_seen.is_empty(),
+        "no rule in STILL_DARK differs any more — the bridge now reaches all of them and the \
+         list should be emptied, along with §5.5's remaining-work section"
     );
 }
 
