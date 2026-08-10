@@ -848,6 +848,29 @@ THREADING-CENSUS §2).
    `PolyLedger::is_clean` — which refuses to excuse `zoneB` — is folded into
    `Outcome::fully_certified`, so `mini --poly` exits 4 today and exits 0 when
    the de-scheduled route works.
+
+   Neither gate is in `ci/check.sh` — they are corpus measurements over
+   `vendor/`, which is gitignored, and this is a design record rather than a
+   CI change. Both are one line, written out so the next tranche runs them
+   instead of reinventing them:
+
+   ```sh
+   # Gate A — must be byte-identical to the previous tranche's file.
+   for f in vendor/arena-tests/good/tutorial/*.ndjson; do echo "## $(basename $f)"
+     ./target/debug/mini --verbose "$f" | grep -E '^(ledger|evidence|untranslated)\b'
+   done > sched.txt
+
+   # Gate B — the ratchet. Add MINI_POLY_SITES=1 for the `polysites` row.
+   for f in vendor/arena-tests/good/tutorial/*.ndjson; do echo "## $(basename $f)"
+     ./target/debug/mini --verbose --poly "$f" | grep -E '^poly'
+   done > poly.txt
+
+   # …and the headline, which is the row to quote: how many whole exports the
+   # de-scheduled route certifies end to end. 18 as of this tranche.
+   for f in vendor/arena-tests/good/tutorial/*.ndjson; do
+     ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
+   done | sort | uniq -c        # 18 × 0, 71 × 4, 2 × 2 (frontend declines)
+   ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
