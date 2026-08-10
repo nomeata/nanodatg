@@ -3472,3 +3472,103 @@ not declare one, the arm must *splice* `Acc` and let it be modelled, rather
 than treat it as a primitive: a spliced-but-unmodelled inductive would quietly
 put a fifth type back in front of a consumer. `init-prelude` declares no `Acc`,
 so this is the live case and not a hypothetical.
+
+## 8.11 Stage 1: the W helper, compiled — `scripts/inductive-basis/WFromPaths.lean`
+
+**Verdict: feasible, and the generic part is genuinely generic.** One
+construction, ~130 lines, parameterised by `A : Type u` and `B : A → Type u`;
+each target is then ~15 lines of glue. 526 lines, compiles at the pinned
+toolchain in ~1 s with 0 errors and every `#guard_msgs` satisfied.
+
+```text
+Edge A B  := Σ a : A, B a
+PTree     := List (Edge A B) → Option A        -- a partial labelling of paths
+Step S t  := ∃ a, t [] = some a ∧ (∀ b : B a, S (subt t ⟨a,b⟩))
+                              ∧ ∀ x, x.1 ≠ a → subt t x = nowhere
+Good t    := ∀ S, (∀ u, Step S u → S u) → S t  -- impredicative least fixpoint
+W A B     := Subtype Good
+Wrec      := WellFounded.fix over the immediate-subtree relation
+Wrec_iota := from WellFounded.fix_eq — propositional, as expected
+```
+
+Three targets, each pinned **twice** — the derived recursor against a
+transcription, and Lean's own recursor against the *same* transcription, so
+the transcription is checked against Lean rather than trusted:
+`BT` (finite branching, two recursive fields, two constructors), `IT`
+(infinite branching, recursive field under a binder), and `DT | mk : (n : Nat)
+→ (Fin n → DT) → DT` — a non-recursive field the recursive field's binder type
+*depends on*, which was expected to resist and does not: `CDT.rec' = Wrec` and
+`CDT.iota = Wrec_iota` verbatim. Non-degeneracy is pinned too:
+`CBT.leaf_ne_node` is proved from the recursor and its two ι rules alone, so
+the recursor is not blind to its step function — the check arm G's refutation
+taught us to make.
+
+**The one non-obvious ingredient** is `Step`'s *third* clause, "subtrees
+hanging off a label other than the node's own are empty". Without it a good
+tree is not determined by its root and its children, `canon` fails, `sup` is
+not surjective onto the carrier, and the recursor cannot be built at all.
+
+### Axioms, and the special case worth taking
+
+Every one of the seven derived constants costs `[propext, Classical.choice,
+Quot.sound]`. All three come from **one place**: `sup` must decide `x.1 = a`
+for an arbitrary `A`. That is `Classical.propDecidable`.
+
+**It is avoidable whenever `B` factors through the constructor tag** — then the
+label test is `Fin k` equality, decidable without choice, and the model loses
+all three. That covers every declaration whose recursive-field binder types do
+not mention its non-recursive fields, which is nearly all of them. A generator
+should special-case it, and the general path should be the fallback rather than
+the default.
+
+### The dependency list — what must be modelled before W
+
+Measured by a closure walk over types *and* values, pinned with `#guard_msgs`,
+with `BT`/`IT`/`DT` asserted absent rather than merely reported. **22
+inductives**, and for the generator they group as:
+
+| | |
+|---|---|
+| load-bearing carriers | `Eq`, `List`, `Option`, `Sigma`, `Subtype`, `Nat`, `Bool` |
+| well-foundedness | **`Acc`**, `WellFounded` |
+| proof plumbing | `And`, `Or`, `Iff`, `Exists`, `True`, `False`, `HEq`, `PProd`, `PUnit` |
+| classical dispatch | `Decidable`, `Nonempty` — and these two go with the special case above |
+
+`Acc` is the interesting entry and it is why arm G came first: the W model
+needs a prior model of accessibility (§8.10). `WellFounded` is an artefact of
+using `WellFounded.fix` rather than raw `Acc.rec`, and can be dropped at the
+price of re-proving the fixpoint equation by hand.
+
+`init-prelude` declares `List`, `Option`, `Subtype`, `Prod`, `PProd`, `Bool`,
+`Nat`, `Nonempty` and `Classical.choice`, and **does not declare `Acc`,
+`Sigma`, `PSigma`, `WellFounded`, `propext`, `funext` or `Quot.sound`** — so
+stage 2 needs a *splice-and-model* step, which the splice machinery does not
+have today: it splices, but does not then run the prim pass over what it
+spliced.
+
+### What schematises, and the one place a generator breaks first
+
+Free, schematic over the telescope: **arbitrary constructor count**
+(`A := Σ' t : Fin k, Args t`, `B` by case on the tag), **arbitrary
+non-recursive fields** including dependent ones and ones the recursive binder
+depends on, **recursive fields with and without binders** (a bare `T` field
+contributes `PUnit`), and **parameters**.
+
+Resists, in the order it will bite:
+
+* **The currying glue.** W hands you `(f : B a → W) → …`; Lean's recursor wants
+  the fields *uncurried* (`motive a → motive b → motive (node a b)`). Bridging
+  needs, per constructor, a chosen iso `B a ≅ Fin arity` **plus an eta lemma**
+  `f = fun i => ⟨case-split⟩ i` proved by case analysis on the index type. It
+  is generatable — the index type is a generated finite enumeration and the eta
+  lemma is one `rfl` per branch — but it is emitted code per constructor rather
+  than a uniform term, and it is where a generator will first break.
+* **Indices: not addressed at all.** `W A B` models one non-indexed type. An
+  indexed family needs the whole `Good`/`canon` development re-run
+  index-aware. Not attempted, and **not to be assumed** from the above. This
+  is the same wall as §8.9's 62 % cluster, from the other side.
+* **Mutual and nested**: need prior reductions (mutual → indexed, nested →
+  mutual), which land in indices.
+* **Universes**: a `Prop`-valued or small-eliminating target is a different
+  construction, and a `Sort`-polymorphic one would need `A B : Sort u`, which
+  `List`-of-`Sigma` paths do not directly support.
