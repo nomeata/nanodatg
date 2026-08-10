@@ -6497,3 +6497,97 @@ it helped: one store with two consumers is the state the census asks for, and
 the 1 640 raw hoists that are the `ty_const` cascade convert into store entries
 the day the shared constant store lands — at which point this read is where the
 target side collects them. It is instrumented so that day is visible.
+
+## The delta route, refuted before it was built — 2026-08-10
+
+*Task #126. Same run and configuration. The coordinator's directive was to
+build the mechanism named at the end of the previous section: a **generalised**
+typing threaded through `delta`, instantiated by the reduction's own
+substitution, targeting the 10 445 open subjects. It was measured first,
+because the claim "the generalised fact exists" was mine, unmeasured, and
+load-bearing. **It is false**, and the tranche was not built.*
+
+### The probe
+
+`Shared::typed_at` keys on the ground pair `(subject, target)`. For an **open**
+subject — one carrying the current declaration's locals — a ground miss is
+guaranteed and means nothing: the pair is about variables that did not exist
+when the declaration the term came from was checked. The question that can be
+asked is the abstracted one, and `Shared::typed_skel` asks it: every membership
+any typing rule concludes is also filed with its free variables closed over, in
+first-occurrence order.
+
+Canonical without minting anything. `Formula::forall` closes a free variable
+into a de Bruijn binder, so folding it over the pair's free variables gives a
+form that depends only on the term's shape and compares across declarations and
+across `Env`s — no fresh-variable pool, no ordering convention to get wrong.
+
+**Calibrated on the closed subjects.** For a closed subject the skeleton *is*
+the pair, so the closed rows of the skeleton probe must agree with the ground
+probe. They do: 0 closed skeleton hits against 0 closed ground hits over 8 172
+closed subjects. A skeleton hit where the pair missed would have meant the two
+keys measure different things and the open rows could not be read.
+
+### The result
+
+| of the 18 622 never concluded at their pair | |
+|---|---:|
+| **open** subject, generalised membership concluded in an **earlier** declaration | **133** |
+| open subject, generalised membership concluded in this declaration | 1 |
+| **open subject, never concluded at any generality** | **10 316** |
+| closed subject, skeleton concluded earlier / here | 0 / 0 |
+| closed subject, never concluded at any generality | 8 172 |
+
+**The delta route's population is 134, not 10 445.** 1.3 % of the open
+subjects, 0.7 % of the 18 622. Building the transport — generalising at the
+handoff write, matching the reduction's substitution, chaining each binder's
+`⟦u⟧ ∈ D` from the enclosing beta step — would have been the largest machine in
+this file for 134 obligations, and it would have measured clean.
+
+Read together with the two earlier keys, the population has now been asked for
+at four:
+
+| the question | the key | reached |
+|---|---|---:|
+| was this very membership concluded anywhere? | `(subject, target)` | 34 |
+| was the subject typed at *some other* target? | `subject` | 460 |
+| was the **generalised** membership concluded? | `∀w⃗. subject ∈ target` | **134** |
+| does the target-side twin find it in the same store? | `arg_mems` at `target_mem` | 145, closing **0** |
+
+**The residue is not a transport problem at any level of generality.** The
+facts were never derived, anywhere, by anyone, in any form. What is missing is
+derivational power — and the decline ledger says where: the leaves of the
+lambda cascade are applications (10 209) and Πs (690), and the 8 496 body
+obligations stated at a beta-reducible target against 125 discharges are the
+same wall seen from the target side. That is bucket (ii) by §3's own
+classification, so §3's split has been corrected in place: the 18 656 were
+filed under bucket (i) on the assumption that the facts existed and were being
+dropped.
+
+### The 7 717 closed subjects: 407 distinct terms, and what stands in the way
+
+Asked as a separate question, because "closed" is a strong property: such a
+term's typing needs no transporting and no generalising, it can simply be
+concluded. **7 717 obligations, 407 distinct terms** — 223 lambdas, 88
+applications of a defined constant, 44 Πs, 17 let/projection/literal, 14
+applications of an opaque constant, 12 constants, 9 applications of a lambda.
+So the cost of typing them on demand is 407 inferences, not 7 717, and the
+arithmetic is not the obstacle. Two things are:
+
+* **Not at the obligation site.** `domain_obligation` runs inside `TgBackend`,
+  which is a *field* of the `TypeChecker` — the call is
+  `tc.certifier.beta(tc.ctx, …)`, with the backend mutably borrowed and the
+  context passed beside it. There is no path from the backend back to `infer`,
+  and giving it one means restructuring the ownership.
+* **At the construction site, with a risk to bound first.** These terms are
+  built by the reduction, inside `whnf`, where `self` *is* a `TypeChecker` and
+  `infer` is in hand. So the correct reading of "the typing arrives with the
+  whnf call" is not a cursor-carried typing — which pays nothing, proved above
+  — but **inference invoked at each beta contraction on the argument, handed
+  to the backend through the existing `Certifier::app_arg_checked` store.**
+  The risk is re-entrancy: `infer` calls `ensure_pi` calls `whnf`, and beta is
+  81 % of all reduction steps, so this is the hot path calling itself. Measure
+  the bound before building.
+
+Ledger unchanged throughout: 15 532 gaps, 2 247 escapes, 20 328 raw hoists.
+The probes are `stepcount`-gated and cost nothing in the default build.

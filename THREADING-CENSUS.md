@@ -133,7 +133,7 @@ the *boundary*, in both directions.
 | fn | today | should take / return | status | instead | diff. |
 | --- | --- | --- | --- | --- | --- |
 | `whnf` (`tc.rs:1389`), `whnf_no_unfolding` (`tc.rs:1426`) | `ExprPtr` only; 28 callers (18 `tc.rs` + 10 `inductive.rs`, re-counted 2026-08-09 — the "28 callers" comment at `tc.rs:1156–1157` is accurate) | **take** `⊢ ⟦e⟧ ∈ ⟦T⟧`; **return** `(e', ⊢ ⟦e⟧ = ⟦e'⟧)` — then `⟦e'⟧ ∈ ⟦T⟧` by Leibniz. The typing *input* is what feeds beta's domain obligations (next row) | **partial** — evidence out exists on demand (`whnf_no_unfolding_aux_with_cert`, `tc.rs:1444`) and is consumed on `def_eq` paths only; evidence *in* does not exist at all | callers that need the equality either use the aux-with-cert path (def_eq) or drop it (all of inference, §1.2 last row); the typing precondition is re-discovered per beta step, next row | signature change M; feeding beta D (below) |
-| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` arrives **threaded where the checker ever held it**: `domain_obligation` first reads `TgBackend::arg_mems` — the store `Certifier::app_arg_checked` fills at `infer_app`'s argument check with the very `ty_conv` composition (`⟦arg⟧ ∈ ⟦binder domain⟧`) the application rule consumes, now built whether or not the head's own derivation is alive — and only then falls back to `has_type_a`, `local_premises`, and the raw hoist | exactly what it now does for checked arguments; the residue is below | **partial** (handoff landed 2026-08-10; fixture `beta_domain_obligation_reads_the_application_checks_handoff`, three atoms, both mutations verified). Measured at `a7b0c6a`: 39 951 asked, 26 724 entries stored, **10 300 answered from the handoff** (102 outright + 10 198 under antecedents, 0 recalls failing their claim), escapes 2 257 → 2 247, gaps 15 542 → 15 532, +0.09 % instructions. The former claim "`infer` typed this very argument when the application was checked" is now **measured, and it is not universal**: the 20 328 remaining raw hoists split by cause into **32** handed off at another domain term, **1 640** whose argument was checked but whose typing was already a hole there (the `ty_const` cascade seen from the beta rule — §3 bucket (ii), and these convert to store entries by themselves when the shared constant store lands), and **18 656 about terms no application check ever visited** — probe-sampled: `Eq.refl`/`HEq.refl` constructor apps built by `to_ctor_when_k`'s K-shortcut, and minor premises inside *other declarations' values* entering by delta, instantiated at the current locals. No intra-declaration handoff reaches those two. **The second named unblock is now measured, and refuted (2026-08-10).** `Shared::typed_at` records every `(subject, target)` pair a typing rule concluded, with the declaration that concluded it; of the 18 656, **34** are memberships some declaration's inference did conclude (all 34 in an *earlier* declaration, 26 free of antecedents), **0** were concluded in the current declaration, and **18 622** were never a typing rule's conclusion anywhere on the thread. So cross-declaration evidence reaches 0.18 % of this population: what is missing is not the transport of a fact but the fact. The probe is claim-checked and calibrated, not just run: every handoff recall is a pair `typed_at` must know (0 unknown over 10 300 recalls), and **11 031** typings were re-concluded at a pair an *earlier* declaration already held — so the interpreted key does cross declarations abundantly, and a small `earlier` row means the facts are absent, not that the keys fail to line up. `stepcount`-gated | residue: `has_type` search + raw hoist, now cause-attributed and reach-attributed in the ledger (`raw hoists by cause`, `of the never-checked …`) | **D** — stage 2 only |
+| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` arrives **threaded where the checker ever held it**: `domain_obligation` first reads `TgBackend::arg_mems` — the store `Certifier::app_arg_checked` fills at `infer_app`'s argument check with the very `ty_conv` composition (`⟦arg⟧ ∈ ⟦binder domain⟧`) the application rule consumes, now built whether or not the head's own derivation is alive — and only then falls back to `has_type_a`, `local_premises`, and the raw hoist | exactly what it now does for checked arguments; the residue is below | **partial** (handoff landed 2026-08-10; fixture `beta_domain_obligation_reads_the_application_checks_handoff`, three atoms, both mutations verified). Measured at `a7b0c6a`: 39 951 asked, 26 724 entries stored, **10 300 answered from the handoff** (102 outright + 10 198 under antecedents, 0 recalls failing their claim), escapes 2 257 → 2 247, gaps 15 542 → 15 532, +0.09 % instructions. The former claim "`infer` typed this very argument when the application was checked" is now **measured, and it is not universal**: the 20 328 remaining raw hoists split by cause into **32** handed off at another domain term, **1 640** whose argument was checked but whose typing was already a hole there (the `ty_const` cascade seen from the beta rule — §3 bucket (ii), and these convert to store entries by themselves when the shared constant store lands), and **18 656 about terms no application check ever visited** — probe-sampled: `Eq.refl`/`HEq.refl` constructor apps built by `to_ctor_when_k`'s K-shortcut, and minor premises inside *other declarations' values* entering by delta, instantiated at the current locals. No intra-declaration handoff reaches those two. **The second named unblock is now measured, and refuted (2026-08-10).** `Shared::typed_at` records every `(subject, target)` pair a typing rule concluded, with the declaration that concluded it; of the 18 656, **34** are memberships some declaration's inference did conclude (all 34 in an *earlier* declaration, 26 free of antecedents), **0** were concluded in the current declaration, and **18 622** were never a typing rule's conclusion anywhere on the thread. So cross-declaration evidence reaches 0.18 % of this population: what is missing is not the transport of a fact but the fact. **Re-asked at three weaker keys on 2026-08-10 and the answer holds** (§2): the *subject* at some other target reaches 460, the **generalised** membership with free variables abstracted away reaches **134**, and the beta rule's target-side twin reading the same handoff answers 145 and closes 0. Of 10 450 open subjects — substitution instances whose ground pair is absent by construction — 10 316 were never concluded at any generality at all. The probe is claim-checked and calibrated, not just run: every handoff recall is a pair `typed_at` must know (0 unknown over 10 300 recalls), and **11 031** typings were re-concluded at a pair an *earlier* declaration already held — so the interpreted key does cross declarations abundantly, and a small `earlier` row means the facts are absent, not that the keys fail to line up. `stepcount`-gated | residue: `has_type` search + raw hoist, now cause-attributed and reach-attributed in the ledger (`raw hoists by cause`, `of the never-checked …`) | **D** — stage 2 only |
 | `whnf_reduce` / `whnf_no_unfolding_reduce` (`tc.rs:1396,1454`) | record traces; `Admit::Quot` and `Admit::NatRed` steps have no backend rule; `Rule::ProjRed` and `Rule::Iota` are backend rules since 2026-08-01 (`proj_red_step`, `iota_step`, §1.5) | as-is; missing pieces are backend rules (`quot` needs interpreted `Quot` — 0 quot steps fire on ip — `NatRed` is milestone 4) | done as threading | Admits, counted | out of threading scope |
 | `certify_reduct` / `trace_cert` / `step_cert` / `seq` / `symm_leg` / `compose_legs` / `compose_whnf_legs` (`tc.rs:1195–1387`) | evidence plumbing, endpoint-checked | as-is | **done** (`Admit::Whnf` = bug report, at zero on ip). The reduct memos audited as caches of evidence 2026-08-10 — §1.10 | — | — |
 | `unfold_def` (`tc.rs:2159`), `delta` (`tc.rs:2148`) | `delta` returns cert; `unfold_def` returns term, callers wrap in `Rule::Delta` trace | as-is | done | — | — |
@@ -463,70 +463,98 @@ still enters the search with no assumptions — three `has_type_a(…, &[], …)
 sites exist (`domain_obligation`, and two in `derive_point_of_proof`),
 grep-auditable.
 
-**Stage 2: `whnf` takes and returns evidence.**
-Signature per target: `whnf(e, ⊢⟦e⟧∈⟦T⟧) → (e', ⊢⟦e⟧=⟦e'⟧)` (the equality
-already exists via traces; the *new* content is the typing input). Internally,
-the typing must flow *down the reduction*: when `whnf` beta-contracts
-`(λx:A.b) a`, the typing of `a` at `A` is owed — and the 2026-08-10 handoff
-(§1.3) settled how much of that debt the checker's *own inference* can pay
-without this stage: `infer_app` now hands every checked argument's typing to
-the backend keyed at the binder's domain, and 10 300 of 39 951 obligations
-are answered from it. **The measured residue narrows what this stage is
-for:** of the 20 328 remaining raw hoists, 18 656 are about terms *no
-inference in the current declaration ever typed* — `to_ctor_when_k`'s
-K-shortcut constructions and delta-imported minor premises instantiated at
-current locals — so for them "the typing arrives with the whnf call" can only
-mean genuine subject-reduction threading (a typing carried alongside the
-cursor, one Leibniz per step), not a recall of inference; and 1 640 are the
-`ty_const` cascade (bucket (ii)), which the shared constant store converts
-into handoff entries with no stage-2 work at all. **This stage is now the
-18 656's only route.** The alternative the first edition of this section left
-open — cross-declaration evidence, once task #125 gave the two engines one
-constant store and so one comparable interpreted key — was measured on
-2026-08-10 and reaches **34** of them (§1.3). 18 622 are memberships no typing
-rule anywhere in the run ever concluded, so there is nothing to transport;
-and the shape ledger says where the derivations would have to come from —
-**10 538** of the raw hoists are about a λ (`HtMiss::Lam` — the *subject's*
-shape), against 2 970 the same rule does discharge. That row was read as "the
-lambda rule did not apply" and **that reading is refuted** (2026-08-10): with
-every decline point in `has_type_lam` attributed, 32 831 of 35 321 declines are
-"the rule applied, the **body** has no typing", and the nine structural ways
-the rule itself can fail — graph, skeleton, fibre, lemma — fire **zero** times
-on the whole prelude. The declines are a nested-λ cascade (21 263 untypeable
-bodies are themselves lambdas); the genuine leaves are **applications**
-(10 209) and Πs (690), so the rule the residue wants is the application rule
-and `ty_const` behind it. A second front the same measurement exposes: **8 496**
-of those body obligations are stated at a target that beta-reduces, while
-`HtClause::TargetBeta` discharges **125** in the whole run. The reading
-"the keys simply do not line up across declarations" is refuted by the same
-run: 11 031 typings were re-concluded at a pair an earlier declaration already
-held. Mechanically as before:
-`whnf_reduce`'s loop threads a typing alongside the cursor; `Certifier::beta`
-grows a typing parameter; the 28 call sites split into evidence-carrying
-(inference, `ensure_*`) and don't-care (`inductive.rs`, until inductives need
-it). The `ensure_pi` slice landed 2026-08-09 (`infer_app` composes the
-reduction leg via `ty_conv`).
-**The cursor-carried typing does not pay the beta rule's debt, and that is
-structural** (measured 2026-08-10, `MEASUREMENTS.md`, "Where the lambda typing
-rule actually declines"): `⟦(λx:A.b) a⟧ ∈ ⟦T⟧` says nothing about `⟦a⟧ ∈ ⟦A⟧`,
-because membership of a set-application is not a statement about the argument.
-The transported typing is correct and is consumed by nothing that owes a domain
-obligation. The same measurement splits the 18 622 by whether the *subject* was
-ever typed at all: **7 717 are closed terms no typing rule anywhere ever spoke
-about** (unreachable by any transport — only a rule firing where none fires
-today produces the fact), and **10 445 are open**, i.e. substitution instances
-of subterms of other declarations' values entering by delta. For the open half
-the ground fact is absent by construction but its *generalised* form was
-concluded in the declaration the value came from, so the reachable mechanism is
-a generalised typing threaded through **delta**, instantiated by the
-reduction's own substitution, with each binder's `⟦u⟧ ∈ D` supplied by the
-enclosing beta step's obligation. A cross-declaration store that carries a
-*conversion* reaches 460 of the 18 622 (2.5 %), confirming the refutation
-below at the sharper question.
-*Measurables:* the `raw hoists by cause` ledger row — this stage attacks the
-"never checked at an application" 18 656; escapes continue down. If
-local-headed misses remain after stage 1, its context is not reaching the
-reduction path.
+**Stage 2: ~~`whnf` takes and returns evidence~~ — WITHDRAWN. The residue is
+not threading-shaped, at any level of generality.**
+
+*Rewritten in place 2026-08-10 after the population was measured four ways.
+The previous text specified `whnf(e, ⊢⟦e⟧∈⟦T⟧) → (e', ⊢⟦e⟧=⟦e'⟧)` and called
+this stage "the 18 656's only route". Both claims are false, and the second is
+false for a reason no amount of plumbing changes.*
+
+**The signature cannot pay the debt it was specified to pay, and the reason is
+structural.** The stage existed to feed the beta rule's domain obligation
+`⟦a⟧ ∈ ⟦A⟧` for the redex `(λx:A.b) a`. A typing carried alongside the cursor
+gives `⟦(λx:A.b) a⟧ ∈ ⟦T⟧`, and **membership of a set-application is not a
+statement about the argument**: nothing about `app(f, a) ∈ T` constrains `a`.
+The transported typing is correct, costs a Leibniz per step, and is consumed by
+nothing that owes a domain obligation. Do not implement it as specified. (The
+`ensure_pi` slice of 2026-08-09 and the `arg_mems` handoff of 2026-08-10 are
+unaffected — they are inference handing over what inference derived, which is a
+different mechanism and did pay.)
+
+**The residue is not a transport problem. Measured at four keys, on
+`init-prelude`, of the 18 656 raw hoists no application check ever visited:**
+
+| the question asked | the key | reached |
+| --- | --- | ---: |
+| was this very membership concluded anywhere? | `(subject, target)` | **34** |
+| was the subject typed at *some other* target? | `subject` | **460** |
+| was the **generalised** membership concluded — free variables abstracted away? | `∀w⃗. subject ∈ target` | **134** |
+| does the beta rule's *target*-side twin find it? | `arg_mems` at `target_mem` | **145, closing 0** |
+
+The third row is the one that settles it. An open subject — one carrying the
+current declaration's locals — is a substitution instance of a subterm of
+another declaration's value entering by delta, so its *ground* pair is absent
+**by construction**: it is about variables that did not exist when that
+declaration was checked. That is why the first row's 34 proves nothing on its
+own, and why a delta-borne transport of generalised typings (instantiated by
+the reduction's own substitution, each binder's `⟦u⟧ ∈ D` supplied by the
+enclosing beta step) looked like the answer. It is not: **of 10 450 open
+subjects, 133 have a generalised membership an earlier declaration concluded, 1
+was concluded here, and 10 316 were never concluded at any generality at all.**
+The facts are not somewhere else in a form that needs carrying. They were never
+derived, anywhere, by anyone. (`Shared::typed_skel`; canonical via
+`Formula::forall`, which needs no minted variables, so the key compares across
+declarations. Calibrated on the closed subjects, where the skeleton *is* the
+pair and the two keys must agree — they do.)
+
+**Where the derivations would have to come from instead.** With every decline
+point in `has_type_lam` attributed, **32 831 of 35 321 declines are "the rule
+applied; the body has no typing"**, and the nine structural ways the lambda
+rule can fail fire **zero** times on the whole prelude. The declines are a
+nested-λ cascade — 21 263 untypeable bodies are themselves lambdas — whose real
+leaves are **applications** (10 209: 4 218 headed by a defined constant, 3 782
+by a lambda, 2 209 by an opaque constant) and **Πs** (690, wanting
+`dprod_in_universe`). A second front, same shape: **8 496** of those body
+obligations are stated at a target that beta-reduces, while
+`HtClause::TargetBeta` discharges **125** in the whole run — `target_head_step`
+reaches 12 874 redexes and loses 6 004 to its own domain premise and 8 624 to
+the reduct still not being typeable.
+
+So what this stage was for is **derivational power in the application rule and
+in `ty_const`**, not plumbing. That is bucket (ii) work by §3's own
+classification, which means §3's split needs re-reading: the 18 656 were
+assigned to bucket (i) on the assumption that the facts existed and were being
+dropped, and they do not exist.
+
+**The one population that is not a ceiling, and what it would cost.** Of the
+18 622, **7 717 are about closed terms** — no free variables, so nothing needs
+transporting and nothing needs generalising; such a term's typing can simply be
+*concluded*. They are **407 distinct terms** (223 lambdas, 88 applications of a
+defined constant, 44 Πs, 17 let/projection/literal, 14 applications of an
+opaque constant, 12 constants, 9 applications of a lambda), so typing them on
+demand is 407 inferences, not 7 717. Two things stand between that and a
+tranche, and they are engineering, not arithmetic:
+
+* **Not at the obligation site.** `domain_obligation` runs inside `TgBackend`,
+  which is a *field* of the `TypeChecker` (`tc.certifier.beta(tc.ctx, …)`), so
+  there is no path from the backend back to `infer`. On-demand inference there
+  needs the ownership restructured, which is a bigger change than the payoff.
+* **At the construction site, with a named risk.** These terms are built by
+  the reduction itself, inside `whnf`, where `self` *is* a `TypeChecker` and
+  `infer` is in hand — so the right reading of "the typing arrives with the
+  whnf call" is not a cursor-carried typing but **inference invoked at each
+  beta contraction on the argument, handed over through the existing
+  `Certifier::app_arg_checked` store**. The risk to measure first is
+  re-entrancy: `infer` calls `ensure_pi` calls `whnf`, and beta is 81 % of all
+  reduction steps, so this is the hot path calling itself. Bound it before
+  building it.
+
+*Measurables, restated:* the `raw hoists by cause` row and its two new
+cross-cuts (`lambda typing declines, by cause`; the subject/skeleton reach
+rows) are what any successor tranche must move. The old measurable — "escapes
+continue down" — stands, and stands unmoved: escapes were 2 247 before and
+after everything above, because nothing above closed an obligation.
 
 **Stage 3: `def_eq` takes typings.**
 `def_eq(a, b, ta, tb)` and thread to: `proof_irrel_eq` (already fed by stage
@@ -590,7 +618,7 @@ item. All counts **(ip)**, fresh run at `8d2b9c9`.
 
 | debt | count (ip) | closed by |
 | --- | ---: | --- |
-| beta obligations searched / hoisted instead of arriving with the call | 39 951 asked; **10 300 now answered from the application check's handoff** (2026-08-10, §1.3). The 20 328 raw hoists are cause-split: 32 threading-shaped (another domain term), 1 640 bucket-(ii) (`ty_const` cascade at the argument's own check), 18 656 about reduction-built / delta-imported terms — of which a cross-declaration typing store reaches **34**, measured | handoff **landed**; residue: stage 2 proper (the 18 656) + the shared constant store (the 1 640) |
+| beta obligations searched / hoisted instead of arriving with the call | 39 951 asked; **10 300 now answered from the application check's handoff** (2026-08-10, §1.3). The 20 328 raw hoists are cause-split: 32 threading-shaped (another domain term), 1 640 bucket-(ii) (`ty_const` cascade at the argument's own check), 18 656 about reduction-built / delta-imported terms | handoff **landed**. The 18 656 were assigned to bucket (i) on the assumption that the facts existed and were being dropped. **They do not exist** — reached at four keys: 34 / 460 / 134 / 145-closing-0 (§2). They are bucket (ii): derivational power in the application rule and `ty_const`. The 1 640 remain the shared constant store's |
 | escaped assumptions (undischarged at a boundary) | 2 247 (2 257 → 2 247 with the handoff: ten obligations about applications of locals now carry per-local antecedents their binders discharge, where the raw membership had none) | stage 1 |
 | `has_type` misses that are "a local" — context guessed, not read | **1 132** (was 11 211) — closed not by stage 1's context stack but by the handoff: an argument whose typing rests on ambient locals now arrives from `infer_app` with those antecedents already attached, so the search never runs to acquire them. The residue is the genuinely-ambient population §3 item 1 describes | handoff (landed); residue stage 1 |
 | `point_of_proof` premises still searched (`Pop`: 41 lam + 34 rule) | 75 | stages 1–2 |

@@ -718,6 +718,29 @@ fn conj_proj(hyps: &[Formula], i: usize) -> Option<Thm> {
 /// both are re-stated under the merged set first. It is also how assumptions get
 /// *reordered*, which the discharge at a binder needs — the one being discharged
 /// has to be last.
+/// `⟦a⟧ ∈ ⟦A⟧` with its free variables abstracted away, in first-occurrence
+/// order — the canonical form two declarations' versions of "the same"
+/// membership share.
+///
+/// Nothing is minted: `Formula::forall` closes over a free variable into a de
+/// Bruijn binder, so the result depends only on the term's shape and on the
+/// *order* the variables first occur, which is a property of the term. Two
+/// declarations that conclude the same membership about their own locals
+/// therefore produce the same key, which is exactly what the ground key
+/// [`Shared::typed_at`] cannot do. See [`Shared::typed_skel`].
+fn mem_skeleton(a: &Term, b: &Term) -> Formula {
+    let mut vs = Vec::new();
+    a.free_vars(&mut vs);
+    b.free_vars(&mut vs);
+    let mut f = Formula::mem(a.clone(), b.clone());
+    // Innermost-first, so the *outermost* binder is the first-occurring
+    // variable however many there are.
+    for v in vs.into_iter().rev() {
+        f = Formula::forall(v, f);
+    }
+    f
+}
+
 fn reassume(thm: &Thm, from: &[Formula], to: &[Formula]) -> Option<Thm> {
     if from == to {
         return Some(thm.clone())
@@ -2390,6 +2413,33 @@ struct Shared {
     /// is a missing conversion. This index separates them.
     #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
     typed_subj: HashMap<Term, u32>,
+    /// The **skeleton** index: every membership any typing rule concluded, with
+    /// its free variables abstracted away, and the earliest declaration that
+    /// concluded it.
+    ///
+    /// This is the probe that decides whether the delta route has a population.
+    /// A raw hoist about an *open* subject — one carrying the current
+    /// declaration's locals — is a substitution instance of a subterm of some
+    /// other declaration's value, entering by delta. The ground fact is absent
+    /// **by construction**: it is about variables that did not exist when that
+    /// declaration was checked, so `typed_at` must report `Never` however
+    /// abundantly the generalised fact exists. Keying on the skeleton is the
+    /// only way to ask the question the ground key cannot: *was the
+    /// generalisation ever concluded?*
+    ///
+    /// Canonical without minting anything: `Formula::forall` closes over a free
+    /// variable, so folding it over the pair's free variables in first-
+    /// occurrence order gives a de Bruijn form that compares across
+    /// declarations and across `Env`s. See [`mem_skeleton`].
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+    typed_skel: HashMap<Formula, u32>,
+    /// The distinct **closed** subjects of raw hoists that no typing rule
+    /// anywhere ever spoke about — the 7 717. Distinct rather than counted,
+    /// because the question this population raises is whether they could be
+    /// typed *on demand*, and that is a question about how many there are to
+    /// type, not how often each is asked.
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+    closed_unknown: std::collections::HashSet<Term>,
     /// Serial number of the next `TgBackend`, i.e. of the declaration-check
     /// about to start. Only ever compared for equality/order, so a wrap would
     /// be a mis-measurement and not a fault; `u32` is three orders of
@@ -2525,6 +2575,8 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             declined_cond: std::collections::HashSet::new(),
             typed_at: HashMap::new(),
             typed_subj: HashMap::new(),
+            typed_skel: HashMap::new(),
+            closed_unknown: std::collections::HashSet::new(),
             decl_seq: 0,
             false_anchor: None,
         }));
@@ -10992,6 +11044,34 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                             (None, true) => SubjReach::ClosedUnknown,
                             (None, false) => SubjReach::OpenUnknown,
                         });
+                        // **The delta route's population, measured.** For an
+                        // open subject the ground fact is absent by
+                        // construction; the question is whether the
+                        // *generalisation* was ever concluded. For a closed one
+                        // the skeleton is the pair itself, so this row can only
+                        // repeat `typed_at` — counted anyway, as the probe's
+                        // own calibration: a skeleton hit on a closed subject
+                        // whose pair was a miss would mean the two keys
+                        // disagree and the open rows could not be trusted.
+                        let skel = mem_skeleton(&ta, dom);
+                        let seen_skel = self.shared.borrow().typed_skel.get(&skel).copied();
+                        note_skel(match (seen_skel, fv.is_empty()) {
+                            (None, true) => SkelReach::ClosedNone,
+                            (None, false) => SkelReach::OpenNone,
+                            (Some(s), true) if s < here => SkelReach::ClosedEarlier,
+                            (Some(_), true) => SkelReach::ClosedHere,
+                            (Some(s), false) if s < here => SkelReach::OpenEarlier,
+                            (Some(_), false) => SkelReach::OpenHere,
+                        });
+                        if fv.is_empty() {
+                            if self.shared.borrow_mut().closed_unknown.insert(ta.clone()) {
+                                CLOSED_UNKNOWN_DISTINCT
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let sh = self.ht_shape(ctx, arg);
+                                CU_SHAPE[sh as usize]
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
                 note_ht_raw(self.ht_shape(ctx, arg));
@@ -14541,6 +14621,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         TYPED_AT_RECONCLUDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     self.shared.borrow_mut().typed_subj.entry(te.clone()).or_insert(seq);
+                    let skel = mem_skeleton(te, ty);
+                    self.shared.borrow_mut().typed_skel.entry(skel).or_insert(seq);
                 }
                 TgTyping::Derived { thm, hyps }
             }
@@ -16549,6 +16631,50 @@ fn note_subj_reach(k: SubjReach) {
     SUBJ_REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// **Does the generalised fact exist?** — the probe that decides whether a
+/// typing threaded through `delta` has a population. See [`Shared::typed_skel`].
+///
+/// An open subject is a substitution instance of a subterm of another
+/// declaration's value; its ground pair is absent by construction, so
+/// `Reach::Never` says nothing about whether the fact it instantiates was ever
+/// proved. This asks the abstracted question. The closed rows are the
+/// calibration: for a closed subject the skeleton *is* the pair, so
+/// `ClosedEarlier`/`ClosedHere` must agree with `SubjReach`'s closed rows —
+/// disagreement would mean the two keys do not measure the same thing.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum SkelReach {
+    /// Open subject; the generalised membership was concluded in an earlier
+    /// declaration. **The delta route's population.**
+    OpenEarlier,
+    /// Open subject; concluded in this declaration, but not at a pair the
+    /// handoff saw.
+    OpenHere,
+    /// Open subject; the generalisation was never concluded either.
+    OpenNone,
+    /// Closed subject; skeleton concluded earlier (calibration).
+    ClosedEarlier,
+    /// Closed subject; skeleton concluded here (calibration).
+    ClosedHere,
+    /// Closed subject; never concluded at any generality.
+    ClosedNone,
+}
+/// Distinct members of [`Shared::closed_unknown`] — how many terms would have
+/// to be typed if the 7 717 were to be typed on demand, as against how often
+/// the obligation is asked.
+static CLOSED_UNKNOWN_DISTINCT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// …by subject shape, over the *distinct* terms: which construction site would
+/// have to type them.
+static CU_SHAPE: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
+
+const N_SKEL: usize = 6;
+static SKEL: [std::sync::atomic::AtomicU64; N_SKEL] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_SKEL];
+#[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+fn note_skel(k: SkelReach) { SKEL[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
 /// [`TgBackend::has_types`] recalls that fail the claim check at the read end.
 ///
 /// Expected 0, and for a reason: the memo's key determines the claim, so a
@@ -17403,6 +17529,29 @@ fn ht_report() -> String {
                 sr(SubjReach::ClosedUnknown),
                 sr(SubjReach::OpenUnknown),
             ));
+        }
+        let sk = |k: SkelReach| SKEL[k as usize].load(Relaxed);
+        let sk_total: u64 = SKEL.iter().map(|c| c.load(Relaxed)).sum();
+        if sk_total > 0 {
+            s.push_str(&format!(
+                "      …and with the free variables abstracted away, the GENERALISED membership was concluded: open subjects {} earlier + {} here + {} never; closed {} earlier + {} here + {} never\n",
+                sk(SkelReach::OpenEarlier),
+                sk(SkelReach::OpenHere),
+                sk(SkelReach::OpenNone),
+                sk(SkelReach::ClosedEarlier),
+                sk(SkelReach::ClosedHere),
+                sk(SkelReach::ClosedNone),
+            ));
+            s.push_str(&format!(
+                "      (the closed subjects nothing ever typed are {} distinct terms)\n",
+                CLOSED_UNKNOWN_DISTINCT.load(Relaxed),
+            ));
+            for m in HtMiss::ALL {
+                let n = CU_SHAPE[m as usize].load(Relaxed);
+                if n > 0 {
+                    s.push_str(&format!("        distinct closed, was: {:<44} {n:>6}\n", m.name()));
+                }
+            }
         }
         let lam_total: u64 = LAM_DECLINE.iter().map(|c| c.load(Relaxed)).sum();
         if lam_total > 0 {
