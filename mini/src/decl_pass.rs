@@ -406,42 +406,44 @@ impl Pass {
 
 /// **Every name `kernel::add(env, d)` brought into `env`.**
 ///
-/// The declaration's own names — the constant, or an inductive's type formers
-/// and constructors, or `Quot`'s four — and then everything `env` now says one
-/// of those owns.
+/// Two sources and they are genuinely different:
 ///
-/// The second half is **read off `env.owners` rather than predicted**, for
-/// `nested_splice::export_recs`'s reason: a nested declaration owns `T.rec_1`
-/// and `T.rec_2` as well as `T.rec`, and how many recursors it owns is the
-/// specialisation's answer, not the declaration's. The scan is once per
-/// inductive — an axiom or a definition owns nothing — and it is checked on
-/// every debug run by [`Pass::step`]'s `debug_assert!`.
+/// * the names nothing owns — a definition's or an axiom's own, an inductive's
+///   type formers, and `Quot`'s four, which `kernel::add_quot` mints and files
+///   under **no owner** at all;
+/// * everything `env` now attributes to one of those, read off `env.owners`.
+///
+/// The second half covers an inductive's constructors and its recursors, and it
+/// is read rather than predicted for `nested_splice::export_recs`'s reason: a
+/// nested declaration owns `T.rec_1` and `T.rec_2` as well as `T.rec`, and how
+/// many recursors it owns is the specialisation's answer and not the
+/// declaration's. **So the constructors are not listed here either**, and that
+/// is deliberate: an explicit list of them was, and a mutation that deleted it
+/// left every test green, because `add_block` files each constructor under its
+/// type former and the scan below picks them all up. A branch that cannot fail
+/// is worse than no branch.
+///
+/// The scan runs once per inductive — an axiom or a definition owns nothing —
+/// and the whole function is checked on every debug run by [`Pass::step`]'s
+/// `debug_assert_eq!` and directly by
+/// [`tests::introduced_is_what_the_kernel_inserted`].
 fn introduced(env: &Environment, d: &Declaration) -> Vec<Name> {
     let mut out: Vec<Name> = match d {
-        Declaration::Axiom { name, .. } => return vec![*name],
-        Declaration::Def { name, .. } => return vec![*name],
+        Declaration::Axiom { name, .. } | Declaration::Def { name, .. } => return vec![*name],
+        // **`add_quot` files no owners**, so its family is named here and
+        // nowhere else. Deleting this arm is a mutation the unit test catches.
         Declaration::Quot => {
             let q = Name::simple("Quot");
             vec![q, Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
         }
-        Declaration::Inductive { name, ctors, .. } => {
-            let mut v = vec![*name];
-            v.extend(ctors.iter().map(|(c, _)| *c));
-            v
-        }
-        Declaration::Mutual { types, .. } => {
-            let mut v = Vec::new();
-            for t in types {
-                v.push(t.name);
-                v.extend(t.ctors.iter().map(|(c, _)| *c));
-            }
-            v
-        }
+        Declaration::Inductive { name, .. } => vec![*name],
+        Declaration::Mutual { types, .. } => types.iter().map(|t| t.name).collect(),
     };
     let owners: std::collections::HashSet<Name> = out.iter().copied().collect();
     out.extend(env.owners.iter().filter(|(_, o)| owners.contains(o)).map(|(n, _)| *n));
     out
 }
+
 
 #[cfg(test)]
 mod tests {

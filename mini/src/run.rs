@@ -345,9 +345,13 @@ pub fn check_file_with_interp(
     }
     let (blocked, accepted) = (pass.blocked, pass.accepted);
     let route_report = driver.finish(&mut ip, &mut pass.led, blocked);
-    let crate::decl_pass::Pass { env, xenv, xdecls, schedule, mut led, .. } = pass;
-    // **After the pass, not before**, and the order is a consequence of
-    // [`crate::ledger::Ledger::run`] filling the store from the schedule.
+    // `env` is **zone A's** and not the evidence pass's, which is the
+    // distinction `elim_audit` needs: it is an oracle over the file's own
+    // inductives, and an encoded block's members are definitions in the other
+    // one.
+    let crate::decl_pass::Pass { env, xdecls, schedule, mut led, .. } = pass;
+    // **After the loop, not inside it**, and the order is a consequence of the
+    // evidence walk filling the store from the schedule.
     // `elim_audit` infers the types of a declaration's constructor fields, so
     // it *reads* the interpretation store; running it first made it a second,
     // unscheduled entry point into zone B, and the constants it pulled in were
@@ -355,7 +359,6 @@ pub fn check_file_with_interp(
     // them. Two exports showed it: `Bool` at `071`/`072` and `True` at `090`
     // were interpreted by the audit rather than by their own declaration. It
     // reads and does not mint now, which is what an oracle should do.
-    let _ = &xenv;
     let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
     let dump = opts.dump.as_ref().map(|f| crate::dump::render(&mut ip, &xdecls, &schedule, f));
     // The same reason as the path below: the walk is a function of the

@@ -5653,9 +5653,14 @@ arena port and after `#115`), `perf stat -e instructions`, `ulimit -v` 10 GB,
 
 Three things in that table were not known before and none is a guess.
 **The whole file type-checks**: every declaration of the residue passes
-`kernel::add` — inferable from the trace alone, because `MINI_CONV_TRACE`'s rows
-come from `Ledger::run`, which does not start until the kernel loop has
-finished. **`gapped` is 0 at 231 declarations** — nothing mini reached is
+`kernel::add`. *That was inferable from the trace alone at the time, because
+`MINI_CONV_TRACE`'s rows came from `Ledger::run`, which did not start until the
+whole-file kernel loop had finished. **The inference no longer holds** and is
+recorded here only as what it was: `mini/src/decl_pass.rs` interleaves the two,
+so a trace row now says the kernel reached that declaration and nothing about
+the ones after it. The fact itself stands — it was measured on this run — but
+re-measuring it needs the verdict line, not the trace.* **`gapped` is 0 at 231
+declarations** — nothing mini reached is
 unrepresentable; it is slow, and the slow part is `Nat`. And **the wall is
 memory rather than time**: the run ended by itself.
 
