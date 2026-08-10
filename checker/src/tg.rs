@@ -8943,6 +8943,41 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if self.interp(ctx, e) != *x {
             return None
         }
+        // **Threaded, before the search** — the same store
+        // [`Self::domain_obligation`] reads, and for the same reason. The
+        // premise a *target*'s beta reduction owes is a domain obligation about
+        // the same kind of term, so if `infer_app` checked this very argument
+        // at this very domain the fact is already in hand. It was read at only
+        // one of the two sites; `has_type_target_beta` reaches 12 874 redexes
+        // and loses 6 004 of them to exactly this premise.
+        //
+        // The recall is re-checked against the claim, as at the other site.
+        // What differs is the bookkeeping: `domain_obligation` asks with no
+        // assumptions, so an entry's own antecedents *are* its assumption list,
+        // while here the caller already holds `assms` and the contract is that
+        // what comes back extends them. So the entry is restated over
+        // `assms ++ (its own, less what is already there)` by `reassume` — the
+        // same move `has_type_target_beta` makes one level up.
+        note_tb(TbMiss::HandoffAsked);
+        if let Some((t, entry)) = self.arg_mems.get(&(e, dom.clone())).cloned() {
+            let claim = Formula::mem(x.clone(), dom.clone());
+            if derived::establishes(&t, &imp_of(conj_of(&entry), &claim)) {
+                let mut used = assms.to_vec();
+                for f in &entry {
+                    if !used.contains(f) {
+                        used.push(f.clone());
+                    }
+                }
+                if let Some(t) = reassume(&t, &entry, &used) {
+                    note_tb(if entry.is_empty() {
+                        TbMiss::HandoffOutright
+                    } else {
+                        TbMiss::HandoffUnderAntecedents
+                    });
+                    return Some((t, used))
+                }
+            }
+        }
         self.has_type_a(ctx, e, dom, assms, depth + 1)
     }
 
@@ -16191,9 +16226,18 @@ enum TbMiss {
     Domain,
     /// …the target reduced, but the obligation at the reduct is not derivable.
     Reduct,
+    /// The premise arrived from the application check's handoff
+    /// ([`TgBackend::arg_mems`]) free of antecedents, rather than being
+    /// searched for.
+    HandoffOutright,
+    /// …or under the antecedents the check itself stood under, which the
+    /// binders that introduced those locals discharge.
+    HandoffUnderAntecedents,
+    /// The denominator: premises that reached the handoff read at all.
+    HandoffAsked,
 }
 
-const N_TB: usize = 3;
+const N_TB: usize = 6;
 
 static TB: [std::sync::atomic::AtomicU64; N_TB] = [const { std::sync::atomic::AtomicU64::new(0) }; N_TB];
 
@@ -17452,7 +17496,23 @@ fn ht_report() -> String {
             "    {:<width$}  {reached:>10}\n",
             "target beta: redexes reached, of which"
         ));
-        for (l, m) in [("premise x ∈ A not settled", TbMiss::Domain), ("reduct still not typeable", TbMiss::Reduct)] {
+        // The handoff rows print even at zero, once the read has been reached
+        // at all: a zero over an unstated denominator is the shape of a probe
+        // that never ran, and this one is measured to answer 145 of 2 119 and
+        // to close nothing.
+        let asked = TB[TbMiss::HandoffAsked as usize].load(Relaxed);
+        if asked > 0 {
+            for (l, m) in [
+                ("premises that reached the application check's handoff", TbMiss::HandoffAsked),
+                ("…answered from it, free of antecedents", TbMiss::HandoffOutright),
+                ("…answered from it, under the check's own antecedents", TbMiss::HandoffUnderAntecedents),
+            ] {
+                let n = TB[m as usize].load(Relaxed);
+                s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
+            }
+        }
+        for (l, m) in [("premise x ∈ A not settled", TbMiss::Domain), ("reduct still not typeable", TbMiss::Reduct)]
+        {
             let n = TB[m as usize].load(Relaxed);
             if n > 0 {
                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));

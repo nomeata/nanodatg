@@ -6460,3 +6460,40 @@ from the one §2 specifies, and it is the finding, not a plan.
 The `LamDecline` bumps are atomics; the cost is the 33 090 `ht_shape`/
 `ht_target` calls at the body cross-cut. `typed_subj` and the subject probe are
 `stepcount`-gated and cost nothing in the default build.
+
+### The target side reads the same handoff, and it is the same wall — 2026-08-10
+
+*Same run and configuration. A **null result**, recorded as one.*
+
+`TgBackend::arg_mems` — the store `infer_app` fills with every checked
+argument's typing — had one consumer, `domain_obligation`, on the *subject*
+side of the beta rule. `target_mem` owes the identical premise on the *target*
+side (`app(lam(…), x) = t(x)` holds only for `x ∈ A`) and went straight to the
+search. That asymmetry is now removed: `target_mem` reads the store first, with
+the same `establishes` re-check, restating the entry over `assms ++ (its own,
+less what is already there)` by `reassume`, since the caller here already holds
+assumptions where `domain_obligation` asks with none.
+
+| | |
+|---|---:|
+| premises that reached the handoff read | **2 119** |
+| …answered from it, free of antecedents | 0 |
+| …answered from it, under the check's own antecedents | **145** |
+| `target beta: premise x ∈ A not settled` | 6 004 → **6 004** |
+| `HtClause::TargetBeta` (obligations the clause discharges) | 125 → **125** |
+| gaps / escapes / raw hoists | 15 532 / 2 247 / 20 328 — **all unchanged** |
+| instructions | 194.39 G → 194.33 G |
+
+**145 premises changed provenance and nothing closed.** Every one of them the
+search settled anyway, from the same ambient-local antecedents; the 6 004 that
+fail are premises for which the store has no entry at all, which is the same
+population as the subject side's 18 656 seen from the other end. The
+denominator is printed beside the numerator, and both handoff rows print even
+at zero, precisely so the null is legible: a zero over an unstated denominator
+is the shape of a probe that never ran, and this one ran 2 119 times.
+
+The wire is kept rather than reverted for two reasons, neither of which is that
+it helped: one store with two consumers is the state the census asks for, and
+the 1 640 raw hoists that are the `ty_const` cascade convert into store entries
+the day the shared constant store lands — at which point this read is where the
+target side collects them. It is instrumented so that day is visible.
