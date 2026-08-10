@@ -2352,6 +2352,25 @@ pub fn install_shared_core(core: EnvCore) {
     })
 }
 
+/// The thread's `Shared` skeleton-site keys — `(lam, pi, prop)` — or `None`
+/// where no `Shared` was ever built. The checker half of the skeleton-key
+/// divergence measurement (`mini/tests/route_tg.rs::
+/// skeleton_key_divergence_sweep`): over a shared core the keys are plain
+/// terms comparable with `mini`'s `Interp::skeleton_keys`, and the overlap
+/// is what sizes the one-mint-path programme.
+pub fn skeleton_keys() -> Option<(Vec<Term>, Vec<Term>, Vec<Term>)> {
+    SHARED.with(|slot| {
+        slot.borrow().as_ref().map(|sh| {
+            let sh = sh.borrow();
+            (
+                sh.lam_infos.keys().cloned().collect(),
+                sh.pi_infos.keys().cloned().collect(),
+                sh.prop_infos.keys().cloned().collect(),
+            )
+        })
+    })
+}
+
 /// The thread's shared signature, created on first use — over a private fresh
 /// [`EnvCore`] unless [`install_shared_core`] ran first.
 fn shared(_pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {

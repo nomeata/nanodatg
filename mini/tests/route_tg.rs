@@ -217,6 +217,182 @@ fn a_checker_routed_declaration_is_checked_at_every_scheduled_instantiation() {
     assert_eq!(cross_field(&out, "checkerSlots"), 4, "{}", rep.cross);
 }
 
+/// **The skeleton-key divergence measurement** — sizing the one-mint-path
+/// programme (the owner's "for a merged environment, `interp` must return
+/// the same terms; use the same code to handle lambdas in both modules").
+///
+/// Both engines run one export to completion over one core (mini first, the
+/// checker second — the sequential seam, maximal interpretation surface on
+/// both sides), and then the three skeleton-site tables are compared **as
+/// key sets**: mini's `lams`/`fibres`/`conds` against the checker's
+/// `lam_infos`/`pi_infos`/`prop_infos`. Over a shared core a skeleton key is
+/// a plain term, so `common` counts shapes both dispatches keyed
+/// identically — where today two site objects (two nominal symbols) stand
+/// for one shape, the population one shared mint path merges by
+/// construction — and the one-sided residues bound the *genuine* divergence:
+/// shapes one dispatch keys that the other, walking the same file, never
+/// produces (different normal form, or different skeletonise-vs-opaque
+/// decisions). `#[ignore]`d: a measurement run, minutes over the corpus;
+/// `cargo test -p mini --features tg skeleton_key_divergence -- --ignored
+/// --nocapture` reproduces it.
+#[test]
+#[ignore]
+fn skeleton_key_divergence_sweep() {
+    use std::collections::HashSet;
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("corpus dir")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "ndjson"))
+        .collect();
+    files.sort();
+    let mut totals = [0usize; 9]; // (common, mini-only, checker-only) × (lam, pi, cond)
+    for f in files {
+        let name = f.file_stem().unwrap().to_string_lossy().to_string();
+        let row = std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                let core = nanoda_lib::tg::EnvCore::fresh();
+                let (out, ip) = mini::run::check_file_with_interp(
+                    &f,
+                    mini::run::Options::default(),
+                    mini::interp::Interp::over(core.clone()),
+                );
+                if !out.verdict.is_accepted() {
+                    return (format!("skelcmp\tfile={name}\tskipped"), [0usize; 9])
+                }
+                nanoda_lib::tg::install_shared_core(core.clone());
+                run_checker(&f);
+                let (ml, mp, mc) = ip.skeleton_keys();
+                let Some((cl, cp, cc)) = nanoda_lib::tg::skeleton_keys() else {
+                    return (format!("skelcmp\tfile={name}\tno-shared"), [0usize; 9])
+                };
+                if std::env::var_os("MINI_SKEL_DUMP").is_some() {
+                    for (label, m, c) in
+                        [("lam", &ml, &cl), ("pi", &mp, &cp), ("cond", &mc, &cc)]
+                    {
+                        let ms: std::collections::HashSet<_> = m.iter().collect();
+                        let cs: std::collections::HashSet<_> = c.iter().collect();
+                        for t in m.iter().filter(|t| !cs.contains(t)) {
+                            let d = format!("{t:?}");
+                            eprintln!("skelkey\t{label}\tmini\tlen={}\t{}", d.len(), &d[..d.len().min(220)]);
+                        }
+                        for t in c.iter().filter(|t| !ms.contains(t)) {
+                            let d = format!("{t:?}");
+                            eprintln!("skelkey\t{label}\tchecker\tlen={}\t{}", d.len(), &d[..d.len().min(220)]);
+                        }
+                    }
+                }
+                // A key modulo the *nominal* mints: the Debug rendering with
+                // every `FnSym` id and every memoised hash blanked, leaving
+                // structure, brands and the (shared) free variables. Two keys
+                // equal under this are one skeleton keyed through two
+                // independently-minted symbol series — the population one
+                // shared mint path merges by construction.
+                fn nominal_blind(t: &kernel::Term) -> String {
+                    let d = format!("{t:?}");
+                    let mut out = String::with_capacity(d.len());
+                    let mut rest = d.as_str();
+                    while let Some(i) = rest.find("id: ") {
+                        out.push_str(&rest[..i + 4]);
+                        rest = &rest[i + 4..];
+                        // Blank the digits only when this `id:` follows a
+                        // FnSym (free variables keep theirs — they are shared
+                        // and load-bearing).
+                        let fnsym = out.rfind("FnSym").map_or(false, |f| {
+                            out.rfind("FreeVar").map_or(true, |v| f > v)
+                        });
+                        let n = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+                        if fnsym {
+                            out.push('_');
+                        } else {
+                            out.push_str(&rest[..n]);
+                        }
+                        rest = &rest[n..];
+                    }
+                    out.push_str(rest);
+                    // The memoised hashes fold the FnSym ids in; blank them.
+                    let mut out2 = String::with_capacity(out.len());
+                    let mut rest = out.as_str();
+                    while let Some(i) = rest.find("hash: ") {
+                        out2.push_str(&rest[..i + 6]);
+                        rest = &rest[i + 6..];
+                        let n = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+                        out2.push('_');
+                        rest = &rest[n..];
+                    }
+                    out2.push_str(rest);
+                    out2
+                }
+                let mut cells = [0usize; 9];
+                let mut s = format!("skelcmp\tfile={name}");
+                for (i, (label, m, c)) in
+                    [("lam", ml, cl), ("pi", mp, cp), ("cond", mc, cc)].into_iter().enumerate()
+                {
+                    let ms: HashSet<_> = m.iter().cloned().collect();
+                    let cs: HashSet<_> = c.iter().cloned().collect();
+                    let common = ms.intersection(&cs).count();
+                    let mo = ms.len() - common;
+                    let co = cs.len() - common;
+                    let nm: HashSet<String> = m.iter().map(nominal_blind).collect();
+                    let nc: HashSet<String> = c.iter().map(nominal_blind).collect();
+                    let ncommon = nm.intersection(&nc).count();
+                    cells[3 * i] = common;
+                    cells[3 * i + 1] = mo;
+                    cells[3 * i + 2] = co;
+                    s.push_str(&format!(
+                        "\t{label}Common={common}\t{label}MiniOnly={mo}\t{label}CheckerOnly={co}\t{label}NomBlindCommon={ncommon}\t{label}NomBlindMiniOnly={}\t{label}NomBlindCheckerOnly={}",
+                        nm.len() - ncommon,
+                        nc.len() - ncommon,
+                    ));
+                }
+                (s, cells)
+            })
+            .expect("spawn")
+            .join()
+            .expect("file thread");
+        eprintln!("{}", row.0);
+        for (t, v) in totals.iter_mut().zip(row.1) {
+            *t += v;
+        }
+    }
+    eprintln!(
+        "skelcmpTotal\tlamCommon={}\tlamMiniOnly={}\tlamCheckerOnly={}\tpiCommon={}\t\
+         piMiniOnly={}\tpiCheckerOnly={}\tcondCommon={}\tcondMiniOnly={}\tcondCheckerOnly={}",
+        totals[0], totals[1], totals[2], totals[3], totals[4], totals[5], totals[6], totals[7],
+        totals[8]
+    );
+}
+
+/// Drive the checker in-process over `export`, on this thread — the same
+/// helper `envshare_tg.rs` uses, for the sequential half of the measurement
+/// above (the *routed* driver shares mini's parse; this deliberately runs
+/// the checker's own full pass).
+fn run_checker(export: &Path) {
+    let cfg_path = std::env::temp_dir().join(format!(
+        "nanodatg-route-skel-{}-{}.json",
+        std::process::id(),
+        export.file_stem().unwrap_or_default().to_string_lossy(),
+    ));
+    let cfg = format!(
+        r#"{{"export_file_path": {},
+             "unpermitted_axiom_hard_error": false,
+             "unsafe_permit_all_axioms": true,
+             "nat_extension": true,
+             "string_extension": true,
+             "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let config = nanoda_lib::util::Config::try_from(cfg_path.as_path()).expect("config parses");
+    let _ = std::fs::remove_file(&cfg_path);
+    let (export_file, _skipped) = config.to_export_file().expect("export parses");
+    export_file.check_all_declars();
+}
+
 /// **`ForceMini` reproduces the unrouted evidence run.** Same file, one
 /// unrouted and one force-mini walk, and the whole evidence ledger must
 /// agree row for row — the factoring of `Ledger::run`'s loop body into

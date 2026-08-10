@@ -1512,6 +1512,20 @@ impl Interp {
     /// `Interp`, whose keys then compare term-for-term with this one's.
     pub fn core(&self) -> &EnvCore { &self.core }
 
+    /// The skeleton keys of the three site tables — the measurement surface
+    /// for the one-mint-path programme (the owner's "interp must return the
+    /// same terms"): which lambda-body, fibre and condition shapes this
+    /// dispatch keyed. Over a shared core the keys are comparable across
+    /// engines as plain terms, which is what
+    /// `mini/tests/route_tg.rs::skeleton_key_divergence_sweep` measures.
+    pub fn skeleton_keys(&self) -> (Vec<Term>, Vec<Term>, Vec<Term>) {
+        (
+            self.lams.keys().cloned().collect(),
+            self.fibres.keys().cloned().collect(),
+            self.conds.keys().cloned().collect(),
+        )
+    }
+
     /// The name of an ambient symbol, for a blocker report.
     pub fn sym_label(&self, f: FnSym) -> Option<&'static str> { self.sym_labels.get(&f).copied() }
 

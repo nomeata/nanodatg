@@ -559,7 +559,44 @@ stage 6"):
   ahead, gated on B5 closing the declined populations.
 * **B5** — shared skeleton-site tables, scoped by B0's result: full sharing
   if the normal forms coincide, constant-level sharing with counted
-  structural gaps if not.
+  structural gaps if not. **Re-scoped by the owner's sharpening** ("for a
+  merged environment, `interp` must return the same terms — use the same
+  code to handle lambdas in both modules") **and by the measurement that
+  sizes it** (`mini/tests/route_tg.rs::skeleton_key_divergence_sweep`, both
+  engines full-run over one core per export, site-table keys compared as
+  terms, then re-compared *nominal-blind* — every `FnSym` id and memoised
+  hash blanked, structure, brands and the shared free variables kept):
+
+  | site | mini impl | checker impl | common / one-sided | nominal-blind |
+  |------|-----------|--------------|--------------------|---------------|
+  | lam  | `Interp::lam_site` (`lams`, `lam_by_sym`) | `lam_info` (`lam_infos`; build-only — the checker has **no** `as_lam`) | 49 / 919+554 | 140 / 673+440 |
+  | Π    | `fibres`, `fibre_by_sym` | `pi_infos`, `pi_by_dprod` | 159 / 467+467 | **621 / 3+3** |
+  | cond | `conds`, `cond_by_sym` | `prop_infos`, `prop_by_chi` | 208 / 561+545 | **725 / 41+24** |
+
+  So the Π divergence is **99.5% same-skeleton-two-symbols** — the one-sided
+  counts are equal file-by-file across all 89 exports, and sampled pairs are
+  identical terms up to the interior `FnSym` id (the shared canonical
+  variables even carry the same ids: B1/B2's hole series is genuinely one) —
+  and cond is 94% the same story. That population is erased *by
+  construction* by **one mint path per nominal object on the `EnvCore`**,
+  not by sharing tables between two minters: a `lambda_n`/`dprod` symbol is
+  nominal, so the mint is part of `⟦e⟧`'s answer, and two agreeing
+  implementations are a coincidence maintained by hand (`bfaeaa9` was such a
+  hand-fix). The genuine skeleton disagreement after blinding is **3+3 Π and
+  41+24 cond shapes corpus-wide** — small — while **lam keeps the real
+  residue** (673/440), confounded by surface asymmetry: mini interprets
+  lambdas the checker's walk never reaches and vice versa, and the checker
+  never decomposes at all. Separating lam's surface from its disagreement
+  needs the paired per-subterm run the one-parse arena now permits (both
+  dispatches over the *same* `ExprPtr`s); that measurement gates the lam
+  mint's design and is the first step of the mint-unification tranche. The
+  **nominal-mint census**, one line each: prelude/tower/machine — one
+  (B1/B2); canonical binder and hole variables — one (B1/B2, confirmed by
+  the measurement); constant carriers — one *store*, still two mint paths
+  behind adopt-and-check (B4); lam/Π/cond sites — two each (the table
+  above); undetermined-Π (`undet_syms`) — checker-only by construction
+  (mini is ground-only); inductive carriers, nests and recursor packages —
+  two (`IndApparatus` vs `gen_inds`/`gen_recs`/`rec_nests`).
 
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
