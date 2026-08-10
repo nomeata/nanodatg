@@ -645,8 +645,7 @@ fn shape(
     // (`MODELGEN.md` §1.3): the filter declined the declaration and said which
     // shape stopped it, and a consumer that treated that as a failure would
     // turn every unsupported nested shape into a broken file.
-    let Some(carrier) = env.get(&self_n) else { return Err(Missing::NoCarrier) };
-    settled(pos, &self_n, i)?;
+    let carrier = model_const(env, pos, &self_n, i, Missing::NoCarrier)?;
     let ConstantInfo::Def { .. } = carrier else { return Err(Missing::Carrier) };
     let Some(t_ci @ ConstantInfo::Inductive { .. }) = env.get(t) else {
         return Err(Missing::Carrier)
@@ -658,8 +657,7 @@ fn shape(
     let mut mono: Vec<(Name, Name)> = vec![(*t, self_n)];
     for (j, (c, c_ty)) in ctors.iter().enumerate() {
         let m = ctor_name(t, j);
-        let Some(ci) = env.get(&m) else { return Err(Missing::Ctor) };
-        settled(pos, &m, i)?;
+        let ci = model_const(env, pos, &m, i, Missing::Ctor)?;
         // At the *declaration's* level parameters, for [`at_export_levels`]'s
         // reason: `MODELGEN.md` §1 says every generated constant carries `ℓ⃗`,
         // and the export's constructor carries the declaration's own.
@@ -690,8 +688,7 @@ fn shape(
     let mut iotas: Vec<(Name, Name, Name)> = Vec::new();
     for (k, (r, r_ci)) in recs.iter().enumerate() {
         let m = rec_name(t, k);
-        let Some(ci) = env.get(&m) else { return Err(Missing::Rec) };
-        settled(pos, &m, i)?;
+        let ci = model_const(env, pos, &m, i, Missing::Rec)?;
         if at_export_levels(ci, r_ci).ok_or(Missing::Rec)? != rename(&rho, r_ci.ty()) {
             return Err(Missing::Rec)
         }
@@ -702,8 +699,7 @@ fn shape(
         let ConstantInfo::Recursor { rules, .. } = r_ci else { return Err(Missing::Rec) };
         for (j, (rule_ctor, _)) in rules.iter().enumerate() {
             let thm = iota_name(t, k, j);
-            let Some(thm_ci) = env.get(&thm) else { return Err(Missing::Iota) };
-            settled(pos, &thm, i)?;
+            let thm_ci = model_const(env, pos, &thm, i, Missing::Iota)?;
             if thm_ci.lparams().len() != r_ci.lparams().len() {
                 return Err(Missing::Iota)
             }
@@ -718,18 +714,52 @@ fn shape(
     Ok(Model { mono, recs: out_recs, iotas })
 }
 
-/// The model constant is settled strictly before position `i`, where
-/// [`crate::ledger::fill_declaration`] will read it.
+/// **One model constant, if the file settles it strictly before position `i`.**
 ///
-/// `⟦T⟧` is resolved at `T`'s own position out of `⟦T._model.self⟧`, so a
-/// model declared level with — or after — the declaration it models is one the
-/// alias cannot look up. `modelgen` splices the model *before* the nested
-/// inductive, so this holds for anything it wrote; it is checked because a
-/// `_model` name in the file is not necessarily one it wrote.
-fn settled(pos: &HashMap<Name, usize>, n: &Name, i: usize) -> Result<(), Missing> {
+/// `⟦T⟧` is resolved at `T`'s own position out of `⟦T._model.self⟧`, so a model
+/// declared level with — or after — the declaration it models is one the alias
+/// cannot look up. `modelgen` splices the model *before* the nested inductive,
+/// so this holds for anything it wrote; it is checked because a `_model` name
+/// in the file is not necessarily one it wrote.
+///
+/// # Three outcomes, and they are three different diagnostics
+///
+/// * **not in the file and not in the environment** — `absent`, the caller's
+///   "this part of the tower is missing" label;
+/// * **in the file at a position `≥ i`** — [`Missing::Later`], *whether or not
+///   the environment has it yet*;
+/// * settled before `i` — the constant.
+///
+/// **The middle case is why the position is consulted before the
+/// environment.** Under the whole-file pipeline the environment was complete
+/// when this ran, so a later model was found there and the position check was
+/// what turned it into `Later`. `crate::decl_pass` hands over the environment
+/// through `i` only, where a later model is simply absent — and reporting
+/// `no nested model in the export` for a model the export does carry is a
+/// *worse* diagnostic, not merely a different one. `nested_keying`'s `UTree`
+/// is the case: the file takes the model's own name for a declaration of its
+/// own, after `UTree`, and `mini/tests/nested.rs` pins the reason.
+///
+/// Read the other way, this is the same answer the whole-file form gave in
+/// every case: with a complete environment, "in the file at `≥ i`" and "in the
+/// environment and at `≥ i`" coincide.
+fn model_const<'e>(
+    env: &'e Environment,
+    pos: &HashMap<Name, usize>,
+    n: &Name,
+    i: usize,
+    absent: Missing,
+) -> Result<&'e ConstantInfo, Missing> {
     match pos.get(n) {
-        Some(j) if *j < i => Ok(()),
-        _ => Err(Missing::Later),
+        Some(j) if *j < i => env.get(n).ok_or(absent),
+        Some(_) => Err(Missing::Later),
+        // Not a declaration of the file. It may still be in the environment —
+        // a constructor or a recursor whose owner the position map missed — and
+        // the whole-file form called that `Later` too.
+        None => match env.get(n) {
+            Some(_) => Err(Missing::Later),
+            None => Err(absent),
+        },
     }
 }
 

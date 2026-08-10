@@ -85,10 +85,14 @@
 //! copying across exactly the names each accepted declaration
 //! [`introduced`](self::introduced).
 //!
-//! The two are equal until a block is encoded, and `debug_assert!`s below check
-//! it declaration by declaration on every debug run — which is every `cargo
-//! test`, over the whole corpus. That is what makes [`introduced`] a checked
-//! claim rather than a list somebody kept up to date.
+//! The two hold the same names, plus exactly what the encodings added, and a
+//! `debug_assert_eq!` in [`Pass::step`] checks that declaration by declaration
+//! on every debug run — which is every `cargo test`, over the whole corpus and
+//! every fixture. It is stated against a counter rather than switched off once
+//! a block appears, so it is live on the ten mutual fixtures too. That is what
+//! makes [`introduced`] a checked claim rather than a list somebody kept up to
+//! date; `introduced_is_what_the_kernel_inserted` is the same claim against an
+//! oracle read off the environment.
 
 use std::collections::HashMap;
 
@@ -173,6 +177,10 @@ pub struct Pass {
     evidence: bool,
     nested: crate::nested_splice::Recogniser,
     expander: crate::mutual_aux::Expander,
+    /// Names an encoding put in [`Pass::xenv`] that are not in [`Pass::env`] —
+    /// the bookkeeping the environment invariant in [`Pass::step`] is stated
+    /// against.
+    xenv_extra: usize,
     pub nested_seen: usize,
     pub nested_models: usize,
 }
@@ -213,6 +221,7 @@ impl Pass {
             schedule,
             evidence,
             expander: crate::mutual_aux::Expander::new(),
+            xenv_extra: 0,
             nested_seen: 0,
             nested_models: 0,
         }
@@ -243,8 +252,15 @@ impl Pass {
                 self.xenv.owners.insert(n, *o);
             }
         }
-        debug_assert!(
-            self.expander.encoded > 0 || self.xenv.consts.len() == self.env.consts.len(),
+        // **The two environments hold the same names, plus what the encodings
+        // added.** Exact and O(1), so it runs on every declaration of every
+        // debug build — which is every `cargo test`, over the whole corpus and
+        // every fixture. A name [`introduced`] forgets would otherwise surface
+        // as an unresolved constant somewhere downstream, attributed to
+        // whatever gap the walk reached first.
+        debug_assert_eq!(
+            self.xenv.consts.len(),
+            self.env.consts.len() + self.xenv_extra,
             "the evidence pass's environment drifted from zone A's at {} — \
              `introduced` is missing a name `kernel::add` inserted",
             d.name()
@@ -284,9 +300,16 @@ impl Pass {
         // that module never names a `Term` or a `Thm`.
         let from = self.xdecls.len();
         {
-            let Pass { env, xenv, expander, xdecls, schedule, .. } = &mut *self;
+            let Pass { env, xenv, expander, xdecls, schedule, xenv_extra, .. } = &mut *self;
+            let before = xenv.consts.len();
             let new = expander.step(env, xenv, schedule, d);
             xdecls.extend_from_slice(new);
+            // What the encoding put in the evidence pass's environment over and
+            // above the block's own names — `Tag`, `Aux`, the packed motive and
+            // their constructors and recursors. Counted so the invariant above
+            // stays exact once a block has been encoded, rather than switching
+            // itself off there.
+            *xenv_extra += xenv.consts.len() - before;
         }
         self.walk(from, ip, driver);
         Step::Continue
