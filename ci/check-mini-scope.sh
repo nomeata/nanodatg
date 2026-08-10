@@ -82,17 +82,24 @@ else
 fi
 
 # ── I4 ───────────────────────────────────────────────────────────────────────
-# `Sealed` is a newtype whose only constructor checks emptiness. A second
-# constructor, or a public field, would reopen the funnel.
-if grep -qE 'pub struct Sealed\(pub ' "$M/src/ev.rs" 2>/dev/null; then
-  fail "Sealed's field is public — the persistence funnel is open"
+# The persistence funnel is `Sealed` — since ENV-UNIFY.md B3 **the checker's
+# type, re-exported** (`checker/src/sealed.rs`, whose private field, single
+# checking constructor and `hyps().is_empty()` gate `ci/check-boundary.sh`'s
+# own I4 already pins). What is checked here is that mini really does route
+# through that one funnel: the re-export is present, and no module of mini's
+# defines a `Sealed` of its own — a second newtype would be a second funnel
+# with whatever gate its author remembered to give it.
+if ! grep -q 'pub use nanoda_lib::sealed::Sealed' "$M/src/ev.rs" 2>/dev/null; then
+  fail "mini/src/ev.rs no longer re-exports the checker's Sealed — the one-funnel identity (ENV-UNIFY B3) is gone"
 else
-  ok "Sealed's field is private"
+  ok "Sealed is the checker's type, re-exported"
 fi
-if [[ "$(grep -cE '^\s*pub fn new\(' "$M/src/ev.rs" 2>/dev/null)" != "1" ]]; then
-  fail "mini/src/ev.rs does not have exactly one \`pub fn new\` (Sealed's)"
+if grep -rInE 'struct Sealed' --include='*.rs' "$M/src" 2>/dev/null \
+     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*)' | grep -q .; then
+  fail "a mini module defines its own Sealed — a second persistence funnel"
+  grep -rInE 'struct Sealed' --include='*.rs' "$M/src" >&2
 else
-  ok "Sealed has exactly one constructor"
+  ok "no second Sealed newtype in mini"
 fi
 
 echo
