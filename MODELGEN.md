@@ -3413,11 +3413,25 @@ model that guessed a fixed count would still pass.
 
 At the 30M prefix the remaining 110 declines are:
 
-| cluster | count | share | owner |
+| cluster | count | share of the 110 | share of the 128 before the not-a-sort fix |
 |---|---|---|---|
-| **an indexed family at a never-zero sort** | 68 | **62 %** | thesis §5.2's skeleton-plus-`good`; `IndexedCarve.lean` compiles it on the thesis's own example. **The largest cluster, and the next tranche.** |
-| branching or under-a-binder recursion | ~39 | 35 % | W — this tranche, and the one on `init-prelude`'s critical path (`Lean.ParserDescr`) |
-| the basis itself | 3 | 3 % | the exemption |
+| **an indexed family at a never-zero sort** | 68 | **62 %** | 53 % |
+| branching or under-a-binder recursion | ~39 | 35 % | 30 % |
+| the basis itself | 3 | 3 % | 2 % |
+
+**Say which denominator.** Both percentages above are correct and they differ
+because the not-a-sort fix removed 18 declines from the *denominator*, not
+from this cluster: 68/110 = 62 %, 68/128 = 53 %. The 128 figure is the census
+as first re-measured, before that fix landed in the same tranche; the 110 is
+current. Quoting either without its denominator turns "half" into "two thirds",
+and a sequencing decision hangs on the difference.
+
+Owners: the indexed family is thesis §5.2's skeleton-plus-`good`, with
+`IndexedCarve.lean` compiling it on the thesis's own example, and it is **in
+goal** rather than a follow-up — the objective for this strand is that
+modelgen model every inductive Lean supports and process Mathlib reasonably.
+Branching is W (§8.11), taken first because `Lean.ParserDescr` is on
+`init-prelude`'s critical path. The basis is the exemption.
 
 W is not the largest cluster and is being done first because `Lean.ParserDescr`
 is one of the two declarations standing between `init-prelude` and full
@@ -3572,3 +3586,50 @@ Resists, in the order it will bite:
 * **Universes**: a `Prop`-valued or small-eliminating target is a different
   construction, and a `Sort`-polymorphic one would need `A B : Sort u`, which
   `List`-of-`Sigma` paths do not directly support.
+
+## 8.12 The denominator, established — and what the PANICs do and do not cost
+
+A coverage percentage on Mathlib was not quotable, because Lean's own
+`Environment.AsyncConsts.add` rejects some of the **input** with
+*duplicate normalized declaration name* — 872 non-fatal PANICs on the full
+export, 176 at the 30M prefix — so some declarations never reach the filter and
+the denominator was unknown. It is now known, and the PANICs do not touch it.
+
+**The population, counted off the export directly** (no Lean, no filter — the
+`{"inductive"` records, each of which is a *block*):
+
+| | full export | 30M prefix |
+|---|---|---|
+| inductive blocks | 6,644 | 4,037 |
+| inductive types | 6,675 | 4,067 |
+| **simple blocks** (1 member, `numNested = 0`) — layer 3's candidates from the input | **6,593** | **3,994** |
+| mutual blocks | 10 (26 types) | 9 (24 types) |
+| nested blocks | 41 (56 types) | 34 (49 types) |
+
+**The arithmetic closes at the 30M prefix.** Layer 3 returned 4,047 models and
+110 declines — **4,157 verdicts** against 3,994 input candidates. The
+difference, 163, is the composition (§8.3): a nested or mutual model emits
+single inductives of its own and layer 3 runs on those too. So every input
+candidate got a verdict and nothing was silently skipped, and
+
+> **coverage at the 30M prefix is 4,047 / 4,157 = 97.4 %.**
+
+**And no inductive is lost to a PANIC**, by two independent arguments. The
+arithmetic above leaves no room for one. And structurally: at the 30M prefix
+the PANIC'd names end in `splitter`, `_arg_pusher`, `eq_1`, `eq_def`, `eq_2`,
+`wf_lbp`, `_simp_1` and the like — definitions and theorems, every one. An
+inductive cannot enter an environment without its recursor and its
+constructors entering too, and **not one PANIC at 30M names a `.rec`, a `.mk`
+or a constructor**. The duplicate-normalized-name collision is between two
+`_private` definitions from different modules (`Init.Data.List.Basic`'s
+`List.filter.match_1.splitter` and `Init.Data.List.Lemmas`'), which is a
+property of the input export, not of this filter.
+
+**One thing to carry into the full re-run rather than assume.** The *old* full
+log — pre-tranche binary — also shows PANICs whose names end in `self`,
+`ctor_0`, `rec` and `mk`, 18 or so each. Those are modelgen's **own generated
+names** colliding, which would be a real defect and is a different phenomenon
+from the input's duplicate privates. They do not appear at the 30M prefix on
+the current binary. Whether they survive at full scale is a question for stage
+4, and it is flagged here so the re-run looks for it rather than counting
+PANICs in aggregate.
