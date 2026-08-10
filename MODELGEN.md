@@ -4612,14 +4612,36 @@ definitions, 58 theorems, 3 quotient constants and **2 axioms**, `propext` and
 difference is the `Classical` machinery.)
 
 So the arm's shape is: get those 190 into the output once, splice-and-model the
-19 inductives among them — every one is a shape §8.2 already models — and emit
-per-declaration glue against them. The choices for "get them in" are to compile
-the core into `modelgen` and copy its `ConstantInfo`s (needs either a runtime
-`importModules` of the tool's own olean or a compile-time quoter, since Lean
-core has no `ToExpr Expr`), or to ship the core as an export fragment and read
-it with the reader this package already has. That decision is the next thing to
-take, and it is worth taking deliberately: it is the difference between an arm
-that is a week of `Expr` plumbing and one that is a day of wiring.
+19 inductives among them — measured above, all of them do — and emit
+per-declaration glue against them.
+
+**Three things about the splice, each measured rather than assumed, and each
+one a wasted attempt saved:**
+
+* **`include_str` is free.** The 500 KB fragment reads in 0.14 s, so it is
+  baked into the binary and there is no runtime file lookup and no dependence
+  on the build tree. The alternative — locating the `.ndjson` relative to
+  `IO.appPath` — would have made the binary depend on its own build layout for
+  no gain.
+* **Everything gets a `_wcore` prefix except the quotient.** The fragment's
+  names are Lean core's, so splicing `List` into an input that already declares
+  one is a kernel rejection; prefixing every name makes the core self-contained
+  and collision-proof, and costs only duplicates of types the input may already
+  have. **But the fragment carries four `quot` records** — `Quot`, `Quot.mk`,
+  `Quot.lift`, `Quot.ind` — and those are kernel *built-ins* whose names the
+  kernel special-cases. They cannot be renamed and must be shared with the
+  input's, which the prelude machinery already does for the nested model's
+  `funext`. So the rename is "everything but the quotient", and the exclusion
+  list is not a matter of taste.
+* **`_wcore.Eq` needs one conversion at the boundary, and it is axiom-free.**
+  The contract's ι theorems are stated at the *input's* `Eq`, while
+  `Wrec_iota` is at the fragment's. They are two inductives of the same shape,
+  so `_wcore.Eq.rec (motive := fun x _ => Eq α a x) (Eq.refl α a) h` carries a
+  proof from one to the other with no axiom and no transport. One such
+  conversion per ι rule. The alternative — excluding `Eq` from the rename the
+  way `Quot` is excluded — looks tempting and is worse: it makes the fragment's
+  own 190 proofs depend on whatever `Eq` the input happens to declare, where
+  `ensureEq` only guarantees the *shape*.
 
 One piece of per-declaration glue **is** required here where arm C had none:
 the currying eta lemmas, one `funext` per constructor, because `W` hands you
