@@ -481,7 +481,7 @@ pub(crate) fn typing(
         return Err(miss!())
     }
     let inst: Vec<u32> =
-        us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        us.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     let Some(ConstantInfo::Inductive { num_params, lparams, ty: ind_ty, .. }) =
         c.environment().get(ind)
     else {
@@ -769,7 +769,7 @@ pub(crate) fn structure_eta(
     let (head, args) = crate::expr::get_app(e1);
     let Expr::Const(ctor, cls) = &head.view() else { return Err(Gap::NoEndpoint) };
     let inst: Vec<u32> =
-        cls.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        cls.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     // `ind` is the name `Checker::try_structure_eta` returned, so the
     // declaration is the probe's and not a second lookup's.
     macro_rules! miss {

@@ -803,7 +803,7 @@ impl Ledger {
                 // also delta reduction's certificate; everything else gets an
                 // opaque symbol, which is a signature extension and asserts
                 // nothing about inhabitation — hence the `Gap` on its typing.
-                let key = (*name, crate::ground::ground_levels(&sigma));
+                let key = (*name, crate::ground::ground_levels(sigma));
                 if ip.get_const(&key).is_some() {
                     if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
                         led.first_blocker = Some(pv.blocker(ip, o));
@@ -1217,7 +1217,7 @@ pub(crate) fn fill_declaration(
                     for sigma in sigmas {
                         let mut c = Checker::threaded(env, ip);
                         let Some(app) = c.interp().and_then(|i| i.ind_apparatus()) else { continue };
-                        let key = (n, crate::ground::ground_levels(&sigma));
+                        let key = (n, crate::ground::ground_levels(sigma));
                         if is_rec {
                             app.rec_untranslated.insert(key, g.clone());
                         } else if n == t.name {

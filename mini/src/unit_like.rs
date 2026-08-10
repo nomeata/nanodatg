@@ -97,7 +97,7 @@ pub(crate) fn certify(
     let name = *name;
     let inst: Vec<u32> = ls
         .iter()
-        .map(|l| ground::as_numeral(l))
+        .map(ground::as_numeral)
         .collect::<Option<_>>()
         .ok_or(Gap::SymbolicLevel)?;
     let bad = || Gap::UnitLike(name);

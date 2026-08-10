@@ -107,7 +107,7 @@ pub(crate) fn typing(
         return Err(miss!())
     }
     let inst: Vec<u32> =
-        us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        us.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(ind) else {
         return Err(miss!())
     };
@@ -614,7 +614,7 @@ fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
     let ty = c.whnf(e).ok()?;
     let (head, args) = crate::expr::get_app(&ty);
     let Expr::Const(name, us) = &head.view() else { return None };
-    let inst: Vec<u32> = us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>()?;
+    let inst: Vec<u32> = us.iter().map(ground::as_numeral).collect::<Option<_>>()?;
     let ConstantInfo::Inductive { num_params, .. } = c.environment().get(name)? else {
         return None
     };
