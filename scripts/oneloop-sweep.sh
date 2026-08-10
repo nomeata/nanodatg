@@ -29,6 +29,6 @@ for f in $files; do
   echo "== $rel rc=$rc"
   # Drop the reject message body and anything with a path in it: those are
   # multi-line and machine-unstable. Keep the tagged rows.
-  echo "$out" | grep -E '^(facts|ledger|evidence|untranslated|conv|frame|clauses|elim|route|prefix)\b|	(accept|reject|decline)	' \
+  echo "$out" | grep -E '^(facts|ledger|evidence|untranslated|convs|framecache|clauses|elim|route|prefix)\b|	(accept|reject|decline)	' \
     | sed "s|$ROOT||g"
 done

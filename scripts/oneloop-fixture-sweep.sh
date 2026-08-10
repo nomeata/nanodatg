@@ -20,5 +20,5 @@ echo "# sweep of $n fixtures"
 for f in $files; do
   out="$("$BIN" --no-modelgen --verbose --mutual --nested "$f" 2>&1)"
   echo "== ${f#mini/tests/fixtures/} rc=$?"
-  echo "$out" | grep -E '^(facts|ledger|evidence|untranslated|conv|frame|clauses|elim|route|prefix)\b|	(accept|reject|decline)	'
+  echo "$out" | grep -E '^(facts|ledger|evidence|untranslated|convs|framecache|clauses|elim|route|prefix)\b|	(accept|reject|decline)	'
 done

@@ -6030,8 +6030,25 @@ capability measured only where it fires is a capability nobody has bounded.
 two binaries — verdict, tag, exit code, `facts`, `clauses`, `elim`, `ledger`,
 `evidence`, `untranslated`, `convs` and `framecache` rows — apart from the new
 `prefix` row. Over `mini/tests/fixtures` (every non-nested fixture, so all ten
-`mutual` ones) it is byte-identical too, apart from three rows that are the one
-waived property: an unused non-standard axiom is no longer kernel-checked, so
-`unused_axiom_ignored` reads `3 declarations` where it read 5,
-`route_unused_axiom` reads 1 where it read 2, and `unused_axiom_illtyped` — a
-fixture added for this — is accepted where it was rejected.
+`mutual` ones) it is byte-identical too, apart from five rows that are all the
+one waived property: an unused non-standard axiom is no longer kernel-checked,
+so `unused_axiom_ignored` reads `3 declarations` where it read 5,
+`route_unused_axiom` reads 1 where it read 2, those two files' `framecache`
+rows lose the misses of the type checks that no longer happen (188 → 184 and
+6 → 5), and `unused_axiom_illtyped` — a fixture added for this — is accepted
+where it was rejected.
+
+*The first version of this claim was weaker than it reads, and the reason is
+worth keeping: `scripts/oneloop-sweep.sh` filtered rows with `conv\b|frame\b`,
+which matches neither `convs` nor `framecache` — so the two rows carrying the
+conversion census were silently outside the comparison. The regex is
+`convs|framecache` now and the numbers above are the re-taken ones.*
+
+The `good/tutorial` aggregate, which is the standing ratchet, is unchanged to
+the last digit:
+
+```
+pairs=218  constEv=218  unsealed=0  lazyFills=0
+proved=829683  sealed=827106  gapped=0  moved=3461  movedSealed=915
+moved − movedSealed = 2546
+```
