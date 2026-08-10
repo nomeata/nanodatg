@@ -1482,6 +1482,27 @@ rather than needing a replacement. Mini's de-scheduling is the **second
 consumption of the checker's own construction, at a larger backend**: volume,
 not mathematics.
 
+**Step 1, decomposed by module** — a *static* count, so that the next seat
+picks by size rather than by the order the compiler happens to complain in. It
+is not a live-firing count and is not offered as one:
+
+| module | `SymbolicLevel` | `.sort(` | what it is |
+|---|---:|---:|---|
+| `zoneb.rs` | 24 | 6 | zone B: the declaration-shape translation and the pre-ensure |
+| `kernel.rs` | 24 | 4 | mini's `Checker` — `whnf`, `assert_def_eq`, the const/proj arms |
+| `interp.rs` | — | **36** | the store itself; `Interp::sort` and everything that spells a rung |
+| `proj_data.rs` / `proj_prop.rs` | 11 / 6 | — | the two projection clauses |
+| `minor_ix.rs` | 9 | — | indexed minor premises |
+| the `rec_*` / `iota_*` family | 28 | 4 | eight modules, recursors and their ι rules |
+| `quot*.rs`, `conv.rs`, `direct.rs`, `class_s*.rs`, … | 21 | 15 | the rest, none above 4 |
+
+The two columns are the two halves of step 1 and they are not the same job:
+`.sort(` is *where a rung is spelled* and is concentrated in `interp.rs` (36 of
+69), so `Interp::sort` taking an ω-term is one module's change with a wide but
+mechanical fan-out. `SymbolicLevel` is *where the ground path gives up*, and it
+is spread — `zoneb` and `kernel` are a third of it between them and no other
+module is above eleven.
+
 `ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
 `(name, ground levels)`, its module doc says so in the first thirty lines) and
 `dump.rs`'s schedule enumeration ("this dump **enumerates the schedule, not the
