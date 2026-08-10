@@ -329,13 +329,26 @@ whole reason the engines can remain two while the certificates become one.
    `mini/tests/envshare.rs` pins each identity with its disagree direction;
    `mini/tests/envshare_tg.rs` (behind `mini`'s `tg` feature) runs both
    engines over one core in one thread, in either order.
-2. **One `Sealed`.** The two are the same newtype with the same gate —
-   `Sealed(Thm)` refusing hypotheses (`mini/src/ev.rs:629`,
-   `checker/src/sealed.rs:71`). One shared type (a small common crate or a
-   re-verifying conversion at the store boundary); trivial.
-3. **One key.** `ConstKey = (Name, Vec<u32>)` vs `(NamePtr::raw,
-   Vec<Term>)` — one definition at the seam. The first version parked this
-   as optional stage 6; it is now on the critical path (track B3).
+2. **One `Sealed` — paid; B3, landed.** The two were the same newtype with
+   the same gate; `mini/src/ev.rs` now re-exports `checker/src/sealed.rs`'s
+   type (mini depends on `nanoda_lib` already), and the identity is pinned by
+   a witness function (`mini/src/ev.rs::sealed_is_the_checkers_type`) that a
+   reintroduced private newtype stops compiling.
+3. **One key — paid; B3, landed.** The joint key is
+   `const_store::ConstKey = (NameKey, Vec<LevelKey>)`
+   (`checker/src/const_store.rs`): the export file's stable name index, and
+   per level either `Ground(u32)` — a level that evaluates to a numeral under
+   σ, the arm on which mini's ground-only keys and the checker's keys are
+   equal values — or `Sym(Term)`, the checker's historical interpreted-level
+   spelling for the non-ground residue (eliminator universes inside inductive
+   blocks), which mini never produces. The checker's funnel is
+   `TgBackend::const_key`/`level_key`; mini's conversion is
+   `mini::interp::joint_key`. The `NamePtr::raw` half rests on the two
+   engines parsing the same export deterministically — today they parse two
+   `ExportFile`s — so every entry also records the name's rendered spelling
+   and both `publish` and `get` refuse a disagreeing caller (`alias`,
+   measured 0 corpus-wide); a raw-index drift is a counted refusal, never a
+   mislabelled theorem.
 4. **Concurrency — settled, with the measurement.** Nothing on the evidence
    axis runs multi-threaded today: `Config::num_threads` serde-defaults to 0
    (`checker/src/util.rs:988`), `check_all_declars` goes parallel only above
@@ -509,14 +522,41 @@ stage 6"):
   that pair — the `tg.rs` coordination point, satisfied without touching
   `derived/`. Mini's chain (`IndChain`) stays mini's: it mints no carrier
   symbols of its own and is checked `is_over` the shared machine.
-* **B3** — one key type and one `Sealed` at the seam (§3.4 items 2–3).
-* **B4** — the shared constant store: mini's `fill_declaration` writes
-  carriers, typings, defining equations and ι theorems under the joint
-  keys; checker reads store-first with its existing guards. **This is the
-  minimal viable form of the owner's split**: checker's def-checking
-  consuming mini's constructions. Measure on `nested_model`, then on the
-  `Nat`-filtered `init-prelude` residue (PRELUDE-COST.md's workload) with
-  defs routed to checker.
+* **B3** — one key type and one `Sealed` at the seam — **landed**; §3.4
+  items 2–3 have the shapes.
+* **B4** — the shared constant store — **landed**, as
+  `const_store::ConstStore` on the `EnvCore` (`checker/src/const_store.rs`),
+  so `mini` — which holds a core but no `Shared` — reaches the same cell.
+  What moved where: the checker's per-thread `const_syms` and
+  `declar_typings` *are* now slots of the joint entries (`defeq` and
+  `typing`, each tagged with the engine that derived it), read and written
+  through the same four funnels as before (`const_abbrev`,
+  `store_declar_typing`, `has_type_const`, `ty_const`) behind their
+  unchanged statement guards; mini's `put_const` publishes carrier, sealed
+  typing and defining equation on every fill, and its constant-miss path
+  (`Checker::adopt_shared`) adopts a cross-written entry instead of
+  constructing a second carrier. The store enforces two facts at `publish` —
+  every certificate is about its entry's own carrier (`incoherent`, 0
+  corpus-wide), and the spelling agrees (`alias`, 0) — and keeps **at most
+  one carrier per key per engine**, merging entries the moment the carriers
+  are equal terms (`converged`) and counting keys where the engines' carriers
+  differ (`divergent`): the one-carrier doctrine as a measured goal rather
+  than an asserted fiction, with `divergent` the B5 work list.
+
+  **The crossing, measured** (91 tutorial exports, mini first, then the
+  checker over the same core; `mini/tests/envshare_tg.rs::cross_sweep_tutorial`
+  reproduces): mini published 798 entries / 1014 certificate slots, the
+  checker 57 / 99. **52 defining equations crossed** — the checker adopted
+  mini's carrier and equation outright. **0 typings crossed**: 469 typing
+  offers and 57 defeq offers were declined at the statement guards, and 57
+  keys hold two carriers — the skeleton-normal-form residue B0 predicted,
+  now counted per key instead of argued. Mini-side adoption is mechanism-
+  complete (pinned by `kernel.rs::a_foreign_store_entry_is_adopted_on_miss`,
+  three atoms) but measures 0 on this corpus shape, because without
+  per-declaration routing mini fills every constant itself before any use
+  misses; its crossings arrive with track D. The `nested_model` /
+  `init-prelude` measurements stay ahead, gated on B5 closing the declined
+  populations.
 * **B5** — shared skeleton-site tables, scoped by B0's result: full sharing
   if the normal forms coincide, constant-level sharing with counted
   structural gaps if not.
@@ -595,8 +635,9 @@ the store remains one, and no finding in this document re-opens the wall.
   after the arrow alignment; the recursor-adjacent lambda residue scopes B5.
 * **The concurrency price of one store** — measured; §3.4 item 4 has the
   numbers and the decision.
-* **Cross-engine adopt-and-check drift rates** — `Dt::IndDrift`-class
-  counters exist per engine; what a mixed run scores is unknown.
+* **Cross-engine adopt-and-check drift rates** — measured; §5 track B4 has
+  the corpus numbers (52 adopted, 469 + 57 declined, 57 divergent keys,
+  `alias` and `incoherent` 0).
 * **The `init-prelude` projection under the split** — checker certifying the
   def population at `nested_model`-like cost is an extrapolation from PIVOT
   §4's 3.96 G vs 1,277 G and PRELUDE-COST.md's wall attribution, not a
