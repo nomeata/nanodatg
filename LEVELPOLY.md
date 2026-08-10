@@ -417,6 +417,41 @@ rebase exactly.
   feature-inert guard in `ci/check.sh` enforces it) and `derived`'s changes
   are purely additive modules, so the flag cannot reach the mini gates.
 
+## 4.5 The branch invariant, in the owner's words
+
+> "the whole idea there is to model lean's theory directly, without any
+> monomorphication. **every lean term has one interpretation, with level
+> parameters turned into elements of omega and interpreted as elements of our
+> universe tower**"
+
+Stated as the checkable property it is: **`⟦·⟧` is a function of the term
+alone — no σ in any key, anywhere**, in either engine. Deleting the ground
+level scheduling code is *how* the branch satisfies it; the invariant is what
+says the deletion actually happened. Two built pieces are the invariant
+showing through, and are the model for the rest, not demos: the
+`f̂(u⃗)`-shaped abbreviations (a constant's interpretation as a function of
+its level parameters, where the ground path mints a symbol per σ) and
+`punit_demo` (one theorem where the ground path mints one fact per σ).
+
+Consequences this section owns:
+
+* **Mini is in scope** (owner's ruling, 2026-08-10): mini's schedule must
+  go — `ground.rs`, the per-σ pair walk, `zoneb`'s pre-ensure, `dump.rs`'s
+  schedule enumeration. `instantiations.rs`-as-mini's-pre-pass is **not** a
+  legitimate end state on this branch. Where master's line routes mini to
+  inductives only, that is *master's* design; this branch follows the
+  sentence above, and a future port must treat mini's de-scheduling here as
+  branch-specific.
+* **`pairs` and `constEv` are denominated in σ** and lose their referent at
+  the switchover — a per-σ count has no meaning when there is one
+  interpretation per term. Their replacements, to be reported side by side
+  at the switchover: `decls` (declarations walked), `declEv` (declarations
+  whose one typing carries evidence — unconditional or `∀u⃗∈ω`-quantified,
+  counted apart), and the unchanged `gapped`/`unsealed`. The per-σ counters
+  are a measurement casualty of the same honest kind as the ι gate's 54
+  vacuous certificates, and are to be *renamed, never silently re-based* —
+  the `permissive but consistent` rule for counters.
+
 ## 5. The checker-side map
 
 A full census of where "levels are ground at translation time" is load-bearing
