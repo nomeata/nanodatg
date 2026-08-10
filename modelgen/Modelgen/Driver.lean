@@ -411,6 +411,36 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
       for cn in iv.ctors do
         if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
       st2 := (← genPrim n iv.levelParams iv.numParams iv.type cts reserved false st2).1
+    -- **A model may not leave an inductive it introduced unmodelled.** Arm C
+    -- (`MODELGEN.md` §8.15) splices the index erasure of the family it is
+    -- carving, so its output contains an inductive that was in nobody's
+    -- input; if the descent above could not model it, emitting would put a
+    -- fifth inductive in front of a consumer, which is the hole §8.13 closed.
+    -- So the whole model is withdrawn and the declaration declines.
+    --
+    -- Checked **after** the descent and not predicted before it. A cheap test
+    -- that says "this skeleton will model" is the shape of "skip is not
+    -- pass": it reports success and leaves the hole open on the case it got
+    -- wrong. This asks the environment.
+    for n in is.requires do
+      unless (← getEnv).constants.contains (Name.str (Name.str n "_model") "self") do
+        -- **Withdraw everything**, and off `st` rather than off the locals:
+        -- `out`, `rep` and `pending` have all been added to by the emission
+        -- and the descent above, and returning any of those would leave the
+        -- skeleton's records in the export with the model that needed them
+        -- gone. `st` is the state as it stood before this declaration.
+        setEnv saved
+        -- **Carry the skeleton's own reason.** The descent recorded why it
+        -- could not model it, and that entry is about to be discarded with
+        -- the rest of the withdrawn state; a message that says only "the
+        -- skeleton did not model" names where a value stopped rather than
+        -- why, which is the defect class this repository has paid for most.
+        let inner := (st2.2.1.declined.find? fun (m, _) => m == n).map (·.2)
+        let why := s!"prim model shape: the spliced index erasure {n} did not model, so \
+          emitting would leave an unmodelled inductive in front of a consumer \
+          (MODELGEN.md §8.15's rule) — {inner.getD "and the descent recorded no reason"}"
+        return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
+          st.2.2), false)
     return (st2, false)
 
 /-- **The composition's third step**: the single inductives a mutual model

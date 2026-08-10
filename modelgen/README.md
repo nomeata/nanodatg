@@ -150,7 +150,10 @@ T._model.{n-1}`, real members first then one mimic per nested occurrence, or
 `unpack_i` isomorphism per mimic, both round trips, and `congrPack_i` — and,
 on `--prim-models`' graph arm, `T._model.ind` and the seven `graph…`
 declarations that define the recursion's graph and prove it total and
-single-valued. **These
+single-valued, and on its **arm C** `T._model.skel` — the declaration's index
+erasure, spliced as an ordinary `inductive` and then modelled in turn like
+anything else this pass splices — beside the carving predicate
+`T._model.good`. **These
 are internal.** They exist because the four above have to be *proved* from
 something, they are what differs between the two constructions, and **no
 consumer needs them.** They are named here only so that nobody wonders what
@@ -287,13 +290,20 @@ narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusa
 paths have fixtures too (`tests/prim_declines.lean`, `tests/prim_graph.lean`).
 What it declines today:
 **branching** recursion (a constructor with two recursive fields, or one under
-a binder), indexed carriers at a **never-zero** sort, indices or recursion at
-a maybe-zero sort, one
+a binder), indexed carriers at a never-zero sort **whose index erasure is
+itself branching**, indices or recursion at
+a maybe-zero sort, a recursive declaration with no base constructor, one
 level-arithmetic gap, and — on the graph arm — a constructor whose data
 fields are not *literally* the conclusion's indices, since inversion at an
 arbitrary index would then need the index's injectivity.
 The *recursive subsingleton* is no longer among them: it is the graph arm,
 and `tests/prim_graph.lean` holds six occupants including `Acc`'s own shape.
+An **indexed family at a never-zero sort whose erasure is linear** is no longer
+among them either: arm C splices the index erasure as an ordinary inductive,
+models that by the same pass, and carves the family out of it — no axioms, no
+per-constructor glue, every ι rule `Eq.refl` (`MODELGEN.md` §8.15). A family
+whose spliced skeleton does *not* model produces **no emission**, so nothing
+unmodelled ever reaches a consumer.
 Indexed and recursive small-eliminating `Prop`s model,
 the whole maybe-zero class models, *linear* recursion at a never-zero sort
 models (`List` and `Lean.Name`, by tuple towers, every ι `Eq.refl`), and so

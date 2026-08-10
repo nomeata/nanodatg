@@ -3674,14 +3674,30 @@ W is not the largest cluster and is being done first because `Lean.ParserDescr`
 is one of the two declarations standing between `init-prelude` and full
 coverage. The indexed family is larger and is deliberately next, not forgotten.
 
-**Two things this table does not say, both established later and both changing
-what to do with it.** The two clusters are *not* stacked: §8.15 builds the
-carve over a spliced index-erased inductive rather than over W, so the indexed
-arm does not wait on the W arm and `CarveOverSkeleton.lean` is the prototype
-that would close this row rather than `IndexedCarve.lean`. And the indexed
-cluster is not 68 independent Mathlib shapes: **42 of the 68 are this tool's
-own composed `_model.aux`**, where every one of the 37 branching declines is an
-input declaration (§8.15's second table).
+**This table is superseded, and by the arm it sequenced.** Three things it does
+not say, all established later:
+
+* The two clusters are *not* stacked. §8.15's arm C carves over a spliced
+  index-erased inductive rather than over W, so the indexed arm did not wait
+  on the W arm — it **landed first**, and `CarveOverSkeleton.lean` rather than
+  `IndexedCarve.lean` is the prototype behind it.
+* The indexed cluster is not 68 independent Mathlib shapes: **42 of the 68 are
+  this tool's own composed `_model.aux`**, where every one of the 37 branching
+  declines is an input declaration.
+* **25 of the 68 are now models.** The residue at this prefix is 85, not 110,
+  and the row below is the current one:
+
+| cluster | count | of the 110 | erasure linear |
+|---|---|---|---|
+| an indexed family whose erasure **branches** | 43 | 39 % | no — W's, through the skeleton |
+| branching or under-a-binder recursion | 37 | 34 % | — it *is* the erasure |
+| the basis, the name guard, and two singletons | 5 | 5 % | — |
+| ~~an indexed family with a linear erasure~~ | ~~25~~ | ~~23 %~~ | **closed by arm C** |
+
+So **W is on the critical path for 80 of the original 110 — 73 %** — where
+this section read 35 %, because a branching skeleton is exactly what W is for.
+What arm C closed is the certifiable quarter; what is left owes an axiom bill
+until item E lands or `Classical.choice` is decided (§8.15).
 
 ## 8.10 The rule the arms are built under: model in dependency order, then use the real type
 
@@ -4071,20 +4087,24 @@ panic **twice**, once per view, and `runCollisionProbe` produces exactly four
 across its two orderings. Uncommenting the guard would move the loss from the
 public name to the private one and lose the same count.
 
-854 PANICs on the full file, of which 18 involve our own `_model` names — the
-ones the escape above retires — and the remaining ~836 are the input's own
-duplicate private declarations, which are the export's property and not
-reachable from here at all: those names are the input's and cannot be
-rewritten.
+**So patching that guard upstream would retire 18 PANICs, not 854.** 854 on the
+full file, of which 18 involve our own `_model` names — the ones the escape
+above retires — and the remaining ~836 are the input's own duplicate private
+declarations, which are the export's property and not reachable from here at
+all: those names are the input's and cannot be rewritten. Anyone who has
+carried the earlier version of this paragraph onwards should carry that
+sentence after it.
 
-## 8.15 The carve does not need W underneath it — `scripts/inductive-basis/CarveOverSkeleton.lean`
+## 8.15 Arm C: the indexed family, carved out of its spliced index erasure
 
-**Verdict: build the indexed carve over a *spliced index-erased inductive*, not
-over a W-type.** It is strictly cheaper on four axes, each of them checked
+**Verdict: the indexed carve is built over a *spliced index-erased inductive*,
+not over a W-type.** It is strictly cheaper on four axes, each of them checked
 mechanically rather than argued, and it makes the indexed arm independent of
-the W arm instead of stacked on it. 507 lines, compiles at the pinned
-toolchain in ~1 s, 0 errors, 0 warnings, 22 `#print axioms` and an asserted
-dependency closure.
+the W arm instead of stacked on it.
+`scripts/inductive-basis/CarveOverSkeleton.lean` is the prototype — 537 lines,
+~1 s, 0 errors, 22 `#print axioms`, an asserted dependency closure — and the
+arm is **landed**: `Modelgen.primIso`'s `armC`, with `tests/prim_carve.lean`
+as its fixture and the census below.
 
 This **refutes a sequencing claim, not a result.** `WIndexedCarve.lean`'s own
 verdict — that the indexed carve subsumes the non-indexed case, with
@@ -4264,16 +4284,101 @@ declaration. The indexed cluster is not 68 independent Mathlib shapes — it is
 26 of them plus 42 instances of one shape *this tool controls the generation
 of*.
 
+### What the arm emits, and the one thing it needs that no other arm did
+
+Six declarations beyond the four interface names, in this order:
+`T._model.skel` — **an `inductive`**, the index erasure, spliced — then
+`T._model.good`, `T._model.self`, the `ctor_j`, `rec_0` and the `iota_0_j`.
+`skel` and `good` are **internal** in `modelgen/README.md`'s sense; no
+consumer reads them.
+
+`skel` and `good` are guarded by the same name check as the interface names
+and only when the arm fires, exactly as arm G's internals are. The erasure
+itself is built by **raw `Expr` surgery on de Bruijn indices rather than by a
+telescope walk**, and that is forced rather than stylistic: opening a telescope
+means `withLocalDecl` at a type mentioning `T._model.skel`, which `MetaM` would
+have to `inferType`, and the constant does not exist yet — it is the one being
+declared. The first attempt did it the ordinary way and cost an `Unknown
+constant` and exit 3.
+
+**`Iso.requires`, and the rule it makes structural.** Arm C is the first arm
+whose output contains an inductive that was in nobody's input, so it is the
+first that can leave one *unmodelled* — the hole §8.13 closed, reopened from a
+new direction. `Iso.requires` names the skeleton, and `Modelgen.genPrim`
+withdraws the **whole** model — environment, records and report — if
+splice-and-model did not model it. Checked after the descent rather than
+predicted before it: a cheap test that says "this skeleton will model" is the
+shape of *skip is not pass*, reporting success and leaving the hole open on
+the case it got wrong. The decline carries the **skeleton's own reason** and
+not merely the fact of failure.
+
+One thing the arm does *not* have to do, and it is worth naming because the W
+route does: **there is no per-constructor glue at all.** The minor premise
+`skel.rec` wants is the minor premise `T.rec` wants, because a spliced
+skeleton keeps the field telescope. Everything per-constructor is extraction —
+`good`'s first conjunct is the index equation, and it is *read off the major*
+rather than proved.
+
+### Measured, on Mathlib
+
+Full 5.6 GB export, exit 0, against the census §8.14 recorded:
+
+| | before arm C | with arm C |
+|---|---|---|
+| models | 6,640 | **6,698** |
+| declines | 147 | **118** |
+| statements compared, differing | 16,928 / 0 | **16,928 / 0** |
+| instructions | 3.350 T | **3.371 T** (+0.6 %) |
+
+**Say what the denominator now counts.** The +58 models are 29 families that
+used to decline *plus their 29 spliced skeletons*, and a skeleton is a verdict
+too — so the denominator moves from 6,787 to 6,816 and the two figures are not
+against the same population. Both readings, so neither can be quoted as the
+other:
+
+* against §8.14's own denominator — input candidates plus composed, 6,787 —
+  6,669 of them model, **98.3 %**, up from 97.8 %;
+* against everything the tool now returns a verdict on, skeletons included,
+  6,698 / 6,816, also **98.3 %**.
+
+They agree to the decimal because a skeleton that models adds one to each side.
+The number to watch is the decline count, and it is **147 → 118**.
+
+Of the 118: 53 an indexed family whose erasure is *not* linear (43 of them
+composed `_model.aux`), ~50 branching or under a binder, 10 name taken
+(§8.14's escape is what those want), 3 basis, and 2 singletons. **No
+withdrawal fired on Mathlib** — every family arm C admitted, it modelled.
+
+At the 30M prefix the same arm closes 25 of 110, which is exactly the count
+`erasure linear: yes` predicted before the arm was built. The prediction and
+the outcome agreeing to the unit is the one piece of evidence that the
+`erasure linear` census measures the arm rather than something adjacent to it.
+
+### A Type-route defect the arm surfaced
+
+`tests/prim_carve.lean`'s `NoBase` is `NoBase : N → Type | mk : (n : N) →
+NoBase n → NoBase (N.s n)` — an indexed family whose erasure is `S | mk : N →
+S → S`, **linearly recursive with no base constructor**, which Lean accepts
+and which is uninhabited. The tuple tower cannot express it: spine 0 is the
+tower over the *base* constructors, and with none there is no fibre for
+`stepTower` to destruct at.
+
+It did not decline cleanly, it read `cs[0]` of an empty array. The resulting
+non-fatal `panic!` returned a default `PCtor` whose chain has no fields, so the
+declaration then declined with *"a chain with no fields needs a pad"* — a true
+refusal reached by an out-of-bounds read, with a reason that named nothing.
+This **predates arm C** and is a gap in the Type route; nothing in the corpus
+had reached it, because every linearly recursive occupant there has a base
+constructor. It is now a named decline with the guard beside `baseJ`, and
+`NoBase` is the fixture that holds it.
+
 ### What is not done, and is not to be assumed from the above
 
-* **Nothing is generated.** This is a compiled prototype, hand-written at three
-  targets. `Modelgen.primIso` has no carve arm and the splice of a skeleton is
-  not implemented.
 * **`Prop`-valued and small-eliminating targets** are a different construction,
   unchanged from `WFromPaths.lean`.
-* **Universe polymorphism is not exercised at the targets**, which are
-  `Type`-valued at a literal level. The one level question the *carrier*
-  raises is asked and answered: the carrier is `PSigma (fun s : S => good s x)`
+* **Universe polymorphism** is exercised by the arm on Mathlib but not by the
+  prototype, whose targets are `Type`-valued at a literal level. The one level
+  question the *carrier* raises is asked and answered: the carrier is `PSigma (fun s : S => good s x)`
   with `S : Sort w` and `good … : Prop`, so it lands at `Sort (max 1 w 0)`, and
   the prototype pins that Lean sees that as `w` on the nose at every never-zero
   shape a carrier has — `succ u`, `max 1 u`, `max 1 u v`, and `imax u (v+1)`.
@@ -4281,7 +4386,8 @@ of*.
   own model still meets the Type route's pads and boxes, which is that route's
   existing business and not a new one.
 * **An index telescope whose later index types depend on earlier ones** uses
-  the same `PSigma` packing and I expect no new content, but only the
-  independent case is tested (`Bal`).
+  the same `PSigma` packing — `Modelgen.packTyOf`, which arm F already states
+  its Henry-Ford equation at for exactly that reason — and I expect no new
+  content, but only the independent case is tested (`Bal`, `Bl`).
 * **The mutual and nested reductions** still land in indices, so they are
   downstream of this arm rather than beside it.

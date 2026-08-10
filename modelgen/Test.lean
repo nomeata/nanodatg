@@ -435,6 +435,25 @@ def expectedPrim : List Row :=
       [ ("PSigma", "prim model shape: a basis primitive")
       , ("Eq", "prim model shape: a basis primitive")
       , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
+  -- **Arm C**, and the two rows below the models are the arm's boundaries.
+  -- Every `X._model.skel` beside an `X` is the spliced index erasure being
+  -- modelled in turn (§8.13's splice-and-model), so a row here going missing
+  -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
+  -- exists to make impossible.
+  , ("prim_carve",
+      [("N", 9), ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
+       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6), ("Two2", 8),
+       ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
+       ("Tri3", 8), ("Tri3._model.skel", 6)],
+      [ ("Eq", "prim model shape: a basis primitive")
+      -- withdrawn: the erasure is linear and still does not model, and the
+      -- reason carried is the *skeleton's* own rather than "it did not model"
+      , ("IBox", "prim model shape: the spliced index erasure IBox._model.skel did \
+          not model")
+      , ("Br", "prim model shape: an indexed family at a never-zero sort whose index \
+          erasure is not linear")
+      , ("NoBase", "prim model shape: the spliced index erasure NoBase._model.skel did \
+          not model")])
   ]
 
 structure TAcc where

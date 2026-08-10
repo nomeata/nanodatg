@@ -1946,6 +1946,20 @@ structure Iso where
   declaration whose input already had what it needed. The report prints it:
   a splice is a decision on record and not a silent one. -/
   spliced : Array Name
+  /-- **Spliced inductives this model is not allowed to leave unmodelled.**
+  Arm C (`MODELGEN.md` §8.15) splices the *index erasure* of the family it is
+  modelling and carves the family out of it, so its output contains an
+  inductive declaration that was in nobody's input. If the prim pass then
+  cannot model that skeleton, the emission would put a fifth inductive in
+  front of a consumer — exactly the hole §8.13 closed — so the whole model is
+  withdrawn and the declaration declines instead.
+
+  The check is **after** the splice-and-model descent rather than a prediction
+  before it, because a prediction is the shape of "skip is not pass": a
+  cheap test that says the skeleton will model, and an emission that leaves it
+  unmodelled when it does not. [`Modelgen.genPrim`] is where the withdrawal
+  happens. Empty for every other arm, so nothing else changes shape. -/
+  requires : Array Name := #[]
   deriving Inhabited
 
 /-- **The export's names rewritten to the model's**: the carrier for each real
