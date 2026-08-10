@@ -68,8 +68,8 @@
 //!
 //! # Layout
 //!
-//! This module is a **hub**: both constructions live in their own file with
-//! their own interface header, and everything is re-exported here, so the paths
+//! This module is a **hub**: every construction lives in its own file with its
+//! own interface header, and everything is re-exported here, so the paths
 //! `crate::prop::…` all still resolve.
 //!
 //! | file | what it exports |
@@ -78,13 +78,16 @@
 //! | [`mod@cond_ext_n`] | two such singletons over pointwise-equal families are equal — `∀`-extensionality |
 //! | [`apparatus`] | [`Props`] — `U₀`, the typing rules over it, and the non-vacuity check |
 //! | [`trunc`] | [`Trunc`] — propositional truncation `‖a‖ = [∃x. x ∈ a]`, the third instance |
+//! | [`ext`] | [`prop_ext`] — mutually inhabiting subsets of `1` are equal, which is what validates Lean's `propext` |
 
 pub mod apparatus;
 pub mod cond;
 pub mod cond_ext_n;
+pub mod ext;
 pub mod trunc;
 
 pub use apparatus::Props;
+pub use ext::prop_ext;
 pub use cond::{
     cond_elim, cond_false, cond_intro, cond_subset_unit, cond_subsingleton, cond_true,
     conditional_singleton,

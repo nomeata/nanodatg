@@ -2834,3 +2834,92 @@ fn the_conversion_trace_names_each_declaration_as_the_loop_reaches_it() {
         "the row is emitted before the declaration it names, and says so:\n{err}"
     );
 }
+
+// ───────────────────────────────────────────────── Lean's standard axioms ──
+
+/// **`propext` is inhabited, and `Classical.choice` is not.**
+///
+/// `mini::ev::Gap::Axiom` is reached only once the axiom's own *type* has
+/// interpreted, and `mini/tests/tutorial.rs` records that on the 91-file corpus
+/// the variant is unreachable for exactly that reason — "no axiom's type
+/// interprets yet". `standard_axioms.lean` is the smallest export where they
+/// do: `Iff` is class (S) and `Nonempty` is class (P), both carriers build, and
+/// the two axioms with no clause in `mini::axiom` reach the fallback.
+///
+/// The measurement this test exists to hold is the *split*. Before
+/// `mini::axiom::Clause::PropExt` the row was
+///
+/// ```text
+/// constEv=1  library-gap=6  waiting:axiom(Classical.choice)=4  waiting:axiom(propext)=2
+/// ```
+///
+/// and the `propext` half is gone. `Classical.choice`'s four are pinned here
+/// **as a decline** and by name, for the reason the module header of
+/// `mini::axiom` gives: its codomain is `α : Sort u`, not a `Prop`, so the
+/// clause would have to hand back the term `ε(⟦α⟧)` and a theorem carrying the
+/// hypothesis `IsChoiceFn(f, ·)` — and `mini::ev::Sealed` refuses a
+/// hypothetical theorem while `mini::ledger` stores `ip.point()` for every
+/// inhabited axiom. That is an architecture question, not a missing lemma, and
+/// a change that closes it should fail here and be re-read.
+///
+/// # Two axioms, not one
+///
+/// A fixture with `propext` alone would pass under a clause that inhabited
+/// *any* axiom whose type interpreted — the failure mode the module header
+/// calls "the name is not the evidence", one level up. `Classical.choice` sits
+/// beside it at the same two σ, and the clause must leave it alone.
+#[test]
+fn propext_is_inhabited_and_classical_choice_is_still_open() {
+    let out = run("standard_axioms.ndjson");
+    let e = evidence(&out);
+    // Non-vacuity: every *type* interprets, so both axioms really do reach the
+    // inhabitation obligation. A fixture whose types stopped interpreting would
+    // report the same `constEv` for an entirely different reason.
+    assert_eq!(e.get("pairs"), Some(&7), "the pair population changed:\n{out}");
+    assert_eq!(e.get("typeEv"), Some(&7), "an axiom's type stopped interpreting:\n{out}");
+    // `propext` and `propextUse`, plus `trueIff` which never needed the axiom.
+    assert_eq!(e.get("constEv"), Some(&3), "the derived population changed:\n{out}");
+    let w = waiting(&out);
+    assert_eq!(
+        w.get("axiom(propext)"),
+        None,
+        "propext is no longer a gap — this row is `mini::axiom::Clause::PropExt`:\n{out}"
+    );
+    assert_eq!(
+        w.get("axiom(Classical.choice)"),
+        Some(&4),
+        "Classical.choice's four pairs are the ε obstruction, pinned as a decline:\n{out}"
+    );
+    assert_eq!(w.len(), 1, "a second reason appeared beside the choice axiom:\n{out}");
+}
+
+/// **The premise is read, not assumed.** `propext`'s clause takes its
+/// biconditional apart through the class-(S) apparatus of whatever the third
+/// binder's head constant is, and the two fields must be the two arrows between
+/// the two binders. The fixture's `Iff` is the declaration that satisfies that;
+/// `trueIff` in the same file is the witness that `Iff` is a real class-(S)
+/// structure with an inhabitant, and it derives with no axiom in sight.
+///
+/// Pinned through the dump rather than a counter because the claim is about
+/// *what* was derived: `propext`'s typing must be a membership in the
+/// interpretation of its own declared type, and a clause that certified the
+/// axiom against some other set would still move `constEv`.
+#[test]
+fn propexts_typing_is_about_its_own_declared_type() {
+    let lines = theorem_lines("standard_axioms.ndjson", "propext");
+    let typing: Vec<&String> = lines.iter().filter(|l| l.starts_with("typing ")).collect();
+    assert_eq!(typing.len(), 1, "propext has one pair and so one typing: {lines:?}");
+    assert!(!typing[0].contains("waiting on"), "propext's typing is a gap again: {}", typing[0]);
+    // The set is the interpretation of `∀ {a b : Prop}, (a ↔ b) → a = b`, so
+    // **both** the premise's type former and the codomain's appear in it — and
+    // `Eq` at level 1, because the equation is between two propositions and
+    // `Prop : Sort 1`. A clause that certified the axiom against the level-0
+    // equation would move `constEv` and print `⟦Eq.{0}⟧` here.
+    for want in ["⟦Iff.{}⟧", "⟦Eq.{1}⟧"] {
+        assert!(
+            typing[0].contains(want),
+            "propext's typing is not about its own declared type — no {want} in {}",
+            typing[0]
+        );
+    }
+}

@@ -114,6 +114,16 @@ pub enum Gap {
     /// carries `Thm::ax_choice`. So this is a **library** obligation, and
     /// `Cause::Assumption` — which used to be this variant's axis — has no
     /// occupant left and is gone.
+    ///
+    /// **Two of the three now have a clause** (`mini::axiom`): `Quot.sound` at
+    /// `Sort 0`, and `propext` through `derived::prop::prop_ext`. The one left
+    /// is `Classical.choice`, and its obstruction is *not* the missing library
+    /// item this variant's name suggests — `derived::choice` is built. It is
+    /// that `ε` can only be carried as a free variable under
+    /// `IsChoiceFn(f,·)`, which `Sealed` refuses, and that its codomain is not
+    /// a `Prop` so its interpretation is not `•`. `mini::axiom`'s header states
+    /// what would have to change; `mini/tests/fixtures/standard_axioms.lean` is
+    /// the witness that keeps it measurable.
     Axiom(Name),
     /// A constant's interpretation is not in the store at these ground levels.
     NoInterpretation(Name, Vec<u32>),

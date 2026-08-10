@@ -735,6 +735,12 @@ fn tutorial_clause_census() {
 /// construction someone has to build, not a postulate. On this corpus the
 /// variant is now unreachable, because no axiom's type interprets yet.
 ///
+/// That last sentence is why `mini/tests/fixtures/standard_axioms.lean` exists:
+/// a clause for `propext` or `Classical.choice` cannot be measured against a
+/// corpus that never reaches the variant. Off that fixture, two of the three
+/// constructions are now built — `Quot.sound` and `propext` — and the corpus
+/// row is unchanged at zero, which is the honest reading of "unreachable here".
+///
 /// # The dependent eliminator moved 18 pairs, and 6 of them only one row
 ///
 /// `mini/src/rec_dep.rs` wired [`derived::inductive::DepRecursor`] and closed

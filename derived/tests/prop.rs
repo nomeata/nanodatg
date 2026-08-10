@@ -757,3 +757,121 @@ fn a_hypothetical_singleton_axiom_does_not_prove_extensionality() {
         "…and on the right"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Propositional extensionality.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ 1 ⊆ 1`, at [`kernel::thm::subset`]'s own binder — reflexivity under a
+/// `∀`, and the second of [`derived::prop::prop_ext`]'s four hypotheses in the
+/// tests below. (`Formula::forall` closes the binder, so this really is the
+/// formula `subset(env, 1, 1)`; the tests' `Thm::mp` is what checks it.)
+fn unit_subset_unit(env: &mut Env, s: &Sums) -> Thm {
+    let z = env.fresh_var();
+    Thm::gen(z, &derived::imp_refl(Formula::mem(Term::var(z), s.unit())))
+}
+
+/// The statement, rebuilt from the kernel's own constructors.
+#[test]
+fn prop_ext_states_extensionality_inside_the_unit_set() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let thm = prop::prop_ext(&mut env, &s).expect("prop_ext");
+    assert!(thm.hyps().is_empty(), "prop_ext must be unconditional");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    // Two fresh variables in the order the lemma quantifies them.
+    let (xv, yv) = (env.fresh_var(), env.fresh_var());
+    let (tx, ty) = (Term::var(xv), Term::var(yv));
+    let at = derived::inst_all(&thm, &[tx.clone(), ty.clone()]).expect("instantiate");
+    let px = kernel::thm::subset(&mut env, tx.clone(), s.unit());
+    let py = kernel::thm::subset(&mut env, ty.clone(), s.unit());
+    let m = |t: &Term| Formula::mem(s.point(), t.clone());
+    let want = Formula::imp(
+        derived::conj_of(&[
+            px,
+            py,
+            Formula::imp(m(&tx), m(&ty)),
+            Formula::imp(m(&ty), m(&tx)),
+        ])
+        .expect("conj"),
+        Formula::eq(tx, ty),
+    );
+    assert_eq!(*at.concl(), want, "prop_ext's shape changed");
+}
+
+/// **Non-vacuity.** The lemma is applied at two *syntactically different*
+/// terms that are both `1`, and the conclusion is the equation between them —
+/// `[• ∈ 1] = 1`, which is not reflexivity and not derivable from the
+/// conditional singleton's own axiom without Extensionality.
+///
+/// A lemma that had collapsed to `x = x`, or whose antecedent could not be
+/// discharged at all, both leave every test above green.
+#[test]
+fn prop_ext_identifies_a_true_conditional_singleton_with_the_unit_set() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    // `[φ]` at `φ = • ∈ 1`, which is true — `Sums::unit_mem`.
+    let phi = Formula::mem(s.point(), s.unit());
+    let (f, ax) = prop::conditional_singleton(&mut env, &s, &[], &phi).expect("cond");
+    let c = Term::apply(f, vec![]);
+    assert_ne!(c, s.unit(), "the fixture needs two distinct terms to identify");
+
+    let pc = prop::cond_subset_unit(&mut env, &s, &phi, &c, &ax).expect("[φ] ⊆ 1");
+    let p1 = unit_subset_unit(&mut env, &s);
+    // `• ∈ [φ] → • ∈ 1` is `[φ] ⊆ 1` at the point; `• ∈ 1 → • ∈ [φ]` is
+    // `cond_intro`, whose antecedent `φ` *is* `• ∈ 1`.
+    let fwd = Thm::mp(&Thm::ax_inst(pc.concl().clone(), s.point()).expect("inst"), &pc)
+        .expect("[φ] ⊆ 1 at •");
+    let bwd = prop::cond_intro(&s, &phi, &c, &ax).expect("cond_intro");
+
+    let thm = prop::prop_ext(&mut env, &s).expect("prop_ext");
+    let at = derived::inst_all(&thm, &[c.clone(), s.unit()]).expect("instantiate");
+    let hyp = [pc, p1, fwd, bwd]
+        .into_iter()
+        .rev()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .expect("fold");
+    let out = Thm::mp(&at, &hyp).expect("the antecedent is exactly what prop_ext wants");
+    assert_eq!(*out.concl(), Formula::eq(c, s.unit()), "the identification is not the one claimed");
+    assert!(out.hyps().is_empty());
+}
+
+/// **The four hypotheses are positional, and all four are read.**
+///
+/// `conj_of` builds a right-nested conjunction, so a caller that folds the
+/// facts in the wrong order hands over a different formula and `Thm::mp`
+/// refuses it. Two hypotheses could not separate this — swapping the only two
+/// would be the same as swapping the roles of `x` and `y`, which the lemma is
+/// symmetric under. With four, every adjacent transposition is a distinct
+/// wrong antecedent, and all four are checked here.
+#[test]
+fn prop_ext_reads_its_four_hypotheses_in_order() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let phi = Formula::mem(s.point(), s.unit());
+    let (f, ax) = prop::conditional_singleton(&mut env, &s, &[], &phi).expect("cond");
+    let c = Term::apply(f, vec![]);
+    let pc = prop::cond_subset_unit(&mut env, &s, &phi, &c, &ax).expect("[φ] ⊆ 1");
+    let p1 = unit_subset_unit(&mut env, &s);
+    let fwd = Thm::mp(&Thm::ax_inst(pc.concl().clone(), s.point()).expect("inst"), &pc)
+        .expect("[φ] ⊆ 1 at •");
+    let bwd = prop::cond_intro(&s, &phi, &c, &ax).expect("cond_intro");
+    let right = [pc, p1, fwd, bwd];
+
+    let thm = prop::prop_ext(&mut env, &s).expect("prop_ext");
+    let at = derived::inst_all(&thm, &[c, s.unit()]).expect("instantiate");
+    let fold = |ts: &[Thm]| {
+        ts.iter().rev().cloned().reduce(|acc, t| derived::and_intro(&t, &acc)).expect("fold")
+    };
+    assert!(Thm::mp(&at, &fold(&right)).is_some(), "the right order must go through");
+    for i in 0..3 {
+        let mut swapped = right.clone();
+        swapped.swap(i, i + 1);
+        assert!(
+            Thm::mp(&at, &fold(&swapped)).is_none(),
+            "hypotheses {i} and {} are interchangeable — the lemma is not reading both",
+            i + 1
+        );
+    }
+}
