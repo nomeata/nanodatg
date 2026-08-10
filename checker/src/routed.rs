@@ -145,6 +145,33 @@ impl<'p> ExportFile<'p> {
     }
 }
 
+#[cfg(feature = "tg")]
+impl<'p> ExportFile<'p> {
+    /// Interpret `d`'s declared type — and, for a definition-like
+    /// declaration, its value — at `sigma`, through the checker's dispatch,
+    /// discarding the terms: what remains is what the dispatch *minted* into
+    /// the thread's `Shared` skeleton-site tables. The paired-subterm
+    /// measurement seam (`mini/tests/route_tg.rs::
+    /// paired_subterm_lam_divergence`): with one parse the `ExprPtr`s here
+    /// are the very pointers mini's declarations hold, so driving both
+    /// dispatches over them separates genuine skeleton disagreement from
+    /// surface asymmetry — the confound the whole-run sweep cannot remove.
+    /// Behind the `tg` feature because only the TG backend has an
+    /// interpretation to measure.
+    pub fn interp_declar_exprs_at(&self, d: &Declar<'p>, sigma: &[u32]) {
+        let info = *d.info();
+        self.with_tc_and_declar(info, sigma, |tc| {
+            let _ = tc.certifier.interp(tc.ctx, info.ty);
+            if let Declar::Definition { val, .. }
+            | Declar::Theorem { val, .. }
+            | Declar::Opaque { val, .. } = d
+            {
+                let _ = tc.certifier.interp(tc.ctx, *val);
+            }
+        });
+    }
+}
+
 /// The checker's side of a routed run: the export's declarations bucketed by
 /// route anchor, the published schedule, and the claim ledger that makes
 /// "nothing was silently left unchecked" a checkable statement rather than a

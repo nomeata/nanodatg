@@ -217,6 +217,193 @@ fn a_checker_routed_declaration_is_checked_at_every_scheduled_instantiation() {
     assert_eq!(cross_field(&out, "checkerSlots"), 4, "{}", rep.cross);
 }
 
+/// **The paired-subterm lam measurement** — de-confounding the whole-run
+/// sweep below, whose lam residue (673 mini / 440 checker after nominal
+/// blinding) mixes two populations: genuine skeleton disagreement, and
+/// *surface asymmetry* — lambdas one engine's walk interprets that the
+/// other's never reaches (mini's constructions, the checker's per-σ
+/// re-checks). Here the surface is forced equal: for every definition-like
+/// declaration and every scheduled σ, **both dispatches interpret exactly
+/// the declared type and value** — the same `ExprPtr`s, one parse, one core
+/// (mini substitutes σ into the expression, the checker carries σ in its
+/// context; same pair, same subterm structure). What survives nominal
+/// blinding on one side only is genuine disagreement about what a lambda
+/// body's skeleton *is*; everything else was surface.
+///
+/// The asymmetry worth naming while measuring it: the checker's lam side is
+/// build-only — no `as_lam`, no `lam_by_sym` — because its dispatch only
+/// ever constructs. Under one mint path it gains a decomposition capability
+/// it never had to build, so unification here is one side gaining, not two
+/// compromising.
+#[test]
+#[ignore]
+fn paired_subterm_lam_divergence() {
+    use mini::env::Declaration;
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("corpus dir")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "ndjson"))
+        .collect();
+    files.sort();
+    let mut totals = [0usize; 18];
+    for f in files {
+        let name = f.file_stem().unwrap().to_string_lossy().to_string();
+        let row = std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                let Ok(loaded) = mini::convert::load_with(&f, Default::default()) else {
+                    return (format!("pairskel\tfile={name}\tskipped"), [0usize; 18])
+                };
+                let mut env = mini::env::Environment::empty();
+                for d in &loaded.decls {
+                    if mini::kernel::add(&mut env, d).is_err() {
+                        return (format!("pairskel\tfile={name}\trejected"), [0usize; 18])
+                    }
+                }
+                // The paired surface: (declaration, σ) for every
+                // definition-like declaration, σ from mini's own schedule.
+                let mut pairs: Vec<(&Declaration, Vec<u32>)> = Vec::new();
+                for d in &loaded.decls {
+                    let lp = match d {
+                        Declaration::Def { lparams, .. } | Declaration::Axiom { lparams, .. } => {
+                            lparams
+                        }
+                        _ => continue,
+                    };
+                    let sigmas = loaded
+                        .schedule
+                        .get(&d.name())
+                        .cloned()
+                        .unwrap_or_else(|| vec![vec![0; lp.len()]]);
+                    for s in sigmas {
+                        pairs.push((d, s));
+                    }
+                }
+                let core = nanoda_lib::tg::EnvCore::fresh();
+                let mut ip = mini::interp::Interp::over(core.clone());
+                for (d, sigma) in &pairs {
+                    let (lparams, ty, val) = match d {
+                        Declaration::Def { lparams, ty, value, .. } => {
+                            (lparams, ty, Some(value))
+                        }
+                        Declaration::Axiom { lparams, ty, .. } => (lparams, ty, None),
+                        _ => unreachable!("pairs holds defs and axioms only"),
+                    };
+                    let ty_g = mini::ground::subst_ground(ty, lparams, sigma);
+                    let mut c = mini::kernel::Checker::threaded(&env, &mut ip);
+                    let _ = c.infer_type(&ty_g);
+                    if let Some(v) = val {
+                        let v_g = mini::ground::subst_ground(v, lparams, sigma);
+                        let _ = c.infer_type(&v_g);
+                    }
+                }
+                let (ml, mp, mc) = ip.skeleton_keys();
+                nanoda_lib::tg::install_shared_core(core.clone());
+                let ef = mini::arena::installed_export_file().expect("load installed the file");
+                for (d, sigma) in &pairs {
+                    if let Some(cd) = ef.declars.get(&d.name().0) {
+                        ef.interp_declar_exprs_at(cd, sigma);
+                    }
+                }
+                let Some((cl, cp, cc)) = nanoda_lib::tg::skeleton_keys() else {
+                    return (format!("pairskel\tfile={name}\tno-shared"), [0usize; 18])
+                };
+                let mut cells = [0usize; 18];
+                let mut s = format!("pairskel\tfile={name}");
+                for (i, (label, m, c)) in
+                    [("lam", ml, cl), ("pi", mp, cp), ("cond", mc, cc)].into_iter().enumerate()
+                {
+                    let (raw, blind) = compare_keys(&m, &c);
+                    cells[6 * i..6 * i + 3].copy_from_slice(&raw);
+                    cells[6 * i + 3..6 * i + 6].copy_from_slice(&blind);
+                    s.push_str(&format!(
+                        "\t{label}Common={}\t{label}MiniOnly={}\t{label}CheckerOnly={}\t\
+                         {label}BlindCommon={}\t{label}BlindMiniOnly={}\t{label}BlindCheckerOnly={}",
+                        raw[0], raw[1], raw[2], blind[0], blind[1], blind[2]
+                    ));
+                }
+                (s, cells)
+            })
+            .expect("spawn")
+            .join()
+            .expect("file thread");
+        eprintln!("{}", row.0);
+        for (t, v) in totals.iter_mut().zip(row.1) {
+            *t += v;
+        }
+    }
+    let l = ["lam", "pi", "cond"];
+    let mut s = String::from("pairskelTotal");
+    for i in 0..3 {
+        s.push_str(&format!(
+            "\t{0}Common={1}\t{0}MiniOnly={2}\t{0}CheckerOnly={3}\t{0}BlindCommon={4}\t\
+             {0}BlindMiniOnly={5}\t{0}BlindCheckerOnly={6}",
+            l[i],
+            totals[6 * i],
+            totals[6 * i + 1],
+            totals[6 * i + 2],
+            totals[6 * i + 3],
+            totals[6 * i + 4],
+            totals[6 * i + 5]
+        ));
+    }
+    eprintln!("{s}");
+}
+
+/// Raw and nominal-blind `(common, mini-only, checker-only)` for one table's
+/// key sets — the shared comparison of the two measurement tests.
+fn compare_keys(m: &[kernel::Term], c: &[kernel::Term]) -> ([usize; 3], [usize; 3]) {
+    use std::collections::HashSet;
+    let ms: HashSet<_> = m.iter().cloned().collect();
+    let cs: HashSet<_> = c.iter().cloned().collect();
+    let common = ms.intersection(&cs).count();
+    let raw = [common, ms.len() - common, cs.len() - common];
+    let nm: HashSet<String> = m.iter().map(nominal_blind).collect();
+    let nc: HashSet<String> = c.iter().map(nominal_blind).collect();
+    let bc = nm.intersection(&nc).count();
+    ([raw[0], raw[1], raw[2]], [bc, nm.len() - bc, nc.len() - bc])
+}
+
+/// A key modulo the *nominal* mints: the Debug rendering with every `FnSym`
+/// id and every memoised hash blanked, leaving structure, brands and the
+/// (shared) free variables. Two keys equal under this are one skeleton keyed
+/// through two independently-minted symbol series — the population one
+/// shared mint path merges by construction.
+fn nominal_blind(t: &kernel::Term) -> String {
+    let d = format!("{t:?}");
+    let mut out = String::with_capacity(d.len());
+    let mut rest = d.as_str();
+    while let Some(i) = rest.find("id: ") {
+        out.push_str(&rest[..i + 4]);
+        rest = &rest[i + 4..];
+        let fnsym =
+            out.rfind("FnSym").is_some_and(|f| out.rfind("FreeVar").is_none_or(|v| f > v));
+        let n = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        if fnsym {
+            out.push('_');
+        } else {
+            out.push_str(&rest[..n]);
+        }
+        rest = &rest[n..];
+    }
+    out.push_str(rest);
+    let mut out2 = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(i) = rest.find("hash: ") {
+        out2.push_str(&rest[..i + 6]);
+        rest = &rest[i + 6..];
+        let n = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        out2.push('_');
+        rest = &rest[n..];
+    }
+    out2.push_str(rest);
+    out2
+}
+
 /// **The skeleton-key divergence measurement** — sizing the one-mint-path
 /// programme (the owner's "for a merged environment, `interp` must return
 /// the same terms; use the same code to handle lambdas in both modules").

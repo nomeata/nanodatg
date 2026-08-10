@@ -589,7 +589,43 @@ stage 6"):
   never decomposes at all. Separating lam's surface from its disagreement
   needs the paired per-subterm run the one-parse arena now permits (both
   dispatches over the *same* `ExprPtr`s); that measurement gates the lam
-  mint's design and is the first step of the mint-unification tranche. The
+  mint's design and is the first step of the mint-unification tranche.
+
+  **Why the raw one-sided counts are equal file-by-file** — the mint
+  duplication *cascades*: leaf keys agree (they are built from the shared
+  canonical variables, whose ids are identical on both sides — `Free(4740)`
+  in the sampled pairs, so B1/B2's series is confirmed genuinely one), and
+  every key that nests an earlier-minted site symbol differs *only through
+  that inner symbol's id*. One shape keyed once per engine, at every
+  nesting level: equal counts, disjoint keys.
+
+  **The paired-subterm run** (`route_tg.rs::paired_subterm_lam_divergence`),
+  which forces the surface equal — both dispatches interpret exactly each
+  definition-like declaration's type and value per scheduled σ, the same
+  `ExprPtr`s over one parse and one core — de-confounds the lam residue:
+
+  | site | raw common / one-sided | nominal-blind |
+  |------|------------------------|---------------|
+  | lam  | 39 / 534+81            | 86 / 384+**32** |
+  | Π    | 82 / 253+103           | 180 / 153+**5** |
+  | cond | 90 / 304+192           | 248 / 145+**33** |
+
+  The remaining mini-only excess is not disagreement but **inference
+  closure**: mini's `infer_type` interprets the *types of* subterms and
+  mints along its whnf/def_eq work, where the checker's bare `interp(e)`
+  touches only `e`'s structure — so a genuinely disagreeing shape, present
+  in both inputs, shows up one-sided on *both* sides, and the checker-only
+  blind column bounds the disagreement: **≤32 lam, ≤5 Π, ≤33 cond shapes
+  corpus-wide**, concentrated and nameable by file — lam: `027/028/029`
+  (peano, 4+8+9, Nat-recursor-adjacent values), `076/079/080/081/093/105`
+  (1–2 each, projection and recursor-value shapes); Π: `072` (2),
+  `081_PSigma` (3); cond: `072` (8), `099/101/102/105` and neighbours (2–4
+  each, Prop-valued ∀ in eliminator types). This is B0's "recursor-adjacent
+  lambda bodies" scope, now with a per-file work list. The asymmetry worth
+  stating for the design: the checker's lam side is **build-only** — no
+  `as_lam`, no `lam_by_sym`, because its dispatch only constructs — so
+  under one mint path it *gains* a decomposition capability it never had;
+  unification here is one side gaining, not two compromising. The
   **nominal-mint census**, one line each: prelude/tower/machine — one
   (B1/B2); canonical binder and hole variables — one (B1/B2, confirmed by
   the measurement); constant carriers — one *store*, still two mint paths
@@ -664,6 +700,27 @@ published, B4's numbers, pinned by `route_tg.rs`). **External dependency, unchan
 checker's stage-1 scope wiring (THREADING-CENSUS §2) is what would turn the
 checker's 156 slots into a typing per def and the 7 into a population
 (§3.6); it is independent work, already sequenced first in PIVOT §5.
+
+**The comprehensive merge, in progress** (the owner's correction of this
+track's shape: one environment, one parse, one entry per declaration — "it
+shouldn't matter which code created it"). Stage 1, **one parse, landed**:
+the routed driver drives the checker over the `ExportFile` mini's load
+installed as its arena (`mini::arena::installed_export_file`), so the joint
+`NameKey` is an identity rather than an agreement between two deterministic
+parses — and a real latent bug closed with it: under the `modelgen` filter
+the export mini checks exists only in memory, so the replaced re-parse
+handed the two engines **two different files**. Next, in order: one mint
+path per nominal object on the `EnvCore` (sized above under B5 — deleting
+the tg backend's duplicate inductive interpretation is part of it), then
+the entry collapse — one carrier, no engine tag in any value, with
+`adopt_shared`, the spelling guard, `divergent` and `alias` disappearing as
+consequences. When the collapse lands, the crossing counters (B4's 52, this
+track's 7/284, the 57 divergent keys) **become meaningless by construction
+— a change of unit, not an improvement to zero** — and the ratchet that
+must hold is the real one: `accept/decline/reject/exit4`, `gapped`,
+`unsealed`, `moved − movedSealed` = 2546. The merge's acceptance test is
+the `052/113/114` population: those files go green exactly when mini's β
+can decompose the one shared lambda mint's sites.
 
 **What routing does not buy, measured on `init-prelude`**: the routed
 `Split` run (`--mutual --nested --no-modelgen`, release, 16 GB cap) stopped
