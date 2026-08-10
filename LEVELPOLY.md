@@ -599,17 +599,20 @@ target, named so it can be checked off):
   (`canon_level`, `interp_level`, `audit_instantiation`, one sort-shape
   probe), `audit_instantiation` (24 lines), `inst_report` + `InstAudit`
   (~60 lines).
-* `mini/src/ground.rs` — **141 lines** (`eval`, `numeral`, `ground_env`,
-  `ground_levels`, `subst_ground`), plus `mini/src/convert.rs`'s
+* `mini/src/ground.rs` (`numeral`, `ground_env`, `ground_levels`,
+  `subst_ground`, and `eval`/`as_numeral`), plus `mini/src/convert.rs`'s
   `Instantiations::compute(ef)` and schedule field, `ledger.rs`'s per-σ pair
   walk, `zoneb`'s per-σ pre-ensure loop, and `dump.rs`'s
   schedule-enumeration reporting. **This half is mini's evidence
   architecture itself** — the (declaration, σ) pair is its unit of account
   (`pairs`, `constEv`, the dump's row identity) — and is load-bearing for a
-  reason §5.3 steps 1–2 describe and this branch has not built. The checker
-  half above is deletable once §5.4's three blockers close; the mini half is
-  the remaining §5.3 volume, and `instantiations.rs` survives as mini's
-  pre-pass either way until it does.
+  reason §5.3 steps 1–2 describe. **Its line count is the wrong unit and
+  used to be quoted here as if it were the job**: `ground.rs` is 141 lines,
+  and the de-scheduling is 40 of mini's 56 source files. See "Mini, sized" in
+  §5.5 for the measurement and for which half is built (step 2) and which is
+  not (step 1). The checker half above is deletable once §5.4's three
+  blockers close; the mini half is the remaining §5.3 volume, and
+  `instantiations.rs` survives as mini's pre-pass either way until it does.
 
 ### 5.1 Where groundness is assumed
 
@@ -628,7 +631,7 @@ turned every row's cost from an estimate into a measurement.
 | `TcCtx::sigma` / `under_sigma` (`checker/src/util.rs:304,354`; 5 call sites) | substitute numerals, then `simplify` | substitution becomes identity; `interp_level`'s `Param` arm becomes the *main* arm |
 | `interp_sort`'s `_` arm (`tg.rs:4128`) | `Max`/`IMax`/`Param` fall to an opaque `sort(t)` with no facts | `srt(ℓ̂)` (§1.2) with the §1.3 fact kit — **built** (the wedge), now over per-name free variables |
 | `Clause::{Prop,Type,Undet}` dispatch (`tg.rs:10449 clause_after`, `tc.rs:1059 infer_pi`) | reads the level shape after σ; `Undet` = axiom-free symbol + `TyGap::PiUndet` | `Undet` becomes the `ite0` clause (§1.4); 12 residual `PiUndet` sites under σ, **2407 without it** (§5.4 blocker 1) |
-| const/ind/ctor tables keyed `(name, interpreted levels)` (`Shared::*`, `TgBackend::{ind_syms, ctor_rules, …}`, mini's `ConstKey = (Name, Vec<u32>)`) | one entry per ground instantiation | one entry per *declaration*, keyed by canonical level *expressions*; ground keys become the numeral instances |
+| const/ind/ctor tables keyed `(name, interpreted levels)` (`Shared::*`, `TgBackend::{ind_syms, ctor_rules, …}`, mini's `ConstKey`) | one entry per ground instantiation | one entry per *declaration*, keyed by canonical level *expressions*; ground keys become the numeral instances. **Mini's half is built** — `ConstKey` is `(Name, Vec<Level>)`, canonicalised by `ground::key_levels` (§5.3 step-2 status) |
 | mini `ground::eval` → `Gap::SymbolicLevel` (~40 mint sites), `Interp::sort(n: u32)`, `CUMUL_HEIGHT = 8` | a symbolic level is a sanctioned dead end; the tower is consulted at a `usize` | the dead end becomes the entry point; `srt(ℓ̂)` has no height limit (`CUMUL_HEIGHT` retires — the internal ladder is ω-long) |
 | `zoneb`'s `provably_nonzero` / eliminator trichotomy | already **per-declaration, not per-σ** — the module doc insists on it | unchanged: this is the one part of the pipeline that is already level-polymorphic in spirit |
 
@@ -660,6 +663,31 @@ THREADING-CENSUS §2).
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
    inherits the key change mechanically.
+
+   **Step-2 status (2026-08-10): built.** `mini::interp::ConstKey` is
+   `(Name, Vec<Level>)`; mini's `Level` is hash-consed and `Copy + Eq + Hash`,
+   so the key costs no more than the numerals it replaced. Every one of the
+   thirty-odd `IndApparatus` tables, `Interp::consts`, and
+   `nested_splice::ModelKey` inherited it; the eighty-eight sites the compiler
+   found were all key *construction*, and each now goes through
+   `ground::ground_levels` (the schedule boundary, the one place a `Vec<u32>`
+   becomes an instantiation) or `ground::key_levels` (`Level::simplify`, the
+   canonicaliser). `ground.rs`'s `eval` split into `as_numeral` — a *closed*
+   level as a `u32`, `None` at a parameter — so that **the groundness
+   assumption now lives in one function instead of in the key's type**, and
+   `subst_ground` is a thin wrapper over the general `subst_levels`. Nothing
+   is minted at a symbolic key yet: the σ threading is still `&[u32]`, so this
+   is exactly the type-level precondition and **no behaviour change,
+   measured**: the `ledger` / `evidence` / `untranslated` rows over all 91
+   tutorial exports are byte-identical to the pre-change sweep
+   (`declars=255 pairs=218 typeEv=218 constEv=218`), `cargo test -p mini` is
+   green at 188/24/12/6/1/12/2/20/16 (185 → 188 `#[test]` in `mini/src`,
+   exactly the three added here — counted, because a deleted test does not
+   fail), `envshare_tg` 5/5, and `tg_tutorial` holds at **39 passed**. What
+   it buys is that the
+   store can *name* `⟦c.{u}⟧`, which it could not, and that step 1's remaining
+   work is the 138 `as_numeral`-shaped dead ends rather than eighty key sites
+   as well.
 3. **Clause dispatch grows the third clause** (`ite0`), consuming
    `levels::rules`.
 4. **Level defeq mirror** (§1.5): a certified `leq` that follows the checker's
@@ -1112,7 +1140,13 @@ at this branch's head:
   *unconditional* ω-membership — are built, and they replace the vacuous
   `x ∈ U(x)` discharge with honest unconditional certificates.
 * **Blocker 4 — mini** (§5.1's last row): its evidence pipeline is
-  (declaration, σ)-shaped end to end, and none of §5.3 steps 1–2 is built.
+  (declaration, σ)-shaped end to end. **Step 2 is built** (§5.3's step-2
+  status: `ConstKey` is `(Name, Vec<Level>)`, so the store can address
+  `⟦c.{u}⟧`); **step 1 is not**, and it is the larger half by a wide margin —
+  138 `Gap::SymbolicLevel` sites across 36 files, `Interp::sort(n: u32)` at a
+  tower rung with 69 consumers, and the eager `CUMUL_HEIGHT = 8` table. The
+  first sizing of this blocker was wrong by an order of magnitude and is
+  corrected under "Mini, sized" below.
 
 The tg-suite rows that would go red under the deletion today are
 `fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10) and `hit ≥ 1308`
@@ -1364,7 +1398,9 @@ Not blockers 1–2, and not blocker 3 *as a precondition*. What is left is:
   levels, and only the first has been run. `declar_typings_poly`'s consumer
   exists but opens at the *generic point*, which answers only uses at the
   declaration's own parameter variables — a population measured at **zero**.
-* **Mini** — blocker 4, below, the largest of the three.
+* **Mini** — blocker 4, below, the largest of the three, and larger than it
+  was sized: 40 of 56 source files, not `ground.rs`'s 141 lines. Step 2 of
+  §5.3 landed 2026-08-10; step 1 is the volume.
 
 None of these is blocked on mathematics, and none of them is a level problem
 except the second.
@@ -1394,17 +1430,65 @@ that lost one is indistinguishable from a healthy run at a smaller number. A
 per-suite expected-test-count, or a manifest of test names diffed across runs,
 would have made it a red rather than a silent −1.
 
-#### Mini, sized
+#### Mini, sized — and the first sizing was wrong by an order of magnitude
 
-`ground.rs` is **141 lines** and `ConstKey` is narrower than the module count
-suggests: **80 occurrences in 4 files** (63 in `interp.rs`, 15 in `dump.rs`,
-one each in `zoneb.rs` and `nested_splice.rs`), with **50 `ground::` call
-sites**. `ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
+**The sizing this section used to carry — "141 lines, 80 `ConstKey`
+occurrences across 4 files, 50 `ground::` sites" — is right about every number
+it names and wrong about what the job is.** Each of those counts is the
+*schedule's* footprint. The de-scheduling's footprint is the set of places that
+assume a level is a **numeral**, and that is a different, much larger set.
+Re-measured 2026-08-10 at `71f1c8f`:
+
+| what | count | where |
+|---|---:|---|
+| `mini/src/ground.rs` | 141 lines | one file |
+| `ConstKey` occurrences | 80 | 4 files |
+| `ground::` call sites | 50 | **22** files, not 4 |
+| **`Gap::SymbolicLevel` mint/match sites** | **138** | **36** files |
+| σ-shaped signatures (`&[u32]`/`Vec<u32>`) | 151 | — |
+| `Interp::sort(n: u32)` consumers (`.sort(`) | 69 | — |
+| **mini source files touching any of the three** | **40 of 56** | — |
+
+`Interp::sort(n: u32) -> Term` is `self.prelude.tower.u(n as usize)` — a `u32`
+indexes a *rung* — and the eager cumulativity table `Cumul::new(…,
+CUMUL_HEIGHT = 8)` exists because "a closed Lean level evaluates to [a small
+numeral] before the interpretation runs". `interp.rs`'s module header states
+the assumption as the module's founding invariant, in these words: "Every level
+reaching this module is a numeral, because the checker runs once per ground
+instantiation σ (§3). `⟦Sort u⟧` is therefore always exactly one clause, and
+`PiUndet` … **cannot arise**."
+
+**And it is not a low-coverage change either.** On mini's live corpus — the 91
+tutorial exports, which is what mini is measured on, not `init-prelude` — 255
+declarations are walked, 218 `(declaration, σ)` pairs are opened, and
+`constEv = typeEv = pairs = 218`: mini certifies **every** pair. Of the 176
+declarations the exports actually declare, **114 (65 %) carry universe
+parameters** (82 `def`, 24 `quot`, 7 `thm`, 1 `axiom`). Every one of them is a
+site where the ground path succeeds today and the symbolic path mints
+`Gap::SymbolicLevel`. A de-scheduling that flattened the walk without the
+ω-vocabulary would therefore trade a 218/218 certification rate for a large
+measured loss — which is why §5.3's step order puts the vocabulary first and
+why the flattening is not a separable first slice.
+
+**No fundamental blocker, and the reason is specific rather than optimistic.**
+Every construction mini needs at a variable rung is already built and tested in
+`derived/src/levels/`, because the checker's `tg` backend needed the same ones:
+`Srt::{at_zero, at_succ, step_sub, sort_in_sort, mono_mem}` for the ladder,
+`levels::rules`/`levels::pi_rules` for the two `Π` clauses, `levels::leq` for
+the level algebra (at the slice §6 names). In particular `Srt::mono_mem` —
+`⊢ ∀n∈ω. ∀m∈n. srt(m) ⊆ srt(n)` — *is* what `CUMUL_HEIGHT`'s `O(h²)` table
+tabulates, at a variable rung and with no height limit, so the table retires
+rather than needing a replacement. Mini's de-scheduling is the **second
+consumption of the checker's own construction, at a larger backend**: volume,
+not mathematics.
+
+`ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
 `(name, ground levels)`, its module doc says so in the first thirty lines) and
 `dump.rs`'s schedule enumeration ("this dump **enumerates the schedule, not the
-store**") are the three named consumers, and each states its σ-dependence in
-its own header. Nothing here was built this tranche; the sizing is so that
-blocker 4 is a number rather than an adjective.
+store**") remain the three named consumers, and each states its σ-dependence in
+its own header.
+
+**Step 2 is built** (this tranche) — see §5.3's step-2 status.
 
 ## 6. What is deliberately not claimed
 

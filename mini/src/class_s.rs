@@ -190,7 +190,7 @@ impl ClassS {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassS>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.props.get(&(*ind_name, inst.to_vec())).cloned()
+    app.props.get(&(*ind_name, crate::ground::ground_levels(inst))).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(S) declaration.
@@ -271,7 +271,7 @@ pub(crate) fn build(
     }
     if let Some(ip) = c.interp() {
         if let Some(app) = ip.ind_apparatus() {
-            app.props.insert((*ind_name, inst.to_vec()), built);
+            app.props.insert((*ind_name, crate::ground::ground_levels(inst)), built);
         }
     }
     Ok(())

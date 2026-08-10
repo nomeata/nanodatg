@@ -55,10 +55,24 @@ use derived::tower::Cumul;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::ev::{Gap, Sealed};
-use crate::expr::Name;
+use crate::expr::{Level, Name};
 
-/// A constant at one ground instantiation.
-pub type ConstKey = (Name, Vec<u32>);
+/// A constant at one instantiation, keyed by the **level expressions** its
+/// universe parameters stand for.
+///
+/// `LEVELPOLY.md` §5.3 step 2. This used to be `(Name, Vec<u32>)` — one entry
+/// per *ground* σ, a numeral per parameter — which made the store unable to
+/// even *name* a declaration at its own parameters, and so made the schedule a
+/// precondition of the interpretation rather than a choice. A [`Level`] is
+/// hash-consed, `Copy` and `Hash`, so the key is no more expensive; what it
+/// buys is that `⟦c.{u}⟧` has a key at all.
+///
+/// **The levels are canonicalised** ([`crate::expr::Level::simplify`], via
+/// [`crate::ground::key_levels`]) so that two spellings of one instantiation
+/// are one entry, exactly as the checker's `canon_level` discipline requires.
+/// At a ground σ that is the identity on numerals, so every key this store held
+/// before it widened it still holds, at the same identity.
+pub type ConstKey = (Name, Vec<Level>);
 
 /// What the store holds for `⟦c.{σ}⟧`.
 #[derive(Debug, Clone)]
@@ -2886,7 +2900,7 @@ impl Interp {
     pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) {
         if crate::blocker::is_armed() || self.labels_on {
             let (name, sigma) = &key;
-            let s: Vec<String> = sigma.iter().map(u32::to_string).collect();
+            let s: Vec<String> = sigma.iter().map(crate::ground::show_level).collect();
             let t = c.term.clone();
             self.set_label(&t, format!("⟦{name}.{{{}}}⟧", s.join(",")));
         }
@@ -3416,7 +3430,7 @@ mod tests {
         let mut ip = Interp::new();
         let body = ip.sort(1);
         let (c, ax) = ip.abbrev(&body).unwrap();
-        let key = (Name::simple("Foo"), vec![0, 1]);
+        let key = (Name::simple("Foo"), crate::ground::ground_levels(&[0, 1]));
         ip.put_const(
             key.clone(),
             ConstInterp {
@@ -3429,6 +3443,67 @@ mod tests {
         assert_eq!(got.term, c);
         assert_eq!(*got.defeq.as_ref().unwrap().thm().concl(), Formula::eq(c, body));
         // A different instantiation is a different key.
-        assert!(ip.get_const(&(Name::simple("Foo"), vec![0])).is_none());
+        assert!(ip
+            .get_const(&(Name::simple("Foo"), crate::ground::ground_levels(&[0])))
+            .is_none());
+    }
+
+    /// **The store can name a declaration at its own universe parameter, and
+    /// that key is distinct from every ground one** — `LEVELPOLY.md` §5.3
+    /// step 2, stated as the thing that was *impossible* before
+    /// [`ConstKey`] widened.
+    ///
+    /// With a `Vec<u32>` key there was no term to write here at all: a
+    /// parameter has no numeral, so `⟦c.{u}⟧` had no address in the store and
+    /// the ground σ-schedule was a precondition of the interpretation rather
+    /// than a choice. This does not make anything *mint* such a key — the σ
+    /// threading is still `&[u32]` and step 1 is what changes that — it pins
+    /// that the address exists.
+    ///
+    /// **Three instantiations, not two.** `u`, `0` and `1`: two would pass
+    /// under a key that collapsed every ground level to one entry, or under
+    /// one that hashed the parameter to the same slot as `0`. Each of the
+    /// three is stored under its own name so a mixed-up read is visible in
+    /// the assertion rather than in a count.
+    #[test]
+    fn the_store_addresses_a_declaration_at_its_own_parameter() {
+        let mut ip = Interp::new();
+        let foo = Name::simple("Foo");
+        let at_u = vec![crate::expr::Level::param(Name::simple("u"))];
+        let sigmas: [(&str, Vec<crate::expr::Level>); 3] = [
+            ("u", at_u.clone()),
+            ("0", crate::ground::ground_levels(&[0])),
+            ("1", crate::ground::ground_levels(&[1])),
+        ];
+        for (tag, levels) in &sigmas {
+            let body = ip.sort(0);
+            let (c, ax) = ip.abbrev(&body).unwrap();
+            ip.set_label(&c, format!("at-{tag}"));
+            ip.put_const(
+                (foo, crate::ground::key_levels(levels)),
+                ConstInterp {
+                    term: c,
+                    typing: Err(Gap::Axiom(foo)),
+                    defeq: Some(Sealed::new(ax).unwrap()),
+                },
+            );
+        }
+        assert_eq!(ip.const_count(), 3, "three instantiations are three entries");
+        // Each address holds its own entry, and the parameter one is not a
+        // ground one wearing a different spelling.
+        let mut terms = Vec::new();
+        for (tag, levels) in &sigmas {
+            let got = ip
+                .get_const(&(foo, crate::ground::key_levels(levels)))
+                .unwrap_or_else(|| panic!("Foo at σ = [{tag}] is addressable"));
+            terms.push(got.term.clone());
+        }
+        assert_ne!(terms[0], terms[1], "⟦Foo.{{u}}⟧ is not ⟦Foo.{{0}}⟧");
+        assert_ne!(terms[0], terms[2], "⟦Foo.{{u}}⟧ is not ⟦Foo.{{1}}⟧");
+        assert_ne!(terms[1], terms[2], "⟦Foo.{{0}}⟧ is not ⟦Foo.{{1}}⟧");
+        // And a *ground* key is still spelled with its numeral, not with the
+        // level ladder — the one thing the widening could have moved for free.
+        assert_eq!(crate::ground::show_levels(&sigmas[2].1), "[1]");
+        assert_eq!(crate::ground::show_levels(&sigmas[0].1), "[u]");
     }
 }

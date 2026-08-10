@@ -163,7 +163,7 @@ pub(crate) fn fire(
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&(ind_name, ind_inst.clone())).cloned().ok_or_else(|| bad(CARRIER))?
+        app.decls.get(&(ind_name, crate::ground::ground_levels(&ind_inst))).cloned().ok_or_else(|| bad(CARRIER))?
     };
     if tr.ind.spec.ctors.len() != n || tr.ind.params.len() != np {
         return Err(bad(SHAPE))
@@ -240,7 +240,7 @@ pub(crate) fn fire(
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.dep_elims
-            .get(&(*rec, rec_inst.to_vec()))
+            .get(&(*rec, crate::ground::ground_levels(rec_inst)))
             .cloned()
             .ok_or_else(|| bad(ABBREV))?
     };

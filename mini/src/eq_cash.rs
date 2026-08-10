@@ -359,8 +359,7 @@ pub fn cash_stmt(c: &mut Checker<'_, '_>, stmt: &E, mem: Thm) -> Result<Cashed, 
     if *nm != eq_name() || sides.len() != 3 {
         return Err(gap!(Gap::NotDecomposable))
     }
-    let empty = std::collections::HashMap::new();
-    let inst: Option<Vec<u32>> = ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+    let inst: Option<Vec<u32>> = ls.iter().map(|l| crate::ground::as_numeral(l)).collect();
     let Some(inst) = inst.filter(|v| v.len() == 1) else {
         return Err(gap!(Gap::SymbolicLevel))
     };

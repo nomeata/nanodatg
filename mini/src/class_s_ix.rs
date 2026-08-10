@@ -131,7 +131,7 @@ impl ClassSIx {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassSIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.props_ix.get(&(*ind_name, inst.to_vec())).cloned()
+    app.props_ix.get(&(*ind_name, crate::ground::ground_levels(inst))).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(S) declaration with indices.
@@ -188,7 +188,7 @@ pub(crate) fn build(
         constructor(c, ind_name, inst, cname, cty, i, &built)?;
     }
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.props_ix.insert((*ind_name, inst.to_vec()), built);
+        app.props_ix.insert((*ind_name, crate::ground::ground_levels(inst)), built);
     }
     Ok(())
 }

@@ -110,7 +110,7 @@ pub(crate) fn ensure(
     let depth = np + 1 + n + ni + 1;
     let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(ARITY))?;
 
-    let key = (*ind_name, ind_inst.to_vec());
+    let key = (*ind_name, crate::ground::ground_levels(ind_inst));
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -198,7 +198,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // The rule, once per declaration — one `w_rect` Separation per build, so a
     // second one would carve a second carrier no equation relates to the first.
     let pr = {
-        let key = (site.ind, site.inst.clone());
+        let key = (site.ind, crate::ground::ground_levels(&site.inst));
         let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((mut kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };

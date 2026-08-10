@@ -27,8 +27,13 @@
 //!   left is a constant whose
 //!   build was *attempted and not translated*, and
 //!   `Checker::miss_reason` answers that from a table.
-//! * The key is `(name, ground levels)`, the same key the store is keyed on.
-//!   Nothing is looked up by shape, by conclusion, or by trying alternatives.
+//! * The key is `(name, levels)` — [`crate::interp::ConstKey`], the same key
+//!   the store is keyed on. This module still *supplies* ground levels (its
+//!   `inst: &[u32]` is a schedule entry, converted at each key site by
+//!   `ground::ground_levels`); what the key can hold is a level expression,
+//!   which is `LEVELPOLY.md` §5.3 step 2 and is the half of the
+//!   de-scheduling that is built. Nothing is looked up by shape, by
+//!   conclusion, or by trying alternatives.
 //! * The declaration is fetched from the syntactic environment **by that
 //!   name**; a constructor reaches its declaration by
 //!   [`crate::env::Environment::owner`], an index built when the declaration
@@ -221,7 +226,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     let own_inst = inst.to_vec();
     let ind_inst: Vec<u32> = inst[inst.len() - nl..].to_vec();
     let inst = &ind_inst[..];
-    let key = (ind_name, inst.to_vec());
+    let key = (ind_name, crate::ground::ground_levels(inst));
     {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -303,7 +308,7 @@ fn model_alias(
     ind_name: &Name,
     why: Option<&'static str>,
 ) -> Result<(), Gap> {
-    let key = (*name, own.to_vec());
+    let key = (*name, crate::ground::ground_levels(own));
     let model = {
         let app = c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.model_of.get(&key).cloned()
@@ -315,7 +320,7 @@ fn model_alias(
         return Err(Gap::IndSpec(*ind_name, why.unwrap_or("nested model not keyed here")))
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let Some(ci) = ip.get_const(&(model, own.to_vec())).cloned() else {
+    let Some(ci) = ip.get_const(&(model, crate::ground::ground_levels(own))).cloned() else {
         return Err(Gap::IndSpec(*ind_name, "nested model not interpreted"))
     };
     ip.put_const(key, ConstInterp { term: ci.term, typing: ci.typing, defeq: None });
@@ -342,11 +347,11 @@ fn record_reason(
     let is_decl = name == ind_name;
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return };
     if is_rec {
-        app.rec_untranslated.insert((*name, own.to_vec()), g);
+        app.rec_untranslated.insert((*name, crate::ground::ground_levels(own)), g);
     } else if is_decl {
-        app.untranslated.insert((*name, inst.to_vec()), g);
+        app.untranslated.insert((*name, crate::ground::ground_levels(inst)), g);
     } else {
-        app.ctor_untranslated.insert((*name, inst.to_vec()), g);
+        app.ctor_untranslated.insert((*name, crate::ground::ground_levels(inst)), g);
     }
 }
 
@@ -382,7 +387,7 @@ pub(crate) fn stored_or_reason_after(
         let r = crate::recursor::ensure(c, ind_name, inst, name, own);
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.rec_untranslated.insert((*name, own.to_vec()), g.clone());
+                app.rec_untranslated.insert((*name, crate::ground::ground_levels(own)), g.clone());
             }
         }
         return r
@@ -396,7 +401,7 @@ pub(crate) fn stored_or_reason_after(
     // standing in for a decline that knows exactly what it could not bridge.
     // `crate::ev::Gap::IndexedCtor` says why the distinction is worth a variant.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        if let Some(g) = app.ctor_untranslated.get(&(*name, inst.to_vec())) {
+        if let Some(g) = app.ctor_untranslated.get(&(*name, crate::ground::ground_levels(inst))) {
             return Err(g.clone())
         }
     }
@@ -444,14 +449,14 @@ pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]
     };
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return bare };
     if is_rec {
-        if let Some(g) = app.rec_untranslated.get(&(*name, inst.to_vec())) {
+        if let Some(g) = app.rec_untranslated.get(&(*name, crate::ground::ground_levels(inst))) {
             return g.clone()
         }
     }
-    if let Some(g) = app.untranslated.get(&(ind_name, ind_inst.clone())) {
+    if let Some(g) = app.untranslated.get(&(ind_name, crate::ground::ground_levels(&ind_inst))) {
         return g.clone()
     }
-    if let Some(g) = app.ctor_untranslated.get(&(*name, ind_inst)) {
+    if let Some(g) = app.ctor_untranslated.get(&(*name, crate::ground::ground_levels(&ind_inst))) {
         return g.clone()
     }
     bare
@@ -971,7 +976,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
                 class_s,
             });
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.indexed_walks.insert((*ind_name, inst.to_vec()), walk.clone());
+                app.indexed_walks.insert((*ind_name, crate::ground::ground_levels(inst)), walk.clone());
             }
             if class_s {
                 return crate::class_s_ix::build(
@@ -1014,7 +1019,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let du = decl_universe(c, ind_name, &shape, &ind)?;
 
     // ── the Lean-facing layer ─────────────────────────────────────────────
-    let key = (*ind_name, inst.to_vec());
+    let key = (*ind_name, crate::ground::ground_levels(inst));
     former(c, ind_name, inst, &shape, &ind, &du)?;
     let at = Decl { name: *ind_name, inst: inst.to_vec(), np, ind: ind.clone() };
     let mut ctor_abbrev = Vec::with_capacity(shape.ctors.len());
@@ -1290,7 +1295,7 @@ fn ctor_le(
                 let t1 = c.infer_type(ty).ok()?;
                 let (s1, _, _) = c.whnf_typing(t1).ok()?;
                 let l = crate::kernel::as_sort(&s1).ok()?;
-                Some(ground::eval(&l, &Default::default())? == 0)
+                Some(ground::as_numeral(&l)? == 0)
             })()
             .unwrap_or(false);
             if !prop {
@@ -1440,7 +1445,7 @@ fn build_trunc(
         field_abbrev: shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect(),
     });
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.truncs.insert((*ind_name, inst.to_vec()), tt);
+        app.truncs.insert((*ind_name, crate::ground::ground_levels(inst)), tt);
     }
     former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)?;
     // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule,
@@ -1526,7 +1531,7 @@ fn trunc_constructors(
             shape.ctors.get(i).map(|(.., ev)| ev.abbrev.clone()).unwrap_or_default();
         if let Err(g) = trunc_one(c, ind_name, inst, np, i, cname, cty, tc, ind, ax, &abbrev) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, crate::ground::ground_levels(inst)), g);
             }
         }
     }
@@ -1837,7 +1842,7 @@ fn build_indexed(
         ctor_abbrev,
         rec_dom_abbrev,
     });
-    app.indexed.insert((*ind_name, inst.to_vec()), tr.clone());
+    app.indexed.insert((*ind_name, crate::ground::ground_levels(inst)), tr.clone());
     // Release the `Env` guard before `c` is borrowed again below.
     drop(kenv_g);
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
@@ -1917,7 +1922,7 @@ pub(crate) fn spec_of(
             Ok(cur)
         })?;
         let Expr::Sort(l) = &cur.view() else { return Err(bad("resultant sort")) };
-        let result_level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
+        let result_level = ground::as_numeral(l).ok_or_else(|| bad("level"))?;
 
         // 2. each constructor, at the same parameter variables.
         //
@@ -2123,11 +2128,15 @@ fn ctor_spec(
                 // σ.
                 decls.push(match &g.view() {
                     Expr::Const(name, levels) => {
-                        let empty = std::collections::HashMap::new();
+                        // Ground-only, deliberately, and unchanged by the key
+                        // widening: an entry here is looked up in a store the
+                        // scheduled path only ever fills at numerals, so a
+                        // symbolic level must stay a `None` rather than become
+                        // a key that silently misses.
                         levels
                             .iter()
-                            .map(|l| crate::ground::eval(l, &empty))
-                            .collect::<Option<Vec<u32>>>()
+                            .map(|l| crate::ground::as_numeral(l).map(crate::ground::numeral))
+                            .collect::<Option<Vec<_>>>()
                             .map(|ls| (*name, ls))
                     }
                     _ => None,
@@ -2245,7 +2254,7 @@ fn ctor_spec(
             let t1 = c.infer_type(ty).map_err(|_| bad("field type"))?;
             let (s1, _, t1) = c.whnf_typing(t1).map_err(|_| bad("field type sort"))?;
             let l = crate::kernel::as_sort(&s1).map_err(|_| bad("field type sort"))?;
-            let l = ground::eval(&l, &Default::default()).ok_or_else(|| bad("field level"))?;
+            let l = ground::as_numeral(&l).ok_or_else(|| bad("field level"))?;
             let dom = t1.tm.clone().ok_or_else(|| bad("field type uninterpretable"))?;
             let mem = t1.ev.thm().cloned().ok_or_else(|| bad("field type typing"))?;
             let sym_args: Vec<Term> = abstraction.iter().map(|v| Term::var(*v)).collect();
@@ -3853,7 +3862,7 @@ pub(crate) fn store(
         Ev::Gap(g) => Err(g),
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    ip.put_const((*name, inst.to_vec()), ConstInterp { term, typing, defeq: None });
+    ip.put_const((*name, crate::ground::ground_levels(inst)), ConstInterp { term, typing, defeq: None });
     Ok(())
 }
 

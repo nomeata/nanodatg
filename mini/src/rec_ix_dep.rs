@@ -139,7 +139,7 @@ pub(crate) fn ensure(
     let depth = np + 1 + n + ni + 1;
     let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(ARITY))?;
 
-    let key = (*ind_name, ind_inst.to_vec());
+    let key = (*ind_name, crate::ground::ground_levels(ind_inst));
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -288,7 +288,7 @@ pub(crate) fn premise_at(
     // minors' own, and a `GenRecursor` per build.
     let dr = {
         let (base, fam) = (tr.base.clone(), &tr.ii);
-        let key = (site.ind, site.inst.clone());
+        let key = (site.ind, crate::ground::ground_levels(&site.inst));
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;
@@ -488,7 +488,7 @@ fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm)
     // `MINI-HANDOFF.md` §8 for why that row's remaining obstacle is
     // `minor_ix::transport` and *not* this.
     if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec, site.rec_inst.clone());
+        let key = (site.rec, crate::ground::ground_levels(&site.rec_inst));
         app.dep_elims
             .insert(key, Rc::new(crate::interp::DepElim { sym, ax, target: target.clone() }));
     }

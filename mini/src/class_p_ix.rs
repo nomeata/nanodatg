@@ -154,7 +154,7 @@ impl ClassPIx {
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassPIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
-    app.truncs_ix.get(&(*ind_name, inst.to_vec())).cloned()
+    app.truncs_ix.get(&(*ind_name, crate::ground::ground_levels(inst))).cloned()
 }
 
 /// `⟦T.{σ}⟧` and `⟦T.ctor.{σ}⟧` for one class-(P) declaration with indices.
@@ -241,7 +241,7 @@ pub(crate) fn build(
     // eliminator read as a `derived/` gap for a month because `build_trunc`
     // ended at `former_at` and dropped exactly this.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        app.truncs_ix.insert((*ind_name, inst.to_vec()), built.clone());
+        app.truncs_ix.insert((*ind_name, crate::ground::ground_levels(inst)), built.clone());
     }
     // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule:
     // the type former is a complete obligation on its own, so a constructor
@@ -249,7 +249,7 @@ pub(crate) fn build(
     for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
         if let Err(g) = constructor(c, ind_name, inst, cname, cty, i, &built) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, crate::ground::ground_levels(inst)), g);
             }
         }
     }

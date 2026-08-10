@@ -162,7 +162,7 @@ cleanly:
 | `Checker::lenv` telescope, `push`/`close_slot` | all | **incidental** — context representation | locals in the term (`mk_dbj_level`), `abstr_levels` on close |
 | `Ev`/`Gap`/`Typing`/`Cause` | all | **incidental as types**, essential as policy (§0.4's cause-propagation rule) | `TgCert`/`TyGap`/`Typing<'t,'p>`; the gap taxonomies differ and must be mapped, not copied |
 | `ground::eval`, `Gap::SymbolicLevel` | proj_data, rec_ix_*, eq_cash, many | **dies** under monomorphic input (§2) | dies on both sides |
-| `ConstKey = (Name, Vec<u32>)` | interp, nested_splice, dump | **dies to a name** under mode B; a ground singleton under mode A | `(u32, Vec<Term>)` keys, same collapse |
+| `ConstKey = (Name, Vec<Level>)` | interp, nested_splice, dump | **dies to a name** under mode B; a ground singleton under mode A | `(u32, Vec<Term>)` keys, same collapse |
 
 So the honest description of the port: the *constructions* stay where they
 are; the *wiring* is rewritten module-by-module against checker's APIs, with

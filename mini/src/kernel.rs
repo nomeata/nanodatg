@@ -1208,9 +1208,8 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     ts[major_pos] = mconv.ev.eq_rhs()?;
                                     Some(ts)
                                 });
-                            let empty = std::collections::HashMap::new();
                             let inst: Option<Vec<u32>> =
-                                ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                                ls.iter().map(|l| crate::ground::as_numeral(l)).collect();
                             // **A nested declaration's rules are its model's
                             // theorems**, and the membership that says so is
                             // the same one `zoneb::ensure` routes its
@@ -1660,9 +1659,8 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // The constructor's own ground levels: a structure's
                     // constructor has the declaration's level parameters, so
                     // this is the key `IndApparatus::decls` holds it under.
-                    let empty = std::collections::HashMap::new();
                     let cinst: Option<Vec<u32>> =
-                        cls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                        cls.iter().map(|l| crate::ground::as_numeral(l)).collect();
                     // The subject's reduction certificate, from the one
                     // reduction above. A subject that is already the
                     // constructor application needs no equation, which is the
@@ -1856,9 +1854,8 @@ impl<'e, 'i> Checker<'e, 'i> {
         if cur_tm.is_none() {
             return (Ev::missing(Gap::NoEndpoint), None)
         }
-        let empty = std::collections::HashMap::new();
         let Some(inst) =
-            ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
+            ls.iter().map(|l| crate::ground::as_numeral(l)).collect::<Option<Vec<u32>>>()
         else {
             return (Ev::missing(Gap::SymbolicLevel), None)
         };
@@ -1869,7 +1866,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (Ev::missing(g), None)
         }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
-        let Some(c) = th.ip.get_const(&(*name, inst.clone())) else {
+        let Some(c) = th.ip.get_const(&(*name, crate::ground::ground_levels(&inst))) else {
             return (Ev::missing(Gap::NoInterpretation(*name, inst)), None)
         };
         match &c.defeq {
@@ -2327,7 +2324,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             Expr::Sort(u) => {
                 let ty = sort((*u).succ());
-                let n = crate::ground::eval(u, &std::collections::HashMap::new());
+                let n = crate::ground::as_numeral(u);
                 let (tm, ev) = match (n, self.th.as_mut()) {
                     (Some(n), Some(th)) => {
                         let tm = th.ip.sort(n);
@@ -2802,12 +2799,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         l1: &Level,
         l2: &Level,
     ) -> (Option<Term>, Ev) {
-        let empty = std::collections::HashMap::new();
         let (Some(dom), Some(cod), Some(w)) = (t1.tm.clone(), tb.tm.clone(), w) else {
             return (None, Ev::missing(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
         };
         let (Some(n1), Some(n2)) =
-            (crate::ground::eval(l1, &empty), crate::ground::eval(l2, &empty))
+            (crate::ground::as_numeral(l1), crate::ground::as_numeral(l2))
         else {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
@@ -3169,7 +3165,19 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// levels it is building for. Only the term: the typing is what it is in the
     /// middle of establishing.
     pub(crate) fn stored_term(&mut self, name: &Name, inst: &[u32]) -> Option<Term> {
-        let ip = self.th.as_ref()?.ip.get_const(&(*name, inst.to_vec()))?;
+        self.stored_term_at(name, &crate::ground::ground_levels(inst))
+    }
+
+    /// [`Self::stored_term`] at an instantiation already in the store's own
+    /// vocabulary — a caller holding a [`crate::interp::ConstKey`] has one and
+    /// must not round-trip it through a `Vec<u32>` it may not have.
+    pub(crate) fn stored_term_at(
+        &mut self,
+        name: &Name,
+        levels: &[crate::expr::Level],
+    ) -> Option<Term> {
+        let ip =
+            self.th.as_ref()?.ip.get_const(&(*name, crate::ground::key_levels(levels)))?;
         Some(ip.term.clone())
     }
 
@@ -3275,7 +3283,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// nowhere. Every clause with a bare-constant value has the same blind
     /// spot, which is why the fix is symmetry rather than a special case.
     fn miss_reason(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
-        let key = (*name, inst.to_vec());
+        let key = (*name, crate::ground::ground_levels(inst));
         let missing = |c: &Self| c.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none());
         if self.th.is_none() || !missing(self) {
             return None
@@ -3296,13 +3304,12 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
-        let empty = std::collections::HashMap::new();
         let Some(inst) =
-            ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
+            ls.iter().map(|l| crate::ground::as_numeral(l)).collect::<Option<Vec<u32>>>()
         else {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
-        let key = (*name, inst.clone());
+        let key = (*name, crate::ground::ground_levels(&inst));
         if let Some(g) = self.miss_reason(name, &inst) {
             return (None, Ev::missing(g))
         }

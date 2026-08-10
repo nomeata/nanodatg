@@ -197,7 +197,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 
     // The rule, once per declaration — one `w_rect` Separation per build.
     let tr = {
-        let key = (site.ind, site.inst.clone());
+        let key = (site.ind, crate::ground::ground_levels(&site.inst));
         let (base, fam, tc) = (cp.base.clone(), cp.ii.clone(), cp.tc.clone());
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((mut kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };

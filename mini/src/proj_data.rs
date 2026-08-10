@@ -480,9 +480,8 @@ pub(crate) fn typing(
     if name != ind {
         return Err(miss!())
     }
-    let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
-        us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     let Some(ConstantInfo::Inductive { num_params, lparams, ty: ind_ty, .. }) =
         c.environment().get(ind)
     else {
@@ -497,7 +496,7 @@ pub(crate) fn typing(
     }
 
     // ── the class, read off the store — `decls`, like row 2's branch ────────
-    let key = (*ind, inst.clone());
+    let key = (*ind, crate::ground::ground_levels(&inst));
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -645,7 +644,7 @@ pub(crate) fn iota(
     }
 
     // ── the declaration, and the theorems its translation kept ──────────────
-    let key = (*ind, inst.to_vec());
+    let key = (*ind, crate::ground::ground_levels(inst));
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -769,9 +768,8 @@ pub(crate) fn structure_eta(
     // ── `e1 = T.mk p⃗ a⃗`, and which declaration that is ──────────────────────
     let (head, args) = crate::expr::get_app(e1);
     let Expr::Const(ctor, cls) = &head.view() else { return Err(Gap::NoEndpoint) };
-    let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
-        cls.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        cls.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     // `ind` is the name `Checker::try_structure_eta` returned, so the
     // declaration is the probe's and not a second lookup's.
     macro_rules! miss {
@@ -789,7 +787,7 @@ pub(crate) fn structure_eta(
     }
     let k = args.len() - np;
 
-    let key = (*ind, inst.clone());
+    let key = (*ind, crate::ground::ground_levels(&inst));
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;

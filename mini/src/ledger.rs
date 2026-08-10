@@ -803,7 +803,7 @@ impl Ledger {
                 // also delta reduction's certificate; everything else gets an
                 // opaque symbol, which is a signature extension and asserts
                 // nothing about inhabitation — hence the `Gap` on its typing.
-                let key = (*name, sigma.clone());
+                let key = (*name, crate::ground::ground_levels(&sigma));
                 if ip.get_const(&key).is_some() {
                     if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
                         led.first_blocker = Some(pv.blocker(ip, o));
@@ -1217,7 +1217,7 @@ pub(crate) fn fill_declaration(
                     for sigma in sigmas {
                         let mut c = Checker::threaded(env, ip);
                         let Some(app) = c.interp().and_then(|i| i.ind_apparatus()) else { continue };
-                        let key = (n, sigma.clone());
+                        let key = (n, crate::ground::ground_levels(&sigma));
                         if is_rec {
                             app.rec_untranslated.insert(key, g.clone());
                         } else if n == t.name {
@@ -1550,7 +1550,9 @@ mod tests {
     /// **and name itself**.
     #[test]
     fn a_recorded_refusal_reaches_the_verdict() {
-        fn key(s: &str) -> (Name, Vec<u32>) { (Name::simple(s), vec![0u32]) }
+        fn key(s: &str) -> crate::interp::ConstKey {
+            (Name::simple(s), crate::ground::ground_levels(&[0]))
+        }
         // Every table empty: clean, and silent.
         let ip = Interp::new();
         let none = Untranslated::of(&ip);

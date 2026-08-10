@@ -206,7 +206,7 @@ pub(crate) fn fire(
     let thm = {
         let app =
             c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.model_iota.get(&((*rec, rec_inst.to_vec()), *ctor)).cloned()
+        app.model_iota.get(&((*rec, crate::ground::ground_levels(rec_inst)), *ctor)).cloned()
     };
     let Some(thm) = thm else { return Err(bad(NORULE)) };
 

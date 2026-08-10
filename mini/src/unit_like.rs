@@ -95,10 +95,9 @@ pub(crate) fn certify(
     let (head, args) = crate::expr::get_app(&tw);
     let crate::expr::Expr::Const(name, ls) = &head.view() else { return Err(Gap::NoEndpoint) };
     let name = *name;
-    let empty = std::collections::HashMap::new();
     let inst: Vec<u32> = ls
         .iter()
-        .map(|l| ground::eval(l, &empty))
+        .map(|l| ground::as_numeral(l))
         .collect::<Option<_>>()
         .ok_or(Gap::SymbolicLevel)?;
     let bad = || Gap::UnitLike(name);

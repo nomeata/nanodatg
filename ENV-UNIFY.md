@@ -333,7 +333,7 @@ whole reason the engines can remain two while the certificates become one.
    `Sealed(Thm)` refusing hypotheses (`mini/src/ev.rs:629`,
    `checker/src/sealed.rs:71`). One shared type (a small common crate or a
    re-verifying conversion at the store boundary); trivial.
-3. **One key.** `ConstKey = (Name, Vec<u32>)` vs `(NamePtr::raw,
+3. **One key.** `ConstKey = (Name, Vec<Level>)` vs `(NamePtr::raw,
    Vec<Term>)` — one definition at the seam. The first version parked this
    as optional stage 6; it is now on the critical path (track B3).
 4. **Concurrency — settled, with the measurement.** Nothing on the evidence

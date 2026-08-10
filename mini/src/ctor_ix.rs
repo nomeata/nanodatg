@@ -267,7 +267,7 @@ pub(crate) fn constructors(
     for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
         if let Err(g) = one(c, ind_name, inst, np, ni, i, cname, cty, tr) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_untranslated.insert((*cname, inst.to_vec()), g);
+                app.ctor_untranslated.insert((*cname, crate::ground::ground_levels(inst)), g);
             }
         }
     }
@@ -1432,7 +1432,8 @@ mod tests {
         let want = Gap::IndexedCtor(c2, INDEX_TYPE, Cause::Scope);
         {
             let app = c.interp().expect("threaded").ind_apparatus().expect("apparatus");
-            app.ctor_untranslated.insert((c2, miss.to_vec()), want.clone());
+            app.ctor_untranslated
+                .insert((c2, crate::ground::ground_levels(miss)), want.clone());
         }
         assert_eq!(
             crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),

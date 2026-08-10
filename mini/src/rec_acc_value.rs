@@ -266,7 +266,7 @@ fn build(
     // Dropping it is `MINI-HANDOFF.md` §2's sixth instance; storing it before
     // that reader existed would have been §26 item 1's from the other side.
     ip.rec_acc_elims.insert(
-        (site.rec, site.rec_inst.clone()),
+        (site.rec, crate::ground::ground_levels(&site.rec_inst)),
         std::rc::Rc::new(crate::interp::RecAccElim { sym, ax: ax.clone() }),
     );
     let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;

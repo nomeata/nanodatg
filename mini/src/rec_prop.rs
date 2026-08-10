@@ -260,7 +260,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         return gap(Gap::NoEndpoint)
     };
     let at = At { xs, mems, former, ctor_former, goal, prop };
-    let key = (site.ind, site.inst.clone());
+    let key = (site.ind, crate::ground::ground_levels(&site.inst));
     let fields = {
         let Some((mut kenv, app, _)) = c.interp().and_then(|ip| ip.ind_parts()) else {
             return gap(Gap::IndApparatus)

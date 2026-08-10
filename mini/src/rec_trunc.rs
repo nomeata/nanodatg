@@ -296,7 +296,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     };
 
     // ── the rule, one per declaration ───────────────────────────────────────
-    let key = (site.ind, site.inst.clone());
+    let key = (site.ind, crate::ground::ground_levels(&site.inst));
     let tr = {
         let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;

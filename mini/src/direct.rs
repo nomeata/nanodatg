@@ -288,7 +288,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
     // bottom must land in, read off the declaration rather than assumed.
     let own = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad("type shape"))?;
     let Expr::Sort(l) = &own.view() else { return Err(bad("resultant sort")) };
-    let level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
+    let level = ground::as_numeral(l).ok_or_else(|| bad("level"))?;
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
         .map(|n| {

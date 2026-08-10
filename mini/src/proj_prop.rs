@@ -106,9 +106,8 @@ pub(crate) fn typing(
     if name != ind {
         return Err(miss!())
     }
-    let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
-        us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(ind) else {
         return Err(miss!())
     };
@@ -122,7 +121,7 @@ pub(crate) fn typing(
     // Two tables, mutually exclusive by `zoneb::ensure`'s own branch, and a
     // declaration in neither is class (T) and owes a *term* rather than a
     // certificate — `SCOPING.md` §9's rows 2 and 4.
-    let key = (*ind, inst.clone());
+    let key = (*ind, crate::ground::ground_levels(&inst));
     let (cs, tt, dt) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -245,7 +244,7 @@ fn trunc_typing(
     idx: u32,
     s: &E,
     field_ty: &E,
-    key: &(Name, Vec<u32>),
+    key: &crate::interp::ConstKey,
     np: usize,
     param_args: &[E],
     tt: &crate::interp::TruncTranslation,
@@ -284,7 +283,7 @@ fn trunc_typing(
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
+    let former = c.stored_term_at(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
         let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;
@@ -433,7 +432,7 @@ fn decl_typing(
     idx: u32,
     s: &E,
     field_ty: &E,
-    key: &(Name, Vec<u32>),
+    key: &crate::interp::ConstKey,
     np: usize,
     param_args: &[E],
     dt: &crate::interp::Translated,
@@ -472,7 +471,7 @@ fn decl_typing(
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
+    let former = c.stored_term_at(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
         let (mut kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;
@@ -615,8 +614,7 @@ fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
     let ty = c.whnf(e).ok()?;
     let (head, args) = crate::expr::get_app(&ty);
     let Expr::Const(name, us) = &head.view() else { return None };
-    let empty = std::collections::HashMap::new();
-    let inst: Vec<u32> = us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>()?;
+    let inst: Vec<u32> = us.iter().map(|l| ground::as_numeral(l)).collect::<Option<_>>()?;
     let ConstantInfo::Inductive { num_params, .. } = c.environment().get(name)? else {
         return None
     };
@@ -631,7 +629,7 @@ fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
         pm.push(t.ev.thm()?.clone());
     }
     let former = c.stored_term(name, &inst)?;
-    let key = (*name, inst);
+    let key = (*name, ground::ground_levels(&inst));
     let (cs, tt) = {
         let app = c.interp()?.ind_apparatus()?;
         (app.props.get(&key).cloned(), app.truncs.get(&key).cloned())

@@ -209,7 +209,7 @@ pub(crate) fn ensure(
     // sets it was translated into. The store read is
     // `crate::zoneb::build_trunc`'s own answer, not a second classification.
     let tt = {
-        let key = (*ind_name, ind_inst.to_vec());
+        let key = (*ind_name, crate::ground::ground_levels(ind_inst));
         c.interp().and_then(|ip| ip.ind_apparatus()).and_then(|a| a.truncs.get(&key).cloned())
     };
     if let Some(tt) = tt {
@@ -294,7 +294,7 @@ fn empty_rec(
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("no constructors: arity"))?;
 
-    let key = (*ind_name, ind_inst.to_vec());
+    let key = (*ind_name, crate::ground::ground_levels(ind_inst));
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;

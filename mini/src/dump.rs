@@ -99,6 +99,21 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// [`Self::keeps`] against a [`ConstKey`]'s own instantiation, which is a
+    /// list of level *expressions*. The filter is spelled in numerals
+    /// (`--dump-sigma=0,1`), so a key that is not ground matches no `--sigma`
+    /// at all — which is the honest answer while the dump still enumerates the
+    /// schedule.
+    fn keeps_levels(&self, name: &str, levels: &[crate::expr::Level]) -> bool {
+        if !self.keeps_decl(name) {
+            return false
+        }
+        match &self.sigma {
+            Some(s) => crate::ground::ground_levels(s) == levels,
+            None => true,
+        }
+    }
+
     fn keeps(&self, name: &str, sigma: &[u32]) -> bool {
         if !self.keeps_decl(name) {
             return false
@@ -139,7 +154,9 @@ fn sigma_str(lparams: &[Name], sigma: &[u32]) -> String {
 /// [`Name`] is `Eq + Hash` but **not `Ord`**, so a `ConstKey` cannot be sorted
 /// directly; the rendered name is the key, and it is stable because `Display`
 /// for a `Name` is a pure function of the name.
-fn key_of(k: &ConstKey) -> (String, Vec<u32>) { (k.0.to_string(), k.1.clone()) }
+fn key_of(k: &ConstKey) -> (String, Vec<(u8, u32, String)>) {
+    (k.0.to_string(), k.1.iter().map(crate::ground::level_sort_key).collect())
+}
 
 /// **The eliminator nest bottoms' abbreviations for one declaration**, keyed by
 /// the *recursor* and therefore listed under the declaration that owns it.
@@ -159,7 +176,7 @@ fn elim_lines(app: &crate::interp::IndApparatus, k: &ConstKey, lines: &mut Vec<L
             n.strip_prefix(decl.as_str()).is_some_and(|r| r.starts_with('.'))
         })
         .collect();
-    elims.sort_by_key(|(rk, _)| (rk.0.to_string(), rk.1.clone()));
+    elims.sort_by_key(|(rk, _)| key_of(rk));
     if elims.is_empty() {
         lines.push(Line::absent(
             "rec abbrev",
@@ -168,8 +185,8 @@ fn elim_lines(app: &crate::interp::IndApparatus, k: &ConstKey, lines: &mut Vec<L
         return
     }
     for (rk, e) in elims {
-        lines.push(Line::thm(format!("rec abbrev {} σ = {:?}", rk.0, rk.1), &e.ax));
-        lines.push(Line::term(format!("rec target {} σ = {:?}", rk.0, rk.1), &e.target));
+        lines.push(Line::thm(format!("rec abbrev {} σ = {}", rk.0, crate::ground::show_levels(&rk.1)), &e.ax));
+        lines.push(Line::term(format!("rec target {} σ = {}", rk.0, crate::ground::show_levels(&rk.1)), &e.target));
     }
 }
 
@@ -370,7 +387,7 @@ fn const_groups(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
             if !f.keeps(&d.shown, s) {
                 continue
             }
-            let key: ConstKey = (d.name, s.clone());
+            let key: ConstKey = (d.name, crate::ground::ground_levels(s));
             let title = format!("{}   σ = {}", d.shown, sigma_str(&d.lparams, s));
             let lines = match ip.get_const(&key) {
                 None => vec![Line::absent(
@@ -486,7 +503,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     decls.sort_by_key(|(k, _)| key_of(k));
     for (k, tr) in decls {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let ind = &tr.ind;
@@ -578,7 +595,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         }
         elim_lines(app, k, &mut lines);
         out.push(Group {
-            title: format!("inductive {shown}   σ = {:?}", k.1),
+            title: format!("inductive {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: Some(format!("{} constructor(s), non-indexed", ind.ctors.len())),
             lines,
         });
@@ -589,7 +606,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     ixs.sort_by_key(|(k, _)| key_of(k));
     for (k, it) in ixs {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let ii = &it.ii;
@@ -650,7 +667,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         }
         elim_lines(app, k, &mut lines);
         out.push(Group {
-            title: format!("indexed {shown}   σ = {:?}", k.1),
+            title: format!("indexed {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: Some(format!("{} constructor(s), indexed family", ii.carrier.ctors.len())),
             lines,
         });
@@ -661,7 +678,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     props.sort_by_key(|(k, _)| key_of(k));
     for (k, cs) in props {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let mut lines = vec![
@@ -697,7 +714,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
              retained in the apparatus",
         ));
         out.push(Group {
-            title: format!("class-(S) {shown}   σ = {:?}", k.1),
+            title: format!("class-(S) {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: None,
             lines,
         });
@@ -714,7 +731,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     walks.sort_by_key(|(k, _)| key_of(k));
     for (k, w) in walks {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let mut lines = Vec::new();
@@ -750,7 +767,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
             },
         ));
         out.push(Group {
-            title: format!("indexed walk {shown}   σ = {:?}", k.1),
+            title: format!("indexed walk {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: Some(format!(
                 "{} constructor(s), {} index slot(s); declined, walk retained",
                 w.spec.len(),
@@ -772,7 +789,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     truncs.sort_by_key(|(k, _)| key_of(k));
     for (k, tt) in truncs {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let mut lines = vec![
@@ -823,7 +840,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
              equation is retained",
         ));
         out.push(Group {
-            title: format!("class-(P) {shown}   σ = {:?}", k.1),
+            title: format!("class-(P) {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: Some(format!("{} constructor(s), truncated", tt.tc.ctors.len())),
             lines,
         });
@@ -841,7 +858,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
     tix.sort_by_key(|(k, _)| key_of(k));
     for (k, cp) in tix {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let mut lines = vec![
@@ -871,7 +888,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
              equation is retained",
         ));
         out.push(Group {
-            title: format!("class-(P) indexed {shown}   σ = {:?}", k.1),
+            title: format!("class-(P) indexed {shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: Some(format!(
                 "{} constructor(s), {} index slot(s), truncated over the §5.2 family",
                 cp.tc.ctors.len(),
@@ -951,9 +968,9 @@ fn untranslated_group(ip: &Interp, f: &Filter) -> Group {
             ds.sort_by_key(|(k, _)| key_of(k));
             for (k, g) in ds {
                 let shown = k.0.to_string();
-                if f.keeps(&shown, &k.1) {
+                if f.keeps_levels(&shown, &k.1) {
                     lines.push(Line::absent(
-                        format!("{shown} σ={:?}", k.1),
+                        format!("{shown} σ={}", crate::ground::show_levels(&k.1)),
                         format!("{what} not translated: {}", Ledger::key(Some(g))),
                     ));
                 }
@@ -1032,7 +1049,7 @@ fn extra_consts(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
     let mut covered: Vec<ConstKey> = Vec::new();
     for d in &sched.order {
         for s in &d.sigmas {
-            covered.push((d.name, s.clone()));
+            covered.push((d.name, crate::ground::ground_levels(s)));
         }
     }
     let mut keys = ip.const_keys();
@@ -1041,7 +1058,7 @@ fn extra_consts(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
     let mut out = Vec::new();
     for k in &keys {
         let shown = k.0.to_string();
-        if !f.keeps(&shown, &k.1) {
+        if !f.keeps_levels(&shown, &k.1) {
             continue
         }
         let Some(c) = ip.get_const(k) else { continue };
@@ -1057,7 +1074,7 @@ fn extra_consts(ip: &Interp, sched: &Sched, f: &Filter) -> Vec<Group> {
             lines.push(Line::thm("defeq", s.thm()));
         }
         out.push(Group {
-            title: format!("{shown}   σ = {:?}", k.1),
+            title: format!("{shown}   σ = {}", crate::ground::show_levels(&k.1)),
             note: None,
             lines,
         });

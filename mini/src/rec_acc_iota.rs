@@ -179,7 +179,7 @@ pub(crate) fn fire(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let elim: Rc<RecAccElim> = ip
         .rec_acc_elims
-        .get(&(*rec, rec_inst.to_vec()))
+        .get(&(*rec, crate::ground::ground_levels(rec_inst)))
         .cloned()
         .ok_or_else(|| bad(ABBREV))?;
     let ac = ip.acc().ok_or(Gap::IndApparatus)?;

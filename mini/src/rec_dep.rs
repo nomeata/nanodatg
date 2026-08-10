@@ -256,7 +256,7 @@ pub(crate) fn ensure(
     let u1 = motive_level(&rec_ty, np, 0)
         .ok_or_else(|| bad("dependent recursor: the motive's binder is not a Lean motive"))?;
 
-    let key = (*ind_name, ind_inst.to_vec());
+    let key = (*ind_name, crate::ground::ground_levels(ind_inst));
     let tr = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -316,7 +316,7 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     // reported the first as the second until `RBTree` was asked.
     let inner = crate::zoneb::peel(motive, ni + 1)?;
     let Expr::Sort(l) = &inner.view() else { return None };
-    ground::eval(l, &Default::default())
+    ground::as_numeral(l)
 }
 
 /// Which eliminator is being built, and everything read off the declaration
@@ -1050,7 +1050,7 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 /// takes ([`Cx`]) is a term or a membership.
 pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<Pre, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
-    let key = (site.ind, site.inst.clone());
+    let key = (site.ind, crate::ground::ground_levels(&site.inst));
     let dep = {
         let (mut kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;
@@ -1180,7 +1180,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // `MINI-HANDOFF.md` §2's sixth instance; [`crate::iota_dep`] is the
     // consumer.
     if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec, site.rec_inst.clone());
+        let key = (site.rec, crate::ground::ground_levels(&site.rec_inst));
         let target = cx.v_set.clone();
         app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
     }
@@ -2132,7 +2132,7 @@ pub(crate) fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
 /// module's header for why the two rungs differ and why it is the outer one.
 pub(crate) fn sort_of(ty: &E) -> Option<u32> {
     let Expr::Sort(l) = &ty.view() else { return None };
-    ground::eval(l, &Default::default())
+    ground::as_numeral(l)
 }
 
 #[cfg(test)]
@@ -2378,7 +2378,7 @@ mod tests {
             .ind_apparatus()
             .expect("apparatus")
             .dep_elims
-            .get(&(rec, vec![1]))
+            .get(&(rec, crate::ground::ground_levels(&[1])))
             .expect("the eliminator nest was built")
             .target
             .clone();

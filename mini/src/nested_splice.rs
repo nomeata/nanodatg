@@ -170,15 +170,19 @@ use std::collections::HashMap;
 use crate::env::{ConstantInfo, Declaration, Environment, IndType};
 use crate::expr::{get_app, Expr, Name, E};
 
-/// A constant at a ground instantiation — the pair `crate::interp`'s `ConstKey`
+/// A constant at an instantiation — the pair `crate::interp`'s `ConstKey`
 /// is, spelled out rather than imported.
 ///
 /// The two are the same type and the alias is deliberately *not* the one on the
 /// interpretation side: `ci/check-mutual-blackbox.sh` scans this file for the
 /// word `interp::`, and a module that produces a table the evidence layer
 /// consumes has no business naming the store to do it. What crosses the
-/// boundary is a `(Name, Vec<u32>) -> Name` map of syntax.
-pub type ModelKey = (Name, Vec<u32>);
+/// boundary is a `(Name, Vec<Level>) -> Name` map of syntax.
+///
+/// It widened with `ConstKey` (`LEVELPOLY.md` §5.3 step 2) and must stay
+/// spelled out: the two are checked to agree by the compiler at every
+/// assignment in `crate::run`, which is the only place they meet.
+pub type ModelKey = (Name, Vec<crate::expr::Level>);
 
 /// One nested declaration's outcome, whether or not a model was found for it.
 #[derive(Clone, Debug)]
@@ -405,7 +409,7 @@ impl Recognised {
                 }
             }
             for s in &sigmas {
-                self.model_of.insert((*export, s.clone()), *model);
+                self.model_of.insert((*export, crate::ground::ground_levels(s)), *model);
             }
             self.demand(model, &sigmas);
             sigmas_of.insert(*export, sigmas);
@@ -417,7 +421,8 @@ impl Recognised {
         for (export, ctor, thm) in &m.iotas {
             let Some(sigmas) = sigmas_of.get(export) else { continue };
             for s in sigmas {
-                self.model_iota.insert(((*export, s.clone()), *ctor), *thm);
+                self.model_iota
+                    .insert(((*export, crate::ground::ground_levels(s)), *ctor), *thm);
             }
             self.demand(thm, sigmas);
         }
