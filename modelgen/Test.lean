@@ -435,6 +435,26 @@ def expectedPrim : List Row :=
       [ ("PSigma", "prim model shape: a basis primitive")
       , ("Eq", "prim model shape: a basis primitive")
       , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
+  -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
+  -- `WTagged.lean`'s four roots — the export `lean4export` emits for
+  -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota`, 19 inductive blocks and 2
+  -- axioms — and the W arm's plan is to splice it and model what it splices.
+  -- This row is what says that plan is sound: **every inductive the core
+  -- reaches models**, except the two that are the basis exemption. If one of
+  -- them stops modelling, the W arm would be emitting an unmodelled inductive
+  -- in front of a consumer and this row is where that is noticed.
+  --
+  -- `Acc` is the interesting entry twice over: it is 14 declarations because
+  -- it is arm G's graph route, and it is **the only model in the fragment that
+  -- spends `Classical.choice`** (`MODELGEN.md` §8.16). One declaration, shared
+  -- by every W target, and the whole of the choice question for this arm.
+  , ("w_core",
+      [("Subtype", 6), ("List", 6), ("Sigma", 4), ("Option", 6), ("Exists", 4),
+       ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 4), ("True", 4),
+       ("Or", 6), ("Iff", 4), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 4),
+       ("Bool", 6), ("HEq", 4), ("PProd", 4)],
+      [ ("Nat", "prim model shape: a basis primitive")
+      , ("Eq", "prim model shape: a basis primitive")])
   -- **Arm C**, and the two rows below the models are the arm's boundaries.
   -- Every `X._model.skel` beside an `X` is the spliced index erasure being
   -- modelled in turn (§8.13's splice-and-model), so a row here going missing

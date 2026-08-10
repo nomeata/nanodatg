@@ -4536,6 +4536,59 @@ So the honest ceiling for the whole thrust, as it stands:
   #150 has to decide about — not a coverage question but a question about what
   a certificate means for a genuinely choice-shaped construction.
 
+### The mechanism is settled, and the foundation is measured
+
+**The core goes in as an export fragment, read and `addChecked`, not compiled
+into the tool.** The deciding argument is not the plumbing but the boundary:
+this tool's contract is *"the input is trusted; only the declarations the tool
+generates are checked, one at a time, by Lean's kernel with checking on"*.
+Compiling the core in and copying its `ConstantInfo`s would smuggle 190 of
+**our own** constants past that boundary as if they were input — trusted,
+unchecked, absent from the report. Reading them and splicing them through
+`Modelgen.addChecked` puts them on the checked side, where they belong, and
+makes them inspectable data rather than linked code. Confirmed against the
+code rather than assumed: `addChecked` is `addDeclCore 0 d none true` and the
+input replay is the same call with `false`, so the two sides are exactly one
+boolean apart and the fragment lands on the right one.
+
+`modelgen/tests/w_core.ndjson` is the fragment — what `lean4export` emits for
+`--#export WT.W WT.sup WT.Wrec WT.Wrec_iota` over `WTagged.lean`'s core: 500 KB,
+**19 inductive blocks and 2 axioms**, matching the closure count exactly.
+
+**And every inductive it reaches models.** Run through `--prim-models`, the
+fragment gives 18 models and 2 declines, and the two are `Nat` and `Eq` — the
+basis exemption doing its job. 40 statements compared, none differing. So the
+plan's load-bearing assumption is measured rather than assumed: splicing the
+core and modelling what it splices leaves **nothing** unmodelled in front of a
+consumer. `Test.lean`'s `w_core` row pins it, so the day one of the 18 stops
+modelling is a test failure with a name on it.
+
+### The choice question is one declaration, not ninety-nine
+
+The fragment's own bill is `[propext, Quot.sound]`. But **`Acc`'s model** is
+arm G's graph route, and arm G spends `Classical.choice` — so modelling the
+fragment splices the axiom once, at exactly one site, which the report names.
+Nothing else in the 18 does: `Nonempty` and `WellFounded` are non-recursive
+`Prop`s and take the Church route.
+
+This is worth stating carefully, because it is easy to read as undoing §8.16's
+result and it does not:
+
+* **A W target's own model is still `[propext, Quot.sound]`.** It depends on
+  the *inductive* `Acc` — a declaration, spliced and kernel-checked — and not
+  on `Acc`'s model. So all 99 are certifiable, as measured.
+* What costs `Classical.choice` is **making the output four-primitive**, i.e.
+  modelling `Acc` rather than leaving it as a fifth exempt inductive. §8.7 took
+  `Acc` out of the basis by the graph arm and paid exactly this; the price was
+  recorded then as an axiom and reads differently now that the axiom is
+  refuted rather than pending.
+
+So the trade is a real one with a name on it, and it is the owner's: **`Acc` as
+a fifth exempt primitive and the whole output is choice-free, or `Acc` modelled
+and one declaration in the output is not certifiable.** Either way it is *one*
+declaration shared by every W target, which is a far better position than
+ninety-nine, and #150 can be decided on it directly.
+
 ### What building the arm costs, and the one thing to settle first
 
 Nothing is generated: this is a compiled prototype at three targets and
@@ -4543,9 +4596,9 @@ Nothing is generated: this is a compiled prototype at three targets and
 be settled before one is worth building — that the construction exists at a
 covered bill, and how much of the residue it reaches.
 
-What it does **not** settle is the mechanism, and that is the load-bearing
-unknown rather than any of the mathematics. **The W core cannot be hand-built
-as `Expr`s the way every other arm is.** Arm C's largest emitted term is a
+The mechanism is settled above. What remains is that **the W core cannot be
+hand-built as `Expr`s the way every other arm is**, which is why the fragment
+exists at all. Arm C's largest emitted term is a
 `PSigma` and an `Eq.rec`; W's `canon`, `Wind`, `sub_wf` and `Wrec_key` are
 thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
 `WellFounded`, and writing them as `Expr` builders is not a bigger version of
