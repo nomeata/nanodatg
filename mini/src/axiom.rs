@@ -145,6 +145,32 @@
 //! `define_choice` primitive was added to let it".
 //! `mini/tests/fixtures/standard_axioms.lean` is the witness that keeps the
 //! four pairs measurable until one of the two is taken.
+//!
+//! # What `propext` alone buys on the generated models — counted
+//!
+//! It is not zero and it is not the W route. `#print axioms` over
+//! `scripts/inductive-basis/`, 2026-08-10:
+//!
+//! | generator | bill | covered now |
+//! |---|---|---|
+//! | `WFromPaths` 7 + `WIndexedCarve` 24 | `propext, Classical.choice, Quot.sound` — all 31 | no |
+//! | `AccArmShapes` — arm G, 6 | `Classical.choice`, and `Quot.sound` at the two `iota`s | no |
+//! | `AccPhi::literal_has_no_rec` | `propext, Quot.sound` | **yes** |
+//!
+//! So **`propext` closes no W model and no arm-G model on its own**: every
+//! declaration that spends it on the W route spends `Classical.choice` too, and
+//! from the *same* source — `WFromPaths.lean`'s header says the label test goes
+//! through `Classical.propDecidable`, "hence choice, hence (via
+//! `Classical.em`) propext. Nothing else in the construction is classical."
+//! Arm G spends choice and never propext at all.
+//!
+//! Two consequences worth having in one place. First, a bill of
+//! `[propext, Quot.sound]` or any subset is now **fully covered**, which is the
+//! shape `AccPhi` already produces. Second, the lever on the W route is not
+//! this module: `WFromPaths.lean`'s item E records that the classical dispatch
+//! is avoidable whenever `B` factors through the constructor tag — "almost all
+//! of them" — and that removes *both* axioms at the generator instead of
+//! certifying either here.
 
 use kernel::{Formula, Term, Thm};
 
