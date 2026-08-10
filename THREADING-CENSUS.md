@@ -575,7 +575,8 @@ item. All counts **(ip)**, fresh run at `8d2b9c9`.
 
 **Bucket (ii) — blocked on something other than threading.** These are items
 1–6 below. Headline rows: `ty_const` no-evidence 20 929 (of which the 2 674
-never-derived declaration typings are the cascade root), opaque-head
+never-derived declaration typings — (declaration, σ) pairs — are the cascade
+root), opaque-head
 obligations ~5 500, `iota` residue 792 + 486, `proj_reduce` 630, `ty_pi`
 8 798, literals (`ty_lit` 890, `NatEq` 44, `NatRed` 8), `eta_struct` 6.
 
@@ -629,7 +630,11 @@ them is the mechanical part.
    threading; closed by scheduling, not evidence.
 3. **Uninterpreted inductives/constructors/recursors and structures.** The
    opaque-head obligations (~5 500 on ip), the `ty_const` store misses'
-   cascade root (2 674 declarations whose own check gapped), the `iota`
+   cascade root (2 674 of the 2 891 **(declaration, σ) pairs with a value**
+   whose own check gapped — pairs, not declarations: `init-prelude` has 2 059
+   declarations, and the pre-pass schedules its 1 645 value-carrying ones at
+   2 891 ground instantiations; see `MEASUREMENTS.md`, "How far along the goal
+   is: the four denominators"), the `iota`
    residue (792 recursors with no curried interpretation + 486 stuck
    majors), `proj_reduce` 630, `Admit::EtaStruct`/`UnitLike`, `Quot`. No
    axioms exist about these symbols *in this backend's signature*, so no

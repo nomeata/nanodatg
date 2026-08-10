@@ -1708,8 +1708,21 @@ fn the_general_iota_rule_computes_on_the_prelude() {
 /// with no entry is a declaration that has **not been translated** — so the
 /// headline number for `init-prelude` is not its 15423 definitional-equality
 /// gaps, which count steps inside checking, but this: of **2891**
-/// (declaration, σ) pairs with a value, **19** carry a proof of their own
+/// (declaration, σ) pairs with a value, **26** carry a proof of their own
 /// typing. `mini`'s counterpart is 121 of 223.
+///
+/// **What this denominator is not** (task #147, 2026-08-10). 2891 counts
+/// (declaration, σ) *pairs* whose declaration carries a **value**. It is not
+/// the size of `init-prelude`, and this test must not be read as measuring the
+/// project's goal: the file has 2059 declarations scheduled at 3861 pairs, and
+/// the 968 pairs belonging to inductives, constructors, recursors, `quot` and
+/// axioms are in no row below. Nor is `Dt::Seen` a denominator — it is
+/// incremented at the top of `store_declar_typing`, so a run reaching fewer
+/// declarations reports a smaller one. It happens to equal the pre-pass's
+/// static count of value-carrying scheduled pairs today (measured, 2891), and
+/// nothing asserts it. `MEASUREMENTS.md`, "How far along the goal is: the four
+/// denominators, and the row that states one", has all four populations and
+/// specifies the `translated` row that fixes both holes.
 ///
 /// # The three ways a pair fails to be translated, and why they are separated
 ///

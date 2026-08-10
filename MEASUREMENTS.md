@@ -2375,6 +2375,18 @@ count steps inside checking, but this:
 with zero definitional-equality gaps and this store would still have proved
 nothing about any declaration, and that has not been said plainly before.
 
+**Two corrections to the framing above, 2026-08-10 (task #147); the figures
+themselves stand as taken.** First, "2891" is not the size of `init-prelude`
+and 19-of-2891 is not "how much of the prelude is translated": 2891 counts
+**(declaration, σ) pairs whose declaration carries a value**, and the file has
+2059 declarations scheduled at 3861 pairs, of which 968 belong to inductives,
+constructors, recursors, `quot` and axioms and are in no row of this table.
+Second, `19` and `26` are pair counts, not declaration counts. See "How far
+along the goal is: the four denominators, and the row that states one" at the
+end of this file for all four populations, the numerator re-measured at **26**,
+and the specification of the row that will stop a bare count being quoted
+again.
+
 ### `Gap` and `Conditional` were one number, and they call for opposite work
 
 The residue used to be arithmetic — `Seen` minus `FromInfer` minus `Conditional`
@@ -6084,3 +6096,160 @@ pairs=218  constEv=218  unsealed=0  lazyFills=0
 proved=829683  sealed=827106  gapped=0  moved=3461  movedSealed=915
 moved − movedSealed = 2546
 ```
+
+## How far along the goal is: the four denominators, and the row that states one — 2026-08-10
+
+*Task #147. `origin/master` at `c2c68c5`, `--release --features tg`,
+`vendor/arena-tests/good/init-prelude.ndjson`, `perf stat -e instructions`. The
+numerator was **re-measured, not inherited**. Three temporary instruments were
+used and reverted in the same session: a `Sealed::new` ok/err tally
+(`checker/src/sealed.rs`), a print of `export_file.declars.len()`
+(`checker/src/main.rs`), and a static per-kind pair census in the level
+pre-pass (`checker/src/instantiations.rs`). Nothing in the tree retains them.*
+
+The project's stated thrust is *"all declarations of prelude-init (except
+skipped non-standard axioms) checked, accepted and with their typing relation
+having a fully proven theorem in the environment."* Nobody could quote a ratio
+for it, because **four different populations were all being called
+"declarations of `init-prelude`"** and two of them had been published against
+each other. They are all measured here, together, so that no future number can
+be quoted without one.
+
+| population | count | what it is |
+|---|---:|---|
+| declaration **records** in the export file | 1 777 | `def` 1479, `thm` 156, `inductive` 126, `opaque` 10, `quot` 4, `axiom` 2 — one JSON line each |
+| **declarations** (named constants) | **2 059** | the 126 `inductive` records expand to 126 type formers + 154 constructors + 128 recursors; this is `export_file.declars.len()`, and the checker's own "Checked 2059 declarations" |
+| scheduled **(declaration, σ) pairs** | 3 861 | the level-instantiation pre-pass's schedule; the unit the checker actually runs on |
+| (declaration, σ) pairs **with a value** | **2 891** | `def` 2687 + `thm` 194 + `opaque` 10 — the declaration-typing ledger's denominator |
+
+**The 1 777-vs-2 674 disagreement was neither corpus nor double counting: it
+was a category error in a sentence.** `THREADING-CENSUS.md`'s cascade root is
+2 674 *of the 2 891 (declaration, σ) pairs with a value* — the census's own
+§1.2 row says so — but §3 item 3 called the same figure "2 674 declarations
+whose own check gapped", and a declaration count larger than the file is what a
+reader then had to reconcile. Corrected in place. The mechanism behind the
+expansion is **universe-level instantiation, not monomorphisation of types**:
+1 645 value-carrying declarations are scheduled at 2 891 ground σ.
+
+### The exclusion, measured exactly
+
+`init-prelude` contains **two** `axiom` records: `Classical.choice` — standard
+per `mini::convert::is_standard_axiom` — and **`sorryAx`**, which is not. So
+*"except skipped non-standard axioms"* removes **exactly one declaration**.
+Measured both ways:
+
+* Statically: no `def`, `thm`, `opaque` or `axiom` in the file contains a
+  `Const` node for `sorryAx` — **zero references**, so `mini::unused_axiom`
+  drops it as unused rather than declining the file.
+* Dynamically: running the checker with `permitted_axioms` set to exactly
+  Lean's three moves the verdict from "Checked 2059 declarations" to
+  **"Checked 2058"**, and the schedule from 3 861 pairs to 3 859. The
+  declaration-typing ledger does not move at all, because `sorryAx` carries no
+  value and was never in its denominator.
+
+Neither `propext` nor `Quot.sound` appears in `init-prelude` at all; the four
+`quot` records are `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind`.
+
+So the goal's population is **2 058 declarations / 3 859 (declaration, σ)
+pairs**, and 1 of 2 059 is skipped.
+
+### The numerator, re-measured
+
+| row | value |
+|---|---:|
+| `Dt::Seen` — (declaration, σ) pairs with a value | 2 891 |
+| `Dt::Stored` — **…carrying `⊢ ⟦c⟧ ∈ ⟦T⟧`, sealed** | **26** |
+| `Dt::Gap` — no certificate at all | 2 667 |
+| `Dt::Conditional` — derived, discarded as conditional | 198 |
+| `Dt::NoKey` / `Dt::Refused` | 0 / 0 |
+| `Dt::Poly` — of the 26, level-polymorphic | 25 |
+| uses answered from the store / missing | 1 325 / 28 060 |
+| instructions | 194.23 G |
+
+**26 of 2 891 is 0.90 %. 26 of 3 859 — every scheduled pair of every
+non-skipped declaration, which is what the goal's sentence says — is 0.67 %.**
+The checked-and-accepted half of the goal is at 2 059 / 2 059; the
+fully-proven-theorem half is the number above.
+
+### Three things the row is not saying, and all three matter
+
+1. **A quarter of the goal's population is outside the denominator.**
+   `Dt::Seen` counts only value-carrying declarations. Every inductive type
+   former, constructor, recursor, `quot` constant and axiom — **413
+   declarations / 968 pairs after the exclusion**, 20.1 % and 25.1 % — is not
+   in it, and has no ledger row of its own. A ledger reading 2 891 / 2 891
+   would still leave a quarter of the prelude's typing obligations unmeasured.
+   Per-kind, `(declarations, pairs)`: `def` (1479, 2687), `thm` (156, 194),
+   `opaque` (10, 10), `recursor` (128, 471), `ctor` (154, 261), `inductive`
+   (126, 230), `quot` (4, 4), `axiom` (2, 4).
+
+2. **26 is a count of pairs, not of declarations, and the two differ by
+   roughly half.** Perturbing `DEFAULT_LEVELS` from `[0, 1]` to `[0, 1, 2]`
+   moves the value denominator 2 891 → 3 959 and `Dt::Stored` 26 → 35, with
+   `Dt::Poly` 25 → 34: **+9 stored pairs are additional σ of declarations
+   already counted**. Those nine therefore contribute at least 18 of the 26, so
+   the distinct Lean declarations behind the numerator are **at most 17, and at
+   least 10** — against 2 058, between **0.5 % and 0.8 %**. The exact figure
+   needs a field the ledger does not have; it is `distinct` in the
+   specification below.
+
+3. **`Dt::Seen` is a walk counter, not a denominator.** `note_dt(Dt::Seen)`
+   is the first line of `TgBackend::store_declar_typing`, so a run that reaches
+   fewer declarations reports a smaller denominator and a *better-looking*
+   ratio. Today it is not vacuous, and that is now a measurement rather than an
+   assumption: the pre-pass's **static** count of value-carrying scheduled
+   pairs is **2 891**, equal to `Dt::Seen` to the digit. Nothing asserts it.
+
+`Dt::Stored` is also bumped one line **before** `Sealed::new`, exactly as
+`FALSE_ANCHORS` is — so the numerator is a count of sealed theorems only if the
+seal never refuses. Instrumented: **5 229 `Sealed::new` calls on this file,
+0 refusals**. True today, unasserted.
+
+### The permanent row, specified
+
+For whoever lands #126. Not landed here: every field needs
+`checker/src/tg.rs`, which #125 holds.
+
+**Name:** `translated`, printed as its own block, not inside the `Dt` table —
+the `Dt` rows are a breakdown of one population, and the point of this row is
+that the population is not the goal's.
+
+**Fields**, each a `u64`, each printed with its denominator on the same line:
+
+| field | definition | today |
+|---|---|---:|
+| `scheduled` | (declaration, σ) pairs the pre-pass scheduled, **all kinds**, computed in `instantiations::compute_in` before any checking | 3 861 |
+| `skipped` | pairs dropped as non-standard axioms, named in the line | 2 (`sorryAx`) |
+| `population` | `scheduled − skipped` — **the denominator, printed inline** | 3 859 |
+| `reached` | pairs the walk actually entered; a separate counter incremented at the top of the per-pair check, **not** derived from any `Dt` row | 3 861 |
+| `eligible` | of `population`, the pairs whose declaration carries a value — today's `Dt::Seen` | 2 891 |
+| `sealed` | pairs with a `Sealed` typing **published** — incremented *after* `Sealed::new` and after `publish`, never before | 26 |
+| `distinct` | distinct `NameKey`s among `sealed` — the count the goal's sentence asks for | unmeasured, ≤ 17 |
+| `sealed_by_kind` | `sealed` split over the eight `Declar` variants | `def`/`thm` only, today |
+
+**Two assertions the row must carry, both in the report and in the test:**
+
+* `reached == scheduled`, and `eligible ==` the pre-pass's static count of
+  value-carrying scheduled pairs. This is the non-vacuity guard. Without it a
+  run that reaches half the file reports `13/1445` and reads as honest.
+* `sealed` is counted after the seal and the publish. If they are ever split,
+  the report prints a bug-report line the way the `⟦False⟧` anchor already does
+  (`"…but the thread is holding no sealed anchor"`), rather than a silent
+  overcount.
+
+**CI floor**, in `checker/tests/tg_tutorial.rs` beside
+`the_declaration_typing_ledger_accounts_for_every_declaration`:
+
+```text
+assert_eq!(reached, scheduled);          // vacuity: not a ratchet, an identity
+assert_eq!(eligible, static_value_pairs);// vacuity: ditto
+assert!(population >= 3859);             // the denominator may not shrink
+assert!(sealed >= 26);                   // ratchet, may only rise
+assert!(distinct >= <first measurement>);// ratchet, may only rise
+```
+
+`population >= 3859` is the field that makes the eleventh instance of
+"reporting success having done nothing" fail red: a change that narrows what is
+scheduled improves `sealed / population` for free, and only a floor under the
+denominator catches it. The two `assert_eq!`s are deliberately not ratchets —
+a ratchet on a vacuity guard is a vacuity guard that can be loosened.
