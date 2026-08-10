@@ -113,16 +113,13 @@ both sides of every ι equation are proofs of one proposition.
 
 ## What declines, and why
 
-* **recursive at a never-zero sort** (`List`, `Lean.Name`, …) — the carrier
-  needs the tuple-tower construction for linear recursion, or W/path in
-  general. `scripts/inductive-basis/LinearRec.lean` compiles the linear arm
-  (three targets, every ι by `rfl`, no `funext`); it is not wired up here.
+* **branching recursion at a never-zero sort** (`Lean.ParserDescr`) — the
+  tuple tower ([`Modelgen.recSlotOf`]) carries *linear* recursion, and its
+  spine is a single `Nat`, so a constructor with two recursive fields (or one
+  under a binder) has no predecessor to take. That needs W/path, plan B.
 * **indexed at a never-zero sort** (the composed `T._model.aux`) — thesis
   §5.2's skeleton-plus-`good`; `scripts/inductive-basis/IndexedCarve.lean`
   compiles it on the thesis's own example.
-* **an indexed subsingleton** (`HEq`) — the packed-index-equation model,
-  INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case, compiled as `HEq'` in
-  `scripts/inductive-basis/PropArms.lean`.
 * **a recursive subsingleton** (`Inf`) — the `AccPhi` carrier of
   INDUCTIVE-BASIS §3.2, which is where `Acc` finally earns its place.
   `scripts/inductive-basis/AccPhi.lean` compiles it, *and* refutes the
@@ -1107,14 +1104,12 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them.
-  -- Bounded at one field: the sequential extraction below is measured
-  -- correct at zero fields (`HEq`) and one (`TagS`), and **measured wrong at
-  -- two** — `prim_shapes`'s `TagS2`/`TagS3` were added precisely to ask, and
-  -- both are red at the recursor's minor application, dependent and
-  -- non-dependent alike. The one-field cases are not a coincidence that
-  -- happens to pass: at zero and one field there is nothing to order. Rather
-  -- than emit a model whose field threading is unverified, the arm declines
-  -- above one and says so.
+  -- **Any number of fields.** The arm used to decline above one, because at
+  -- zero fields (`HEq`) and one (`TagS`) there is nothing to order and no
+  -- fixture could catch a threading bug. `prim_shapes`'s `TagS2`, `TagS3` and
+  -- `TagS4` are the two- and three-field occupants that were added to ask, and
+  -- the sequential extraction below is correct at all three — kernel-accepted,
+  -- statements compared, and red under the field-order mutations.
   let armF := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
 
   if armF then
@@ -1169,11 +1164,6 @@ and {ni} indices"
             badShape s!"{exportCtors[0]!.1} has an index-variable field: its index \
 expressions mention its own fields, which the packed-equation model substitutes only \
 when the front end has already promoted them to parameters"
-        if nf > 1 then
-          badShape s!"an indexed subsingleton whose constructor has {nf} fields: the \
-packed-equation model's sequential field extraction is verified at zero fields and one, \
-and prim_shapes' TagS2/TagS3 measure it wrong at two, so it declines above one rather \
-than emit an unverified threading"
         for f in fs do
           unless (← ilevel (← ityp f)).normalize.isZero do
             badShape s!"{exportCtors[0]!.1} has a field that is not a proposition, so \

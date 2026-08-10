@@ -379,14 +379,13 @@ is the control that says the guard is not refusing everything. `Eq` declines
 as basis in both, because both declare it. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
-      [("Tri", 11), ("Weave", 10), ("Opt", 6), ("IdxP", 6), ("Le3", 8),
-       ("Le3.below", 8), ("PM", 6), ("Emp", 2), ("PU", 4), ("PE", 2),
-       ("MNm", 8), ("IdxS", 4), ("Dec", 6), ("Conj", 4), ("TagS", 4),
-       ("PT", 8), ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
+      [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
+       ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
+       ("Conj3", 4), ("PU", 4), ("PE", 2), ("MNm", 8), ("IdxS", 4),
+       ("Dec", 6), ("Conj", 4), ("TagS2", 4), ("TagS", 4), ("PT", 8),
+       ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
-      [ ("Eq", "prim model shape: a basis primitive")
-      , ("TagS3", "prim model shape: an indexed subsingleton whose constructor has 2")
-      , ("TagS2", "prim model shape: an indexed subsingleton whose constructor has 2")])
+      [ ("Eq", "prim model shape: a basis primitive")])
   , ("prim_declines", [("P", 9), ("Idx", 4)],
       [ ("Eq", "prim model shape: a basis primitive")
       , ("Inf", "prim model shape: a recursive subsingleton proposition")

@@ -235,13 +235,15 @@ narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusa
 paths have fixtures too (`tests/prim_declines.lean`). What it declines today:
 **branching** recursion (a constructor with two recursive fields, or one under
 a binder), indexed carriers at a **never-zero** sort, *recursive*
-subsingletons, an indexed subsingleton with more than one constructor field,
-indices or recursion at a maybe-zero sort, and one level-arithmetic gap.
-Indexed and recursive small-eliminating `Prop`s model, the whole maybe-zero
-class models, *linear* recursion at a never-zero sort models (`List` and
-`Lean.Name`, by tuple towers, every ι `Eq.refl`), and so does the indexed
-subsingleton up to one field (`HEq`). Every remaining decline names a
-compiled prototype under `scripts/inductive-basis/` that would close it.
+subsingletons, indices or recursion at a maybe-zero sort, and one
+level-arithmetic gap. Indexed and recursive small-eliminating `Prop`s model,
+the whole maybe-zero class models, *linear* recursion at a never-zero sort
+models (`List` and `Lean.Name`, by tuple towers, every ι `Eq.refl`), and so
+does the indexed subsingleton at **any** number of constructor fields
+(`HEq`) — that arm shipped bounded at one field on a measurement that
+re-measuring did not reproduce, and `MODELGEN.md` §8.2 records the episode.
+Every remaining decline names a compiled prototype under
+`scripts/inductive-basis/` that would close it.
 
 On Mathlib (5.6 GB export, 670,630 declarations):
 

@@ -2581,9 +2581,9 @@ Four of those ten are now models:
 * **`HEq`** was the last indexed subsingleton. It models by the packed index
   equation (§8.1): the whole index telescope into one `PSigma`, one `Eq` at
   it, one `Eq.rec` to discharge it, resting on `PSigma` structure eta for
-  `pack (unpack y) ≡ y`. ι is `Eq.refl`. **The arm is bounded at one
-  constructor field** — see §8.2's fixture note, which is the honest part of
-  this row.
+  `pack (unpack y) ≡ y`. ι is `Eq.refl`. **The arm takes any number of
+  constructor fields** — it shipped bounded at one, and the bound was wrong;
+  see the fixture note below, which is the honest part of this row.
 
 `PUnit` models on the maybe-zero route, `PULift` on a `PULiftP ⊤` pad, and
 `Trans` on a boxed field.
@@ -2619,7 +2619,9 @@ this tranche: `PE` (empty at `Sort u`), `PM` (two constructors there), `PT`
 (three, with *distinguishable* field telescopes), `PF` (a field), `PI` (a
 field at the carrier's own sort), `IdxP` (indexed, non-recursive) and `Le3`
 (indexed *and* recursive, three constructors, whose front-end-generated
-`Le3.below` is the fixture's only two-index witness).
+`Le3.below` is the fixture's only two-index witness); and, with the arm-F
+field bound (below), `TagS4` and `Conj3`, the three-field dependent occupants
+of the two sequential-extraction sites.
 
 Three mutations were run against the new arm and each caught something a
 different fixture could not:
@@ -2632,7 +2634,10 @@ different fixture could not:
 | every step constructor given tag 0 (a non-injective tag collision) | `MNm`, `Weave` | `Lst` — one step constructor, so a collision is a no-op |
 | the step constructor storing the predecessor's spine, not its successor | `Lst`, `MNm`, `Weave` | — |
 | the packed index telescope unpacked in reverse | `Hq` | `IdxS`, `TagS` — one index, so reversing a singleton is a no-op |
-| the extracted fields handed to the minor in reverse | *nothing* | every arm-F shape had ≤ 1 field; this is the mutation that found the defect above, by **not** going red |
+| arm F's extracted fields handed to the minor in reverse | `TagS2`, `TagS3`, `TagS4` | `IdxS`, `TagS`, `Hq` — ≤ 1 field, so reversing is a no-op |
+| arm F's extracted fields handed to the *rebuilt carrier* in reverse | `TagS2`, `TagS3`, `TagS4` | the same three, for the same reason |
+| arm F's field `i` extracted as field `nf-1-i` | `TagS2`, `TagS3`, `TagS4` | the same three |
+| every field's type instantiated at extraction **0** rather than at its own predecessors | **`TagS4` and `Conj3` only** | `TagS2`, `Conj` — two dependent fields, so extraction 0 *is* the only predecessor |
 
 The third is the two-atoms lesson one dimension up, and it is why the
 fixture needs a two-index family. Note also that on the Church routes ι is
@@ -2640,6 +2645,38 @@ fixture needs a two-index family. Note also that on the Church routes ι is
 minor-order bug there at all; what catches a permutation is the minor
 premise failing to typecheck, and that needs the constructors' telescopes to
 differ — which is why `PT` and `Le3` are built the way they are.
+
+### The arm-F field bound that was a bound and not a defect
+
+Arm F shipped declining above **one** constructor field, on the strength of a
+measurement recorded here as "the sequential extraction is wrong at two
+fields, dependent and non-dependent alike". **Re-measured, it is not.**
+`TagS2` (two dependent fields), `TagS3` (two non-dependent) and the newly
+added `TagS4` (three dependent) all model: kernel-accepted through
+`addDeclCore`, statements compared against the installed recursors' own
+rules with zero differences, ι `Eq.refl`. The bound is gone and the three
+shapes are positive occupants rather than boundary markers.
+
+Two things are worth keeping from the episode, because neither is undone by
+the bound being wrong.
+
+* **The mutation that found nothing was still the right mutation.** Reversing
+  arm F's extracted fields was green because every occupant had at most one
+  field, and that is a genuine hole in the fixture set whether or not the code
+  under it was broken. It is now red at `TagS2`, `TagS3` and `TagS4`.
+* **Two fields are not three, and here that is measurable.** The extraction
+  instantiates a later field's type at the *earlier extractions*. A version
+  that instantiates every field's type at extraction 0 instead is a real bug
+  and is **invisible at two fields** — with two, extraction 0 is the only
+  predecessor. It is caught only by `TagS4` and by `Conj3`, the three-field
+  dependent occupant added to the *non-indexed* large-eliminating route
+  (`Conj`'s site, which threads fields sequentially in the same way and had
+  the same two-field blind spot).
+
+What made the difference was not re-reading the extraction but running it: the
+bound was believed, the fixtures were written to hold it open, and nothing in
+the tree ever asked the kernel. **A decline is a claim about the code and has
+to be measured like any other.**
 
 ## 8.3 Composition: nested → mutual → primitives, and where it stops today
 

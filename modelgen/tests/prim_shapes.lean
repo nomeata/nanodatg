@@ -32,10 +32,14 @@
      minor-order bug, and distinguishable telescopes, because ι is `rfl` by
      proof irrelevance here and so cannot catch one either — what catches a
      permutation is the minor premise failing to typecheck.
-   * `Conj` — a `Prop` structure with **dependent** propositional fields:
-     large elimination by sequential extraction, the second field's type
-     instantiated at the first's extraction and closed by definitional
-     proof irrelevance.
+   * `Conj` and `Conj3` — a `Prop` structure with **dependent**
+     propositional fields, two of them and three: large elimination by
+     sequential extraction, a later field's type instantiated at the earlier
+     extractions and closed by definitional proof irrelevance. Three, not
+     two, because with two fields the *first* extraction is the only
+     predecessor, so a version that instantiates every field's type at
+     extraction 0 rather than at its own predecessors is green at `Conj` and
+     red only at `Conj3`.
    * `PU` — a **variable-sort singleton** (`PUnit`'s shape): the carrier is
      `PULiftP ⊤` at exactly `Sort u`, the recursor a transport along the
      lift's eta.
@@ -76,15 +80,15 @@
      index equation and not a Church fold.
    * `TagS` — the same with a genuine `Prop` field, which rides as an extra
      Church-conjoined component and comes back out by small elimination.
-   * `TagS2` and `TagS3` — two `Prop` fields, dependent and non-dependent.
-     These **decline**, and they live here rather than in `prim_declines`
-     because that is what they were added to find out. `TagS`'s single field
-     cannot catch a field-order bug — a mutation reversing the extracted
+   * `TagS2`, `TagS3` and `TagS4` — **two and three** `Prop` fields,
+     dependent and non-dependent. These exist because `TagS`'s single field
+     cannot catch a field-order bug: a mutation reversing the extracted
      fields is a no-op on one field, and was measured green until these
-     existed — and asking the question turned up that the packed-equation
-     model's sequential extraction is wrong at two fields as well. The arm
-     now declines above one field rather than emit an unverified threading;
-     these two hold that boundary open.
+     existed. `TagS4`'s three fields are what pin the order rather than a
+     transposition of it, and its chain (`h : q`, `k : t h`, `w h k`) makes
+     the sequential instantiation run **twice**, so a version that reads a
+     later field's type off the raw telescope instead of off the earlier
+     extractions is red here and at `TagS2`.
    * `Hq` — `HEq`'s shape widened to **three** indices, the second dependent
      on the first (`{β : Sort u}` then `b : β`). Three atoms: with one index
      the packing is the identity and with two a transposition is invisible in
@@ -144,6 +148,10 @@ inductive Tor (a b c : Prop) : Prop where
 inductive Conj (a : Prop) (b : a → Prop) : Prop where
   | mk : (ha : a) → b ha → Conj a b
 
+inductive Conj3 (a : Prop) (b : a → Prop) (c : (ha : a) → b ha → Prop) :
+    Prop where
+  | mk : (ha : a) → (hb : b ha) → c ha hb → Conj3 a b c
+
 inductive IdxP : Tri → Prop where
   | at_a : IdxP Tri.a
   | at_b : IdxP Tri.b
@@ -199,6 +207,10 @@ inductive TagS2 (q : Prop) (t : q → Prop) : Tri → Prop where
 
 inductive TagS3 (q s : Prop) : Tri → Prop where
   | mk : q → s → TagS3 q s Tri.a
+
+inductive TagS4 (q : Prop) (t : q → Prop) (w : (h : q) → t h → Prop) :
+    Tri → Prop where
+  | mk : (h : q) → (k : t h) → w h k → TagS4 q t w Tri.a
 
 inductive Hq : {α : Sort u} → α → {β : Sort u} → β → Tri → Prop where
   | refl (a : α) : Hq a a Tri.a
