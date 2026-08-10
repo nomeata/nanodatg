@@ -14,6 +14,42 @@
 # looked at `$?` would stay green with the guard it is testing deleted. That is
 # the trap the corpus seat hit at `4b463f1` — a cell that exits earlier for
 # another reason cannot fail.
+#
+# ── Why this file earns its keep, with two fresh receipts ────────────────────
+#
+# "A CI rule that passes because it examined nothing" is this project's oldest
+# failure and its most frequent: `ci/check.sh` missing its modelgen step,
+# monotest's 107 tests unrun, mini-vs-nanoda passing a crash, 41 Rust tests
+# reporting `ok` with no corpus (twice), rule 6 covering two crates while a third
+# appeared, rule 3's glob reading only the top level. Every one of them was found
+# *after* it had been green for a while, and none of them was found by reading
+# the rule.
+#
+# Rule 7 was written with all of that in mind and shipped with **two** instances
+# of it anyway, both caught here within a minute of the cells being added and
+# neither visible in review:
+#
+#   * `grep` **omits the filename when handed a single file**. Rule 7's scan
+#     pipes `find -print0 | xargs -0 grep -In`, which prefixes `path:line:` —
+#     until the workspace holds exactly one candidate file, at which point the
+#     output is bare `line:` and *both* downstream filters silently stop
+#     applying: the comment skip (which anchors on `path:line:`) and the
+#     home-module test (which matches on the path). A comment mentioning the
+#     primitive read as a violation, and a real violation in the home module
+#     would have read as clean. Fixed with `grep -H`; the one-file case is
+#     exactly what a fixture workspace is.
+#   * an **unanchored exclusion glob** matches the checkout, not the subtree.
+#     `-not -path '*/.claude/*'` was meant to skip nested `git worktree` copies
+#     under `.claude/worktrees/`. Every seat on this project *works* in one, so
+#     the scan root itself contains that component and the rule read **zero
+#     files** — reporting the same `ok:` it reports for a clean workspace.
+#     Exclusions are anchored at the scan root now.
+#
+# The general lesson, since it generalises past this file: a boundary rule's
+# *plumbing* — how it enumerates files, how it prefixes matches, how it excludes
+# — is as load-bearing as its predicate, and it is the half nobody reviews. The
+# counted-files guard catches "read nothing"; only a fixture with a *known*
+# answer catches "read the wrong thing and said ok".
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

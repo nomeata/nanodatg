@@ -35,17 +35,34 @@
 //! that the premise is closed is the one this whole route rests on, and a
 //! parameterised universe term would collapse it back to the arity-≥1 case.
 //!
-//! # One `ε` per domain, and why that is Carneiro's `ε` and not more
+//! # One `ε` per rung — and **do not try to fix this up to `U_ω`**
 //!
-//! §6.2 fixes **one** choice function on `U_ω`. There is no `U_ω` term in this
-//! development — the tower is `U₀, U₁, …` with no limit stage — so what a caller
-//! fixes is one `ε` per rung it needs, each on a *set*. That is weaker than the
-//! thesis's `ε` and weaker in the safe direction: every use is still set-sized
-//! choice on a bounded universe, never global choice on `V`, and the consistency
-//! strength argument on [`kernel::Thm::ax_choice`] applies unchanged. What it
-//! costs is that `ε` at rung `m` and `ε` at rung `n` are *unrelated* symbols; a
-//! consumer that needs one function to work across rungs has to mint at the
-//! larger rung and use [`crate::cumul`] to get there.
+//! §6.2 fixes **one** choice function on `U_ω`. This module fixes one per rung.
+//! That reads like an approximation to be tidied away later, and it is not: it is
+//! forced, and tidying it is how the free variable gets back in.
+//!
+//! There is no `U_ω` **term**. The tower is `U₀, U₁, …` with no limit stage, and
+//! the only universe-valued *operator* this development has is `U(·)` — so the
+//! nearest thing to "a universe big enough for everything" that can be written
+//! down is `U(x)` at a **variable** `x`. That is exactly the term
+//! [`super::choice_fn_on_universe`] is stated at, it is exactly what
+//! [`kernel::thm::henkin`] must refuse, and reaching for it is not a small step
+//! toward §6.2 — it is the whole arity-≥1 case, whose unsoundness
+//! [`kernel::thm::define`]'s comment establishes. `derived/tests/epsilon.rs`
+//! pins the refusal at that precise term, so the "fix" reds rather than lands.
+//!
+//! The route to a genuine single `ε` is therefore **a `U_ω` term**, not a looser
+//! guard: build the limit stage as a closed term (a Replacement image over `ω`
+//! of the rung operator, say), prove `Uₙ ⊆ U_ω`, and mint once at it. Until that
+//! exists, per-rung is the strongest thing that is *closed*.
+//!
+//! Per-rung is also weaker than §6.2 in the **safe** direction: every use is
+//! set-sized choice on a bounded universe, never global choice on `V`, so the
+//! consistency-strength argument on [`kernel::Thm::ax_choice`] applies unchanged
+//! and nothing here reaches for the §1.2 axiom the thesis declines. What it costs
+//! is that `ε` at rung `m` and `ε` at rung `n` are *unrelated* symbols; a consumer
+//! that needs one function across rungs mints at the larger rung and uses
+//! [`crate::cumul`] to get there.
 //!
 //! Minting twice at the *same* `u` yields two distinct constants and no theorem
 //! relating them. So a caller must mint once and thread the [`Epsilon`], not
@@ -72,10 +89,23 @@
 //! (`kernel/README.md`, "Choice"), and a well-ordering of `u` gives a *unique*
 //! least element of every non-empty member, hence an `∃!` that
 //! [`kernel::thm::define`] can name with no new primitive at all. That
-//! derivation does not exist in `derived/` and is substantial. When it does,
-//! this file changes and [`kernel::thm::henkin`] loses its only caller — at
-//! which point `ci/check-boundary.sh` rule 7 fails, deliberately, so that the
-//! rule is removed from the trusted base rather than left in it unused.
+//! derivation does not exist in `derived/` and is substantial.
+//!
+//! ## The door is not merely left open, it is wired to an alarm
+//!
+//! The project owner's condition, in full, was to add the rule "sparingly and
+//! nicely encapsulated, in case we regret that choice later and build it
+//! differently". The regrettable outcome is not that the rule is *replaced* —
+//! that is the plan — it is that the rule is replaced and then **left sitting in
+//! the trusted base**, unused, unread, and impossible for a later reader to
+//! justify deleting.
+//!
+//! So `ci/check-boundary.sh` rule 7 fails at **zero** callers, not only at two or
+//! at a stray one. The day this file is rebuilt over a well-ordering, the build
+//! goes red and the only way to green it is to take [`kernel::thm::henkin`] out
+//! of `kernel/src/thm.rs`. An encapsulation that only stops the seam widening is
+//! half a guarantee; this one also makes the seam's *disappearance* mandatory
+//! rather than optional.
 
 use kernel::{Env, Formula, Term, Thm};
 
