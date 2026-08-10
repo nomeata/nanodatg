@@ -14,6 +14,7 @@
 //! | [`utower`] | the internal universe ladder `lvl` — the recursion theorem at `G := U(·)`, seed `ω` |
 //! | [`srt`] | `srt(n) = ite0(n, U₀, app(lvl,n))` — `⟦Sort ·⟧` as one term function of a variable level |
 //! | [`rules`] | typing rules at a variable level: Π-formation at `imax`, with the `ite0` split |
+//! | [`pi_rules`] | **dependent** Π-formation at `imax` — the `dprod` twin, per fibre family |
 //!
 //! Interpreting a Lean level expression over parameters `u⃗` (each under a
 //! `uᵢ ∈ ω` hypothesis):
@@ -32,4 +33,5 @@ pub mod ite0;
 pub mod order;
 pub mod srt;
 pub mod utower;
+pub mod pi_rules;
 pub mod rules;

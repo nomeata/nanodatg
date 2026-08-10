@@ -311,6 +311,26 @@ landed and green, [ ] not landed.
   "`a : Type u` becomes `⟦a⟧ ∈ U(u)`" sentence as a kernel theorem), and
   `punit_demo` (`⊢ ∀u∈ω. 1 ∈ srt(u)` — the `PUnit`-carrier membership as
   **one** theorem where the ground checker mints one symbol per σ, §1.6).
+* [x] **`pi_rules`** (`pi_rules.rs`, tests `levels_pi_rules.rs`) — the
+  **dependent** twin of the flagship, per fibre family `b` of arity `k+1`
+  (the `DProdN` stack):
+
+  ```text
+  ⊢ ∀q⃗ ∀u ∀v ∀A. (((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ ∀x.(x∈A → b(q⃗,x) ∈ srt(v))))
+                    → ite0(v, cndd(q⃗,A), dprod(q⃗,A)) ∈ srt(ite0(v, ∅, u ∪ v)))
+  ```
+
+  — §6's "dependent `dprod` form", now derived. Assembly, not new
+  mathematics: `ext::dprod_in_universe_pair_n` is already quantified over its
+  universe seed and instantiates at `c := app(lvl,q)` exactly where the
+  flagship instantiates `Tower::funspace`; the one new move is the fibres
+  conjunct raised pointwise under its binder (a fresh-witness `syl` chain
+  closed by `prim::gen`). The tests pin the shape at prefix length 2 with
+  distinct probes (prefix dropping *and* reordering both fail), compute both
+  branches to ground facts (`cndd(ω,∅) ∈ U₀`; `dprod(ω,∅) ∈ U(ω)`, the rung
+  pinned as the tower's `U₁`), and refuse a pair theorem for a foreign fibre
+  stack; two mutations were run red and reverted (recorded in the test
+  header).
 
 ## 4. The checker prototype, and what it costs
 
@@ -586,9 +606,13 @@ at this branch's head:
 * **Blocker 1 — the Π clause (step 3).** `no evidence: ty_pi_undet`
   12 → 2407; Π-under-neither-clause for a parameter reason 1588 → 6005. The
   undetermined clause is *rare under σ and structural without it*. The
-  mathematics for the `ite0` clause exists (`levels::rules`, the flagship)
-  for the constant-fibre/`fs` form; the dependent `dprod` form at a variable
-  rung is underived (§6), and master's `⟦Π⟧` is a `dprod` at every codomain.
+  mathematics for the `ite0` clause is now **complete**: `levels::rules` for
+  the constant-fibre/`fs` form and `levels::pi_rules` (§3) for the dependent
+  `dprod` form at a variable rung — the derivation the deletion was waiting
+  on, and it went through as assembly, with **no fundamental blocker**.
+  Master's `⟦Π⟧` is a `dprod` at every codomain, so the wiring consumes one
+  rule shape. The unbuilt half is that wiring: `interp_pi`'s Undet clause as
+  the `ite0` term, and `ty_pi` at Undet spending `pi_imax_dep`.
 * **Blocker 2 — ι and the nests at a symbolic eliminating universe.**
   **First slice built** (the ω-prefix, commit `b6d93fa`): `gen_ty_nest` and
   `gen_ctor_nest` thread the level variables free in their domains as
@@ -663,10 +687,12 @@ Named so nothing is hidden behind the verdict. As of this branch:
   checker seam (§3–§4), not shipped end to end. §5.3's steps 1–5 are the
   remaining volume, and every one of them is ordinary plumbing whose shape is
   known; none is blocked on mathematics.
-* **The dependent product at a variable rung** is stated here for the
-  non-dependent `fs` form; the dependent `dprod` form goes through
-  `Tower::family`'s per-fibre scheme the same way and is not derived on this
-  branch.
+* **The dependent product at a variable rung is derived** (`levels::pi_rules`,
+  §3) — via `dprod_in_universe_pair_n`'s `∀c` form at `c := app(lvl,q)`, not
+  via `Tower::family` as this bullet used to predict. What is *not* built is
+  its checker-side consumption: the interpretation of an Undet-`Π` as the
+  `ite0` term and the typing rule that spends `pi_imax_dep` (§5.4 blocker 1's
+  other half).
 * **The certified level-`leq` mirror (§1.5)** is designed, not built.
 * **The store schema for `∀u⃗∈ω` certificates** is built on the checker side
   (`Shared::declar_typings_poly`, §5.3 step-5 status) and pinned by fixture;
