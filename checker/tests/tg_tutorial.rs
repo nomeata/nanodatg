@@ -2466,6 +2466,15 @@ fn the_rec_nest_outcome_rows_partition_the_no_curried_row() {
 /// levels, which is not a level problem. This test pins the mechanism; §5.4
 /// carries the number.
 ///
+/// And it pins **which** half. All 483 are at *ground* levels — a use spelled
+/// `f.{0}`, not one spelled at another declaration's parameter variables. The
+/// stored `∀u⃗` instantiated at `∅` concludes about `srt(∅)` while the use's
+/// obligation, under the ground special case, is about a tower rung: provably
+/// equal, not identical. There is therefore no variable-to-variable population
+/// that could be closed by instantiation alone, ahead of unifying
+/// `interp_sort`. That measurement is what makes blocker 3 part of the
+/// switchover rather than a precondition of it.
+///
 /// `118_accRecReduction` is the discriminating negative — 19 store misses,
 /// none of them cross-level — without which a counter wired to fire on every
 /// miss would pass.
@@ -2490,6 +2499,7 @@ fn the_store_miss_that_a_level_construction_could_reach_is_counted_apart() {
     const HIT: &str = "uses answered from the store";
     const MISS: &str = "uses with no entry";
     const XLEVEL: &str = "…of them against a declaration stored at other levels";
+    const GROUND: &str = "…of those, at ground levels";
 
     // The control: the schedule answers the use.
     let sched = poly_report(&lp, "1", true);
@@ -2517,6 +2527,18 @@ fn the_store_miss_that_a_level_construction_could_reach_is_counted_apart() {
         rows_totalling(&staged, XLEVEL),
         1,
         "the miss must be attributed to the σ boundary, not to an absent entry:\n{staged}"
+    );
+    // And it is the *ground* half — the one that needs the vocabulary unified
+    // rather than merely the stored `∀u⃗` instantiated. On the staged prelude
+    // this row is 483 of 483: there is no variable-to-variable population to
+    // close ahead of the switchover, which is why blocker 3 is part of it and
+    // not a precondition of it (§5.5).
+    assert_eq!(
+        rows_totalling(&staged, GROUND),
+        1,
+        "if this drops below the cross-level row, a use at another declaration's parameter \
+         variables has appeared and blocker 3 has a separately closable half after all — \
+         which would be a finding, and §5.5 clause 1 would need re-taking:\n{staged}"
     );
 
     // The discriminating negative: misses that are *not* the boundary's.

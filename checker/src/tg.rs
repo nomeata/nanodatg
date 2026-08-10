@@ -3701,6 +3701,19 @@ static REC_MISSES: [std::sync::atomic::AtomicU64; N_RECMISS] =
 /// Record the reason one ι site found no curried nest. Called from exactly one
 /// place — [`TgBackend::derive_iota`]'s `rec_nest` arm — so the rows partition
 /// the gap row rather than merely accompanying it.
+/// Are these interpreted level arguments closed — no free variable anywhere?
+///
+/// A `Vec<Term>` with no free variables is a use at *numerals*: the levels were
+/// spelled `0`/`1`/`max 0 1` rather than with a parameter. See
+/// [`Dt::MissOtherLevelsGround`].
+fn ground_levels(levels: &[Term]) -> bool {
+    let mut fvs = Vec::new();
+    for l in levels {
+        l.free_vars(&mut fvs);
+    }
+    fvs.is_empty()
+}
+
 fn note_rec_miss(m: RecMiss) {
     REC_MISSES[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -10891,6 +10904,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     note_dt(Dt::Miss);
                     if self.stored_at_other_levels(&key) {
                         note_dt(Dt::MissOtherLevels);
+                        if ground_levels(&key.1) {
+                            note_dt(Dt::MissOtherLevelsGround);
+                        }
                     }
                     if self.shared.borrow().declined_cond.contains(&key) {
                         note_dt(Dt::MissCond);
@@ -16099,6 +16115,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             note_dt(Dt::Miss);
             if self.stored_at_other_levels(&key) {
                 note_dt(Dt::MissOtherLevels);
+                if ground_levels(&key.1) {
+                    note_dt(Dt::MissOtherLevelsGround);
+                }
             }
             if self.shared.borrow().declined_cond.contains(&key) {
                 note_dt(Dt::MissCond);
@@ -17671,6 +17690,15 @@ enum Dt {
     /// changes. The two are counted from the same lookup so
     /// `MissOtherLevels ≤ Miss` by construction.
     MissOtherLevels,
+    /// …and of *those*, the use's own levels are **ground** — no ω-variable in
+    /// them. This is the half that needs the vocabulary unified, not merely the
+    /// stored `∀u⃗` instantiated: a numeral's `⟦Sort ℓ⟧` is a tower rung under
+    /// the ground special case and `srt(ℓ̂)` under the quantified one, and the
+    /// two are provably equal but not identical. The complement — a use at
+    /// another declaration's *parameter variables* — needs no vocabulary
+    /// switch at all, only the instantiation. The split is what decides whether
+    /// blocker 3 is reachable before the switchover or only at it.
+    MissOtherLevelsGround,
     /// …and the entry is missing *because the typing was conditional* — the
     /// declaration was translated and the translation was thrown away
     /// ([`Dt::Conditional`]). Split out from [`Dt::Miss`] because the two say
@@ -17718,7 +17746,7 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 24;
+const N_DT: usize = 25;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -17740,6 +17768,7 @@ impl Dt {
             Dt::PolyHit => "uses answered from the quantified store, conditionally",
             Dt::Miss => "uses with no entry (or at other levels)",
             Dt::MissOtherLevels => "…of them against a declaration stored at other levels",
+            Dt::MissOtherLevelsGround => "…of those, at ground levels (needs the vocabulary unified)",
             Dt::MissCond => "…of them against a typing that was derived and discarded",
             Dt::Wrong => "uses whose target is not the declared type",
             Dt::Poly => "stored entries that are level-polymorphic",
@@ -17767,6 +17796,7 @@ impl Dt {
         Dt::PolyHit,
         Dt::Miss,
         Dt::MissOtherLevels,
+        Dt::MissOtherLevelsGround,
         Dt::MissCond,
         Dt::Wrong,
         Dt::Poly,
