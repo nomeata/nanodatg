@@ -1023,6 +1023,62 @@ carry *value* premises (87 a family of families, 30 a membership), never a
 level one. The store's input population is empty for a reason upstream of
 levels; §5.4 blocker 2c has the rates.
 
+**Step-5 status (2026-08-10, mini side): specified, not built — and it is the
+whole of what remains.** After the `Π` clause, `const_evidence` at a parametric
+level is **109 of the 128 residual `Gap::SymbolicLevel`**, and it is the only
+thing standing between the de-scheduled route and a per-file verdict: the
+per-declaration counters moved a long way with the `Π` clause and the exit
+distribution did not move at all (18/71/2), because every unclean export
+contains a constant reference.
+
+*Keyed by name at the generic point, not by the level vector.* The obvious
+design — widen the lookup to `ground::key_levels(ls)` and let the existing
+`ConstKey` carry parametric levels — **does not work, and the checker has
+already paid for finding out.** `key_levels` canonicalises by `simplify()` but
+does not rename parameters positionally, so `(d1,[param u])` and
+`(d1,[param v])` are different keys and a use under a different parameter name
+misses; the checker's own step-5 fixture pins exactly that miss. Mini's half
+therefore keys the poly store by `Name` alone and holds
+
+```text
+f̂  of arity k = |lparams|,   ⟦c.{ℓ⃗}⟧ = f̂(ℓ̂₁,…,ℓ̂ₖ)
+⊢ ∀u⃗. (u₁∈ω → … → uₖ∈ω → f̂(u⃗) ∈ T̂(u⃗))
+```
+
+A use at `c.{ℓ⃗}` instantiates the `∀` at `ℓ̂⃗` and discharges each antecedent
+with `Interp::level_in_omega`. The parameter *name* never enters the key, so
+the checker's hole is sidestepped rather than inherited.
+
+*Three obstacles found in reconnaissance, recorded so they are not rediscovered:*
+
+1. **`Thm::gen` is banned in `mini/src`** (R6′ I3, `ci/check-mini-scope.sh`),
+   and `derived::gen_all` is equally exposed to the side condition — the
+   script's own header says so, and names three past sites that got it wrong.
+   The route is `rec_dep::gen_all_checked`, which refuses to bind a variable
+   free in a live hypothesis. It is safe here *only after* the discharge, which
+   fixes the order below.
+2. **The order is: retarget, batch-discharge, then generalise.** The constant's
+   typing must be built while the `uᵢ ∈ ω` are still open, so it has to join
+   `⟦ty⟧`'s and `⟦val⟧`'s conclusions in the **same**
+   `Checker::discharge_levels` batch — which is the third conclusion that
+   function's slice form was widened for. Generalising happens after, on the
+   closed theorem, where `gen_all_checked` can succeed.
+3. **`LevelVar` records the variable's *term*, not its `FreeVar`**, and both
+   `define_abbrev` and `gen_all_checked` need the variable. `kernel::Term`
+   exposes no `as_var`, so `LevelVar` gains the `FreeVar` beside the term —
+   `Checker::poly` already has it at the mint and simply drops it today.
+
+*And one thing to measure rather than assume.* `T̂(ℓ̂⃗)` is the stored type
+interpretation with `ℓ̂` substituted, while a fresh `⟦T[ℓ⃗/u⃗]⟧` interprets the
+*already-substituted* level. These agree when `level_term` commutes with Lean's
+level substitution, and Lean's substitution **normalises** (`imax u 0` at
+`u:=1` becomes `1`, where the term side is `ite0(0̄,∅,1̄∪0̄)` — provably equal,
+not syntactically). So a *ground* use of a poly constant needs the §1.2 bridge,
+exactly as step 5's own text says ("ground demands become `ax_inst`s … plus the
+bridge equations"). Build the clean case, compare the conclusion rather than
+trusting it, and report the residue — the discipline that has now worked twice
+on this branch.
+
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 
 `NANODATG_NO_SCHEDULE=1` (the staging switch in `check_declar_all`,
