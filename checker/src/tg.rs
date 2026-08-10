@@ -1472,10 +1472,28 @@ struct UndetPolySite {
     guard: Term,
 }
 
-/// The per-skeleton dependent-`Π` kit at a variable level: the checker-side
-/// [`derived::levels::pi_rules::PiRules`] plus the `dprod` symbol it is about
-/// (the **same** symbol the `Type` clause uses for this skeleton, so the
-/// `ite0` term's nonzero branch *is* the decided clause's term).
+/// The **interpretation half** of a wired Undet-`Π` skeleton: the two clause
+/// symbols the `ite0` term is built from. Cheap — one conditional singleton
+/// over the skeleton's fibre — where [`PiPolyKit`] is a dozen derivations,
+/// which is why the two are split: every Undet skeleton reached by `interp`
+/// pays for this, and only the skeletons a typing obligation actually lands
+/// on pay for the kit (measured: building the kit at interp time took the
+/// staged prelude from minutes to unfinished).
+struct PiPolySyms {
+    /// The Prop-clause conditional singleton `cndd(h⃗,A)` over the `PiInfo`
+    /// fibre, and its characteristic theorem — handed to
+    /// [`derived::levels::pi_rules::pi_rules`], which validates the pair by
+    /// probe before deriving rules about it.
+    cndd: FnSym,
+    cndd_ax: Thm,
+    /// The shared dependent-product head for this skeleton ([`PiInfo::dprod`]).
+    dprod: FnSym,
+}
+
+/// The per-skeleton dependent-`Π` **rule kit** at a variable level:
+/// [`derived::levels::pi_rules::PiRules`] over the same symbols
+/// [`PiPolySyms`] interprets with. Derived lazily, at the first typing
+/// obligation that lands on the skeleton.
 struct PiPolyKit {
     /// The shared dependent-product head for this skeleton ([`PiInfo::dprod`]).
     dprod: FnSym,
@@ -2355,10 +2373,13 @@ struct Shared {
     /// interpretation, not a step in it. Holding it here is what lets
     /// [`global_report`] say whether this run has it.
     false_anchor: Option<Sealed>,
-    /// The per-skeleton dependent-`Π` kit at a variable level (`LEVELPOLY.md`
-    /// §5.4 blocker 1), keyed like [`Shared::pi_infos`] and populated only
-    /// under `NANODATG_LEVELPOLY=1`. `None` memoises a refusal, per the
-    /// store discipline everywhere here.
+    /// The interpretation half of each wired Undet-`Π` skeleton
+    /// (`LEVELPOLY.md` §5.4 blocker 1), keyed like [`Shared::pi_infos`] and
+    /// populated only under `NANODATG_LEVELPOLY=1`. `None` memoises a
+    /// refusal, per the store discipline everywhere here.
+    pi_poly_syms: HashMap<Term, Option<Rc<PiPolySyms>>>,
+    /// The rule half, built lazily at the first typing obligation on the
+    /// skeleton — see [`PiPolySyms`] for why the two are split.
     pi_poly: HashMap<Term, Option<Rc<PiPolyKit>>>,
     /// The level-quantification apparatus (`LEVELPOLY.md`), built over the
     /// prelude's tower when `NANODATG_LEVELPOLY=1` and `None` otherwise.
@@ -2486,6 +2507,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             declar_typings_poly: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
+            pi_poly_syms: HashMap::new(),
             pi_poly: HashMap::new(),
             lp,
         }));
@@ -4642,16 +4664,56 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(info)
     }
 
-    /// The per-skeleton dependent-`Π` kit at a variable level, derived once
-    /// per thread and shared ([`Shared::pi_poly`]).
+    /// The interpretation half of a wired Undet-`Π` skeleton, built (or
+    /// recalled) per thread — see [`PiPolySyms`].
+    fn pi_poly_syms(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolySyms>> {
+        if let Some(s) = self.shared.borrow().pi_poly_syms.get(sk) {
+            return s.clone()
+        }
+        let built = self.pi_poly_syms_build(sk, holes_len);
+        self.shared.borrow_mut().pi_poly_syms.insert(sk.clone(), built.clone());
+        built
+    }
+
+    /// The uncached body of [`Self::pi_poly_syms`]: the skeleton's `PiInfo`
+    /// (shared with the `Type` clause), plus one conditional singleton over
+    /// its fibre — [`derived::levels::pi_rules::pi_body_dep`]'s formula, the
+    /// same one the rule kit is later validated against.
+    fn pi_poly_syms_build(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolySyms>> {
+        let pre = self.pre.clone();
+        let info = self.pi_info_or_build(sk, holes_len)?;
+        let fb = info.fibre.as_ref()?;
+        let (b, dprod) = (fb.b, info.dprod);
+        let mut env = self.env_mut();
+        let qs: Vec<FreeVar> = (0..holes_len).map(|_| env.fresh_var()).collect();
+        let av = env.fresh_var();
+        let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
+        let phi = derived::levels::pi_rules::pi_body_dep(
+            &mut env,
+            &pre.tower.sums,
+            b,
+            &qts,
+            &Term::var(av),
+        );
+        let mut params = qs;
+        params.push(av);
+        let (cndd, cndd_ax) =
+            derived::prop::conditional_singleton(&mut env, &pre.tower.sums, &params, &phi)?;
+        Some(Rc::new(PiPolySyms { cndd, cndd_ax, dprod }))
+    }
+
+    /// The per-skeleton dependent-`Π` rule kit at a variable level, derived
+    /// **lazily** — at the first typing obligation that lands on the
+    /// skeleton — and shared per thread ([`Shared::pi_poly`]).
     ///
     /// The chain is `LEVELPOLY.md` §5.4 blocker 1's, end to end: the
     /// skeleton's own fibre stack adapted into a [`derived::ext::DProdN`]
     /// (`dprod_members_n` + `dprod_subset_funspace_n` over the already-built
     /// symbols), Replacement for its image, `dprod_in_universe_pair_n`, and
-    /// [`derived::levels::pi_rules::pi_rules`] on top. Every step validates
-    /// its inputs by probe, so a stack that does not fit together memoises a
-    /// refusal rather than describing the wrong terms.
+    /// [`derived::levels::pi_rules::pi_rules`] on top — handed the
+    /// interpretation's own `cndd` pair, which it validates by probe. Every
+    /// step validates its inputs, so a stack that does not fit together
+    /// memoises a refusal rather than describing the wrong terms.
     fn pi_poly_kit(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolyKit>> {
         if let Some(k) = self.shared.borrow().pi_poly.get(sk) {
             return k.clone()
@@ -4665,6 +4727,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn pi_poly_kit_build(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolyKit>> {
         let lp = self.lp()?;
         let pre = self.pre.clone();
+        let syms = self.pi_poly_syms(sk, holes_len)?;
         let info = self.pi_info_or_build(sk, holes_len)?;
         let fb = info.fibre.as_ref()?;
         let (b, img, img_ax, dprod, dprod_def) =
@@ -4714,7 +4777,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let pair =
             derived::ext::dprod_in_universe_pair_n(&mut env, &pre.ap, &fibre, &uparts, &general)?;
         let rules = derived::levels::pi_rules::pi_rules(
-            &mut env, &lp.r, &lp.i, &lp.ord, &lp.ut, &lp.s, &lp.ru, tower, &dp, &pair,
+            &mut env,
+            &lp.r,
+            &lp.i,
+            &lp.ord,
+            &lp.ut,
+            &lp.s,
+            &lp.ru,
+            tower,
+            &dp,
+            &pair,
+            syms.cndd,
+            &syms.cndd_ax,
         )?;
         Some(Rc::new(PiPolyKit { dprod, rules }))
     }
@@ -4755,11 +4829,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // (`imax u u` under a `succ`), and a disagreement is a counted miss.
         let l = self.undet_body_level(ctx, body)?;
         let guard = self.omega_term(ctx, l, &lp);
-        let kit = self.pi_poly_kit(sk, holes.len())?;
+        let syms = self.pi_poly_syms(sk, holes.len())?;
         let mut args: Vec<Term> = holes.to_vec();
         args.push(dom.clone());
-        let cndd_t = self.mk(kit.rules.cndd, args.clone());
-        let dprod_t = self.mk(kit.dprod, args);
+        let cndd_t = self.mk(syms.cndd, args.clone());
+        let dprod_t = self.mk(syms.dprod, args);
         let term = self.mk(lp.i.sym, vec![guard.clone(), cndd_t, dprod_t]);
         self.undet_poly_sites.insert(
             e,
@@ -14439,7 +14513,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     return Err("pi congruence: two wired Πs at different guard levels")
                 }
                 let kit = self
-                    .pi_poly_kit(&sa.key, sa.holes.len())
+                    .pi_poly_syms(&sa.key, sa.holes.len())
                     .ok_or("pi congruence: the wired Π's kit is gone")?;
                 let n = sa.holes.len();
                 let mut prems = Vec::with_capacity(n + 1);
@@ -14456,7 +14530,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     prems.push(p);
                 }
                 let cndd_eq = self
-                    .ceq_congr(kit.rules.cndd, &prems)
+                    .ceq_congr(kit.cndd, &prems)
                     .ok_or("pi congruence: congruence rule refused")?;
                 let dprod_eq = self
                     .ceq_congr(kit.dprod, &prems)

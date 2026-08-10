@@ -123,6 +123,17 @@ struct Cx<'a> {
 /// consumed), `dp` a [`DProdN`] over `tower`'s own `Apply`/`Funspace`, and
 /// `pair` the [`crate::ext::dprod_in_universe_pair_n`] theorem for exactly
 /// that stack. Returns `None` on any mismatch.
+///
+/// `cndd`/`cndd_ax` are the Prop-clause conditional singleton and its
+/// characteristic theorem, **handed in rather than minted**: a consumer that
+/// interprets terms with `cndd` before deriving rules about it (the checker's
+/// lazy split — the symbol is cheap, this derivation is not) must be talking
+/// about the same symbol, so whoever owns the interpretation builds it
+/// ([`conditional_singleton`] at [`pi_body_dep`]'s formula) and this
+/// constructor **validates it by probe**: `cndd_ax` is instantiated at fresh
+/// variables and compared against the biconditional rebuilt from `dp.b` and
+/// the caller's `Sums`. A pair over a different fibre, unit or point is
+/// refused. [`pi_rules_minting`] keeps the old self-contained entry.
 #[allow(clippy::too_many_arguments)] // the whole chain, as `recarg` and `cantor::image` take it
 pub fn pi_rules(
     env: &mut Env,
@@ -135,6 +146,8 @@ pub fn pi_rules(
     tower: &Tower,
     dp: &DProdN,
     pair: &Thm,
+    cndd: FnSym,
+    cndd_ax: &Thm,
 ) -> Option<PiRules> {
     // The cheap identity guards, as in `rules`; anything subtler fails a
     // composition below or the probe check.
@@ -188,7 +201,52 @@ pub fn pi_rules(
 
     let cx = Cx { r, i, ord, ut, s, tower, dp };
 
-    // The Prop-clause symbol: one conditional singleton over params [q⃗, A].
+    // `cndd_ax` validated by probe: `⊢ ∀q⃗ ∀A ∀z. (z ∈ cndd(q⃗,A) ↔
+    // (z ∈ 1 ∧ φ(q⃗,A)))`, rebuilt at fresh variables and compared.
+    if cndd.arity() as usize != dp.k + 1 {
+        return None
+    }
+    {
+        let qs: Vec<_> = (0..dp.k).map(|_| env.fresh_var()).collect();
+        let (av, zv) = (env.fresh_var(), env.fresh_var());
+        let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
+        let (ta, tz) = (Term::var(av), Term::var(zv));
+        let phi = pi_body_dep(env, &tower.sums, dp.b, &qts, &ta);
+        let mut cargs = qts.clone();
+        cargs.push(ta);
+        let cndd_at = Term::apply(cndd, cargs.clone());
+        let want = Formula::iff(
+            Formula::mem(tz.clone(), cndd_at),
+            Formula::and(Formula::mem(tz, tower.sums.unit()), phi),
+        );
+        let mut iargs = cargs;
+        iargs.push(Term::var(zv));
+        if *inst_all(cndd_ax, &iargs)?.concl() != want {
+            return None
+        }
+    }
+
+    let pi_imax_dep = pi_imax_dep(env, &cx, &ru.mono_sub, cndd, cndd_ax, pair)?;
+
+    Some(PiRules { cndd, cndd_ax: cndd_ax.clone(), pi_imax_dep })
+}
+
+/// [`pi_rules`] with the Prop-clause singleton minted here — the original,
+/// self-contained entry, kept for consumers (and tests) that do not interpret
+/// terms ahead of the derivation.
+#[allow(clippy::too_many_arguments)]
+pub fn pi_rules_minting(
+    env: &mut Env,
+    r: &Rec,
+    i: &Ite0,
+    ord: &Order,
+    ut: &UTower,
+    s: &Srt,
+    ru: &Rules,
+    tower: &Tower,
+    dp: &DProdN,
+    pair: &Thm,
+) -> Option<PiRules> {
     let qs: Vec<_> = (0..dp.k).map(|_| env.fresh_var()).collect();
     let av = env.fresh_var();
     let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
@@ -196,16 +254,17 @@ pub fn pi_rules(
     let mut params = qs;
     params.push(av);
     let (cndd, cndd_ax) = conditional_singleton(env, &tower.sums, &params, &phi)?;
-
-    let pi_imax_dep = pi_imax_dep(env, &cx, &ru.mono_sub, cndd, &cndd_ax, pair)?;
-
-    Some(PiRules { cndd, cndd_ax, pi_imax_dep })
+    pi_rules(env, r, i, ord, ut, s, ru, tower, dp, pair, cndd, &cndd_ax)
 }
 
 /// The Prop-clause dependent-Π body `φ(q⃗,A) := ∀x. (x ∈ A → • ∈ b(q⃗,x))`,
 /// with `•` the point `∅` — the uniform-typing reading of `∀x:α. β x` at
 /// sort 0 (`LEVELPOLY.md` §1.4).
-fn pi_body_dep(env: &mut Env, sums: &Sums, b: FnSym, qts: &[Term], a: &Term) -> Formula {
+///
+/// Public because the [`pi_rules`] caller that owns the interpretation mints
+/// `cndd` itself ([`conditional_singleton`] at exactly this formula) and the
+/// two must agree; [`pi_rules`] then validates the pair by probe.
+pub fn pi_body_dep(env: &mut Env, sums: &Sums, b: FnSym, qts: &[Term], a: &Term) -> Formula {
     let x = env.fresh_var();
     let mut args = qts.to_vec();
     args.push(Term::var(x));

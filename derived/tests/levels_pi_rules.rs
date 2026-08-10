@@ -30,7 +30,7 @@ use derived::ext::{
 };
 use derived::levels::ite0::{ite0, Ite0};
 use derived::levels::order::{order, Order};
-use derived::levels::pi_rules::{pi_rules, PiRules};
+use derived::levels::pi_rules::{pi_rules_minting, PiRules};
 use derived::levels::rules::rules;
 use derived::levels::srt::{srt, Srt};
 use derived::levels::utower::{utower, UTower};
@@ -49,6 +49,7 @@ struct Setup {
     o: Order,
     dp: DProdN,
     pr: PiRules,
+    pair: Thm,
 }
 
 fn setup(env: &mut Env, fibre_arity: u32) -> Setup {
@@ -86,8 +87,8 @@ fn setup(env: &mut Env, fibre_arity: u32) -> Setup {
     let pair = dprod_in_universe_pair_n(env, &t.sums.ap, &dp.fibre(&replacement), &u, &general)
         .expect("dprod_in_universe_pair_n");
 
-    let pr = pi_rules(env, &r, &i, &o, &ut, &s, &ru, &t, &dp, &pair).expect("pi_rules");
-    Setup { t, r, i, ut, s, o, dp, pr }
+    let pr = pi_rules_minting(env, &r, &i, &o, &ut, &s, &ru, &t, &dp, &pair).expect("pi_rules");
+    Setup { t, r, i, ut, s, o, dp, pr, pair }
 }
 
 /// `x ∈ a` and `a = b` give `x ∈ b`.
@@ -499,7 +500,66 @@ fn a_foreign_pair_theorem_is_refused() {
     let o2 = order(&mut env, &r).expect("order");
     let ru2 = rules(&mut env, &r, &i2, &o2, &ut2, &s2, &se.t).expect("rules");
     assert!(
-        pi_rules(&mut env, &r, &i2, &o2, &ut2, &s2, &ru2, &se.t, &se.dp, &pair2).is_none(),
+        pi_rules_minting(&mut env, &r, &i2, &o2, &ut2, &s2, &ru2, &se.t, &se.dp, &pair2).is_none(),
         "a pair theorem for another fibre stack must be refused"
+    );
+}
+
+/// **A `cndd` pair over a foreign fibre is refused by the probe.** The lazy
+/// consumer hands `pi_rules` the singleton it already interpreted terms with;
+/// this is what stops a mismatched pair — a perfectly good conditional
+/// singleton, about the *other* fibre — from being described as this stack's
+/// Prop clause. Two fibres are the atoms: the probe compares `φ` built from
+/// `dp.b`, and with one fibre in the environment there is nothing unequal to
+/// hand it.
+#[test]
+fn a_foreign_cndd_pair_is_refused() {
+    use derived::levels::pi_rules::{pi_body_dep, pi_rules};
+    let mut env = Env::new();
+    let se = setup(&mut env, 2);
+
+    // A second fibre of the same arity, and an honest singleton over it.
+    let b2 = env.declare(2);
+    let q = env.fresh_var();
+    let a = env.fresh_var();
+    let phi2 = pi_body_dep(&mut env, &se.t.sums, b2, &[Term::var(q)], &Term::var(a));
+    let (cndd2, cndd2_ax) =
+        derived::prop::conditional_singleton(&mut env, &se.t.sums, &[q, a], &phi2)
+            .expect("conditional_singleton");
+
+    // The chain, rebuilt as in the sibling foreign-pair test.
+    let lu = se.t.space.lu;
+    let lu_ax = se.t.space.lu_ax.clone();
+    let (pow, pow_ax) = (se.t.space.pow, se.t.space.pow_ax.clone());
+    let ap = se.t.sums.ap.clone();
+    let peano = se.t.peano.clone();
+    let app_of_graph = app_of_graph(&mut env, &ap).expect("app_of_graph");
+    let r = Rec { ap, peano, app_of_graph };
+    let i2 = ite0(&mut env, &r.ap).expect("ite0");
+    let ut2 = utower(&mut env, &r, lu, &lu_ax, pow, &pow_ax).expect("utower");
+    let s2 = srt(&mut env, &r, &i2, &ut2, &se.t).expect("srt");
+    let o2 = order(&mut env, &r).expect("order");
+    let ru2 = rules(&mut env, &r, &i2, &o2, &ut2, &s2, &se.t).expect("rules");
+    assert!(
+        pi_rules(
+            &mut env, &r, &i2, &o2, &ut2, &s2, &ru2, &se.t, &se.dp, &se.pair, cndd2, &cndd2_ax
+        )
+        .is_none(),
+        "a cndd pair over another fibre must be refused by the probe"
+    );
+    // …and the same pair over the right fibre goes through, so the refusal
+    // above is the probe and not some incidental mismatch.
+    let q3 = env.fresh_var();
+    let a3 = env.fresh_var();
+    let phi3 = pi_body_dep(&mut env, &se.t.sums, se.dp.b, &[Term::var(q3)], &Term::var(a3));
+    let (cndd3, cndd3_ax) =
+        derived::prop::conditional_singleton(&mut env, &se.t.sums, &[q3, a3], &phi3)
+            .expect("conditional_singleton");
+    assert!(
+        pi_rules(
+            &mut env, &r, &i2, &o2, &ut2, &s2, &ru2, &se.t, &se.dp, &se.pair, cndd3, &cndd3_ax
+        )
+        .is_some(),
+        "the same pair over this fibre must be accepted"
     );
 }
