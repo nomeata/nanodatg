@@ -6882,3 +6882,118 @@ curried spine `app(⟦T⟧, p⃗)`, and `has_type` reaches that only through
 but about why the target-beta clause does not contract these 1 376 — which is a
 question about `target_head_step` and its own domain premise, not about the
 constructor rule.
+
+### The head reduction that never reached its delta branch — escapes 2 247 → 2 232 — 2026-08-10
+
+*The edge the refutation above localised, measured at the clause and then
+closed. **The first fall of the escape ratchet this stage**, after seven routes
+that could only trade it away.*
+
+The entry above ended by naming a question rather than a route: the general
+inductive's constructor rule states its premises at the curried spine
+`app(⟦T⟧, p⃗)`, `has_type` reaches that only through `has_type_target_beta`, and
+that clause was not firing on the 1 376. So: why not.
+
+#### Measured at the clause, in the shape that worked at the rule
+
+A decline census over every exit of `target_head_step`, all rows printed
+including the ones expected to be zero. 97 307 invocations, recursive calls
+included (`CurriedOk`/`CurriedHeadMiss` are the rows to subtract if a count of
+obligations served is wanted — said in the doc, because a census with an
+ambiguous denominator is the thing it exists to avoid):
+
+| one head reduction of a type | |
+|---|---:|
+| the target is not a set application — never this clause's business | 67 869 |
+| contracted a redex / reduced a curried head / unfolded a defined head | 6 870 / 1 081 / 1 854 |
+| **beta's own premise `x ∈ A` not settled** | 6 004 |
+| the curried head's own reduction declined | 2 810 |
+| **the head's shape is not recorded** | 4 955 |
+| **the target's shape is not recorded** | 5 195 |
+| the head is opaque | 669 |
+| no graph / did not assemble / wrong target | 0 / 0 / 0 |
+
+The two "not recorded" rows together are **larger than the domain-premise row**,
+which is not what a reduction-cost story predicts. Splitting them by whether the
+*term* is an application, when the table says it is not:
+
+| | |
+|---|---:|
+| head unrecorded, and not an application either | 2 032 |
+| **head IS an application; the table was not told** | **2 923** |
+| target unrecorded, and not an application either | 4 945 |
+| **target IS an application; the table was not told** | **250** |
+
+**3 173 declines caused by the side table rather than by the term.** And on the
+1 376 themselves, asked both ways:
+
+| of the 1 376, could target-beta start | via `parts` | via the term |
+|---|---:|---:|
+| head is a λ graph | 0 | 0 |
+| head is curried | 394 | 394 |
+| head is a defined constant | **0** | **982** |
+| head shape unknown | **982** | **0** |
+
+All 982 flip. `TgBackend::parts`' own header already said this would happen —
+the table is "redundant, and retained only because retiring it moves this
+backend's frontier counters", and its misses are "the silent kind: a term the
+kernel itself built read back as structureless".
+
+#### The defect, and the one-line shape of the fix
+
+`target_head_step` looked the head's shape up in `parts` and returned `None`
+when it was absent — **before considering any of its three branches**. Two of
+those branches read the shape. The third does not: `app(c, x)` for a defined
+constant unfolds `c` out of `abbrev_defs`, and never touches `hsym`/`hargs`. So
+the clause was refusing a delta step it could perform, on terms it had every
+means to reduce.
+
+The lookup is now optional and gates only the two branches that use it. Nothing
+else changed: no new rule, no new obligation, `parts` still in place, the
+existing `l != *ty || r != ty2` check still deciding what comes out.
+
+#### What it bought
+
+| | before | after |
+| --- | ---: | ---: |
+| **escapes** | **2 247** | **2 232** |
+| gaps | 15 761 | 15 734 |
+| **derived (real kernel `Thm`)** | 159 791 | **159 803** |
+| obligations asked | 40 060 | **40 060** |
+| raw hoists, never checked | 16 502 | 16 233 |
+| unsettled ctor premises about a local | 1 376 | 798 |
+| instructions | — | +0.67 % |
+
+**Obligations asked did not move.** That is the whole difference between this
+and the seven refuted routes, every one of which paid for its answers with new
+obligations that escaped: this one contracts redexes that were already there, so
+the debt is discharged where a binder can see it rather than manufactured
+elsewhere. Every row of the gap ledger moved down or stayed — `trans over an
+admitted premise` −4, `symm` −4, `proj_reduce` −2, `beta: the lambda has no
+function-graph interpretation` −2 — and **nothing that was derived before is
+admitted now**. +0.67 % instructions, against +0.47 % for the one other shipped
+route and +5.7 % for the rejected inner binders.
+
+#### The ratchets
+
+Both are **tightened**, not bought: gaps 15 761 → 15 734 and escapes 2 257 →
+2 232. A ratchet that only ever loosens has stopped measuring, and this is the
+first chance this stage has had to move one in the right direction.
+
+One reach ratchet is **re-based with a written trade**:
+`projection_reduction_is_a_rule_fed_by_inference` asserts that at least 11
+projection reductions reach the threaded derivation, and 9 now do. Two
+reductions *lost* and two *not attempted* read identically in that row, so the
+distinction is checked rather than assumed — `gap: proj_reduce` fell 661 → 659
+in lockstep, the three search rows are unmoved at 34/41/0, and no ledger row
+rose. It is the population, not the rate, exactly as that test's own 630 → 661
+move was. The trade is at the assertion as well as here.
+
+#### Still uncounted
+
+The **3 213 `ConstMatches`** half of the 4 119 remains unmeasured: the census
+covers the constructor rule, and a constant application has no conditional rule
+to decompose. It is also now the *older* question — the 2 923 + 250
+table-caused declines outside the constructor population are closed by this
+change wherever the delta branch serves them, and what remains of them is
+`ThStep`'s business rather than `CtorReach`'s.

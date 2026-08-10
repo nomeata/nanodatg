@@ -8890,6 +8890,39 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///   first — this is the curried case, `⟦C α xs⟧`, and it is the common one;
     /// * `app(c, x)` for a defined constant `c` unfolds `c`.
     ///
+    /// # The head's shape is a precondition of two branches, not of three
+    ///
+    /// *The escape ratchet's first fall of this stage, 2026-08-10. Task #126.*
+    ///
+    /// This used to read the head's applicative shape out of [`Self::parts`] and
+    /// **return `None` when the table had none** — before considering any
+    /// branch. But the third branch wants `abbrev_defs.get(&head)` and nothing
+    /// else: a defined constant in head position needs a defining equation, not
+    /// a decomposition. So a target whose head this backend never passed through
+    /// [`record`] was refused a delta step it could perform, and `parts`' own
+    /// header names that failure mode — "a term the kernel itself built read
+    /// back as structureless". The lookup is now optional and only the two
+    /// branches that read `hsym`/`hargs` are gated on it.
+    ///
+    /// **Measured before it was changed.** Of the 1 376 constructor premises
+    /// about a context local that `LocalPrem` had just shown to be unservable by
+    /// decomposition, the shape table said 0 could reach a λ graph, 394 a
+    /// curried spine and **982 nothing at all**; reading the same shapes off the
+    /// terms said the 982 are *defined constants with equations*. Across the
+    /// whole run the table, not the term, was the sole cause of **3 173**
+    /// declines.
+    ///
+    /// Effect on `init-prelude`: escapes **2 247 → 2 232**, gaps 15 761 →
+    /// 15 734, **12 more real kernel theorems**, and no row of the gap ledger
+    /// rose. Obligations asked stayed at **40 060** — the change contracts
+    /// redexes rather than manufacturing obligations, which is what separates it
+    /// from the seven routes that shrank a residue by outrunning it. +0.67 %
+    /// instructions. Two projection redexes stop being *reached*, which re-bases
+    /// one reach ratchet in `tg_tutorial.rs`; the trade is written there.
+    ///
+    /// Falling through costs nothing where the head has no equation either — the
+    /// branch declines, and `ThStep::HeadOpaque` absorbs it (669 → 4 765).
+    ///
     /// The congruence in the last two is [`u_congr_arg`] at the function slot,
     /// so the equation stays about the term it started from.
     fn target_head_step(
@@ -8900,62 +8933,170 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         depth: u32,
     ) -> Option<(Thm, Term, Vec<Formula>)> {
         let app = self.pre.ap.app;
-        let (f, args) = self.parts.get(ty).cloned()?;
+        let Some((f, args)) = self.parts.get(ty).cloned() else {
+            // Was the table merely not told? `Term::as_app` reads the same pair
+            // off the term, and the gap between these two rows is what
+            // [`TgBackend::parts`]' header means by a miss of "the silent kind".
+            note_ths(if ty.as_app().is_some_and(|(g, a)| g == app && a.len() == 2) {
+                ThStep::TargetUnrecordedIsApp
+            } else {
+                ThStep::TargetUnrecorded
+            });
+            return None
+        };
         if f != app || args.len() != 2 {
+            note_ths(ThStep::TargetNotApp);
             return None
         }
         let (head, x) = (args[0].clone(), args[1].clone());
-        let (hsym, hargs) = self.parts.get(&head).cloned()?;
+        let hshape = self.parts.get(&head).cloned();
+        if hshape.is_none() {
+            note_ths(if head.as_app().is_some() {
+                ThStep::HeadUnrecordedIsApp
+            } else {
+                ThStep::HeadUnrecorded
+            });
+            // **The head's shape is only needed by two of the three branches.**
+            // The delta branch below wants `abbrev_defs.get(&head)` and nothing
+            // else, so bailing here refused a reduction the clause can perform
+            // on a term the *table* had not seen — `parts`' own header calls
+            // that miss "the silent kind". Falling through costs nothing when
+            // the head has no defining equation either: the branch declines,
+            // and the `head is opaque` row absorbs it.
+        }
+        let (hsym, hargs) = hshape.clone().unwrap_or((app, Vec::new()));
 
         // ── The head is a lambda graph: beta ─────────────────────────────────
-        let lam = self.core.lams().borrow().by_lam(hsym).map(|(k, s)| (k.clone(), s.clone()));
+        let lam = hshape
+            .is_some()
+            .then(|| self.core.lams().borrow().by_lam(hsym).map(|(k, s)| (k.clone(), s.clone())))
+            .flatten();
         if let Some((key, info)) = lam {
-            let (holes, dom) = hargs.split_last().map(|(d, h)| (h.to_vec(), d.clone()))?;
-            let t_def = info.graph.as_ref()?.t_def.clone();
+            let Some((holes, dom)) = hargs.split_last().map(|(d, h)| (h.to_vec(), d.clone())) else {
+                note_ths(ThStep::LamNoGraph);
+                return None
+            };
+            let Some(graph) = info.graph.as_ref() else {
+                note_ths(ThStep::LamNoGraph);
+                return None
+            };
+            let t_def = graph.t_def.clone();
             note_tb(TbMiss::Reached);
             // Beta's domain premise, derived or acquired — never assumed.
             let Some((mem, used)) = self.target_mem(ctx, &x, &dom, assms, depth) else {
                 note_tb(TbMiss::Domain);
+                note_ths(ThStep::LamDomain);
                 return None
             };
-            let beta = self.beta_thm(&key)?;
-            let mut inst = holes.clone();
-            inst.push(dom);
-            inst.push(x.clone());
-            let cond = derived::inst_all(&beta, &inst)?;
-            let hyp = conj_of(&used);
-            let eq0 = u_mp(&u_a1i(&cond, hyp.as_ref()), &mem, hyp.as_ref())?;
-            // `t(h⃗,x)` unfolded to the body skeleton with `x` plugged in.
-            let mut tinst = holes;
-            tinst.push(x);
-            let unfold = derived::inst_all(&t_def, &tinst)?;
-            let eq = u_eq_trans(&mut self.env_mut(), &eq0, &u_a1i(&unfold, hyp.as_ref()), hyp.as_ref())?;
+            let step = (|| {
+                let beta = self.beta_thm(&key)?;
+                let mut inst = holes.clone();
+                inst.push(dom.clone());
+                inst.push(x.clone());
+                let cond = derived::inst_all(&beta, &inst)?;
+                let hyp = conj_of(&used);
+                let eq0 = u_mp(&u_a1i(&cond, hyp.as_ref()), &mem, hyp.as_ref())?;
+                // `t(h⃗,x)` unfolded to the body skeleton with `x` plugged in.
+                let mut tinst = holes.clone();
+                tinst.push(x.clone());
+                let unfold = derived::inst_all(&t_def, &tinst)?;
+                u_eq_trans(&mut self.env_mut(), &eq0, &u_a1i(&unfold, hyp.as_ref()), hyp.as_ref())
+            })();
+            let Some(eq) = step else {
+                note_ths(ThStep::LamAssemble);
+                return None
+            };
             // The equation has to be about `ty` itself, not about whatever the
             // instantiation happened to produce.
-            let (l, r) = u_as_eq(&eq, hyp.as_ref())?;
+            let Some((l, r)) = u_as_eq(&eq, conj_of(&used).as_ref()) else {
+                note_ths(ThStep::LamAssemble);
+                return None
+            };
             if l != *ty {
+                note_ths(ThStep::LamMismatch);
                 return None
             }
+            note_ths(ThStep::LamOk);
             return Some((eq, r, used))
         }
 
         // ── The head reduces first: a curried application, or a definition ───
-        let (heq, head2, used) = if hsym == app && hargs.len() == 2 {
-            self.target_head_step(ctx, &head, assms, depth + 1)?
+        let curried = hshape.is_some() && hsym == app && hargs.len() == 2;
+        let (heq, head2, used) = if curried {
+            let Some(r) = self.target_head_step(ctx, &head, assms, depth + 1) else {
+                note_ths(ThStep::CurriedHeadMiss);
+                return None
+            };
+            r
         } else {
-            let def = self.abbrev_defs.get(&head).cloned()?;
-            let (_, v) = def.concl().as_eq()?;
+            let Some(def) = self.abbrev_defs.get(&head).cloned() else {
+                note_ths(ThStep::HeadOpaque);
+                return None
+            };
+            let Some((_, v)) = def.concl().as_eq() else {
+                note_ths(ThStep::TailAssemble);
+                return None
+            };
             (u_a1i(&def, conj_of(assms).as_ref()), v, assms.to_vec())
         };
         let hyp = conj_of(&used);
-        let eq = u_congr_arg(&mut self.env_mut(), app, &[head, x.clone()], 0, &heq, hyp.as_ref())?;
+        let Some(eq) = u_congr_arg(&mut self.env_mut(), app, &[head, x.clone()], 0, &heq, hyp.as_ref())
+        else {
+            note_ths(ThStep::TailAssemble);
+            return None
+        };
         // Register the reduct's shape so that the next step can take it apart.
         let ty2 = self.mk(app, vec![head2, x]);
-        let (l, r) = u_as_eq(&eq, hyp.as_ref())?;
+        let Some((l, r)) = u_as_eq(&eq, hyp.as_ref()) else {
+            note_ths(ThStep::TailAssemble);
+            return None
+        };
         if l != *ty || r != ty2 {
+            note_ths(ThStep::TailMismatch);
             return None
         }
+        note_ths(if curried { ThStep::CurriedOk } else { ThStep::DeltaOk });
         Some((eq, ty2, used))
+    }
+
+    /// Which [`ThStep`] row a target would land in, by shape alone.
+    ///
+    /// A lookup into [`Self::parts`], [`Self::core`]'s lambda table and
+    /// [`Self::abbrev_defs`], with no derivation and no counter touched — so it
+    /// may be asked at a probe site without moving anything the probe measures.
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+    fn tb_reach(&mut self, ty: &Term, total: bool) -> TbReach {
+        let app = self.pre.ap.app;
+        // `total` reads the shape off the term itself, which is what
+        // `Term::as_app` does and what [`TgBackend::parts`]' own header says the
+        // table is a redundant copy of. The two are asked side by side so that
+        // "the clause cannot start" can be separated from "the table was not
+        // told" — see the report row.
+        let shape = |parts: &Parts, t: &Term| -> Option<(FnSym, Vec<Term>)> {
+            if total {
+                t.as_app().map(|(f, a)| (f, a.to_vec()))
+            } else {
+                parts.get(t).cloned()
+            }
+        };
+        let Some((f, args)) = shape(&self.parts, ty) else { return TbReach::Unrecorded };
+        if f != app || args.len() != 2 {
+            return TbReach::Unrecorded
+        }
+        let head = args[0].clone();
+        let Some((hsym, hargs)) = shape(&self.parts, &head) else {
+            return TbReach::HeadUnrecorded
+        };
+        if self.core.lams().borrow().by_lam(hsym).is_some() {
+            return TbReach::HeadLam
+        }
+        if hsym == app && hargs.len() == 2 {
+            return TbReach::HeadCurried
+        }
+        if self.abbrev_defs.contains_key(&head) {
+            return TbReach::HeadAbbrev
+        }
+        TbReach::HeadOpaque
     }
 
     /// `⊢ conj(used) → x ∈ dom` for a term `x` that arrived without a Lean node
@@ -9668,6 +9809,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         } else if self.unfolds_to(&dom, &a).is_some() {
                             LocalPrem::DomainUnfoldsTo
                         } else if dom.as_app().is_some_and(|(f, _)| f == self.pre.ap.app) {
+                            // **Can the target-beta clause start on it?** A pure
+                            // shape lookup, so the row is attributed rather than
+                            // inferred. See [`TbReach`].
+                            let r = self.tb_reach(&dom, false);
+                            TB_REACH[r as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let r = self.tb_reach(&dom, true);
+                            TB_REACH_TOTAL[r as usize]
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             LocalPrem::UnrelatedApp
                         } else {
                             LocalPrem::UnrelatedOther
@@ -16506,6 +16655,104 @@ static TB: [std::sync::atomic::AtomicU64; N_TB] = [const { std::sync::atomic::At
 
 fn note_tb(m: TbMiss) { TB[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// Every exit of [`TgBackend::target_head_step`], the one head reduction of a
+/// *type*. The decline census for the target-beta clause, in the shape that
+/// worked at [`CtorDecline`]: one row per way out, none of them silent.
+///
+/// **Counted at every invocation, the recursive ones included.** A curried
+/// target contributes its own row *and* its head's, so the rows do not sum to
+/// a number of obligations served; `CurriedOk`/`CurriedHeadMiss` are the two
+/// rows to subtract if that is what is wanted. Said here because a census whose
+/// denominator is ambiguous is the failure mode this one exists to avoid.
+///
+/// The first two rows are the "says nothing" population — a target that is not
+/// a set application at all was never this clause's business — and they are
+/// reported so that the interesting rows have a denominator beside them.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum ThStep {
+    /// [`TgBackend::parts`] holds no shape for the target: this backend never
+    /// built it, so there is nothing to take apart.
+    TargetUnrecorded,
+    /// Recorded, but not a two-argument `app`. Not a redex.
+    TargetNotApp,
+    /// The target is `app(head, x)` but `parts` holds no shape for `head`, and
+    /// neither does the term: a variable, or a nullary symbol.
+    HeadUnrecorded,
+    /// …but the **term** does: `parts` was simply never told. Nothing about the
+    /// obligation stops the clause here; the side table does.
+    HeadUnrecordedIsApp,
+    /// As [`Self::TargetUnrecorded`], where the term itself is a two-argument
+    /// `app`. Same reading: the table, not the term.
+    TargetUnrecordedIsApp,
+    /// The head is a lambda graph whose graph or holes are missing.
+    LamNoGraph,
+    /// **Beta's own domain premise `x ∈ A` could not be settled.** The clause
+    /// refuses to assume it (see [`TgBackend::target_mem`]), so this is a
+    /// decline and not an admission.
+    LamDomain,
+    /// The premise held but the beta lemma, its instantiation or the transitive
+    /// step did not assemble. Expected 0.
+    LamAssemble,
+    /// Assembled, but the equation is not about the target it started from.
+    /// Expected 0.
+    LamMismatch,
+    /// Contracted a redex.
+    LamOk,
+    /// The head is itself an application and *its* reduction declined — the row
+    /// that says the walk died further up the curried spine, not here.
+    CurriedHeadMiss,
+    /// The head is neither a lambda graph, nor an application, nor a constant
+    /// with a defining equation. Nothing can move it.
+    HeadOpaque,
+    /// The congruence or the equation's own shape check failed. Expected 0.
+    TailAssemble,
+    /// The congruence produced an equation about something else. Expected 0.
+    TailMismatch,
+    /// Reduced the head of a curried spine.
+    CurriedOk,
+    /// Unfolded a defined constant in head position.
+    DeltaOk,
+}
+const N_TH_STEP: usize = 17;
+static TH_STEP: [std::sync::atomic::AtomicU64; N_TH_STEP] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TH_STEP];
+fn note_ths(k: ThStep) { TH_STEP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Can the target-beta clause even *start* on the domain of an unsettled
+/// constructor premise? A pure shape lookup at the
+/// [`LocalPrem::UnrelatedApp`] population — no derivation, no counters
+/// disturbed — so that the 1 376 are attributed to a row of
+/// [`ThStep`] rather than inferred to belong to one.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum TbReach {
+    /// [`TgBackend::parts`] holds no shape for the domain.
+    Unrecorded,
+    /// Recorded, but `parts` holds no shape for its head.
+    HeadUnrecorded,
+    /// The head is a lambda graph: [`ThStep::LamOk`] is reachable, and what
+    /// stands between is beta's domain premise.
+    HeadLam,
+    /// The head is itself an application: the walk recurses up the spine.
+    HeadCurried,
+    /// The head is a defined constant: one delta step is available.
+    HeadAbbrev,
+    /// None of the above. The clause cannot start.
+    HeadOpaque,
+}
+const N_TB_REACH: usize = 6;
+static TB_REACH: [std::sync::atomic::AtomicU64; N_TB_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TB_REACH];
+/// The same question asked of the **term** rather than of the side table —
+/// `Term::as_app` instead of [`TgBackend::parts`]. The difference between the
+/// two is the population the table is losing, as against the population the
+/// clause genuinely cannot serve. `parts`' own header calls the table a
+/// redundant copy whose misses are "the silent kind"; this is that, counted.
+static TB_REACH_TOTAL: [std::sync::atomic::AtomicU64; N_TB_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TB_REACH];
+
+
 /// How far [`TgBackend::peel_family`] got. Cumulative: each stage counts every
 /// attempt that reached it, so the drop from one row to the next is what that
 /// stage refused.
@@ -17914,6 +18161,28 @@ fn ht_report() -> String {
                         lp(LocalPrem::UnrelatedApp) + lp(LocalPrem::UnrelatedOther),
                         lp(LocalPrem::UnrelatedApp),
                     ));
+                    let tr = |k: TbReach| TB_REACH[k as usize].load(Relaxed);
+                    if TB_REACH.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+                        s.push_str(&format!(
+                            "          …of those, could target-beta START: {} head is a λ graph, {} head is curried, {} head is a defined constant, {} head opaque, {} head shape unknown, {} target shape unknown\n",
+                            tr(TbReach::HeadLam),
+                            tr(TbReach::HeadCurried),
+                            tr(TbReach::HeadAbbrev),
+                            tr(TbReach::HeadOpaque),
+                            tr(TbReach::HeadUnrecorded),
+                            tr(TbReach::Unrecorded),
+                        ));
+                        let tt = |k: TbReach| TB_REACH_TOTAL[k as usize].load(Relaxed);
+                        s.push_str(&format!(
+                            "          …and reading the shape off the TERM instead of the table: {} head is a λ graph, {} head is curried, {} head is a defined constant, {} head opaque, {} head shape unknown, {} target shape unknown\n",
+                            tt(TbReach::HeadLam),
+                            tt(TbReach::HeadCurried),
+                            tt(TbReach::HeadAbbrev),
+                            tt(TbReach::HeadOpaque),
+                            tt(TbReach::HeadUnrecorded),
+                            tt(TbReach::Unrecorded),
+                        ));
+                    }
                 }
             }
         }
@@ -18053,6 +18322,41 @@ fn ht_report() -> String {
             if n > 0 {
                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
             }
+        }
+    }
+    // The head-reduction census, every exit of `target_head_step`. Printed
+    // whole, zeros included, once the walk has run at all: the rows expected to
+    // be 0 are load-bearing (see [`ThStep`]), and an absent row and a zero row
+    // read identically while meaning opposite things.
+    let ths_total: u64 = TH_STEP.iter().map(|c| c.load(Relaxed)).sum();
+    if ths_total > 0 {
+        s.push_str(&format!(
+            "    {:<width$}  {ths_total:>10}\n",
+            "one head reduction of a TYPE, by outcome (recursive calls included)"
+        ));
+        for (l, k) in [
+            ("contracted a redex", ThStep::LamOk),
+            ("reduced a curried head", ThStep::CurriedOk),
+            ("unfolded a defined head", ThStep::DeltaOk),
+            ("beta's own premise x ∈ A not settled", ThStep::LamDomain),
+            ("the head is opaque — no λ graph, no spine, no equation", ThStep::HeadOpaque),
+            ("the curried head's own reduction declined", ThStep::CurriedHeadMiss),
+            ("the head's shape is not recorded — nor is it one", ThStep::HeadUnrecorded),
+            ("the head IS an application; the table was not told", ThStep::HeadUnrecordedIsApp),
+            ("the target's shape is not recorded — nor is it one", ThStep::TargetUnrecorded),
+            ("the target IS an application; the table was not told", ThStep::TargetUnrecordedIsApp),
+            ("the target is not a set application", ThStep::TargetNotApp),
+            ("the λ graph has no graph", ThStep::LamNoGraph),
+            ("did not assemble (λ / tail)", ThStep::LamAssemble),
+            ("assembled about the wrong target (λ / tail)", ThStep::LamMismatch),
+        ] {
+            let n = TH_STEP[k as usize].load(Relaxed)
+                + match k {
+                    ThStep::LamAssemble => TH_STEP[ThStep::TailAssemble as usize].load(Relaxed),
+                    ThStep::LamMismatch => TH_STEP[ThStep::TailMismatch as usize].load(Relaxed),
+                    _ => 0,
+                };
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
         }
     }
     s

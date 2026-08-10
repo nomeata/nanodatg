@@ -1674,7 +1674,12 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // discharged obligations +977, raw hoists −868, "never checked at an
     // application" 18 656 → 16 502, escapes unmoved at 2 247. See
     // `MEASUREMENTS.md`, "Typing the reduction's own arguments".
-    assert!(gaps > 0 && gaps <= 15761, "init-prelude: {gaps} gaps, ratchet 15761 — the general ι path regressed");
+    // **Tightened 15 761 → 15 734 on 2026-08-10**, in the right direction and
+    // therefore without a trade to write: `TgBackend::target_head_step` reached
+    // its delta branch for the first time on heads `TgBackend::parts` had no
+    // shape for. Locked in rather than left slack, because a ratchet that only
+    // ever loosens has stopped measuring.
+    assert!(gaps > 0 && gaps <= 15734, "init-prelude: {gaps} gaps, ratchet 15734 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1709,7 +1714,18 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // to run uncertified, and `ty_conv` borrows rather than consumes it. See
     // the gap ratchet's paragraph for what it buys and why the over-report is
     // the safe direction; stage 1 is what brings both counters down.
-    assert!(esc <= 2257, "init-prelude: {esc} escapes, ratchet 2257 — the general ι path regressed");
+    // **2 257 → 2 232 on 2026-08-10, and this one is tightened rather than
+    // bought.** After seven routes that could only trade escapes away, the
+    // counter finally fell: `TgBackend::target_head_step` refused *every* one of
+    // its three branches when `TgBackend::parts` held no shape for the target's
+    // head, and the delta branch never needed that shape. Letting it fall
+    // through contracts type-level redexes the run used to leave standing, so
+    // obligations get discharged where a binder can see them instead of
+    // surviving to the boundary. **Obligations asked did not move** (40 060
+    // before and after), which is what distinguishes this from every route that
+    // shrank a residue by outrunning it, and no row of the gap ledger rose —
+    // 12 more real kernel theorems. +0.67 % instructions.
+    assert!(esc <= 2232, "init-prelude: {esc} escapes, ratchet 2232 — the general ι path regressed");
 }
 
 /// **How much of the prelude is actually translated** — the declaration-typing
@@ -2085,10 +2101,29 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
         "init-prelude: {proj_red} proj_reduce gaps, ratchet 661 — projection reduction regressed"
     );
 
+    // **Moved 11 → 9 on 2026-08-10, with a written trade, and for the same
+    // reason the 630 → 661 above moved: the population, not the rate.**
+    // `TgBackend::target_head_step` used to require `TgBackend::parts` to hold
+    // a shape for the head of the target before it would consider *any* of its
+    // three branches — including the delta branch, which needs only
+    // `abbrev_defs` and never looks at that shape. Letting it fall through
+    // contracts type-level redexes the run previously left standing, and two
+    // projection redexes it used to reach are no longer reached at all.
+    //
+    // Two projection reductions being *lost* and two being *not attempted* look
+    // identical in this row, so the distinction is checked in the ledger rather
+    // than assumed. `gap: proj_reduce` fell 661 → 659 in lockstep; the three
+    // search rows below are unmoved at 34/41/0; and **no row of the gap ledger
+    // rose** — escapes 2 247 → 2 232, `trans over an admitted premise` −4,
+    // `symm` −4, `beta: the lambda has no function-graph interpretation` −2,
+    // with 12 *more* real kernel theorems derived. Nothing that was derived
+    // before is admitted now, which is the property a reach ratchet is a proxy
+    // for. See `MEASUREMENTS.md`, "The head reduction that never reached its
+    // delta branch".
     let threaded = rows_totalling(&text, THREADED);
     assert!(
-        threaded >= 11,
-        "only {threaded} projection reductions reached the threaded derivation, expected at least 11 — \
+        threaded >= 9,
+        "only {threaded} projection reductions reached the threaded derivation, expected at least 9 — \
          the rule is declining before it gets there"
     );
 
