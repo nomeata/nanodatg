@@ -503,6 +503,36 @@ pub trait Certifier<'t, 'p> {
         self.ty_gap(ctx, e, to, TyGap::Conv.name())
     }
 
+    /// **An application's argument was checked at the binder's domain** — the
+    /// handoff that lets a later beta contraction of that very argument take
+    /// its domain obligation from the check instead of searching for it.
+    ///
+    /// `infer_app` establishes `⟦arg⟧ ∈ ⟦dom⟧` for every argument of every
+    /// checked application: the argument's own typing converted along the
+    /// `assert_def_eq` certificate ([`Certifier::ty_conv`]). Until this method
+    /// existed that composition had exactly one consumer — the application
+    /// rule — and was built only when the *head's* derivation was still alive,
+    /// so for the majority of applications (any whose head is an
+    /// evidence-less constant) the argument's typing was established and
+    /// thrown away. The beta rule then re-discovered the same fact per redex
+    /// by `has_type` search, and hoisted the membership as an assumption when
+    /// the search failed — `THREADING-CENSUS.md` §1.3's largest re-discovery
+    /// site.
+    ///
+    /// A backend that keeps a store reads it back in its beta rule, checked
+    /// against the claim like every recall. The default does nothing, which is
+    /// correct for the null backend: its typings carry no information, so
+    /// there is nothing to hand off.
+    fn app_arg_checked(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        arg: ExprPtr<'t>,
+        dom: ExprPtr<'t>,
+        typing: &Self::Typing,
+    ) {
+        let _ = (ctx, arg, dom, typing);
+    }
+
     /// **Application**: from `⟦f⟧ ∈ ⟦Π x:A. B⟧` and `⟦a⟧ ∈ ⟦A⟧` conclude
     /// `⟦f a⟧ ∈ ⟦B[a/x]⟧`.
     ///

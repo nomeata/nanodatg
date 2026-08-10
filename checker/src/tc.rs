@@ -874,8 +874,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                         // `⟦arg⟧ ∈ ⟦arg_type⟧` converted along `⟦binder_type⟧ = ⟦arg_type⟧`
                         // into the `⟦arg⟧ ∈ ⟦binder_type⟧` the application rule
                         // asks for. This is the discarded certificate, put to
-                        // work.
-                        live.then(|| self.certifier.ty_conv(self.ctx, arg, arg_type, binder_type, at, &eq))
+                        // work — and composed whether or not the head's own
+                        // derivation is still alive, because it now has a
+                        // second consumer: a beta contraction of this argument
+                        // at this domain owes exactly this membership, and
+                        // `app_arg_checked` hands it to the backend's store so
+                        // the beta rule reads it instead of searching
+                        // (`THREADING-CENSUS.md` §1.3). When the head is dead
+                        // *and* the argument's own typing is a hole there is
+                        // nothing to convert and nothing to store, so the
+                        // composition is skipped — but the hole is still
+                        // handed over, so the store can say of a later miss
+                        // "this argument was checked, and its typing was
+                        // already a gap then" rather than leaving the miss
+                        // unattributed. Under the null backend every call here
+                        // is a no-op, so it still pays nothing.
+                        if !live && typing_is_gap(&at) {
+                            self.certifier.app_arg_checked(self.ctx, arg, binder_type, &at);
+                            None
+                        } else {
+                            let composed =
+                                self.certifier.ty_conv(self.ctx, arg, arg_type, binder_type, at, &eq);
+                            self.certifier.app_arg_checked(self.ctx, arg, binder_type, &composed);
+                            live.then_some(composed)
+                        }
                     } else if live {
                         // `InferOnly` does not check the argument, so there is
                         // no premise to offer the application rule — and here

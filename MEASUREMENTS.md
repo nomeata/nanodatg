@@ -5875,3 +5875,103 @@ decomposition that used to fail now succeeds and an earlier rule fires instead.
 Those counters are tg's frontier record and re-baselining them is a change to
 make on purpose, not a side effect of a memory fix in another crate. The same
 one-line replacement is available there whenever somebody wants it.
+
+## Beta domain obligations arrive from the application's own check — 2026-08-10
+
+*Task #126, the census's largest bucket-(i) row (`THREADING-CENSUS.md` §1.3,
+§3). Baseline `origin/master` at `a7b0c6a`; `release`, `--features
+tg,stepcount`, the `scripts/arena.sh` config over
+`good/init-prelude.ndjson`; `perf stat -e instructions` throughout.*
+
+### The claim under test, and how it fared
+
+The census said the beta rule's domain obligation `⟦a⟧ ∈ ⟦A⟧` should not be
+searched for because "`infer` typed this very argument when the application
+was checked". Both halves of that sentence were measurable, and they came
+apart:
+
+* **Where the checker held the evidence, it was being discarded.** `infer_app`
+  composes `⟦arg⟧ ∈ ⟦binder domain⟧` — the argument's own typing converted
+  along the `assert_def_eq` certificate — and consumed it only into `ty_app`,
+  and only while the *head's* derivation was still alive. With 20 922
+  `ty_const` no-evidence heads, the common case built the composition never;
+  the beta rule then re-derived the same fact per redex by `has_type`, and
+  `local_premises` guessed the context by scanning the argument for `Local`
+  nodes.
+* **But the majority of the raw-hoisted population was never in inference's
+  hands at all.** That is the refutation half, below.
+
+### What landed
+
+`Certifier::app_arg_checked` (default no-op; the null backend pays nothing):
+`infer_app` hands every checked argument's composed typing to the backend,
+now built even when the head's derivation is dead — the composition gained a
+second consumer, so the `live` gate that made it free to skip became wrong.
+`TgBackend::arg_mems` stores it keyed `(arg, ⟦binder domain⟧)`, entries
+checked at the write to establish exactly their key's claim.
+`TgBackend::domain_obligation` reads the store **before any search**, and a
+recalled entry is re-checked against the claim being asked
+(`derived::establishes`) — a failed recall falls through to the search and is
+counted as a bug report (`ArgMem::Mismatch`, 0 on the corpus).
+
+Fixture: `beta_domain_obligation_reads_the_application_checks_handoff`, three
+atoms — a checked redex whose certificate must be unconditional, an unchecked
+same-shaped redex whose certificate must stay the honest `Conditional` hoist,
+and a poisoned store entry (a true theorem under the wrong key) the recall
+guard must refuse. Mutations verified: deleting the write turns atom 1 red
+with exactly the pre-tranche `Conditional`; skipping `establishes` at the
+read turns atom 3 red as `Admitted("trans over an admitted premise")` — the
+wrong membership fails `u_mp` against the beta lemma inside the rule, i.e.
+the system fails closed, but the *label* moves from an honest hoist to an
+admitted gap, which is why the guard is load-bearing.
+
+### The numbers (`init-prelude`, 2 059 declarations, 3 861 (decl, σ) pairs)
+
+| | `a7b0c6a` | with the handoff |
+| --- | ---: | ---: |
+| instructions | 193.83 G | 194.01 G (**+0.09 %**) |
+| gaps | 15 542 | **15 532** |
+| escapes | 2 257 | **2 247** |
+| obligations asked / discharged | 39 951 / 5 373 | 39 951 / 5 373 |
+| answered from the handoff | — | **10 300** (102 outright + 10 198 under antecedents) |
+| entries stored | — | 26 724 |
+| recalls failing their claim | — | **0** |
+| `has_type` miss "a local" | 11 310 | **1 132** |
+| `by Local` (context acquired by the search) | 15 648 | 5 447 |
+| raw hoists | 20 338 | 20 328 |
+
+Reading it: the handoff did not change *what* is discharged outright (the 102
+were derivable by search too) — it changed **where the conditional answers
+come from**. 10 198 obligations that used to be settled by the search
+re-acquiring ambient-local typings (`has_type_local`, the census's 11 211-row
+"context guessed, not read") now arrive with their antecedents from the
+application check. The ten escapes closed are obligations about applications
+of locals (`w x`): the raw hoist assumed the whole membership, which no
+binder discharges; the handoff carries per-local antecedents, which binders
+do discharge. The ledger is unchanged row-for-row everywhere else.
+
+### The refutation: the raw population, attributed
+
+The new permanent ledger row (`raw hoists by cause`) splits the 20 328
+survivors:
+
+* **32** — handed off at another domain term (a conversion the store does not
+  carry). Negligible.
+* **1 640** — checked, and the argument's typing was already a hole at the
+  check: the `ty_const` cascade seen from the beta rule, §3 bucket (ii).
+  These convert into handoff entries *by themselves* the day the shared
+  constant store lands: the write site is already there.
+* **18 656** — **no application check ever visited the term.** Probe-sampled
+  (40 subjects): `Eq.refl α a` / `HEq.refl x y` constructor applications
+  built by `to_ctor_when_k`'s K-shortcut, and minor premises out of *other
+  declarations' values* (`Fin.casesOn` wrappers, `Nat.below`'s
+  `fun n n_ih => PProd …`) entering by delta unfolding, instantiated at the
+  current declaration's locals. For these, "the typing arrives with the whnf
+  call" can only mean stage-2-proper subject-reduction threading or
+  cross-declaration evidence (task #125) — no recall of this declaration's
+  inference can serve them, because it never held them.
+
+So the census's beta row was **two problems and a third wearing its coat**:
+a threading debt (now paid where it existed), a cascade face (bucket (ii),
+delivery mechanism now in place), and a reduction-built residue that is the
+honest remaining case for stage 2's signature change.

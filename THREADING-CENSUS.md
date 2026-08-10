@@ -113,7 +113,7 @@ locals, 43 110 with no evidence.
 | `infer_ty` (`tc.rs:792`) | `infer` + counted discard | should eventually have no callers | the *discard adapter*; counting its wrappers `infer_sort_of`/`infer_then_whnf`/`ensure_infers_as_sort`, 20 `Dropped`-passing call sites in `tc.rs` (one line carrying two) and 2 in `inductive.rs` | Dropped ledger (66 594 `BinderSort` + 802 `Probe` + 774 `Predicate` + 272 `DefEqSide` on ip) | site-by-site |
 | `infer_sort` (`tc.rs:796`) | cert via `ty_sort` | as-is | done (backend derives via `x ∈ U(x)`; 8 338 carried on ip) | — | — |
 | `infer_const` (`tc.rs:407`) | returns substituted declared type; cert added by caller via `ty_const` | as-is | done as threading; the *backend* misses when no stored typing (20 929 `ty_const` no-evidence rows on ip). **Mostly but not wholly interpretation scope, §3**: of 2 891 (declaration, σ) pairs with a value, 2 674 have no certificate at all — cascade — but 198 had one that was *derived and discarded* because it stood under antecedents, which is threading debt. 1 161 of the 31 256 use-site misses are against those 198. All five numbers re-confirmed on the fresh run | store miss ⇒ gap (search already removed) | — |
-| `infer_app` (`tc.rs:822`) | rebuilds spine cert via `ty_app`/`ty_conv`; `assert_def_eq`'s cert consumed by `ty_conv`; when the head's type is not syntactically a `Π`, `ensure_pi_with_cert` returns the reduction leg and it is composed into the head's typing via `ty_conv` (built only when a derivation is live, so the null backend pays nothing) | exactly what it does | **done** (stage 2's first slice, landed 2026-08-09): `ty_conv` carried 31 → 142, `ty_app` no-evidence 481 → 418, and 7 declaration typings complete antecedent-free and store (19 → 26, cascade root 2 674 → 2 667). `ty_bridge` survives for the typings the leg does not reach. Cost: a conditional leg's antecedents are counted at the boundary (escapes 2 138 → 2 257 — the `ty_conv` borrow policy's over-report, stage 1's to discharge), +0.17 % instructions | residual `ty_app` 418 is backend scope | — |
+| `infer_app` (`tc.rs:822`) | rebuilds spine cert via `ty_app`/`ty_conv`; `assert_def_eq`'s cert consumed by `ty_conv`; the argument's composed typing `⟦arg⟧ ∈ ⟦binder domain⟧` is additionally handed to the backend (`Certifier::app_arg_checked`, 2026-08-10) — built now even when the head's derivation is dead, because the beta rule is its second consumer (§1.3); when the head's type is not syntactically a `Π`, `ensure_pi_with_cert` returns the reduction leg and it is composed into the head's typing via `ty_conv` (built only when a derivation is live, so the null backend pays nothing) | exactly what it does | **done** (stage 2's first slice, landed 2026-08-09): `ty_conv` carried 31 → 142, `ty_app` no-evidence 481 → 418, and 7 declaration typings complete antecedent-free and store (19 → 26, cascade root 2 674 → 2 667). `ty_bridge` survives for the typings the leg does not reach. Cost: a conditional leg's antecedents are counted at the boundary (escapes 2 138 → 2 257 — the `ty_conv` borrow policy's over-report, stage 1's to discharge), +0.17 % instructions | residual `ty_app` 418 is backend scope | — |
 | `infer_lambda` (`tc.rs:952`) | rebuilds λ/Π per binder, cert via `ty_lam`; binder-domain sort check dropped (`Dropped::BinderSort`, `tc.rs:959`) | as-is; the domain-sort evidence `⊢ ⟦A⟧ ∈ ⟦Sort u⟧` has its consumer served since stage 0 by `proposition_witness` (§1.6), so the residual value of threading it here is small | **partial** — typing threaded; domain-sort evidence dropped | Dropped `BinderSort` (the largest single share of 66 594) | M |
 | `infer_pi` (`tc.rs:1008`) | cert is `ty_pi` with three-way clause label (`Pi`/`PiProp`/`PiUndet`, `tc.rs:1043–1049`, computed under σ) | as-is; the missing evidence (`dprod_in_universe` n-ary) is a *library* gap, not threading (8 798 `ty_pi` no-evidence rows on ip; `PiProp` 2 566 carried against 6 no-evidence — the `Prop` clause is essentially closed) | done as threading | — | library work |
 | `infer_let` (`tc.rs:1058`) | expansion's typing via `ty_let`; the annotation check's certs dropped (`tc.rs:1068–1071`) | as-is (the dropped equality has nothing to compose with post-substitution — the argument stands at `tc.rs:1053–1057`) | done; drops counted | Dropped `BinderSort`/`Probe`/`DefEqSide` | — |
@@ -133,7 +133,7 @@ the *boundary*, in both directions.
 | fn | today | should take / return | status | instead | diff. |
 | --- | --- | --- | --- | --- | --- |
 | `whnf` (`tc.rs:1389`), `whnf_no_unfolding` (`tc.rs:1426`) | `ExprPtr` only; 28 callers (18 `tc.rs` + 10 `inductive.rs`, re-counted 2026-08-09 — the "28 callers" comment at `tc.rs:1156–1157` is accurate) | **take** `⊢ ⟦e⟧ ∈ ⟦T⟧`; **return** `(e', ⊢ ⟦e⟧ = ⟦e'⟧)` — then `⟦e'⟧ ∈ ⟦T⟧` by Leibniz. The typing *input* is what feeds beta's domain obligations (next row) | **partial** — evidence out exists on demand (`whnf_no_unfolding_aux_with_cert`, `tc.rs:1444`) and is consumed on `def_eq` paths only; evidence *in* does not exist at all | callers that need the equality either use the aux-with-cert path (def_eq) or drop it (all of inference, §1.2 last row); the typing precondition is re-discovered per beta step, next row | signature change M; feeding beta D (below) |
-| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` is **searched**: `domain_obligation` (`tg.rs:10005`) runs `has_type_a(arg, dom, [], 0)`, then retries under `local_premises` — which *reconstructs the ambient context by scanning the argument for `Local` nodes* — and finally hoists the raw membership as an escaped assumption | the typing should arrive with the whnf call: `infer` typed this very argument when the application was checked | none — this is the single largest re-discovery site left (**ip**: 39 783 obligations asked, 5 344 discharged, 34 439 carried as assumptions, 20 334 of them raw hoists; 11 211 misses are "a local", ~5 500 opaque-constant-shaped; escapes 2 138) | `has_type` search + `local_premises` context guess + escape ledger | **D** — the heart of §2 stage 2 |
+| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` arrives **threaded where the checker ever held it**: `domain_obligation` first reads `TgBackend::arg_mems` — the store `Certifier::app_arg_checked` fills at `infer_app`'s argument check with the very `ty_conv` composition (`⟦arg⟧ ∈ ⟦binder domain⟧`) the application rule consumes, now built whether or not the head's own derivation is alive — and only then falls back to `has_type_a`, `local_premises`, and the raw hoist | exactly what it now does for checked arguments; the residue is below | **partial** (handoff landed 2026-08-10; fixture `beta_domain_obligation_reads_the_application_checks_handoff`, three atoms, both mutations verified). Measured at `a7b0c6a`: 39 951 asked, 26 724 entries stored, **10 300 answered from the handoff** (102 outright + 10 198 under antecedents, 0 recalls failing their claim), escapes 2 257 → 2 247, gaps 15 542 → 15 532, +0.09 % instructions. The former claim "`infer` typed this very argument when the application was checked" is now **measured, and it is not universal**: the 20 328 remaining raw hoists split by cause into **32** handed off at another domain term, **1 640** whose argument was checked but whose typing was already a hole there (the `ty_const` cascade seen from the beta rule — §3 bucket (ii), and these convert to store entries by themselves when the shared constant store lands), and **18 656 about terms no application check ever visited** — probe-sampled: `Eq.refl`/`HEq.refl` constructor apps built by `to_ctor_when_k`'s K-shortcut, and minor premises inside *other declarations' values* entering by delta, instantiated at the current locals. No intra-declaration handoff reaches those two; what would is typing flowing down the reduction (stage 2 proper) and/or cross-declaration evidence (task #125) | residue: `has_type` search + raw hoist, now cause-attributed in the ledger (`raw hoists by cause`) | **D** — stage 2 for the reduction-built residue |
 | `whnf_reduce` / `whnf_no_unfolding_reduce` (`tc.rs:1396,1454`) | record traces; `Admit::Quot` and `Admit::NatRed` steps have no backend rule; `Rule::ProjRed` and `Rule::Iota` are backend rules since 2026-08-01 (`proj_red_step`, `iota_step`, §1.5) | as-is; missing pieces are backend rules (`quot` needs interpreted `Quot` — 0 quot steps fire on ip — `NatRed` is milestone 4) | done as threading | Admits, counted | out of threading scope |
 | `certify_reduct` / `trace_cert` / `step_cert` / `seq` / `symm_leg` / `compose_legs` / `compose_whnf_legs` (`tc.rs:1195–1387`) | evidence plumbing, endpoint-checked | as-is | **done** (`Admit::Whnf` = bug report, at zero on ip) | — | — |
 | `unfold_def` (`tc.rs:2159`), `delta` (`tc.rs:2148`) | `delta` returns cert; `unfold_def` returns term, callers wrap in `Rule::Delta` trace | as-is | done | — | — |
@@ -392,11 +392,15 @@ sub-decisions, and this is where D lives:
   and `scope.rs`'s header names the condition under which stage 1 may
   promote it onto `close` (exactly one `Scopes` per `TcCtx`, with `derived/`
   still barred from `Thm::assume`).
-*Measurables (fresh baselines):* escapes (2 138 on ip) must fall — every
-escape today is an assumption no binder discharged, and after this stage an
-assumption about a checker-opened local *has* a discharging binder by
-construction; the `has_type` miss row "a local" (11 211 on ip) must fall to
-the genuinely-ambient residue (§3); `Admit::Cache` 260 (paths through
+*Measurables (fresh baselines):* escapes (2 247 after the 2026-08-10 handoff)
+must fall — every escape today is an assumption no binder discharged, and
+after this stage an assumption about a checker-opened local *has* a
+discharging binder by construction; the `has_type` miss row "a local" — which
+this survey assigned to stage 1 at 11 211 — **fell to 1 132 without stage 1**,
+through §1.3's application-check handoff (the antecedents arrive with the
+argument's typing instead of being acquired by the search), leaving stage 1
+the 1 132 residue and the *cost* argument (per-consumer acquisition versus
+per-binder open/close), not the count; `Admit::Cache` 260 (paths through
 conditional union-find edges) should shrink as fewer certs are conditional at
 cache-write time. If escapes do not fall, the leak is a consumer path that
 still enters the search with no assumptions — three `has_type_a(…, &[], …)`
@@ -407,22 +411,28 @@ grep-auditable.
 Signature per target: `whnf(e, ⊢⟦e⟧∈⟦T⟧) → (e', ⊢⟦e⟧=⟦e'⟧)` (the equality
 already exists via traces; the *new* content is the typing input). Internally,
 the typing must flow *down the reduction*: when `whnf` beta-contracts
-`(λx:A.b) a`, the typing of the application yields the typing of `a` at `A` —
-which is precisely what `domain_obligation` currently searches for and, with
-stage 1, what the open-binder context supplies for local-headed arguments.
-Mechanically: `whnf_reduce`'s loop threads a typing alongside the cursor
-(subject reduction, one Leibniz per step); `Certifier::beta` grows a typing
-parameter; the 28 call sites split into evidence-carrying (inference,
-`ensure_*`) and don't-care (`inductive.rs`, until inductives need it).
-Also closes §1.2's `ensure_pi` hole: `infer_app` composes the reduction leg
-into the head typing via `ty_conv`, retiring `ty_bridge`'s delta-only rescue.
-*Measurables (fresh baselines):* the raw-fallback hoists (20 334 on ip) and
-`domain_obligation`'s search count must fall hard — this is the stage that
-attacks the 39 783 obligations directly; `ty_premise_missing` (10 467) and
-`ty_app` (481) fall as the `ensure_pi` leg is composed; escapes continue
-down. Residual misses should be dominated by opaque-constant heads (§3) — if
-local-headed misses remain, stage 1's context is not reaching the reduction
-path.
+`(λx:A.b) a`, the typing of `a` at `A` is owed — and the 2026-08-10 handoff
+(§1.3) settled how much of that debt the checker's *own inference* can pay
+without this stage: `infer_app` now hands every checked argument's typing to
+the backend keyed at the binder's domain, and 10 300 of 39 951 obligations
+are answered from it. **The measured residue narrows what this stage is
+for:** of the 20 328 remaining raw hoists, 18 656 are about terms *no
+inference in the current declaration ever typed* — `to_ctor_when_k`'s
+K-shortcut constructions and delta-imported minor premises instantiated at
+current locals — so for them "the typing arrives with the whnf call" can only
+mean genuine subject-reduction threading (a typing carried alongside the
+cursor, one Leibniz per step), not a recall of inference; and 1 640 are the
+`ty_const` cascade (bucket (ii)), which the shared constant store converts
+into handoff entries with no stage-2 work at all. Mechanically as before:
+`whnf_reduce`'s loop threads a typing alongside the cursor; `Certifier::beta`
+grows a typing parameter; the 28 call sites split into evidence-carrying
+(inference, `ensure_*`) and don't-care (`inductive.rs`, until inductives need
+it). The `ensure_pi` slice landed 2026-08-09 (`infer_app` composes the
+reduction leg via `ty_conv`).
+*Measurables:* the `raw hoists by cause` ledger row — this stage attacks the
+"never checked at an application" 18 656; escapes continue down. If
+local-headed misses remain after stage 1, its context is not reaching the
+reduction path.
 
 **Stage 3: `def_eq` takes typings.**
 `def_eq(a, b, ta, tb)` and thread to: `proof_irrel_eq` (already fed by stage
@@ -486,9 +496,9 @@ item. All counts **(ip)**, fresh run at `8d2b9c9`.
 
 | debt | count (ip) | closed by |
 | --- | ---: | --- |
-| beta obligations searched / hoisted instead of arriving with the call | 39 783 asked, 20 334 raw hoists | stages 1–2 |
-| escaped assumptions (undischarged at a boundary) | 2 257 (2 138 at `8d2b9c9`; +119 are the conditional `ensure_pi` legs' antecedents, newly *visible* — the reductions used to run uncertified — and counted at the boundary by `ty_conv`'s borrow policy) | stage 1 |
-| `has_type` misses that are "a local" — context guessed, not read | 11 211 | stage 1 |
+| beta obligations searched / hoisted instead of arriving with the call | 39 951 asked; **10 300 now answered from the application check's handoff** (2026-08-10, §1.3). The 20 328 raw hoists are cause-split: 32 threading-shaped (another domain term), 1 640 bucket-(ii) (`ty_const` cascade at the argument's own check), 18 656 about reduction-built / delta-imported terms | handoff **landed**; residue: stage 2 proper + the shared constant store |
+| escaped assumptions (undischarged at a boundary) | 2 247 (2 257 → 2 247 with the handoff: ten obligations about applications of locals now carry per-local antecedents their binders discharge, where the raw membership had none) | stage 1 |
+| `has_type` misses that are "a local" — context guessed, not read | **1 132** (was 11 211) — closed not by stage 1's context stack but by the handoff: an argument whose typing rests on ambient locals now arrives from `infer_app` with those antecedents already attached, so the search never runs to acquire them. The residue is the genuinely-ambient population §3 item 1 describes | handoff (landed); residue stage 1 |
 | `point_of_proof` premises still searched (`Pop`: 41 lam + 34 rule) | 75 | stages 1–2 |
 | `Admit::Cache` — conditional union-find edges declined at write | 260 | stage 1 |
 | `ensure_pi`/`ensure_sort`/`infer_then_whnf` legs silently dropped; `ty_bridge`'s delta-only rescue | **`ensure_pi` leg closed 2026-08-09** (`ty_app` 481 → 418, `ty_conv` carried 31 → 142, 7 more declaration typings stored; escapes 2 138 → 2 257, the borrow-policy over-report — see §1.2); `ensure_sort`/`infer_then_whnf` remain, consumers pending | stage 2 (remainder) |

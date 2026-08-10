@@ -496,7 +496,7 @@
 //! * The **de Bruijn shift** category — 756 gaps where the claim had two
 //!   different `bvar` symbols for one binder — has gone with the `bvar`s.
 
-use crate::util::{ExprPtr, LevelPtr, LevelsPtr, NamePtr, TcCtx};
+use crate::util::{new_fx_hash_set, ExprPtr, FxHashSet, LevelPtr, LevelsPtr, NamePtr, TcCtx};
 use crate::env::Declar;
 use crate::expr::Expr;
 use crate::level::Level;
@@ -2575,6 +2575,34 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// The stored `Vec<Formula>` is `assms'`: the key's assumptions, followed by
     /// whatever the derivation had to *acquire* — see [`TgBackend::has_type_h`].
     has_types: HashMap<(ExprPtr<'t>, Term, Vec<Formula>), Option<(Thm, HtClause, Vec<Formula>)>>,
+    /// Argument typings the checker itself established, `⊢ conj(hyps) →
+    /// ⟦arg⟧ ∈ dom`, keyed by the argument's node and the interpreted domain.
+    ///
+    /// Written by [`Certifier::app_arg_checked`] — `infer_app`'s `ty_conv`
+    /// composition, the argument's inferred typing converted along the very
+    /// `assert_def_eq` the checker had to run — and read by
+    /// [`TgBackend::domain_obligation`] *before* any search: a beta
+    /// contraction of `arg` at a lambda whose domain interprets to `dom` owes
+    /// exactly the stored membership. Entries are checked to establish their
+    /// key's claim at the write, and re-checked against the asked claim at the
+    /// read, like every recall in this file.
+    ///
+    /// The hypotheses stored are ambient-local memberships, confined to locals
+    /// occurring in the argument itself — the same written argument that makes
+    /// the checker's `infer_cache_*` safe to key on the `ExprPtr` alone
+    /// (`certify::Certifier::typing_is_confined`), inherited here because
+    /// every entry *is* a copy of what those memos carry, restated at the
+    /// binder's domain. Same lifetime as [`TgBackend::has_types`]: per
+    /// declaration, dying with the backend.
+    arg_mems: HashMap<(ExprPtr<'t>, Term), (Thm, Vec<Formula>)>,
+    /// The arguments with at least one [`TgBackend::arg_mems`] entry — the
+    /// cheap side of the question "was this argument's typing ever handed
+    /// off?", asked when a raw fallback wants its cause attributed.
+    arg_stored: FxHashSet<ExprPtr<'t>>,
+    /// The arguments an application check *did* reach whose typing was
+    /// already a hole there — so a later raw fallback about them is the
+    /// `ty_const`-cascade's face at the beta rule, not a threading miss.
+    arg_gapped: FxHashSet<ExprPtr<'t>>,
     /// The constant instantiations currently being unfolded, innermost last.
     ///
     /// This is what makes [`TgBackend::has_type_const`]'s step into a
@@ -3476,6 +3504,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             open_levels: HashMap::new(),
             x_canon,
             has_types: HashMap::new(),
+            arg_mems: HashMap::new(),
+            arg_stored: new_fx_hash_set(),
+            arg_gapped: new_fx_hash_set(),
             const_active: Vec::new(),
             ht_active: Vec::new(),
             points: HashMap::new(),
@@ -10589,6 +10620,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ta: &Term,
         dom: &Term,
     ) -> (Option<Thm>, Vec<Formula>) {
+        // Threaded, before any search: the checker typed this very argument at
+        // this very domain when the application it stood in was checked —
+        // `infer_app`'s `ty_conv` composition, handed over by
+        // [`Certifier::app_arg_checked`] instead of being discarded. A
+        // recalled entry is checked against the claim being made now, like
+        // every recall in this file; a mismatch falls through to the search
+        // and is counted, because at one backend instance the interpretation
+        // is a function and a mismatch would be a bug on the order of
+        // `Admit::Whnf`.
+        if let Some((t, used)) = self.arg_mems.get(&(arg, dom.clone())).cloned() {
+            let want = Formula::mem(ta.clone(), dom.clone());
+            let full = match conj_of(&used) {
+                None => want,
+                Some(h) => Formula::imp(h, want),
+            };
+            if derived::establishes(&t, &full) {
+                note_arg_mem(if used.is_empty() { ArgMem::Outright } else { ArgMem::UnderAntecedents });
+                note_ht_call(used.is_empty());
+                return (Some(t), used)
+            }
+            note_arg_mem(ArgMem::Mismatch);
+        }
         let mut hyps = Vec::new();
         let mut mem_inst = match self.has_type_a(ctx, arg, dom, &[], 0) {
             Some((t, used)) => {
@@ -10619,7 +10672,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // The raw fallback: nothing about the argument was derived, so
                 // the membership itself becomes the assumption. Counted
                 // separately, and cross-cut by target shape, because this is the
-                // set the next rule has to attack.
+                // set the next rule has to attack — and attributed to its
+                // cause, because "raw hoist" turned out to be three
+                // populations with three different unblocks: an argument whose
+                // typing was handed off *at another domain* (a key the
+                // handoff's conversion did not reach), one whose typing was
+                // already a hole when the application was checked (the
+                // `ty_const` cascade, interpretation scope), and one no
+                // application check ever visited (a term the reduction itself
+                // constructed — stage 2's genuine residue).
+                note_arg_mem(if self.arg_stored.contains(&arg) {
+                    ArgMem::RawStoredElsewhere
+                } else if self.arg_gapped.contains(&arg) {
+                    ArgMem::RawGapAtCheck
+                } else {
+                    ArgMem::RawNeverChecked
+                });
                 note_ht_raw(self.ht_shape(ctx, arg));
                 let t = self.ht_target(dom);
                 note_ht_raw_target(t);
@@ -14009,9 +14077,16 @@ fn unique_key<'t, 'p>(ctx: &TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<LocalKey> {
 // a binder — and its discipline: a rule checks its result against the judgement
 // being claimed, and a mismatch is a counted gap, never a theorem.
 //
-// The two coexist deliberately. `has_type` still serves the obligations that
-// arise *inside* a definitional-equality derivation (`beta`'s domain premise),
-// where there is no inference in progress to ask.
+// The two coexist deliberately, but the boundary between them is narrower
+// than it used to be: for `beta`'s domain premise there very often *was* an
+// inference that established the fact — the enclosing application's check —
+// and [`TgBackend::arg_mems`] now delivers it (10 300 of 39 951 obligations
+// on `init-prelude`). What `has_type` still serves is the residue no
+// inference in the current declaration ever visited: terms the reduction
+// itself builds (`to_ctor_when_k`'s constructor applications) and
+// delta-imported values instantiated at the current locals, plus arguments
+// whose typing was already a hole at their check (the `ty_const` cascade).
+// The `raw hoists by cause` ledger row keeps the three apart.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A typing certificate: `⊢ conj(hyps) → ⟦e⟧ ∈ ⟦ty⟧`, or a named gap.
@@ -14491,6 +14566,44 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         match out {
             Some(t) => self.typing(crate::certify::TyGap::Conv, &te, &tt, t, hyps2),
             None => self.ty_miss(crate::certify::TyGap::Conv),
+        }
+    }
+
+    /// **The handoff into [`TgBackend::arg_mems`].** The composition arriving
+    /// here is [`Certifier::ty_conv`]'s output for this very `(arg, dom)`
+    /// pair, so its conclusion is `⟦arg⟧ ∈ ⟦dom⟧` — but that is *checked*, not
+    /// assumed: the entry is admitted only if the theorem literally
+    /// establishes the membership under exactly the advertised hypotheses,
+    /// restated against the key it will be found under. A gap premise writes
+    /// nothing; first write wins, so a memo hit cannot swap an entry under a
+    /// derivation already using it.
+    fn app_arg_checked(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        arg: ExprPtr<'t>,
+        dom: ExprPtr<'t>,
+        typing: &TgTyping,
+    ) {
+        let TgTyping::Derived { thm, hyps } = typing else {
+            // The check reached this argument and its typing was already a
+            // hole. Remembered so a later raw fallback about it can name its
+            // cause: the cascade upstream of the check, not a threading miss.
+            self.arg_gapped.insert(arg);
+            return
+        };
+        let key = (arg, self.interp(ctx, dom));
+        if self.arg_mems.contains_key(&key) {
+            return
+        }
+        let want = Formula::mem(self.interp(ctx, arg), key.1.clone());
+        let full = match conj_of(hyps) {
+            None => want,
+            Some(h) => Formula::imp(h, want),
+        };
+        if derived::establishes(thm, &full) {
+            note_arg_mem(ArgMem::Stored);
+            self.arg_stored.insert(arg);
+            self.arg_mems.insert(key, (thm.clone(), hyps.clone()));
         }
     }
 
@@ -15827,6 +15940,46 @@ static HT_MISSES: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
 /// Obligations asked of `has_type` by `beta_step`, and how many it settled.
 static HT_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static HT_SETTLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The [`TgBackend::arg_mems`] handoff — the argument typings `infer_app`
+/// establishes, stored instead of discarded — counted at both ends.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum ArgMem {
+    /// An entry written: an application argument's typing, restated at the
+    /// binder's domain, survived the write guard.
+    Stored,
+    /// A beta obligation answered from the store outright — no antecedents,
+    /// so the ledger counts it discharged.
+    Outright,
+    /// …answered under the entry's ambient-local antecedents, which the
+    /// binders that introduced those locals discharge exactly as they do the
+    /// search's acquired ones.
+    UnderAntecedents,
+    /// A recalled entry did not establish the claim being asked. One backend
+    /// instance has one interpretation, so this is expected to hold at zero;
+    /// nonzero is a bug report in the spirit of `Admit::Whnf`, not a benign
+    /// miss.
+    Mismatch,
+    /// A raw hoist whose argument *was* handed off — at some other domain
+    /// term. The obligation's domain and the checked application's domain are
+    /// definitionally equal but interpret apart; bridging them is a
+    /// conversion this store does not yet carry.
+    RawStoredElsewhere,
+    /// A raw hoist whose argument was checked, and whose typing was already a
+    /// hole at the check — the `ty_const` cascade seen from the beta rule.
+    /// Threading cannot manufacture these; the constant store unblocks them.
+    RawGapAtCheck,
+    /// A raw hoist about a term no application check ever visited — built by
+    /// the reduction itself (an iota nest's argument, a substitution
+    /// product). The genuinely stage-2-shaped residue: only typing flowing
+    /// *down the reduction* reaches it.
+    RawNeverChecked,
+}
+const N_ARG_MEM: usize = 7;
+static ARG_MEM: [std::sync::atomic::AtomicU64; N_ARG_MEM] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_ARG_MEM];
+fn note_arg_mem(k: ArgMem) { ARG_MEM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 /// The deepest recursion at which `has_type_h` actually derived something.
 ///
 /// There is no bound to compare it against any more (see the termination note
@@ -16431,6 +16584,31 @@ fn ht_report() -> String {
         asked - settled,
         HT_DEPTH_USED.load(Relaxed),
     );
+    let am = |k: ArgMem| ARG_MEM[k as usize].load(Relaxed);
+    if am(ArgMem::Stored) > 0 {
+        s.push_str(&format!(
+            "    argument typings handed off by the application check: {} stored, answering {} outright + {} under antecedents\n",
+            am(ArgMem::Stored),
+            am(ArgMem::Outright),
+            am(ArgMem::UnderAntecedents),
+        ));
+    }
+    if am(ArgMem::Mismatch) > 0 {
+        s.push_str(&format!(
+            "    ARG-MEM RECALLS NOT MATCHING THEIR CLAIM (bug report, expected 0): {}\n",
+            am(ArgMem::Mismatch),
+        ));
+    }
+    let raw_causes =
+        am(ArgMem::RawStoredElsewhere) + am(ArgMem::RawGapAtCheck) + am(ArgMem::RawNeverChecked);
+    if raw_causes > 0 {
+        s.push_str(&format!(
+            "    raw hoists by cause: {} handed off at another domain, {} a hole at their own check, {} never checked at an application\n",
+            am(ArgMem::RawStoredElsewhere),
+            am(ArgMem::RawGapAtCheck),
+            am(ArgMem::RawNeverChecked),
+        ));
+    }
     for c in HtClause::ALL {
         let n = HT_CLAUSES[c as usize].load(Relaxed);
         if n > 0 {
@@ -16892,6 +17070,114 @@ mod tests {
                 assert!(
                     matches!(cert2, TgCert::Admitted(_)),
                     "two distinct variables have no equating rule — this must stay a counted gap, got {cert2:?}"
+                );
+            })
+        })
+        .unwrap()
+    }
+
+    /// **A beta contraction's domain obligation arrives from the application's
+    /// own check.** `infer_app` establishes `⟦arg⟧ ∈ ⟦dom⟧` for every argument
+    /// it checks (`ty_conv` over the `assert_def_eq` it ran anyway); the
+    /// handoff ([`Certifier::app_arg_checked`] → [`TgBackend::arg_mems`]) keeps
+    /// it, and [`TgBackend::domain_obligation`] reads it back *before any
+    /// search* — so the beta step is discharged outright where it used to
+    /// hoist `⟦arg⟧ ∈ ⟦dom⟧` as a raw assumption.
+    ///
+    /// The subject is `(λ x : Prop. x) (∀ p : Prop, p)`: the argument is a `Π`,
+    /// which `has_type` *cannot* type (`dprod_in_universe` is a named library
+    /// gap, `HtMiss::Pi`) while inference *can* (`ty_pi_prop`) — so the
+    /// unconditional certificate can only have come through the handoff, and
+    /// under the pre-handoff code this exact subject was a raw hoist
+    /// (verified red: certificate `Conditional`, one assumption).
+    ///
+    /// Three atoms, deliberately, because two pass under either half-bug:
+    /// * `checked` — the application is inferred first; its beta certificate
+    ///   must be `Proved` and unconditional. Red if the write site or the read
+    ///   site is missing.
+    /// * `unchecked` — a same-shaped redex nobody inferred; its certificate
+    ///   must stay `Conditional` (the honest hoist). Red if the store forges
+    ///   — e.g. if the read stopped requiring an entry.
+    /// * `poisoned` — a true theorem filed under the wrong key (the `checked`
+    ///   entry copied onto the `unchecked` argument): the read guard must
+    ///   refuse it and fall through to the honest hoist, `Conditional` again —
+    ///   never `Admitted`, which is what handing the wrong membership to the
+    ///   beta lemma's `u_mp` produces. Red if the recall skips
+    ///   `derived::establishes`.
+    ///
+    /// Mutation-verified: deleting the `app_arg_checked` call in `infer_app`
+    /// turns `checked` red; making `domain_obligation` return entries without
+    /// the `establishes` check turns `poisoned` red (`Admitted("beta: …")`).
+    #[test]
+    fn beta_domain_obligation_reads_the_application_checks_handoff() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_tc(crate::env::EnvLimit::Empty, |tc| {
+                let x = tc.ctx.str1("x");
+                let p = tc.ctx.str1("p");
+                let zero = tc.ctx.zero();
+                let prop = tc.ctx.mk_sort(zero);
+                let style = crate::expr::BinderStyle::Default;
+                let v0 = tc.ctx.mk_var(0);
+                let v1 = tc.ctx.mk_var(1);
+
+                // (λ x : Prop. x) (∀ p : Prop, p) — argument a closed `Π`.
+                let id_prop = tc.ctx.mk_lambda(x, style, prop, v0);
+                let arg = tc.ctx.mk_pi(p, style, prop, v0);
+                let app = tc.ctx.mk_app(id_prop, arg);
+
+                // `checked`: the application goes through inference first, as
+                // every declaration subterm does; the check hands the
+                // argument's typing off.
+                let inferred = tc.infer(app, crate::tc::InferFlag::Check);
+                assert_eq!(inferred.ty, prop, "sanity: the redex types at Prop");
+                let cert = tc
+                    .def_eq(app, arg)
+                    .expect("the redex contracts to its argument");
+                assert!(
+                    cert.is_proved() && crate::certify::is_unconditional(&cert),
+                    "the domain obligation must arrive from the application's own check \
+                     — outright, no hoisted assumption; got {cert:?}"
+                );
+
+                // `unchecked`: same shape, nobody inferred it — the store has
+                // no entry, `has_type` has no rule for a `Π` subject, and the
+                // honest answer is the counted conditional hoist.
+                let q = tc.ctx.str1("q");
+                let arg2body = tc.ctx.mk_pi(q, style, v0, v1);
+                let arg2 = tc.ctx.mk_pi(p, style, prop, arg2body);
+                let app2 = tc.ctx.mk_app(id_prop, arg2);
+                let cert2 = tc
+                    .def_eq(app2, arg2)
+                    .expect("the checker's verdict does not depend on the backend");
+                assert!(
+                    matches!(cert2, TgCert::Conditional { .. }),
+                    "an unchecked argument's obligation stays an honest hoist — got {cert2:?}"
+                );
+
+                // `poisoned`: the `checked` entry — a true theorem — filed
+                // under the `unchecked` argument's key. The recall must check
+                // the claim and refuse, leaving the honest hoist; using it
+                // would send the wrong membership into the beta lemma and
+                // surface as an `Admitted` gap.
+                let dom_t = tc.certifier.interp(tc.ctx, prop);
+                let good = tc
+                    .certifier
+                    .arg_mems
+                    .get(&(arg, dom_t.clone()))
+                    .cloned()
+                    .expect("the checked application's handoff entry exists");
+                let q2 = tc.ctx.str1("q2");
+                let arg3body = tc.ctx.mk_pi(q2, style, v0, v1);
+                let arg3 = tc.ctx.mk_pi(p, style, prop, arg3body);
+                let app3 = tc.ctx.mk_app(id_prop, arg3);
+                tc.certifier.arg_mems.insert((arg3, dom_t), good);
+                let cert3 = tc
+                    .def_eq(app3, arg3)
+                    .expect("the checker's verdict does not depend on the backend");
+                assert!(
+                    matches!(cert3, TgCert::Conditional { .. }),
+                    "a recalled entry that does not establish the claim must be refused, \
+                     falling back to the honest hoist — got {cert3:?}"
                 );
             })
         })
