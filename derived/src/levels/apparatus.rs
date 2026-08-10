@@ -36,6 +36,7 @@
 use kernel::{Env, Formula, Term, Thm};
 
 use crate::levels::ite0::{ite0, Ite0};
+use crate::levels::leq::{leq, Leq};
 use crate::levels::order::{order, Order};
 use crate::levels::rules::{rules, Rules};
 use crate::levels::srt::{srt, Srt};
@@ -53,6 +54,12 @@ pub struct LevelPoly {
     pub i: Ite0,
     /// Trichotomy, the case principle, and `max = ∪`.
     pub ord: Order,
+    /// The `≤`-kit: the `⊆` facts and `imax(u,v) = v` under a guarded
+    /// `u ≤ v`. Carried here because the level *bridge* — the consumer that
+    /// reconciles a canonical level's spelling with a rule instance's
+    /// (`LEVELPOLY.md` §5.4 blocker 1) — spends it per obligation, and it
+    /// must be over this very chain.
+    pub lq: Leq,
     /// The internal universe ladder `lvl`.
     pub ut: UTower,
     /// `srt(n) = ite0(n, U₀, app(lvl, n))` and its laws.
@@ -93,13 +100,14 @@ pub fn level_poly(env: &mut Env, tower: &Tower) -> Option<LevelPoly> {
 
     let i = ite0(env, &r.ap)?;
     let ord = order(env, &r)?;
+    let lq = leq(env, &r, &i, &ord)?;
     let ut = utower(env, &r, tower.space.lu, &tower.space.lu_ax, tower.space.pow, &tower.space.pow_ax)?;
     let s = srt(env, &r, &i, &ut, tower)?;
     let ru = rules(env, &r, &i, &ord, &ut, &s, tower)?;
 
     let imax_in_omega = derive_imax_in_omega(env, &r, &i, &ord)?;
 
-    Some(LevelPoly { r, i, ord, ut, s, ru, imax_in_omega })
+    Some(LevelPoly { r, i, ord, lq, ut, s, ru, imax_in_omega })
 }
 
 /// `⊢ ∀u ∀v. ((u ∈ ω ∧ v ∈ ω) → ite0(v, ∅, u ∪ v) ∈ ω)`.

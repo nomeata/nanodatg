@@ -620,7 +620,10 @@ fn sub_iff(env: &mut Env, core: &OmegaCore, peano: &Peano, trichotomy: &Thm) -> 
 /// `⊢ ∀a ∀b. (b ⊆ a → a ∪ b = a)` when `keep_left`, else
 /// `⊢ ∀a ∀b. (a ⊆ b → a ∪ b = b)` — a `⊆`-comparable pair's union is the
 /// larger side, by Extensionality over the membership condition.
-fn union_absorb_one(env: &mut Env, sets: &Sets, bin_iff: &Thm, keep_left: bool) -> Option<Thm> {
+///
+/// `pub(crate)` for [`crate::levels::leq`], whose `imax_absorb` spends the
+/// `keep_left = false` direction — one construction, not two.
+pub(crate) fn union_absorb_one(env: &mut Env, sets: &Sets, bin_iff: &Thm, keep_left: bool) -> Option<Thm> {
     let (a, b, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tz) = (Term::var(a), Term::var(b), Term::var(z));
     let bu = bin_union(sets, ta.clone(), tb.clone());

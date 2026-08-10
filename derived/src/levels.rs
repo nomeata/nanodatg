@@ -11,6 +11,7 @@
 //! |---|---|
 //! | [`ite0`] | the conditional term former `ite0(g,a,b)` — `a` if `g = ∅`, else `b` |
 //! | [`order`] | trichotomy on `ω`, the case principle, `⊆`-linearity, and `max = ∪` |
+//! | [`leq`] | the certified `≤`-kit: `⊆` facts and `imax(u,v) = v` under a guarded `u ≤ v` |
 //! | [`utower`] | the internal universe ladder `lvl` — the recursion theorem at `G := U(·)`, seed `ω` |
 //! | [`srt`] | `srt(n) = ite0(n, U₀, app(lvl,n))` — `⟦Sort ·⟧` as one term function of a variable level |
 //! | [`rules`] | typing rules at a variable level: Π-formation at `imax`, with the `ite0` split |
@@ -30,6 +31,7 @@
 
 pub mod apparatus;
 pub mod ite0;
+pub mod leq;
 pub mod order;
 pub mod srt;
 pub mod utower;
