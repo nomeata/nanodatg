@@ -4536,9 +4536,41 @@ So the honest ceiling for the whole thrust, as it stands:
   #150 has to decide about — not a coverage question but a question about what
   a certificate means for a genuinely choice-shaped construction.
 
-### What is not done
+### What building the arm costs, and the one thing to settle first
 
 Nothing is generated: this is a compiled prototype at three targets and
 `Modelgen.primIso` has no W arm. What it settles is the two things that had to
 be settled before one is worth building — that the construction exists at a
 covered bill, and how much of the residue it reaches.
+
+What it does **not** settle is the mechanism, and that is the load-bearing
+unknown rather than any of the mathematics. **The W core cannot be hand-built
+as `Expr`s the way every other arm is.** Arm C's largest emitted term is a
+`PSigma` and an `Eq.rec`; W's `canon`, `Wind`, `sub_wf` and `Wrec_key` are
+thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
+`WellFounded`, and writing them as `Expr` builders is not a bigger version of
+what `Simple.lean` already does.
+
+Measured, so the next attempt starts from a number: the tagged core's full
+constant closure — types *and* values, from `W`, `sup`, `Wrec`, `Wrec_iota` —
+is **190 constants**: 19 inductives, 24 constructors, 15 recursors, 69
+definitions, 58 theorems, 3 quotient constants and **2 axioms**, `propext` and
+`Quot.sound`. (`WFromPaths.lean`'s classical core is 252; the 62-constant
+difference is the `Classical` machinery.)
+
+So the arm's shape is: get those 190 into the output once, splice-and-model the
+19 inductives among them — every one is a shape §8.2 already models — and emit
+per-declaration glue against them. The choices for "get them in" are to compile
+the core into `modelgen` and copy its `ConstantInfo`s (needs either a runtime
+`importModules` of the tool's own olean or a compile-time quoter, since Lean
+core has no `ToExpr Expr`), or to ship the core as an export fragment and read
+it with the reader this package already has. That decision is the next thing to
+take, and it is worth taking deliberately: it is the difference between an arm
+that is a week of `Expr` plumbing and one that is a day of wiring.
+
+One piece of per-declaration glue **is** required here where arm C had none:
+the currying eta lemmas, one `funext` per constructor, because `W` hands you
+`(f : B' t → W) → …` and Lean's recursor wants the fields uncurried. Both W
+prototypes name it as where a generator first breaks. It costs no *axiom*
+beyond what the core already spends (§8.16's first correction), but it is
+emitted code per constructor rather than a uniform term.
