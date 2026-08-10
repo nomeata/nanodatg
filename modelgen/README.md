@@ -78,13 +78,19 @@ mutuality, a mutual model *removes* it, so the second at zero mimics would be
 the identity.
 
 A **third construction is opt-in** (`--prim-models`, `Modelgen/Simple.lean`):
-a plain — non-mutual, non-nested, non-indexed, non-recursive — inductive is
-modelled as ordinary `def`s and `theorem`s over five primitive inductives,
-`Eq`, `False`, `PSigma`, `Nat`, `Acc`, each spliced at Lean's shape if the
-input lacks it. Same four interface names, no internal declarations at all,
-every ι theorem `Eq.refl`. `MODELGEN.md` §8 carries the construction, its
-measured coverage (115 of `init-prelude`'s 125 simple inductives; every
-decline with a printed reason), and its cost (+23 % instructions there).
+a plain — non-mutual, non-nested — inductive is modelled as ordinary `def`s
+and `theorem`s over five primitive inductives, `Eq`, `PSigma`, `Nat`, `Acc`
+and `PULiftP`, each spliced at Lean's shape if the input lacks it. Same four
+interface names, no internal declarations at all, every ι theorem `Eq.refl`.
+`False` is **not** a primitive — it is derived, Church-encoded, with its
+`Sort w` eliminator from `0 = 1` and a `Nat.rec` family. `PULiftP.{u}
+(p : Prop) : Sort u` is: it is the one basis type former that reaches a bare
+variable sort and can be *empty*, which is what makes `PEmpty` modellable and
+retires the `False`-Π pad that used to cost a `funext`. `MODELGEN.md` §8
+carries the construction, its measured coverage (119 of `init-prelude`'s 125
+simple inductives; every decline with a printed reason), its cost (+24 %
+instructions there), and §8.6 the lean4lean cross-check on the one decline
+that is a level-arithmetic gap rather than a type error.
 
 **They compose in one pass.** A nested declaration's model *is* a mutual block,
 so the second construction runs on it too — and with `--prim-models` the third
@@ -176,10 +182,14 @@ declaration, and declines with `nested model name taken`.
 
 ### The prelude
 
-A model's proofs need `Eq`, the quotient, `Quot.sound` and `funext`. If the
-input lacks any of them they are **spliced in** — `funext` is *derived* from
-`Quot.sound`, not asserted as an axiom — and only when a model is actually being
-generated, so a file with nothing to model comes back byte-identical.
+A nested or mutual model's proofs need `Eq`, the quotient, `Quot.sound` and
+`funext`. A `--prim-models` model needs `Eq` and whichever basis primitives it
+actually uses, and **no axiom at all** — the construction stopped needing
+`funext` when the `False`-Π pad was replaced by `PULiftP ⊤`, whose uniqueness
+is definitional. If the input lacks anything a model needs it is **spliced
+in** — `funext` is *derived* from `Quot.sound`, never asserted as an axiom —
+and only when a model is actually being generated, so a file with nothing to
+model comes back byte-identical.
 
 ## `monomorph`
 
@@ -221,9 +231,13 @@ For the two always-on constructions there is no shape Lean accepts that
 so: it comes from a sweep of what Lean's `inductive` command actually admits,
 and **every refusal path has a fixture**. Three shapes remain that *Lean
 itself* rejects, recorded with the error Lean gives. `--prim-models` is
-narrower by design — recursive and indexed carriers decline with the reason
-printed, `MODELGEN.md` §8.2's table is the census, and its refusal paths have
-fixtures too (`tests/prim_declines.lean`).
+narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
+paths have fixtures too (`tests/prim_declines.lean`). What it declines today:
+recursive or indexed carriers at a **never-zero** sort, indexed or recursive
+**subsingletons**, indices or recursion at a maybe-zero sort, and one
+level-arithmetic gap. Indexed and recursive small-eliminating `Prop`s model,
+and so does the whole maybe-zero class. Every remaining decline names a
+compiled prototype under `scripts/inductive-basis/` that would close it.
 
 On Mathlib (5.6 GB export, 670,630 declarations):
 

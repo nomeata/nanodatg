@@ -6,28 +6,37 @@ import Modelgen.Mutual
 The third construction in this package, behind `--prim-models` and off by
 default. Where the first two constructions remove *nesting* and *mutuality*,
 this one removes the inductive declaration itself: a plain (non-mutual,
-non-nested, non-indexed, non-recursive) inductive's carrier, constructors,
-recursor and ι rules are emitted as ordinary `def`s and `theorem`s over a
-fixed basis of primitive inductives —
+non-nested) inductive's carrier, constructors, recursor and ι rules are
+emitted as ordinary `def`s and `theorem`s over a fixed basis of primitive
+inductives —
 
-    Eq   False   PSigma   Nat   Acc
+    Eq   PSigma   Nat   Acc   PULiftP
 
 — each spliced into the output at Lean's own shape if the input lacks it,
-exactly as the existing prelude splice does for `Eq`, the quotient and
-`funext`. A consumer that recognises the four interface names then needs to
-implement only the five primitives (plus `Quot`), not general inductives.
+exactly as the existing prelude splice does for `Eq`. A consumer that
+recognises the four interface names then needs to implement only the five
+primitives (plus `Quot`), not general inductives.
 
-The commission named the basis `{Eq, False, Sigma, Acc, Nat}`. Verified
-rather than inherited (`scripts/prim-basis/Derivations.lean`, compiled at
-the pinned toolchain): the Σ must be **`PSigma`-shaped** — `{α : Sort u} →
-(α → Sort v) → Sort (max 1 u v)` — because `Subtype`, structures with
-`Prop` fields, and every `Prop`-fibred pair in the constructions below need
-a Σ over `Sort`, which a `Type`-only `Sigma` cannot give without `PLift`, a
-sixth inductive. `Acc` is in the basis for the recursive construction
-(plan B, not implemented here) and is therefore not yet spliced: the
-prelude splice's rule is "only what a model actually needs".
+**`False` is not in the basis**: it is *derived* (Church `∀ p : Prop, p`,
+with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
+transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
+declaration. Its place is taken by **`PULiftP.{u} (p : Prop) : Sort u`**,
+the lift of a proposition to a bare variable sort. Lean's *elaborator*
+refuses that declaration; Lean's *kernel* takes it and grants it large
+elimination by the subsingleton rule, and `addDeclCore` is the kernel. Core
+itself crosses the same line twice, for `PUnit` and `PEmpty`, with
+`set_option bootstrap.inductiveCheckResultingUniverse false`
+(`Init/Prelude.lean:123,211`).
 
-## The three routes
+The Σ is **`PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
+Sort (max 1 u v)` — because `Subtype`, structures with `Prop` fields, and
+every `Prop`-fibred pair in the constructions below need a Σ over `Sort`,
+which a `Type`-only `Sigma` cannot give without `PLift`, a sixth inductive.
+`Acc` is in the basis for the recursive `Type`-valued construction, which is
+not implemented here, and is therefore not yet spliced: the prelude splice's
+rule is "only what a model actually needs".
+
+## The three routes, by the carrier's sort
 
 **Type route** — carrier sort `w` never zero:
 
@@ -35,64 +44,99 @@ prelude splice's rule is "only what a model actually needs".
 T._model.self p⃗ := Σ'(n : Nat), F n        F : a Nat.rec cases tower
 F ȷ̄  := the j-th constructor's field chain  (right-nested PSigma,
         boxed and padded to exactly Sort w when the levels demand it)
-F n  := an empty type at Sort w for n ≥ #ctors  (Σ'(h : False), False.rec h)
+F n  := PULiftP.{w} ⊥, an empty type at Sort w, for n ≥ #ctors
 ```
 
-The recursor destructs the pair, cases on the tag with `Nat.rec` — the
-large elimination the basis buys, and the reason `Nat` is in it — and then
+The recursor destructs the pair, cases on the tag with `Nat.rec` — the large
+elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
-* **A pad** closes a level gap. At a `dsingOk` level the pad is `D`
-  ([`Modelgen.dsingAt`]), every element *defeq* to canonical — no
-  transport. At any other level — a bare parameter in the gap, `PULift`'s
-  shape — it is the `False`-Π singleton `(h : False) → False.rec (fun _ =>
-  Sort ℓ) h`, at exactly `Sort ℓ` because `imax 0 ℓ = ℓ`; its uniqueness is
-  `funext` at a pointwise `False.rec`, the destructor transports along it,
-  and on a constructor application the transport sits on a closed
-  self-equality that K-like reduction on `Eq.rec` erases.
-* **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's
-  level is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an
-  `imax` under a `max` — what collapses it is a never-`Prop` codomain, so
-  the field is stored with its codomain wrapped as `Σ'(_ : S), D 1` and
-  unboxed by projection wherever the minor consumes it; `unbox (box v) ≡ v`
-  by βι, structure eta, proof irrelevance and function eta, no transport.
+* **A pad** closes a level gap. At a `dsingOk` level it is `D`
+  ([`Modelgen.dsingAt`]); at any other level — a bare parameter in the gap,
+  `PULift`'s shape — it is `PULiftP.{ℓ} ⊤` ([`Modelgen.unitAt`]), which
+  exists at *every* level. **Both are definitionally canonical**: structure
+  eta on `PULiftP` plus proof irrelevance on `⊤` collapses every element
+  onto the canonical one, so no pad costs a transport. The `False`-Π
+  singleton this replaced was not canonical and cost a `funext`.
+* **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's level
+  is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an `imax` under
+  a `max` — what collapses it is a never-`Prop` codomain, so the field is
+  stored with its codomain wrapped as `Σ'(_ : S), D 1` and unboxed by
+  projection wherever the minor consumes it; `unbox (box v) ≡ v` by βι,
+  structure eta, proof irrelevance and function eta, no transport.
 
-**Every ι theorem is `Eq.refl`** on all routes.
+**Church routes** — carrier sort literally `0`, or **maybe-zero**. One
+construction serves both. The carrier is the impredicative Church encoding
 
-**Prop route** — carrier sort `0`: the impredicative Church encoding
-`∀ C : Prop, (∀ f⃗₀, C) → … → C`. At a `Prop` motive the dependent recursor
-is the fold itself — the motive's proof argument is definitionally
-irrelevant. When the export's recursor is large-eliminating the
-subsingleton rule holds, so (non-indexed) every field is a proposition and
-is **extracted** by instantiating the encoding at the field's own type;
-proof irrelevance closes the motive.
+```text
+T._model.self p⃗ ι⃗ := ∀ C : (∀ ι⃗, Prop), k⃗ → C ι⃗
+```
 
-**Singleton route** — carrier at a *variable* sort (`Prop` at some
-instantiations, `Type` at others: `PUnit : Sort u`). The basis reaches such
-a sort exactly once: the `False`-Π singleton above, which is a type at any
-`Sort w` and is inhabited. So a one-constructor, no-field declaration
-models with it as carrier, the canonical element as constructor, and the
-recursor a transport along the singleton's uniqueness — erased on the
-constructor by K-like reduction, so ι is `Eq.refl` here too.
+with `k_j` constructor `j`'s telescope, `T p⃗` replaced by `C` at its
+recursive fields as well as at its result ([`Modelgen.churchSwapAt`]); and at
+a maybe-zero sort that same proposition under `PULiftP.{w}`, which puts it at
+exactly `Sort w` for any `w`. The constructors are the folds, `up` of the
+folds under a lift. There is **no transport between the two**: structure eta
+gives `t ≡ up (down t)`, so `motive ι⃗ (up (down t))` and `motive ι⃗ t` are
+convertible, and the maybe-zero route is the `Prop` route with a `down` at
+one end and an `up` at the other.
+
+Three recursors:
+
+* **small elimination, no indices, no recursion** — the fold at
+  `C := motive t`. Every minor's motive is closed by definitional proof
+  irrelevance.
+* **small elimination, otherwise** — the fold at the Church *pair*
+  `Pair ι⃗ := ∀ D : Prop, (Self ι⃗ → (∀ h : Self ι⃗, motive ι⃗ h) → D) → D`
+  ([`Modelgen.pairArm`]). The plain fold does not serve here: a minor premise
+  wants `motive ι⃗_j (c_j f⃗)` and the fold offers `C ι⃗_j`, which proof
+  irrelevance stops identifying once the index moves; and a *recursive* minor
+  premise needs a carrier element to apply itself to, which only the pair's
+  first component supplies.
+* **large elimination** — zero constructors: Church `⊥`'s `Sort v`
+  eliminator. One constructor, no indices: the subsingleton rule that minted
+  the recursor says every field is a proposition, so extract each by
+  instantiating the encoding at the field's own type, sequentially, with
+  proof irrelevance closing the motive.
+
+**Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
+sort the contract never forces two provably distinct elements: zero
+constructors and the subsingleton shape large-eliminate and are subsingletons
+anyway, and everything else there small-eliminates, so the motive lands in
+`Prop` and cannot discriminate. The lift of a proposition is exactly the
+right size — which is also why `PEmpty` models: `PULiftP ⊥` is *empty*, where
+every type the old basis reached at a bare sort was inhabited.
+
+**Every ι theorem is `Eq.refl`** on all three routes. On the Church routes
+with a `Prop`-valued motive that is free for a reason unrelated to reduction:
+both sides of every ι equation are proofs of one proposition.
 
 ## What declines, and why
 
-* **recursive** (`List`, `Lean.Name`, …) — the carrier needs the W/path
-  construction (plan B). Not implemented; the reason is printed.
-* **indexed** (`HEq`, `Nat.le`, the composed `T._model.aux`) — the
-  skeleton-plus-`good` translation (thesis §5.2) is not implemented.
-* **an empty carrier at a variable sort** (`PEmpty : Sort u`) — not
-  constructible over the basis: every basis former lands at `0`, `1` or
-  `max 1 ·`, a Π reaches a bare `u` only through an `imax` collapse whose
-  body is already at `Sort u`, and the one `Sort u`-valued family with no
-  `Sort u` seed is `False.rec`'s over the empty domain — whose Π is
-  *inhabited*. A model of `PEmpty.rec` would be a closed term that, at
-  `motive := fun _ => False`, proves `False`.
-* **a variable-sort carrier that is not the singleton** (several
-  constructors, or fields) — the singleton is the fragment's only type at
-  such a sort.
+* **recursive at a never-zero sort** (`List`, `Lean.Name`, …) — the carrier
+  needs the tuple-tower construction for linear recursion, or W/path in
+  general. `scripts/inductive-basis/LinearRec.lean` compiles the linear arm
+  (three targets, every ι by `rfl`, no `funext`); it is not wired up here.
+* **indexed at a never-zero sort** (the composed `T._model.aux`) — thesis
+  §5.2's skeleton-plus-`good`; `scripts/inductive-basis/IndexedCarve.lean`
+  compiles it on the thesis's own example.
+* **an indexed subsingleton** (`HEq`) — the packed-index-equation model,
+  INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case, compiled as `HEq'` in
+  `scripts/inductive-basis/PropArms.lean`.
+* **a recursive subsingleton** (`Inf`) — the `AccPhi` carrier of
+  INDUCTIVE-BASIS §3.2, which is where `Acc` finally earns its place.
+  `scripts/inductive-basis/AccPhi.lean` compiles it, *and* refutes the
+  thesis's own `accφ` reduction at thesis.txt:1838.
+* **indices or recursion at a maybe-zero sort** — neither is threaded
+  through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
   boxing does not collapse (an `imax`-leveled *domain* inside the field).
+  This one is a **level-incompleteness** decline, not a type error: the
+  padded chain equals the carrier's level at every instantiation and Lean's
+  normal-form level defeq does not see it. `MODELGEN.md` §8.6 has the
+  lean4lean cross-check.
+* a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
+  occurrence, which is layer 1's business.
 * the five **basis primitives themselves** — the exemption that makes the
   construction well-founded.
 -/

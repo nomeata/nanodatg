@@ -2420,8 +2420,17 @@ models whose proofs transport (§8.1's `False`-Π pads and the singleton
 route), §1.5's quotient-and-`funext` splice.
 
 The commission named the basis `{Eq, False, Sigma, Acc, Nat}` and asked for
-it to be verified rather than inherited. Two corrections came out of that,
-both compiled at the pinned toolchain in `scripts/prim-basis/Derivations.lean`:
+it to be verified rather than inherited. **The basis it ended at is
+`{Eq, PSigma, Nat, Acc, PULiftP}`** — `INDUCTIVE-BASIS.md` is the derivation,
+and the two changes are that `False` is derived rather than primitive (Church
+`∀ p : Prop, p`, with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`
+family) and that `PULiftP.{u} (p : Prop) : Sort u` joins. Lean's *elaborator*
+refuses `PULiftP`; Lean's *kernel* takes it and grants it large elimination by
+the subsingleton rule, and `addDeclCore` is the kernel — core crosses the same
+line twice itself, for `PUnit` and `PEmpty`
+(`Init/Prelude.lean:123,211`). Three corrections came out of the original
+commission, the first two compiled at the pinned toolchain in
+`scripts/prim-basis/Derivations.lean`:
 
 * **the Σ must be `PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
   Sort (max 1 u v)`. `Subtype`, every structure with a `Prop` field, and
@@ -2494,21 +2503,41 @@ extracts each field by instantiating the encoding at the field's own type —
 sequentially, a later field's type instantiated at the earlier extractions,
 with proof irrelevance closing the gap.
 
-**Singleton route** — carrier at a **variable** sort: `Prop` at some
-instantiations and `Type` at others, `PUnit : Sort u`'s shape, where
-neither of the other two routes applies at generation time. The basis
-reaches such a sort exactly once — every former lands at `0`, `1` or
-`max 1 ·`, and a Π lands on a bare parameter only through an `imax`
-collapse whose body is already there, which only `False.rec`'s family over
-the empty domain provides — and that once is the `False`-Π singleton
-above, which is *inhabited*. So a one-constructor, no-field declaration
-models with the singleton as carrier, its canonical element as the
-constructor, and the recursor a transport along the singleton's uniqueness,
-erased on the constructor by K-like reduction. A model on this route waits
-for the input's own quotient the way a mutual model waits for the input's
-own `Eq` (§1.6): `PUnit` sits at record 29 of `init-prelude` and `Quot` at
-351, so `PUnit._model` is emitted after the quotient, with `Quot.sound` —
-which `init-prelude` never declares — spliced beside it.
+**Maybe-zero route** — carrier at a **variable** sort: `Prop` at some
+instantiations and `Type` at others, `PUnit`'s and `PEmpty`'s shape. This is
+the Church route under a lift. `PULiftP p : Sort u` lands at exactly such a
+sort for *any* `u`, and — unlike every type the old basis could reach there —
+it is **empty exactly when `p` is**. So the whole class is one construction:
+the carrier is `PULiftP.{w}` of the Church encoding, the constructors are `up`
+of the folds, and the recursor is the `Prop` route's with a `down` at one end.
+There is no transport between them: structure eta on `PULiftP` gives
+`t ≡ up (down t)` definitionally.
+
+That is also why the pads improved. A pad at a level `dsingOk` cannot build —
+a bare parameter in the gap, `PULift`'s shape — used to be the `False`-Π
+singleton `(h : False) → False.rec (fun _ => Sort ℓ) h`, whose uniqueness is
+`funext` at a pointwise `False.rec`. It is now `PULiftP.{ℓ} ⊤`, which is a
+**definitional** singleton at every level (structure eta plus proof
+irrelevance on `⊤`), so the destructor transports nothing and the model
+splices no axiom.
+
+**The strong-induction fold.** A small-eliminating `Prop` that is indexed or
+recursive cannot use the plain fold: a minor premise wants
+`motive ι⃗_j (c_j f⃗)` where the fold offers `C ι⃗_j`, and proof irrelevance
+stops identifying the two once the index moves; and a recursive minor premise
+needs a carrier element to apply itself to, which the fold has thrown away.
+The repair (INDUCTIVE-BASIS §3.1) is to fold at the Church *pair*
+
+```text
+Pair ι⃗ := ∀ D : Prop, (Self ι⃗ → (∀ h : Self ι⃗, motive ι⃗ h) → D) → D
+```
+
+of a rebuilt carrier element and a proof about every element at that index.
+The `∀ h` is what proof irrelevance collapses; the element is what the
+recursive minor premise consumes. `scripts/inductive-basis/PropArms.lean`
+compiles it against `Nat.le` and `Nat.le.below` — the latter with two
+parameters (one a function type), two indices (one a *proof*), and a
+recursive field *followed* by a non-recursive one.
 
 ι is `Eq.refl` on all three routes.
 
@@ -2516,37 +2545,87 @@ which `init-prelude` never declares — spliced beside it.
 
 `vendor/arena-tests/good/init-prelude.ndjson` has 126 inductive types. One
 (`Lean.Syntax`) is nested and is §1's business. Of the 125 simple ones,
-**115 model and 10 decline**, each decline with its printed reason:
+**119 model and 6 decline**, each decline with its printed reason:
 
 | declined | count | reason |
 |---|---|---|
-| `Eq`, `Nat`, `False` | 3 | the basis itself — the exemption that makes the construction well-founded |
-| `Nat.le`, `HEq`, `Nat.le.below` | 3 | indexed families (thesis §5.2's skeleton-plus-`good`, not implemented) |
-| `List`, `Lean.Name`, `Lean.ParserDescr` | 3 | recursive `Type`-valued — the carrier needs the W/path construction (§8.4) |
-| `PEmpty` | 1 | an **empty** carrier at `Sort u`, which the basis cannot build: its one type at a variable sort is the inhabited `False`-Π singleton, and a model of `PEmpty.rec` would prove `False` (§8.1) |
+| `Eq`, `Nat` | 2 | the basis itself — the exemption that makes the construction well-founded |
+| `List`, `Lean.Name`, `Lean.ParserDescr` | 3 | recursive `Type`-valued — the carrier needs the tuple-tower construction for linear recursion (`scripts/inductive-basis/LinearRec.lean`, compiled) or W/path in general (§8.4) |
+| `HEq` | 1 | an indexed **subsingleton** — the packed-index-equation model, INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case, compiled as `HEq'` in `scripts/inductive-basis/PropArms.lean` |
 
-`PUnit` models on the singleton route, `PULift` on a `False`-Π pad, and
-`Trans` on a boxed field — the three level-shaped gaps this construction
-used to hand to `monomorph`, which was wrong twice over: the tool must
-stand on its own, and the variable-sort and bare-parameter shapes were
-never beyond the fragment (§8.1). `PEmpty` is the one that is, and the
-decline says exactly why.
+plus, on the composed side, `Lean.Syntax._model.0._model.aux` — indexed at a
+never-zero sort, thesis §5.2's skeleton-plus-`good` (§8.3).
+
+**What moved, and why.** The previous tranche modelled 115 and declined 10.
+Four of those ten are now models:
+
+* **`False`** left the basis. It is Church `∀ p : Prop, p`, and its `Sort w`
+  eliminator is `0 = 1` plus a `Nat.rec`-built family to transport along
+  ([`Modelgen.cfalseElim`]) — so it models like any other declaration, and
+  the three places the construction used `False` (the empty fibre beyond a
+  tag tower, the level pad, the variable-sort carrier) use `PULiftP` of
+  Church-`⊥` or Church-`⊤` instead.
+* **`PEmpty`** was recorded here as *not constructible*, and that was wrong
+  about the basis rather than about the type. Over `{Eq, False, PSigma, Nat,
+  Acc}` every type at a bare `Sort u` is inhabited, so the claim held; it
+  does not survive the sixth primitive. `PULiftP.{u} (p : Prop) : Sort u` is
+  empty exactly when `p` is, and `PEmpty._model.self := PULiftP ⊥`.
+* **`Nat.le`** and **`Nat.le.below`** were recorded as indexed families
+  needing thesis §5.2. They do not: they are small-eliminating `Prop`s, and
+  the Church encoding carries indices by quantifying `C` over the index
+  telescope. What they *did* need is the strong-induction fold (§8.1).
+
+`PUnit` models on the maybe-zero route, `PULift` on a `PULiftP ⊤` pad, and
+`Trans` on a boxed field.
+
+### The three oracles
 
 Every generated declaration goes through `Environment.addDeclCore` with
-checking on, and §4's statement oracle runs on all of it: **263 statements
+checking on. §4's statement oracle runs on all of it: **271 statements
 compared against the installed recursors' own rules, 0 differ**. Replaying
-the whole output export with kernel checking on accepts all 2312
-declarations. The run splices one basis member (`PSigma`), `Quot.sound`
-(once, at `PUnit` — `init-prelude` has the quotient but not the axiom), and
-a namespaced `funext` per transporting model (`PUnit._model.funext`,
-`PULift._model.funext`), and reports every splice.
-Filtering the output again with the flag on declines 118 times at the name
+the whole output export from bytes, through `addDeclCore` with checking on,
+accepts **2326 declarations and rejects 0** — `modelgen/EnvProbe.lean` mode
+`C`, which is new; mode `A` deliberately swallows rejections because it is
+asking about visibility, and nothing in the tree counted them before.
+
+The run splices exactly two basis members, `PSigma` and `PULiftP`. It
+splices **no `funext`, no `Quot.sound` and no quotient**, and no model waits
+on the input's quotient any more: the `False`-Π singleton's uniqueness was
+`funext` at a pointwise `False.rec`, and `PULiftP`'s is *definitional* —
+structure eta on a single-constructor index-free inductive, plus proof
+irrelevance on `⊤`. That retired both axioms and two spliced declarations
+(`PUnit`'s model went from 7 declarations to 4, `PULift`'s from 5 to 4).
+
+Filtering the output again with the flag on declines 131 times at the name
 guard and returns the file byte-identical — idempotence, §1.5's mechanism
 unchanged.
 
-Fixtures: `modelgen/tests/prim_shapes.lean` is one positive occupant per
-route variant, `modelgen/tests/prim_declines.lean` one per refusal path with
-its reason pinned by prefix, both in `Test.lean`'s table.
+### Fixtures and mutations
+
+`modelgen/tests/prim_shapes.lean` is one positive occupant per route
+variant and `modelgen/tests/prim_declines.lean` one per refusal path with
+its reason pinned by prefix, both in `Test.lean`'s table. Shapes added with
+this tranche: `PE` (empty at `Sort u`), `PM` (two constructors there), `PT`
+(three, with *distinguishable* field telescopes), `PF` (a field), `PI` (a
+field at the carrier's own sort), `IdxP` (indexed, non-recursive) and `Le3`
+(indexed *and* recursive, three constructors, whose front-end-generated
+`Le3.below` is the fixture's only two-index witness).
+
+Three mutations were run against the new arm and each caught something a
+different fixture could not:
+
+| mutation | red | **green**, and why that is right |
+|---|---|---|
+| fields and induction hypotheses handed to the minor in the wrong order | `Le3` | `IdxP` — no recursive field, so the two orders are the same array |
+| Pair premises handed to the fold in reverse constructor order | `IdxP`, `Le3` | `Tor` — three constructors but no indices and no recursion, so it takes the plain-fold path |
+| ι stated at reversed index arguments | `Le3.below`, `Nat.le.below` | `Le3`, `IdxP` — one index cannot distinguish an index ordering |
+
+The third is the two-atoms lesson one dimension up, and it is why the
+fixture needs a two-index family. Note also that on the Church routes ι is
+`Eq.refl` **by proof irrelevance**, so an ι theorem cannot catch a
+minor-order bug there at all; what catches a permutation is the minor
+premise failing to typecheck, and that needs the constructors' telescopes to
+differ — which is why `PT` and `Le3` are built the way they are.
 
 ## 8.3 Composition: nested → mutual → primitives, and where it stops today
 
@@ -2558,8 +2637,10 @@ model leaves behind). On `Lean.Syntax` the tag models — it is a plain
 enumeration — and **`aux` declines as indexed**, which it always is: the tag
 is its index. So the claim "layer 3 composes at the end of the chain" is
 **confirmed in mechanism and bounded in coverage**: it will be whole exactly
-when indexed families are (§8.4), and the decline is recorded per run rather
-than asserted here.
+when indexed families at a never-zero sort are (§8.4), and the decline is
+recorded per run rather than asserted here. The `Prop`-valued indexed
+families are done — `Nat.le` and `Nat.le.below` model — but `aux` is
+`Type`-valued, so it waits on the skeleton-and-carve.
 
 ## 8.4 Plan A against plan B — what is settled and what remains
 
@@ -2594,37 +2675,150 @@ from the primitives directly, recursor as `Acc.rec` on the subterm relation
   no shape covered that the path construction does not cover.
 
 **Verdict: plan A was not impossible on the measured corpus; it is W in
-disguise plus bookkeeping.** The recursive class therefore declines today
-with plan B named as the continuation, and the honest cost of that
-continuation is the one `W-FROM-LFP.md` §4 already priced: building the
-gist's tactic-elaborated proof terms — `Acc.fix_eq`, the casts, the
-propositional ι — as raw `Expr`s. The remaining classes are the indexed
-families (thesis §5.2 skeleton-plus-`good`, which §8.3's composition also
-waits on), recursive `Prop`s (the Church induction derivation — the
-strong-induction predicate `S m := T' m ∧ motive m`, mechanical but real),
-and the two shapes §8.1 shows unreachable from the basis: an **empty**
-carrier at a variable sort (`PEmpty` — the fragment's one type there is
-inhabited), and a field whose level keeps an `imax` on a *domain* after
-boxing. The variable-sort singleton, the bare-parameter pad and the
-`imax`-leveled field are constructions now, not gaps.
+disguise plus bookkeeping.** But the corpus is finitely branching, and at
+*linear* recursion — every constructor with at most one recursive field, no
+recursive field under a binder — there is a third answer that is neither, and
+it is fully definitional: the tuple tower. `scripts/inductive-basis/
+LinearRec.lean` compiles it on three targets (`List`, a `Lean.Name` copy, and
+an interleaved base/step shape with fields on both sides of the recursive
+one), **every ι rule by `rfl`, no `funext`, no axiom at all**. The schema is
+
+```text
+V 0     := Σ'(tag : Nat), Base_tag          -- a Nat.rec tag tower
+V (n+1) := Σ'(tag : Nat), Step_tag (V n)
+T       := Σ'(n : Nat), V n
+```
+
+with the spine `n` counting the recursive depth, and it needs three repairs
+the naive version does not have: every chain terminated by a pad (so a
+constructor whose fields are all `Prop`s still lands in `Type u`, and the
+zero-field case needs no special rule); the pad being `PULiftP ⊤` rather than
+`D`, since that is definitionally canonical at *every* level; and a tag tower
+with zero real tags being the constant family rather than a `Nat.rec`, which
+would otherwise stick on the bound tag. It genuinely cannot express a
+constructor with **two** recursive fields — the spine is a single `Nat` and
+`⟨r.1 + 1, …⟩` has one predecessor to take — so `Lean.ParserDescr` (whose
+`binary`, `sepBy` and `sepBy1` branch) stays with plan B. That arm is
+compiled and **not wired up**; wiring it is the named continuation for
+`List` and `Lean.Name`.
+
+Three classes remain declined, each with a compiled prototype naming the
+construction: recursive `Type`-valued (above); an indexed **subsingleton**
+(`HEq` — the packed-index-equation model, `PropArms.lean`'s `HEq'`, one
+`Eq.rec` at a `PSigma`-packed index telescope, ι by `rfl`, resting on
+`PSigma` structure eta); and a recursive subsingleton (`AccPhi.lean`, which
+is where `Acc` finally earns its place in the basis, and which also refutes
+and repairs the thesis's own `accφ` reduction at thesis.txt:1838). The
+variable-sort carriers, the bare-parameter pad, the `imax`-leveled field and
+the indexed and recursive `Prop`s are constructions now, not gaps; the
+`imax`-on-a-domain field is a *level-incompleteness* decline and §8.6
+cross-checks it against lean4lean.
 
 ## 8.5 Cost, measured
 
 `perf stat -e instructions`, `init-prelude`, two runs each, deterministic to
-0.04 %:
+0.02 %:
 
 | | instructions | output bytes |
 |---|---|---|
-| `modelgen` (layers 1+2) | 2.565 × 10⁹ | 3,857,568 |
-| `modelgen --prim-models` | 3.164 × 10⁹ | 4,664,741 |
+| `modelgen` (layers 1+2) | 2.567 × 10⁹ | 3,857,568 |
+| `modelgen --prim-models` | 3.183 × 10⁹ | 4,716,327 |
 
-**+23 % instructions and +21 % output bytes for 116 models** (115 input
-inductives and one composed tag) — about 5 × 10⁶ instructions per model.
-The three level-shaped models this section gained cost 18 × 10⁶
-instructions over the 3.146 × 10⁹ they joined. Reproduce with:
+**+24.0 % instructions and +22.3 % output bytes for 120 models** (119 input
+inductives and one composed tag) — about 5.1 × 10⁶ instructions per model.
+Against the previous tranche's 3.164 × 10⁹ for 116 models this is **+0.6 %
+for four more models**, which is the honest shape of the change: the new arms
+are the same order of work per declaration as the old ones, and nothing in
+the common path got slower. Reproduce with:
 
 ```bash
 cd modelgen && lake build
 perf stat -e instructions ./.lake/build/bin/modelgen \
   ../vendor/arena-tests/good/init-prelude.ndjson -o /dev/null --prim-models --quiet
 ```
+
+## 8.6 The level-incompleteness decline, cross-checked against lean4lean
+
+One refusal path is **not** a type error and should not be read as one. A
+field whose level keeps an `imax` on a *domain* of its own telescope — the
+`BoxF` shape, `modelgen/tests/prim_declines.lean` — declines with
+
+```text
+BoxF.mk's fields reach Sort imax (imax u v) v and the carrier is
+Sort max 1 u v: no pad or codomain box closes the gap
+```
+
+but the gap **is** closed at every instantiation. The planner's own candidate
+pad already works semantically:
+
+```text
+max 1 (imax (imax u v) v) (max 1 u v)  =  max 1 u v      at every σ
+```
+
+Lean does not accept it, because Lean's level definitional equality is
+normal-form comparison and a `max` does not absorb an `imax` it dominates
+(`scripts/inductive-basis/SortPolyNeg.lean` N3). This is exactly
+`INDUCTIVE-BASIS.md` §2's *sixth item*.
+
+**lean4lean** — Lean's kernel reimplemented in Lean 4 — carries an
+experimental level normalizer intended to be complete for level algebra, so
+it is the right oracle for the question. Pinned at commit `3dc52e0` ("Prove
+`Expr` cached flag correctness", #19), whose `lean-toolchain` we set to our
+own `leanprover/lean4:v4.29.1`; checked out under `vendor-l4l/` (gitignored,
+like `/vendor`). The survey below is `vendor-l4l/lean4lean/LevelSurvey.lean`,
+run as
+
+```bash
+T=~/.elan/toolchains/leanprover--lean4---v4.29.1
+cd vendor-l4l/lean4lean
+env -u LEAN_PATH LEAN_SYSROOT=$T LEAN_PATH=$PWD/.lake/build/lib/lean \
+  $T/bin/lean LevelSurvey.lean
+```
+
+It compares four judgements on each pair: `sem` (brute-force semantic
+equality over all assignments in 0..4), `lean` (`Level.isEquiv`), `l4l`
+(lean4lean's `Level.isEquiv'`), and `fix` (see below).
+
+| pair | sem | lean | l4l |
+|---|---|---|---|
+| `imax (max u v) w ~ max (imax u w) (imax v w)` | yes | **no** | yes |
+| `imax u (max v w) ~ max (imax u v) (imax u w)` | yes | **no** | yes |
+| `imax u (imax v w) ~ imax (max u v) w` | yes | **no** | yes |
+| `max 1 (imax u v) ~ max 1 v (imax u v)` | yes | **no** | yes |
+| `max 1 u v ~ max 1 (imax u v) u v` | yes | **no** | **no** |
+| `max u v ~ max u v (imax u v)` | yes | **no** | **no** |
+| `BoxF` padded at `w` | yes | **no** | **no** |
+| `BoxF` padded at `max 1 u` | yes | **no** | **no** |
+| `max 1 u ~ max 1 (imax v u) u` | no | no | no |
+| `max 2 v ~ imax 2 v` | no | no | no |
+
+**Verdict: lean4lean is strictly more complete than Lean and still does not
+rescue `BoxF`.** It buys four `imax`-distributivity laws Lean lacks; it does
+not buy `max`-absorption of a dominated `imax`, which is the one law this
+decline needs. So the decline stands, and it now carries the finer reason:
+*rejected by a level checker that is incomplete in a way lean4lean does not
+repair either*. Nothing is emitted that Lean's kernel would refuse.
+
+Two further findings, both from reading lean4lean's own notes and source:
+
+* lean4lean **documents** the incompleteness as deliberate-for-now
+  (`vendor-l4l/lean4lean/divergences.md`): `Level.normalize'`/`isEquiv'` is
+  "an experimental new algorithm … intended to be complete for level algebra
+  … currently known to be incomplete in cases where Lean's algorithm is not",
+  and the plan of record is to verify Lean's original algorithm and keep the
+  new one as a backburner project.
+* the `fix` column of the survey is a **candidate repair**, and it turns all
+  ten semantically-true pairs true while leaving both false pairs false.
+  lean4lean's normal form is a map whose keys are variable sets; the `imax`
+  paths leave behind entries with `const = 0` and no variables — keys that
+  subsumption emptied but did not erase — and `isEquiv'` compares them
+  structurally. Dropping empty entries before the comparison is the whole
+  fix. This is a *reading* of `Lean4Lean/Level.lean` plus a measurement of
+  the repaired predicate on the twelve pairs, not a proof of completeness,
+  and it is offered upstream-shaped rather than as something this repository
+  depends on.
+
+Nothing in `modelgen` requires the better algorithm today: the population it
+would rescue on our corpus is **empty** (`init-prelude` has no `BoxF`-shaped
+declaration; the fixture is designed). What the cross-check settles is that
+the sixth item is a real gap and which side of it lean4lean is on.
