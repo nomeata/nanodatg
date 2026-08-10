@@ -600,14 +600,30 @@ mini's *def* equations, which mini no longer derives under `Split`; the
 residue is B5's, unchanged. Three files regressed against `ForceMini` and
 are named, counted and fallen back rather than netted: `052_reduceCtorParam
 .mk`, `113_reduceCtorParamRefl.mk`, `114_reduceCtorParamRefl2.mk` decline
-`ind-spec(…: parameter reduction)` under `Split` because that arm's threaded
-`whnf_conv` needs the defining equation of a def (`id`) the policy routed to
-the checker, and mini's adoption guard (typing-carrying entries only —
-correctly) does not take the checker's entry for it; the checker checks all
-three groups via the counted fallback, and the corpus ratchet under `Split`
-is 86 exit-0 + 3 exit-4 + 2 declines against `ForceMini`'s 89 + 0 + 2,
-which reproduces the unrouted run exactly (798 / 1014 published, B4's
-numbers, pinned by `route_tg.rs`). **External dependency, unchanged**:
+`ind-spec(…: parameter reduction)` under `Split` — and the cause, traced to
+the store entry at the miss (first written here as an adoption-guard refusal
+and corrected in place on the owner's challenge), is **B5's residue in the
+other direction, after a fully successful crossing**: the shared store held
+`id` with *both* certificate slots (`carrier_by=Checker`,
+`typing=Some(Checker)`, `defeq=Some(Checker)` — `store_declar_typing` and
+`const_abbrev` merged onto one carrier), `adopt_shared` took it (two of the
+7 adoptions are exactly these), the arm's threaded `whnf_conv` δ-stepped
+along the adopted equation — and then mini's β step (`beta_evidence`,
+`kernel.rs`) asked `as_lam` to take the **checker's carrier** apart, and
+the checker's lambda symbol is in no table of mini's dispatch:
+`Gap::NotDecomposable`, seven times on `052`, §3.5's "structure it cannot
+take apart" verbatim. Not an ownership failure and not a guard failure —
+the environment delivered the def and its equation; what is missing is
+B5's shared skeleton-site tables, which now have a production witness in
+each direction. (One true code fact noted while ruling the guard out:
+`adopt_shared` requires a typing and carries `defeq` only as a passenger,
+so a defeq-only entry — e.g. a def whose typing was `Dt::Conditional` — is
+invisible to mini. It was not the blocker here and loosening it is B5-scope
+work, to be done with a claim-check mutation, not by argument.) The checker
+checks all three groups via the counted fallback, and the corpus ratchet
+under `Split` is 86 exit-0 + 3 exit-4 + 2 declines against `ForceMini`'s
+89 + 0 + 2, which reproduces the unrouted run exactly (798 / 1014
+published, B4's numbers, pinned by `route_tg.rs`). **External dependency, unchanged**:
 checker's stage-1 scope wiring (THREADING-CENSUS §2) is what would turn the
 checker's 156 slots into a typing per def and the 7 into a population
 (§3.6); it is independent work, already sequenced first in PIVOT §5.
