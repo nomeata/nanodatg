@@ -115,14 +115,23 @@
 //! (§6.2), so both would have to change — `inhabit` to hand back a term, and
 //! the ledger to store it.
 //!
-//! That is the smaller half. The larger one is that **`ε` is not a term of the
-//! kernel's language and cannot be made one here.** [`kernel::Thm::ax_choice`]
-//! is `∀X ∃f. IsChoiceFn(f,X)`, an existential; `kernel::thm::define` requires
-//! `∃!` and a choice function is never unique, so no symbol can be introduced
-//! for it. `derived/src/choice.rs` says exactly this and carries `f` as a **free
-//! variable under the antecedent `IsChoiceFn(f,u)`** instead — which makes
-//! every theorem about it hypothetical, and [`crate::ev::Sealed`] (the
-//! checker's, shared) refuses a theorem with hypotheses.
+//! **That was described here as the smaller half of the problem, with the
+//! larger being that "`ε` is not a term of the kernel's language and cannot be
+//! made one here". The larger half is gone, and it is now the only half.** The
+//! paragraph is rewritten rather than annotated, because it told the next reader
+//! that the blocker was in `kernel/` and `derived/`, and it is in this file and
+//! `crate::ledger`.
+//!
+//! `ε` **is** a term of the kernel's language. `kernel::thm::henkin` mints a
+//! 0-ary constant from `⊢ ∃y. φ` with `FV(φ) ⊆ {y}` — a Henkin constant, not
+//! Skolemisation, which at arity ≥ 1 would be unsound here — and
+//! [`derived::choice::Epsilon`] is its one caller and the seam a replacement
+//! would cut at. `Epsilon::on(env, u)` requires a **closed** `u`, which every
+//! rung of `derived::tower` is, and yields two hypothesis-free sentences:
+//! `⊢ IsChoiceFn(ε, Uₙ)` and
+//! `⊢ ∀x. ((x ∈ Uₙ ∧ ∃w. w ∈ x) → app(ε,x) ∈ x)`. Both reach a
+//! [`crate::ev::Sealed`] — the funnel checks `hyps().is_empty()` and there is
+//! nothing in either to check against.
 //!
 //! **The nonemptiness half is already there**, which is worth saying so that
 //! nobody spends an agent on it: `Nonempty` is class (P), its carrier is
@@ -134,17 +143,48 @@
 //! *ladder* beneath `elim_psi` is not usable here and does not need to be: its
 //! `Pⱼ : βⱼ ⊆ 1` is false for a data field.)
 //!
-//! So the missing thing is not a lemma. It is a decision about whether mini's
-//! evidence may carry one distinguished, whole-run hypothesis
-//! `IsChoiceFn(f, U_ω)` — discharged once at the top against
-//! `derived::choice::choice_fn_existence`, which is Carneiro's "fix a choice
-//! function `ε` on `U_ω`" verbatim — and that decision changes what a `Sealed`
-//! means for `checker/` too. The alternative, a kernel rule turning `⊢ ∃x. φ`
-//! into a fresh symbol with `⊢ φ(c)`, is conservative and small and was
-//! **already declined**: `derived/src/choice.rs` records that "no
-//! `define_choice` primitive was added to let it".
-//! `mini/tests/fixtures/standard_axioms.lean` is the witness that keeps the
-//! four pairs measurable until one of the two is taken.
+//! So the missing thing is still not a lemma, and it is no longer a decision
+//! either — the kernel rule was taken, on 2026-08-10, and the alternative
+//! (mini's evidence carrying one distinguished whole-run hypothesis
+//! `IsChoiceFn(f, U_ω)`, which would have changed what a `Sealed` means for
+//! `checker/` too) was **not**. What is left is plumbing in this file and in
+//! `crate::ledger`, and it splits by level in a way worth writing down, because
+//! the two halves are unequal and only one of them needs `ε` at all.
+//!
+//! ### `σ = [0]` — four pairs' worth of two, and no `ε`
+//!
+//! At `u = 0` the type is `∀ {α : Prop}, Nonempty α → α`. The nest bottom's
+//! `ty` is `α : Sort 0`, so [`crate::kernel::Checker::lam_nest`] takes
+//! `lam_evidence`'s **`Prop` branch at both binders and `tm` is `•`** — the
+//! existing `t.tm == Some(point)` check passes unchanged and the ledger's
+//! `term: ip.point()` is already right. The obligation is `⊢ • ∈ ⟦α⟧`, and that
+//! is not `elim_psi` but the class-(P) ladder: `TruncFields::steps[0]` needs
+//! `P₀ : β₀(α) ⊆ 1`, which at `u = 0` is [`crate::rec_prop::subset_of_unit`] at
+//! the `α` binder's `⟦α⟧ ∈ U₀` — the same closure [`propext_eq`] already writes
+//! below. `crate::proj_prop::trunc_typing`'s major-premise block is the
+//! template.
+//!
+//! ### `σ = [1]` and above — this is where `ε` is
+//!
+//! `P₀` is false for a data field above `Prop`, so the ladder is unusable and
+//! the fact needed is `TruncFields::elim_psi`,
+//! `⊢ ∀α. (• ∈ ‖Nonempty α‖ → ∃y. y ∈ β₀(α))` — which is exactly the
+//! `∃w. w ∈ x` antecedent of [`derived::choice::Epsilon::chooses`]. The other
+//! antecedent, `⟦α⟧ ∈ Uᵤ`, *is* the `α` binder's own membership, because
+//! [`Interp::sort`] is `prelude.tower.u(u)`. So the bottom is `ε_u` at `⟦α⟧`,
+//! one `Epsilon` per rung.
+//!
+//! Three things then have to move, none of them in `kernel/` or `derived/`:
+//! [`inhabit`] must hand back a `Term` beside the `Thm` (its `t.tm == point`
+//! check becomes "the nest interprets, and the membership is about *that*
+//! term", which is strictly stronger); `crate::ledger` must store that term
+//! instead of `ip.point()`; and `lam_evidence`'s **non-`Prop`** branch fires
+//! from an axiom nest for the first time, which is the one part of this with no
+//! precedent to copy.
+//!
+//! `mini/tests/fixtures/standard_axioms.lean` keeps all four pairs measurable
+//! meanwhile, and it is still measuring 4: **the kernel rule and its
+//! encapsulation closed no pair on their own, and nothing here changed.**
 //!
 //! # What `propext` alone buys on the generated models — counted
 //!
