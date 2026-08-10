@@ -4401,7 +4401,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // only for the ledger. An adopted `mini` carrier is a certificate
             // that crossed; a cross entry none of whose equations matched is a
             // counted decline, and the fallback is today's private mint.
-            let entries = self.core.consts().borrow_mut().get(k, sp, Engine::Checker);
+            let entries = self.core.consts().borrow_mut().get(k, sp);
             let mut cross_offered = false;
             for e in &entries {
                 if let Some((ax, by)) = &e.defeq {
@@ -9327,7 +9327,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if let Some(key) = self.const_key(ctx, name, levels) {
             use crate::const_store::{Engine, Slot};
             let sp = self.spell(ctx, name);
-            let entries = self.core.consts().borrow_mut().get(&key, &sp, Engine::Checker);
+            let entries = self.core.consts().borrow_mut().get(&key, &sp);
             let want = Formula::mem(te.clone(), ty.clone());
             let mut offered = false;
             let mut cross_offered = false;
@@ -14563,26 +14563,47 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         };
         use crate::const_store::{Engine, Slot};
         let sp = self.spell(ctx, name);
-        let entries = self.core.consts().borrow_mut().get(&key, &sp, Engine::Checker);
-        let mut slots: Vec<(Sealed, Engine)> =
+        let entries = self.core.consts().borrow_mut().get(&key, &sp);
+        let slots: Vec<(Sealed, Engine)> =
             entries.iter().filter_map(|e| e.typing.clone()).collect();
-        // This engine's own slot first — behaviour-preserving where it exists;
-        // the other engine's typing is tried when this engine derived none,
-        // which is exactly a certificate crossing, and `typing`'s own
-        // statement guard decides whether it fits.
-        slots.sort_by_key(|(_, by)| *by != Engine::Checker);
-        let Some((t, by)) = slots.into_iter().next() else {
+        if slots.is_empty() {
             note_dt(Dt::Miss);
             if self.shared.borrow().declined_cond.contains(&key) {
                 note_dt(Dt::MissCond);
             }
             return self.ty_miss(crate::certify::TyGap::Const)
-        };
+        }
         note_dt(Dt::Hit);
         // Interpreting the constant is what fixes which symbol `⟦c⟧` is, and so
         // what a stored theorem has to be about.
         let te = self.interp(ctx, e);
         let tt = self.interp(ctx, ty);
+        // **Statement first, provenance never.** Up to one carrier per engine
+        // may be stored for a key, so there may be two typings here and one of
+        // them has to be picked. This used to pick by writer — `sort_by_key(|
+        // (_, by)| *by != Engine::Checker)`, own slot first — which was the
+        // one place in this file where a decision read the crossing ledger's
+        // tag rather than a statement. It picks by *conclusion* now: the slot
+        // that says what this obligation wants, whoever wrote it.
+        //
+        // Measured identical, which is the point. Over the 91 tutorial
+        // exports the crossing report is unchanged to the field
+        // (`checkerSlots=71`, `declinedByCheckerTyping=481`); dropping the
+        // preference *without* replacing it is not — that run reads 60 and
+        // 503. So the old rule was load-bearing and this one carries the same
+        // load without provenance, which is what let `ConstEntry`'s
+        // certificate slots stop storing a writer at all.
+        //
+        // The writer is still read *below*, and only there: `note_adopted` /
+        // `note_declined` are defined as "the other engine wrote it" and there
+        // is no way to say that without a writer. That is the ledger, not a
+        // decision, and it is the whole of what the tag is for.
+        let want = Formula::mem(te.clone(), tt.clone());
+        let (t, by) = slots
+            .iter()
+            .find(|(s, _)| *s.concl() == want)
+            .cloned()
+            .unwrap_or_else(|| slots[0].clone());
         let out = self.typing(crate::certify::TyGap::Const, &te, &tt, t.into_thm(), Vec::new());
         if by != Engine::Checker {
             let cell = self.core.consts();

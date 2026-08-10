@@ -3339,7 +3339,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let Some(th) = self.th.as_mut() else { return false };
         let sp = name.to_string();
         let cell = th.ip.core().consts().clone();
-        let entries = cell.borrow_mut().get(&jk, &sp, Engine::Mini);
+        let entries = cell.borrow_mut().get(&jk, &sp);
         let Some(e) = entries
             .into_iter()
             .find(|e| matches!(&e.typing, Some((_, by)) if *by != Engine::Mini))

@@ -97,6 +97,55 @@ pub type ConstKey = (NameKey, Vec<LevelKey>);
 
 /// Which engine wrote a carrier or a certificate. A label for the crossing
 /// ledger — never a licence: readers guard statements, not provenance.
+///
+/// # Why a `by` is stored at all
+///
+/// The question was asked directly — *"why do you even store a `by` in the
+/// environment? once both engines mint the same terms, a certificate is a
+/// certificate"* — and the first half is right: **nothing decides whether to
+/// believe a theorem by looking here.** Every consumer matches the
+/// statement. So the tag is only worth its place if some reader needs to
+/// know *who wrote it* for a reason that is not belief.
+///
+/// One does, and it is the only one left. `CrossStats::adopted`,
+/// `declined`, `converged` and `divergent` are each *defined* as "the other
+/// engine wrote it": a certificate that crossed, a crossing that gapped, two
+/// engines that agreed on a carrier, two that did not. There is no way to
+/// state any of those without a writer, and they are the measurement the
+/// whole two-engine merge is steered by. That is the answer: the tag is the
+/// **ledger's**, and the environment is where the ledger keeps it because the
+/// entry is what the ledger is about.
+///
+/// The census behind that, each entry mutated and its green column measured
+/// over the 91 tutorial exports:
+///
+/// | reader | reads | class | mutation |
+/// |--------|-------|-------|----------|
+/// | [`ConstStore::publish`] — `converged`, `divergent`, [`ConstStore::census`] | `carrier_by` | ledger | — |
+/// | [`ConstStore::publish`] — one carrier per engine, first wins | `carrier_by` | **decision** | red: `one_carrier_per_engine_divergence_and_convergence_counted` |
+/// | `tg::const_abbrev`, `tg::has_type_const`, `tg::ty_const` — `note_adopted`/`note_declined` | `typing.1`, `defeq.1` | ledger | — |
+/// | `mini::kernel::adopt_shared` — `note_adopted` | `typing.1` | ledger | — |
+/// | `tg::ty_const` — which of two typings to try | `typing.1` | **decision** | **removed** |
+/// | `mini::kernel::adopt_shared` — adopt only a *foreign* typing | `typing.1` | **decision** | no test red, no number moves |
+///
+/// **One decision was removed.** `ty_const` picked between two stored
+/// typings by writer (own slot first). Dropping that preference outright
+/// moves the corpus report — `checkerSlots` 71 → 60,
+/// `declinedByCheckerTyping` 481 → 503 — so it was load-bearing, and *no
+/// test caught it*. Replacing it with the rule the header already claimed —
+/// pick the slot whose conclusion is the statement wanted, whoever wrote it
+/// — reproduces the baseline to the field. Statement first, provenance
+/// never, and now that is true of every decision in `tg.rs`.
+///
+/// **One decision stays, and it is worth naming.**
+/// `mini::kernel::adopt_shared` adopts only a typing this engine did *not*
+/// write. Engine-blind, the corpus report is unchanged to the field, because
+/// `adopt_shared` runs only where mini's own table has no entry and the store
+/// therefore holds no mini entry either — the filter never fires. It stays
+/// because if that invariant ever breaks, an engine-blind read would adopt
+/// its own certificate back and `note_adopted` would count a self-read as a
+/// crossing: the filter guards the *measurement*, not the belief, which is
+/// the same reason the tag exists at all.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Engine {
     Mini,
@@ -118,11 +167,18 @@ pub struct ConstEntry {
     pub spelling: Rc<str>,
     /// `⟦c.{σ}⟧`, this writer's carrier.
     pub term: Term,
-    /// Who minted the carrier.
+    /// Who minted the carrier. Read by [`ConstStore::publish`]'s
+    /// one-carrier-per-engine rule and by the `converged`/`divergent`
+    /// counters; see [`Engine`] for why a writer is stored at all.
     pub carrier_by: Engine,
-    /// `⊢ term ∈ ⟦ty[σ]⟧`, and who derived it.
+    /// `⊢ term ∈ ⟦ty[σ]⟧`, and who derived it. **The writer is the ledger's,
+    /// not a licence** — no consumer decides whether to believe this theorem
+    /// by reading it, and since the `ty_const` slot pick became
+    /// statement-first, no consumer decides anything by reading it. See
+    /// [`Engine`].
     pub typing: Option<(Sealed, Engine)>,
-    /// `⊢ term = ⟦val[σ]⟧` — the defining equation — and who derived it.
+    /// `⊢ term = ⟦val[σ]⟧` — the defining equation — and who derived it. Same
+    /// rule as [`ConstEntry::typing`].
     pub defeq: Option<(Sealed, Engine)>,
 }
 
@@ -238,7 +294,15 @@ impl ConstStore {
     /// disagreement is counted (`alias`) and the entry withheld. Clones: the
     /// caller guards statements against its own objects at its leisure,
     /// without holding the store's cell open.
-    pub fn get(&mut self, key: &ConstKey, spelling: &str, _reader: Engine) -> Vec<ConstEntry> {
+    ///
+    /// **It does not take the reader's engine, and that is the answer to
+    /// "why is a `by` stored at all?" in miniature.** It used to, as
+    /// `_reader: Engine` — a parameter every caller passed and this function
+    /// ignored — which made the store look provenance-aware on the read path
+    /// when nothing on that path has ever consulted a writer. A read is
+    /// decided by spelling and, at the caller, by statement. See the type
+    /// header for where the writer *is* read.
+    pub fn get(&mut self, key: &ConstKey, spelling: &str) -> Vec<ConstEntry> {
         let Some(list) = self.entries.get(key) else { return Vec::new() };
         let (hit, miss): (Vec<_>, Vec<_>) =
             list.iter().partition(|e| &*e.spelling == spelling);
@@ -332,12 +396,12 @@ mod tests {
         // counted; the carrier itself still lands.
         st.publish(&key(1), "c", Engine::Mini, a.clone(), None, Some(refl(&b)));
         assert_eq!(st.stats.incoherent, 1, "an incoherent slot must be counted");
-        let got = st.get(&key(1), "c", Engine::Checker);
+        let got = st.get(&key(1), "c");
         assert_eq!(got.len(), 1);
         assert!(got[0].defeq.is_none(), "an incoherent certificate must not be stored");
         // The coherent one lands.
         st.publish(&key(1), "c", Engine::Mini, a.clone(), None, Some(refl(&a)));
-        let got = st.get(&key(1), "c", Engine::Checker);
+        let got = st.get(&key(1), "c");
         assert!(got[0].defeq.is_some(), "a coherent certificate must merge into the entry");
     }
 
@@ -350,9 +414,9 @@ mod tests {
         // Same raw key, different name: the write is refused…
         st.publish(&key(2), "Zzz", Engine::Checker, b, None, None);
         assert_eq!(st.stats.alias, 1, "an aliased publish must be counted");
-        assert_eq!(st.get(&key(2), "List.cons", Engine::Mini).len(), 1);
+        assert_eq!(st.get(&key(2), "List.cons").len(), 1);
         // …and so is the read.
-        assert!(st.get(&key(2), "Zzz", Engine::Checker).is_empty());
+        assert!(st.get(&key(2), "Zzz").is_empty());
         assert_eq!(st.stats.alias, 2, "an aliased read must be counted");
     }
 
@@ -367,15 +431,15 @@ mod tests {
         let mut st = ConstStore::default();
         st.publish(&key(3), "c", Engine::Mini, a.clone(), None, None);
         st.publish(&key(3), "c", Engine::Mini, b.clone(), None, Some(refl(&b)));
-        let got = st.get(&key(3), "c", Engine::Mini);
+        let got = st.get(&key(3), "c");
         assert_eq!(got.len(), 1, "an engine's second carrier for one key must be dropped");
         assert_eq!(got[0].term, a, "…and the first must stand");
         st.publish(&key(3), "c", Engine::Checker, c.clone(), None, None);
-        assert_eq!(st.get(&key(3), "c", Engine::Mini).len(), 2);
+        assert_eq!(st.get(&key(3), "c").len(), 2);
         assert!(st.stats.divergent.contains(&key(3)), "two carriers must be counted divergent");
         // The checker meets mini's carrier: same term ⇒ merge, not a third row.
         st.publish(&key(3), "c", Engine::Checker, a.clone(), None, Some(refl(&a)));
-        let got = st.get(&key(3), "c", Engine::Checker);
+        let got = st.get(&key(3), "c");
         assert_eq!(got.len(), 2, "a same-term publish must merge, never stack");
         assert!(st.stats.converged.contains(&key(3)), "a cross-engine merge is convergence");
         let m = got.iter().find(|e| e.term == a).expect("mini's entry");
@@ -400,13 +464,13 @@ mod tests {
         // A reflexivity theorem offered as a typing: not a membership at all.
         st.publish(&key(4), "c", Engine::Checker, a.clone(), Some(refl(&a)), None);
         assert_eq!(st.stats.incoherent, 1);
-        assert!(st.get(&key(4), "c", Engine::Mini)[0].typing.is_none());
+        assert!(st.get(&key(4), "c")[0].typing.is_none());
         // A real membership about a *different* subject: still refused.
         st.publish(&key(4), "c", Engine::Checker, a.clone(), Some(u0_in_u1.clone()), None);
         assert_eq!(st.stats.incoherent, 2);
         // About its own subject: lands.
         st.publish(&key(5), "d", Engine::Checker, pre.u0(), Some(u0_in_u1), None);
-        assert!(st.get(&key(5), "d", Engine::Mini)[0].typing.is_some());
+        assert!(st.get(&key(5), "d")[0].typing.is_some());
     }
 
     #[test]
