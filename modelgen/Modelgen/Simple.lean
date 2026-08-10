@@ -1837,9 +1837,36 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
   match route with
   | PrimRoute.type =>
     if ni > 0 then
-      badShape "an indexed family at a never-zero sort (the skeleton-plus-good \
+      -- **The decline carries the arm's reach, so the census measures it.**
+      -- `CarveOverSkeleton.lean` (`MODELGEN.md` §8.15) closes this cluster by
+      -- splicing the *index erasure* as an ordinary inductive and carving the
+      -- family out of it. Its reach is therefore bounded by whether that
+      -- erasure models, and the dominant condition is the tuple tower's
+      -- ([`Modelgen.recSlotOf`]): at most one recursive field per constructor
+      -- and no recursive occurrence under a binder. Erasing the indices does
+      -- not move that test — a field `∀ z⃗, T p⃗ e⃗` erases to `∀ z⃗, S`, with
+      -- the same binders and the same count — so it can be asked here, of the
+      -- family itself, and the answer printed rather than guessed at later.
+      -- **It is an upper bound**: the erasure could still meet a level gap no
+      -- pad or box closes, which only building the arm will find.
+      let erasureLinear : Bool := exportCtors.all fun (_, cty) => Id.run do
+        let mut t := cty
+        for _ in [0:np] do
+          match t with
+          | .forallE _ _ b _ => t := b
+          | _ => return false
+        let mut nrec := 0
+        while t matches .forallE .. do
+          let .forallE _ dom b _ := t | unreachable!
+          if mentionsAny #[tname] dom then
+            nrec := nrec + 1
+            unless dom.getAppFn.isConstOf tname do return false
+          t := b
+        return nrec <= 1
+      badShape s!"an indexed family at a never-zero sort (the skeleton-plus-good \
         translation, thesis §5.2, is not implemented — the Church routes carry \
-        indices, the Nat-tagged sum does not)"
+        indices, the Nat-tagged sum does not); erasure linear: \
+        {if erasureLinear then "yes" else "no"}"
     -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.

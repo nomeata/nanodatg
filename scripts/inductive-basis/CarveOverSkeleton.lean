@@ -57,7 +57,19 @@ are each independently checked below.
 
   3. NO AXIOMS.  `#print axioms` is empty for all 22 derived constants.  The
      carve over W costs `[propext, Classical.choice, Quot.sound]` on every one
-     of its 24, from `sup` deciding `x.1 = a`; there is no such decision here.
+     of its 24, from `sup` deciding `x.1 = a`; there is no such decision here,
+     because there are no labels to decide an equality between -- the
+     skeleton's own recursor does the case analysis the tag stood in for.
+     This is now the difference between "modelled" and "modelled AND
+     CERTIFIABLE": `Classical.choice` has been refuted as a term of the
+     checker's language (a choice function is never unique, so `define`
+     cannot introduce it and every theorem through it stays hypothetical),
+     and a bill containing it will not be covered soon.  A bill of `[propext,
+     Quot.sound]` or any subset is covered today, and the empty bill trivially
+     is.  Note also what item E of `WFromPaths.lean` does NOT buy: it removes
+     the classical dispatch, but the currying glue's eta lemmas are each a
+     `funext`, and `funext` is proved from `Quot.sound` -- so the glue costs an
+     axiom as well as being the unschematic part.
 
   4. THE BASIS IS UNCHANGED.  Everything below is `Eq`, `PSigma` and the
      spliced skeleton.  No `List`, no `Option`, no `Sigma`, no `Subtype`, no

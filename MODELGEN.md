@@ -4145,6 +4145,50 @@ apart on its own, with `CTwo.l_ne_r` derived from the recursor and its two ι
 rules alone), and `Bal` (an index **telescope** of length two, packed into one
 `PSigma`, which is `Modelgen.packTyOf` — already built, already used by arm F).
 
+### Certifiable, and by construction rather than by luck
+
+The axiom-clause seat certified `propext` and then **refuted `Classical.choice`
+outright** — `ε` cannot be a term of the kernel's language, so a choice
+function is carried as a free variable under `IsChoiceFn`, every theorem
+through it is hypothetical, and `Sealed` refuses hypothetical theorems. Closing
+that needs an owner decision that has not been taken. So a model's bill is now
+the difference between *modelled* and *modelled and certifiable*, and it
+belongs in the census as a column rather than a remark:
+
+| route | bill | certifiable today |
+|---|---|---|
+| carve over a spliced skeleton (this section) | **none** | **yes** |
+| carve over W (`WIndexedCarve.lean`, all 24) | `propext, Classical.choice, Quot.sound` | no |
+| W alone (`WFromPaths.lean`, all 7) | the same three | no |
+| arm G (`AccArmShapes.lean`, 6) | `Classical.choice, Quot.sound` | no |
+
+**`propext` on its own closes nothing here**, and the reason is worth stating
+because it looks like it should: on the W route `propext` and
+`Classical.choice` come from the *same* source — `Classical.propDecidable`,
+hence choice, hence `Classical.em`, hence `propext` — so certifying `propext`
+alone unblocks no W model, and arm G never spends `propext` at all.
+
+`WFromPaths.lean`'s item E is the lever on the W side: the classical dispatch
+is avoidable whenever `B` factors through the constructor tag, because the
+label test is then `Fin k` equality. **For this arm it is moot** — there is no
+`B`. The carve over a spliced skeleton never decides an equality between
+labels, because it never has labels: the skeleton's own recursor does the case
+analysis the tag was standing in for. There is nothing to make the default,
+because there is no fallback.
+
+Two things that ought to be said to whoever builds the W arm rather than left
+here. First, item E's cheap path is a *different construction* and not a
+setting: `WCon.mk` opens `Classical` unconditionally (`WFromPaths.lean`, and
+`WIndexedCarve.lean:238`), which is why every one of the 31 constants across
+the two prototypes carries all three axioms even at targets like `BT` whose
+`B` does factor through the tag. Second, item E does not remove `Quot.sound`,
+because the **currying glue spends `funext` independently** — every eta lemma
+is a `funext` (`CBT.rec'`, `CTri.nodeKids_eq`, and so on), and `funext` in Lean
+core is proved from `Quot.sound`. So the best bill item E can reach is
+`[Quot.sound]`, which *is* covered. That last is a reading of the two
+prototypes and not a measurement; nothing has been built at item E's path.
+It is also a third reason the glue is worth not having.
+
 ### What it costs, and the rule that keeps the contract honest
 
 One spliced inductive per modelled family, which splice-and-model must then
@@ -4160,24 +4204,65 @@ inductive in front of a consumer, which is exactly the hole §8.13 closed. So
 the rule is **decline the family when its skeleton does not model.** A decline,
 never an emission.
 
-### The residue, split by who wrote the declaration
+### The residue, re-split — and the arm is worth a quarter of it, not nine tenths
 
 Re-measured on `pre-30000000` with the current binary — 110 declines, the same
-110 §8.9 sequences, split along an axis that census did not have:
+110 §8.9 sequences, split along two axes that census did not have. The second
+axis is now **printed by the decline itself**: the indexed decline carries
+`erasure linear: yes|no`, computed by the same test the tuple tower applies
+(`Modelgen.recSlotOf`: at most one recursive field per constructor, and no
+recursive occurrence under a binder). Erasing indices does not move that test —
+a field `∀ z⃗, T p⃗ e⃗` erases to `∀ z⃗, S`, same binders, same count — so it can
+be asked of the family itself, and the census measures the arm's reach instead
+of estimating it.
 
-| cluster | count | of which are this tool's own composed `_model.aux` |
-|---|---|---|
-| an indexed family at a never-zero sort | 68 | **42** |
-| branching or under-a-binder recursion | 37 | **0** |
-| basis / name taken / index-variable field | 5 | — |
+| cluster | count | this tool's own composed `_model.aux` | erasure linear |
+|---|---|---|---|
+| an indexed family at a never-zero sort | 68 | 42 | **25 yes / 43 no** |
+| branching or under-a-binder recursion | 37 | 0 | — (it *is* the erasure) |
+| basis / name taken / index-variable field | 5 | — | — |
 
-**Nearly two thirds of the indexed cluster is our own output.** Those are the
-single indexed inductives layer 2 emits when it packs a mutual block, fed back
-through layer 3 by `primCompose`. Every branching decline, by contrast, is an
-input declaration. That is worth knowing before sequencing: the indexed
-cluster is not 68 independent Mathlib shapes, it is 26 of them plus 42
-instances of one shape *this tool controls the generation of*, and their
-erasures are the erasures of the mutual blocks underneath them.
+**So the carve arm on its own closes at most 25 of 110 — 23 %, not 91 %.**
+That is the number that was not known, and it is an *upper* bound: an erasure
+that is linear could still meet a level gap no pad or box closes, which only
+building the arm will find. Of the 25, nineteen are input declarations and six
+are composed.
+
+**W is on the critical path for 80 of the 110, not 37.** The 37 branching
+declines are non-indexed and are W's directly. The 43 indexed families whose
+erasure is *not* linear need their skeleton modelled before they can be carved,
+and a branching skeleton is exactly what W is for. Adding those: 73 % of the
+residue waits on W, where §8.9's table reads as 35 %. The brief this arm was
+begun under put the combined figure at ~91 % of the residue and that is right —
+25 + 43 + 37 = 105 of 110 — but it attributed it to *one* arm, and the split is
+23 / 39 / 34.
+
+**This does not put the carve back on top of W**, and that is the point of
+building it over a spliced skeleton instead. The carve arm never names W: it
+splices the erasure, `genPrim` models that by whichever arm fits — the tuple
+tower where the erasure is linear, the W arm where it branches — and the carve
+is written against the real spliced inductive either way, with ι still
+`Eq.refl`. What the measurement changes is *sequencing*, not architecture: the
+two arms are independent to build and W unblocks more.
+
+**But the 25 and the 80 are not the same kind of coverage**, and after the
+axiom table above that difference is the sharper one. The 25 the carve arm
+reaches over a *linear* skeleton spend **no axioms**, so they are models and
+certificates both. The 43 whose skeleton branches inherit whatever the W arm
+spends on that skeleton — all three axioms as W stands today, `[Quot.sound]` at
+best — so they would be models that no certificate covers until either item E
+lands or `Classical.choice` is decided. Sequenced by certifiable coverage
+rather than by coverage, the arm that closes 23 % of the residue outranks the
+one that closes 34 %.
+
+**And nearly two thirds of the indexed cluster is our own output.** The 42
+composed occupants are the single indexed inductives layer 2 emits when it
+packs a mutual block, fed back through layer 3 by `primCompose`; 36 of those 42
+are the non-linear-erasure ones, because a mutual block of branching members
+packs into a branching aux. Every branching decline, by contrast, is an input
+declaration. The indexed cluster is not 68 independent Mathlib shapes — it is
+26 of them plus 42 instances of one shape *this tool controls the generation
+of*.
 
 ### What is not done, and is not to be assumed from the above
 
