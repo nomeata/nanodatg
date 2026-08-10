@@ -124,6 +124,15 @@ def report (o : Opts) (rep : Modelgen.Report) : IO Unit := do
   if o.checkRecursors then
     IO.eprintln s!"recursors: {rep.recChecked} checked against Lean's own, \
       {rep.recMismatch.size} differ{if rep.recMismatch.isEmpty then "" else s!": {rep.recMismatch}"}"
+  -- The planner's level census (`Modelgen/LevelAlgebra.lean`). An **escape**
+  -- is a pair the complete procedure accepts and `Lean.Meta.isLevelDefEq`
+  -- rejects, so it is the only place this build can differ from one asking
+  -- the elaborator alone. Printed always, because zero is the interesting
+  -- number as often as not.
+  let calls ← Modelgen.LevelAlgebra.levelCalls.get
+  let escapes ← Modelgen.LevelAlgebra.levelEscapes.get
+  IO.eprintln s!"levels: {calls} planner comparisons, {escapes} escapes\
+    {if Modelgen.LevelAlgebra.stockLevels then " (widening OFF — control run)" else ""}"
 
 def run (o : Opts) : IO UInt32 := do
   -- An unreadable input is the *input's* problem and exits 2, where it used to

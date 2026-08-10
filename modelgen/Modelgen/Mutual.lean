@@ -1,4 +1,5 @@
 import Modelgen.Model
+import Modelgen.LevelAlgebra
 
 /-!
 # The model of a **plain mutual block**, generated
@@ -212,7 +213,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- cannot show it, because Lean's elaborator makes the members agree on the
   -- nose — so this is a shape only the composition reaches.
   for k in [0:r] do
-    unless ← isLevelDefEq shapes[k]!.2 u do
+    unless ← LevelAlgebra.isLevelDefEqComplete shapes[k]!.2 u do
       badShape s!"a mutual block whose members land at different sorts \
         ({all[0]!} at {u}, {all[k]!} at {shapes[k]!.2})"
 

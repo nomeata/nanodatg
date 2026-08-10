@@ -401,7 +401,17 @@ which is the re-modelling guard.
 model; `Inf.below` is not, and neither are the other `.below` declarations
 Lean mints for these shapes — their index is `T.mk a` rather than one of the
 constructor's own data fields, so inversion cannot be stated at an arbitrary
-index. `BadC` is the same refusal reached deliberately. -/
+index. `BadC` is the same refusal reached deliberately.
+`BoxF` is still a decline and **declines for a different reason than it used
+to**. The planner's level equality is complete now
+([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
+and then Lean's *kernel*, whose `lean::is_equivalent` has the same
+`max`-does-not-absorb-`imax` gap the elaborator had, rejects the model. The
+message moved from `fields reach Sort imax` to `rejected by the kernel`, and
+that move is the measurement `MODELGEN.md` §8.6.1 reports: the repair has to
+reach the kernel as well, and a planner-side procedure alone cannot get
+`BoxF` past a stock one. Under `--interpose-levels` this row becomes a model
+of 4 declarations. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
       [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
@@ -417,7 +427,7 @@ def expectedPrim : List Row :=
       , ("MixI", "prim model shape: MixI.mk has an index-variable field")
       , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
       , ("Binder", "prim model shape: Binder.lim has a recursive field that is not")
-      , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")
+      , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")
       , ("SvIx", "prim model shape: SvIx.mk has an index-variable field")])
   , ("prim_graph",
       [("G1", 15), ("Nonempty", 4), ("G4", 15), ("Ac", 13), ("N", 8),

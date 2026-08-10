@@ -30,3 +30,7 @@ supportInterpreter = true
 name = "envprobe"
 root = "EnvProbe"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "levelfuzz"
+root = "LevelFuzz"

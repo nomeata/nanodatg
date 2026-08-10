@@ -2553,22 +2553,51 @@ the subsingleton rule that minted {ern} does not hold of it"
         forallBoundedTelescope tele (some nf) fun fs _ => do
           let tys ← fs.mapM ityp
           let ℓs ← tys.mapM ilevel
-          let plan : Array Level → GenM (Option (Option Level)) := fun ms => do
+          -- The three storage questions, asked with whichever level equality
+          -- the caller passes.
+          let plan : (Level → Level → GenM Bool) → Array Level →
+              GenM (Option (Option Level)) := fun eq ms => do
             let raw := if nf == 1 then ms[0]! else (ms.foldl mkLevelMax' (.succ .zero)).normalize
             if nf > 0 then
-              if ← isLevelDefEq raw w then return some none
+              if ← eq raw w then return some none
             let withOne := (ms.foldl mkLevelMax' (.succ .zero)).normalize
-            if ← isLevelDefEq withOne w then return some (some (Level.succ .zero))
-            if ← isLevelDefEq (mkLevelMax' withOne w) w then return some (some w)
+            if ← eq withOne w then return some (some (Level.succ .zero))
+            if ← eq (mkLevelMax' withOne w) w then return some (some w)
             return none
-          if let some pad? ← plan ℓs then
-            return { boxed := Array.replicate nf false, pad? }
-          let boxed := ℓs.map fun ℓ => levelHasIMax ℓ.normalize
-          if boxed.any id then
-            let ms ← (Array.range nf).mapM fun k => do
-              if boxed[k]! then ilevel (← boxTyOf tys[k]!) else pure ℓs[k]!
-            if let some pad? ← plan ms then
-              return { boxed, pad? }
+          -- bare first, then the same questions again on the boxed levels
+          let attempt : (Level → Level → GenM Bool) → GenM (Option CPlan) := fun eq => do
+            if let some pad? ← plan eq ℓs then
+              return some { boxed := Array.replicate nf false, pad? }
+            let boxed := ℓs.map fun ℓ => levelHasIMax ℓ.normalize
+            if boxed.any id then
+              let ms ← (Array.range nf).mapM fun k => do
+                if boxed[k]! then ilevel (← boxTyOf tys[k]!) else pure ℓs[k]!
+              if let some pad? ← plan eq ms then
+                return some { boxed, pad? }
+            return none
+          -- **The elaborator gets first refusal, and that ordering is the
+          -- whole design.** `LevelAlgebra.isLevelDefEqComplete` is complete
+          -- where `isLevelDefEq` is not, but a level equality only the
+          -- *complete* procedure can see is one **Lean's kernel cannot see
+          -- either** — the kernel's `lean::is_equivalent` is a different
+          -- function with the same `max`-does-not-absorb-`imax` gap. So a
+          -- plan reached by the complete procedure is a plan `addChecked`
+          -- rejects, unless the kernel is repaired too
+          -- (`modelgen --interpose-levels`, `MODELGEN.md` §8.6.1).
+          --
+          -- Asking completely *first* is therefore actively worse, and was
+          -- measured so: `Trans` in `init-prelude` has a bare chain the
+          -- complete procedure equates to `w` and the stock kernel does not,
+          -- so it took the unboxed plan and was rejected — where the
+          -- elaborator's own refusal had sent it to the boxing retry, which
+          -- the stock kernel accepts. Coverage went 125 → 124. Second
+          -- refusal costs nothing and cannot lose a plan that already works:
+          -- every declaration that models today models by the same route it
+          -- took before, and the complete procedure is consulted only where
+          -- the alternative is a decline.
+          if let some p ← attempt (fun a b => isLevelDefEq a b) then return p
+          if let some p ← attempt (fun a b => LevelAlgebra.isLevelDefEqComplete a b) then
+            return p
           let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
           badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
             pad or codomain box closes the gap"
