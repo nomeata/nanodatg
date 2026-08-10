@@ -2775,6 +2775,12 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
 /// domains. They are the same terms because both go through
 /// [`TgBackend::interp`] on the same Lean types.
 struct RecNest {
+    /// The ω-vocabulary level variables of the recursor's own levels —
+    /// motive universe included — in declaration order (`LEVELPOLY.md` §5.4
+    /// blocker 2c). The leading arguments of every body symbol and graph
+    /// below, and the leading instantiation terms of every beta and body
+    /// definition. Empty exactly when the levels are ground.
+    omega: Vec<FreeVar>,
     /// `⟦T.rec.{us}⟧`, the abbreviation symbol.
     head: Term,
     /// `⊢ ⟦T.rec.{us}⟧ = lam₁(D₁)`.
@@ -2818,17 +2824,20 @@ struct RecNest {
 /// disagreement has to be caught before any term is built.
 ///
 /// `None` if the shapes do not line up.
-fn nest_replay(lams: &[FnSym], doms: &[Term]) -> Option<Term> {
+fn nest_replay(lams: &[FnSym], doms: &[Term], wts: &[Term]) -> Option<Term> {
     let depth = doms.len();
+    let nw = wts.len();
     if lams.len() != depth || depth == 0 {
         return None
     }
     for (k, l) in lams.iter().enumerate() {
-        if l.arity() as usize != k + 1 {
+        if l.arity() as usize != nw + k + 1 {
             return None
         }
     }
-    Some(Term::apply(lams[0], vec![doms[0].clone()]))
+    let mut args: Vec<Term> = wts.to_vec();
+    args.push(doms[0].clone());
+    Some(Term::apply(lams[0], args))
 }
 
 /// **The claim-check on a stored nest**: is this nest the one *this* walk would
@@ -2846,6 +2855,7 @@ fn nest_replay(lams: &[FnSym], doms: &[Term]) -> Option<Term> {
 ///   abbreviation of the same body would be accepted, which is the
 ///   mislabelling the store exists to avoid.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn nest_agrees(
     stored_vars: &[FreeVar],
     stored_doms: &[Term],
@@ -2854,11 +2864,12 @@ fn nest_agrees(
     lams: &[FnSym],
     vars: &[FreeVar],
     doms: &[Term],
+    wts: &[Term],
 ) -> bool {
     if stored_vars != vars || stored_doms != doms {
         return false
     }
-    match nest_replay(lams, doms) {
+    match nest_replay(lams, doms, wts) {
         Some(outer) => *head_def.concl() == Formula::eq(head.clone(), outer),
         None => false,
     }
@@ -3085,6 +3096,12 @@ enum RecBottom {
 /// declines the cache rather than the declaration, and is counted. A stale
 /// entry therefore costs a rebuild, never a theorem about the wrong terms.
 struct GenInd {
+    /// The ω-vocabulary level variables the declaration was walked at, in
+    /// declaration order — route (ii)'s leading machine parameters
+    /// (`np' = nw + np`, `LEVELPOLY.md` §5.4 blocker 2b). Every derived-facing
+    /// instantiation list leads with these; the Lean-facing spine never
+    /// mentions them.
+    omega: Vec<FreeVar>,
     /// The `np` parameter variables the declaration's own binders were opened
     /// at. Every `βⱼ` body is stated over these.
     param_vars: Vec<FreeVar>,
@@ -3394,6 +3411,11 @@ impl Decline {
 /// Not stored: it is the *input* to `Inductive::build` and to the Lean-facing
 /// layer, and what survives is [`GenInd`].
 struct SpecWalk {
+    /// The ω-vocabulary variables of the declaration's level parameters, in
+    /// **declaration order** — route (ii)'s leading machine parameters
+    /// (`LEVELPOLY.md` §5.4 blocker 2b). Empty exactly when the levels are
+    /// ground.
+    omega: Vec<FreeVar>,
     /// The kernel variables the `np` parameter binders were opened at.
     param_vars: Vec<FreeVar>,
     /// The interpretations of the parameter binder types — the domains of the
@@ -4234,6 +4256,41 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn is_param_omega_var(&self, v: FreeVar) -> bool {
         self.param_omegas.values().any(|w| *w == v)
             || self.shared.borrow().param_vars.values().any(|w| *w == v)
+    }
+
+    /// The ω-vocabulary variables of `levels`, in declaration order under the
+    /// ambient σ — the ordered ω-parameter list route (ii) hands the
+    /// [`derived::inductive::Machine`] (`LEVELPOLY.md` §5.4 blocker 2b).
+    /// Deterministic in the declaration and computable before any `interp`;
+    /// empty exactly when the instantiated levels are ground, which is what
+    /// keeps the scheduled pass identical.
+    fn omega_of_levels(&mut self, ctx: &mut TcCtx<'t, 'p>, levels: LevelsPtr<'t>) -> Vec<FreeVar> {
+        let mut out = Vec::new();
+        let ls: Vec<LevelPtr<'t>> = ctx.read_levels(levels).to_vec();
+        for l in ls {
+            let l = ctx.under_sigma(l);
+            self.level_omega_vars(ctx, l, &mut out);
+        }
+        out
+    }
+
+    /// [`Self::omega_of_levels`]' walk: `Param`s at first occurrence, in
+    /// traversal order.
+    fn level_omega_vars(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>, out: &mut Vec<FreeVar>) {
+        match ctx.read_level(l) {
+            Level::Zero => {}
+            Level::Succ(a, _) => self.level_omega_vars(ctx, a, out),
+            Level::Max(a, b, _) | Level::IMax(a, b, _) => {
+                self.level_omega_vars(ctx, a, out);
+                self.level_omega_vars(ctx, b, out);
+            }
+            Level::Param(n, _) => {
+                let v = self.param_omega_var(n);
+                if !out.contains(&v) {
+                    out.push(v);
+                }
+            }
+        }
     }
 
     /// The `u ∈ ω` assumptions a level's interpretation needs, one per distinct
@@ -6287,6 +6344,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // instead of a constructor.
         let Declar::Recursor(r) = self.decls.get_declar(&name)? else { return None };
         let (uparams, ty) = (r.info.uparams, r.info.ty);
+        // Blocker 2c's ω-prefix: the recursor's own levels lead with the
+        // eliminating universe, so this list covers the motive's domain too —
+        // which `gi.omega` (the inductive's levels alone) would not.
+        let omega = self.omega_of_levels(ctx, levels);
+        let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
         let depth = r.major_idx() + 1;
         let mut cur = ctx.subst_expr_levels(ty, uparams, levels);
         let mut doms: Vec<Term> = Vec::with_capacity(depth);
@@ -6368,7 +6430,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 if depth != np + n + 2 {
                     return None
                 }
-                let ps: Vec<Term> = vars[..np].iter().map(|v| Term::var(*v)).collect();
+                let mut ps: Vec<Term> = g.gi.omega.iter().map(|v| Term::var(*v)).collect();
+                ps.extend(vars[..np].iter().map(|v| Term::var(*v)));
                 let minors: Vec<Term> =
                     vars[np + 1..np + 1 + n].iter().map(|v| Term::var(*v)).collect();
                 let t_policy = self.t_policy(&g.gi, &doms, &minors, np)?;
@@ -6383,9 +6446,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         // ── The nest, innermost first ───────────────────────────────────────
         //
-        // Level `k` is the graph `lamₖ(x₀…x_{k-1}, Dₖ)` whose body symbol is
-        // `tₖ(x₀…x_{k-1}, xₖ)`: every argument above it is a parameter, and its
-        // body is the next level's graph — or, at the bottom, `bottom_body`.
+        // Level `k` is the graph `lamₖ(w⃗, x₀…x_{k-1}, Dₖ)` whose body symbol
+        // is `tₖ(w⃗, x₀…x_{k-1}, xₖ)`: the ω-prefix, then every argument above
+        // it, and its body is the next level's graph — or, at the bottom,
+        // `bottom_body`. Fail closed if a domain or the bottom mentions an
+        // ω-variable the recursor's levels do not name.
+        if self
+            .omega_prefix(doms.iter().chain(std::iter::once(&bottom_body)))
+            .iter()
+            .any(|v| !omega.contains(v))
+        {
+            return None
+        }
         let mut lams: Vec<FnSym> = vec![];
         let mut betas: Vec<Thm> = vec![];
         let mut t_defs: Vec<Thm> = vec![];
@@ -6397,14 +6469,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 None => bottom_body.clone(),
                 Some(t) => t,
             };
-            let xs: Vec<FreeVar> = vars[..=k].to_vec();
+            let mut xs: Vec<FreeVar> = omega.clone();
+            xs.extend_from_slice(&vars[..=k]);
             let (tk, tk_def) = derived::define_abbrev(&mut self.env_mut(), &xs, &body)?;
             let (lamk, lamk_ax) = lambda_n(&mut self.env_mut(), &ap, tk)?;
             let betak = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)?;
             lams.push(lamk);
             betas.push(betak);
             t_defs.push(tk_def);
-            let mut args: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            let mut args: Vec<Term> = wts.clone();
+            args.extend(vars[..k].iter().map(|v| Term::var(*v)));
             args.push(doms[k].clone());
             inner = Some(Term::apply(lamk, args));
         }
@@ -6414,7 +6488,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         let (head, head_def) = self.ind_abbrev(name, &key.1, &inner?)?;
         let head_sym = self.parts.get(&head).map(|(f, _)| *f);
-        let nest = Rc::new(RecNest { head, head_def, lams, betas, t_defs, prefixes, bottom });
+        let nest = Rc::new(RecNest { omega, head, head_def, lams, betas, t_defs, prefixes, bottom });
         // Publish, so that the next declaration mentioning this recursor gets
         // the same `⟦T.rec⟧` instead of minting one — **whatever the bottom**.
         // A `General` bottom used to be excluded here because it carries a
@@ -6486,7 +6560,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if head != c.nest.head {
             return None
         }
-        if !nest_agrees(&c.vars, &c.doms, &head, &c.nest.head_def, &c.nest.lams, vars, doms) {
+        let wts: Vec<Term> = c.nest.omega.iter().map(|v| Term::var(*v)).collect();
+        if !nest_agrees(&c.vars, &c.doms, &head, &c.nest.head_def, &c.nest.lams, vars, doms, &wts) {
             return None
         }
         // The unfolding chain reads this map, and it is per backend.
@@ -7148,6 +7223,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.gen_scope(ctx, &ind_name, levels)?;
         let ind = decls.get_inductive(&ind_name).ok_or(Decline::Shape)?;
         let np = ind.num_params as usize;
+        // Route (ii) of `LEVELPOLY.md` §5.4 blocker 2b: the level variables
+        // ride as ordinary machine parameters, `np' = nw + np`. The list is in
+        // **declaration level-parameter order** — never `omega_prefix`'s
+        // sorted order — and is computed under the ambient σ, so a scheduled
+        // ground pass gets the empty list and the walk is exactly the ground
+        // walk.
+        let omega = self.omega_of_levels(ctx, levels);
 
         // ── 2. The declaration's own type, at these levels ──────────────────
         let ty = ctx.subst_expr_levels(ind.info.ty, ind.info.uparams, levels);
@@ -7254,7 +7336,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         // variable is deliberately absent, which is what makes
                         // a dependence on it a decline rather than a wrong
                         // arity.
-                        let mut xs = param_vars.clone();
+                        let mut xs = omega.clone();
+                        xs.extend(param_vars.iter().copied());
                         xs.extend(plain_vars.iter().copied());
                         if field_vars
                             .iter()
@@ -7283,8 +7366,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                                 .ok_or(Decline::Shape)?,
                             // The explicit recursive-field check above has
                             // already fired, so a refusal here is the
-                            // free-variable guard: a level variable the
-                            // `np + i` arity contract cannot name.
+                            // free-variable guard: a variable neither the
+                            // ω-prefix nor the `np' + i` contract names.
                             None => derived::define_abbrev(&mut self.env_mut(), &xs, &body_t)
                                 .ok_or(Decline::LevelVar)?,
                         };
@@ -7313,7 +7396,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             });
         }
         let ctors: Vec<CtorWalk> = ctors.into_iter().collect::<Option<_>>().ok_or(Decline::Shape)?;
-        Ok(SpecWalk { param_vars, param_doms, ctors })
+        // Fail closed: every ω-variable free in a parameter domain or a field
+        // body must be one the declaration's own levels name, or the covering
+        // prefix would be silently wrong — the `spec.rs` §"free variables"
+        // hazard, checked rather than trusted.
+        let need = self
+            .omega_prefix(param_doms.iter().chain(ctors.iter().flat_map(|c| c.beta_bodies.iter())));
+        if need.iter().any(|v| !omega.contains(v)) {
+            return Err(Decline::LevelVar)
+        }
+        Ok(SpecWalk { omega, param_vars, param_doms, ctors })
     }
 
     /// The thread's [`derived::inductive::Machine`], built on first use over
@@ -7375,6 +7467,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     match self.walk_spec(ctx, ind_name, levels, Some(&gi)) {
                         Ok(w) => {
                             let agrees = w.ctors.len() == gi.orders.len()
+                                && w.omega == gi.omega
                                 && w.param_doms == gi.param_doms
                                 && w.ctors.iter().enumerate().all(|(i, c)| {
                                     c.order == gi.orders[i] && c.beta_bodies == gi.beta_bodies[i]
@@ -7433,7 +7526,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 return None
             }
         };
-        let np = walk.param_vars.len();
+        // Route (ii): the machine sees `np' = nw + np` parameters — a level is
+        // a set, and item-by-item reading (2026-08-10) confirmed the machine
+        // never states a fact *about* a parameter, so the extra prefix is
+        // invisible to `derived/`.
+        let np_all = walk.omega.len() + walk.param_vars.len();
         let mut cspecs = Vec::with_capacity(walk.ctors.len());
         for c in walk.ctors.iter() {
             let args: Vec<FnSym> = c
@@ -7446,7 +7543,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 .collect();
             cspecs.push(CtorSpec::with_order(args, c.recs, c.order.clone())?);
         }
-        let spec = DeclSpec::new(np, cspecs);
+        let spec = DeclSpec::new(np_all, cspecs);
         // Belt and braces: the derived layer re-checks this and declines
         // otherwise, but a wrong `βⱼ` arity here would derive true theorems
         // about the wrong declaration, so it is worth its own exit.
@@ -7475,6 +7572,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         GEN_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Some(Rc::new(GenInd {
+            omega: walk.omega,
             param_vars: walk.param_vars,
             param_doms: walk.param_doms,
             orders: walk.ctors.iter().map(|c| c.order.clone()).collect(),
@@ -7589,14 +7687,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         let np = vars.len();
-        let bottom = gi.ind.ty_of(vars.iter().map(|v| Term::var(*v)).collect());
-        // The ω-prefix (see [`Self::omega_prefix`]): level variables the
-        // domains or the carrier mention, threaded as leading arguments of
-        // every body symbol and graph in the nest so `define_abbrev`'s
-        // free-variable guard is satisfied by naming them rather than by
-        // declining the nest.
-        let omega = self.omega_prefix(doms.iter().chain(std::iter::once(&bottom)));
+        // Route (ii): one **ordered** ω-list — `gi.omega`, declaration order —
+        // serves the nest and every derived instantiation alike. Never
+        // `omega_prefix`'s sorted order, which at two or more level parameters
+        // would instantiate `βⱼ(w₁,w₀,…)` where `βⱼ(w₀,w₁,…)` is meant. The
+        // carrier takes the ω-variables as its leading parameters, so the
+        // bottom names all of them; a domain mentioning one the declaration's
+        // levels do not name fails closed here.
+        let omega = gi.omega.clone();
         let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
+        let mut bargs = wts.clone();
+        bargs.extend(vars.iter().map(|v| Term::var(*v)));
+        let bottom = gi.ind.ty_of(bargs);
+        if self.omega_prefix(doms.iter()).iter().any(|v| !omega.contains(v)) {
+            return None
+        }
 
         // ── The nest, innermost first — [`Self::gen_ctor_nest`]'s loop ──────
         let mut betas: Vec<Thm> = Vec::with_capacity(np);
@@ -7721,7 +7826,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         if np == 0 && nf == 0 {
-            let ty_body = gi.ind.ty_of(Vec::new());
+            let wts: Vec<Term> = gi.omega.iter().map(|v| Term::var(*v)).collect();
+            let ty_body = gi.ind.ty_of(wts.clone());
             // ── A nullary constructor: a term, and a closed membership ──────
             let ctor_body = {
                 let m = mach.borrow();
@@ -7729,9 +7835,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             let (ct, ct_ax) = self.ind_abbrev(name, &lv, &ctor_body)?;
             // `Ctor::mem` is `⊢ ctor_i() ∈ ind()` outright — no `∀`, no
-            // antecedent — for a parameterless nullary constructor. Checked,
-            // not assumed: a theorem of any other shape is not used.
-            let raw = gi.ind.ctors[i].mem.clone();
+            // antecedent — for a parameterless nullary constructor; at
+            // `nw > 0` it is `∀w⃗`-closed and instantiated at the walk's own
+            // ω-variables, still with no antecedent, since a parameter (level
+            // or set) contributes no hypothesis. Checked, not assumed: a
+            // theorem of any other shape is not used.
+            let raw = if wts.is_empty() {
+                gi.ind.ctors[i].mem.clone()
+            } else {
+                derived::inst_all(&gi.ind.ctors[i].mem, &wts)?
+            };
             if *raw.concl() != Formula::mem(ctor_body.clone(), ty_body.clone()) {
                 return None
             }
@@ -7854,7 +7967,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
         }
         let ps: Vec<Term> = tn.vars.iter().map(|v| Term::var(*v)).collect();
-        let ty_body = gi.ind.ty_of(ps.clone());
+        let wts: Vec<Term> = gi.omega.iter().map(|v| Term::var(*v)).collect();
+        let mut tyargs = wts.clone();
+        tyargs.extend(ps.iter().cloned());
+        let ty_body = gi.ind.ty_of(tyargs);
         let bottom = {
             let m = mach.borrow();
             gi.ind.ctor_term(&m, i, &ys, &rs)?
@@ -7883,12 +7999,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         // ── The nest, innermost first — `rec_nest`'s loop with a new bottom ─
         //
-        // With the ω-prefix of [`Self::omega_prefix`], as in
-        // [`Self::gen_ty_nest`]: a field or parameter domain at a variable
+        // With the ordered ω-prefix `gi.omega`, as in [`Self::gen_ty_nest`]
+        // and for its reasons: a field or parameter domain at a variable
         // level would otherwise make `define_abbrev` refuse the whole
-        // constructor.
-        let omega = self.omega_prefix(doms.iter().chain(std::iter::once(&bottom)));
-        let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
+        // constructor, and the sorted `omega_prefix` order would be the wrong
+        // instantiation order at two or more level parameters.
+        let omega = gi.omega.clone();
+        if self
+            .omega_prefix(doms.iter().chain(std::iter::once(&bottom)))
+            .iter()
+            .any(|v| !omega.contains(v))
+        {
+            return None
+        }
         let depth = np + nf;
         let mut betas: Vec<Thm> = Vec::with_capacity(depth);
         let mut t_defs: Vec<Thm> = Vec::with_capacity(depth);
@@ -7942,7 +8065,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     // defining equation.
                     Slot::Plain => {
                         let FieldDom::Plain(_, _, beta_ax) = &cw.field_doms[f] else { return None };
-                        let mut at: Vec<Term> = ps.clone();
+                        let mut at: Vec<Term> = wts.clone();
+                        at.extend(ps.iter().cloned());
                         at.extend(ys[..plain_seen].iter().cloned());
                         let inst = derived::inst_all(beta_ax, &at)?;
                         let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
@@ -7963,7 +8087,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // `⊢ ∀p⃗ ∀y⃗ ∀r⃗. (H_mem → ctor_i(y⃗,r⃗) ∈ ind(p⃗))`, and **without** the
         // `H_mem →` when the constructor has no fields at all — the `Ctx(None)`
         // discipline. Both shapes are checked rather than assumed.
-        let mut inst_at: Vec<Term> = ps.clone();
+        let mut inst_at: Vec<Term> = wts.clone();
+        inst_at.extend(ps.iter().cloned());
         inst_at.extend(ys.iter().cloned());
         inst_at.extend(rs.iter().cloned());
         let mem = derived::inst_all(&gi.ind.ctors[i].mem, &inst_at)?;
@@ -11260,7 +11385,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let Some((mem_inst, hyps)) = self.mem_obligation(ctx, args[k], &ta[k], &doms[k]) else {
                 return Err("iota: a domain obligation has no assumption to rest on")
             };
-            let mut inst: Vec<Term> = nest.prefixes[k].iter().map(|i| ta[*i].clone()).collect();
+            let mut inst: Vec<Term> = nest.omega.iter().map(|v| Term::var(*v)).collect();
+            inst.extend(nest.prefixes[k].iter().map(|i| ta[*i].clone()));
             inst.push(doms[k].clone());
             inst.push(ta[k].clone());
             let Some(conditional) = derived::inst_all(&nest.betas[k], &inst) else {
@@ -11276,7 +11402,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             obligations.push((mem_inst, hyps));
 
-            let mut inst_t: Vec<Term> = nest.prefixes[k].iter().map(|i| ta[*i].clone()).collect();
+            let mut inst_t: Vec<Term> = nest.omega.iter().map(|v| Term::var(*v)).collect();
+            inst_t.extend(nest.prefixes[k].iter().map(|i| ta[*i].clone()));
             inst_t.push(ta[k].clone());
             let Some(unfold) = derived::inst_all(&nest.t_defs[k], &inst_t) else {
                 return Err("iota: instantiating the nest's body definition failed")
@@ -11856,7 +11983,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if ta.len() != np + n + 2 || doms.len() != np + n + 2 || obligations.len() != np + n + 2 {
             return Err("iota: the general recursor is not applied to its own arguments")
         }
-        let ps: Vec<Term> = ta[..np].to_vec();
+        // Lean's spine carries only the set parameters; every derived-facing
+        // list leads with the ω-variables the package was walked at (route
+        // (ii)). `lps` is the Lean-facing prefix, `ps` the derived-facing one.
+        let lps: Vec<Term> = ta[..np].to_vec();
+        let mut ps: Vec<Term> = gr.gi.omega.iter().map(|v| Term::var(*v)).collect();
+        ps.extend(lps.iter().cloned());
         let minors: Vec<Term> = ta[np + 1..np + 1 + n].to_vec();
         let mach = match self.machine() {
             Some(m) => m,
@@ -11898,7 +12030,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // from there rather than asked again.
         let ty_t = doms[major].clone();
         let ind_body = ind.ty_of(ps.clone());
-        let (ty_ax, ty_hyps) = self.gen_ty_bridge(tn, &ps, ta, doms, obligations, &ty_t, &ind_body)?;
+        let (ty_ax, ty_hyps) = self.gen_ty_bridge(tn, &lps, ta, doms, obligations, &ty_t, &ind_body)?;
         let Some(w_ax) = derived::inst_all(&ind.ty_ax, &ps) else {
             return Err("iota: instantiating the carrier's defining equation failed")
         };
@@ -11927,6 +12059,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 doms,
                 obligations,
                 &ps,
+                np,
                 &w_at,
                 &minors,
                 &t,
@@ -12010,7 +12143,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // or `Hᵢ^ctor` would be stated about a different instantiation than
             // the ι rule asks for.
             let mut tf: Vec<Term> = cparams.iter().map(|p| self.interp(ctx, *p)).collect();
-            if tf != ps {
+            if tf != lps {
                 return Err("iota: the constructor's parameters are not the recursor's")
             }
             tf.extend(fields.iter().map(|f| self.interp(ctx, *f)).collect::<Vec<_>>());
@@ -12378,6 +12511,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         doms: &[Term],
         obligations: &[(Thm, Vec<Formula>)],
         ps: &[Term],
+        lnp: usize,
         w_at: &Term,
         minors: &[Term],
         t: &Term,
@@ -12390,7 +12524,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let ind = gi.ind.clone();
         let ctor = ind.spec.ctors[i].clone();
         let (k, m) = (ctor.args.len(), ctor.recs);
-        let np = ps.len();
+        // Lean-layout index base: `doms`/`args`/`obligations` are the Lean
+        // spine, whose parameter count is the caller's `lnp`, not `ps.len()` —
+        // `ps` is the derived-facing list and leads with the ω-variables.
+        let np = lnp;
         let order = ctor.order.clone();
         let su = minors[i].clone();
         let Some(mach) = self.machine() else {
@@ -17448,7 +17585,7 @@ mod tests {
         // read the wrong domain. (It did not: replacing `doms[0]` by
         // `doms[len-1]` passed until this line stopped calling `nest_replay`.)
         let outer = Term::apply(lams[0], vec![doms[0].clone()]);
-        assert_eq!(nest_replay(&lams, &doms), Some(outer.clone()), "the outermost graph is `lam0(D0)`");
+        assert_eq!(nest_replay(&lams, &doms, &[]), Some(outer.clone()), "the outermost graph is `lam0(D0)`");
         // The stored equation, as `define_abbrev` would have left it.
         let (head_sym, head_def) =
             derived::define_abbrev(&mut env, &[], &outer).expect("abbreviate the nest");
@@ -17709,10 +17846,10 @@ mod tests {
         let doms: Vec<Term> = (0..3).map(|_| constant(&mut env)).collect();
         // Level 1 should have arity 2 and has arity 3.
         let wrong = [env.declare(1), env.declare(3), env.declare(3)];
-        assert!(nest_replay(&wrong, &doms).is_none(), "a mis-arited nest must not replay");
+        assert!(nest_replay(&wrong, &doms, &[]).is_none(), "a mis-arited nest must not replay");
         // …and a nest of the wrong depth likewise.
         let short = [env.declare(1), env.declare(2)];
-        assert!(nest_replay(&short, &doms).is_none(), "a nest of the wrong depth must not replay");
+        assert!(nest_replay(&short, &doms, &[]).is_none(), "a nest of the wrong depth must not replay");
     }
 
     /// **A literal's key must separate the two kinds.**

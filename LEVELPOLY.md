@@ -657,24 +657,63 @@ at this branch's head:
   rules (5803 → 6084); pinned by the `037_prodType` staged fixture with its
   mutation run red. ι stays at 37 staged because the remaining sites are
   deeper, and they are two:
-  * **2b — the `βⱼ` field abbreviations** (76 rows staged, misattributed to
-    `…declined: field type depends on a recursive field`, whose guard is
-    the same free-variable refusal): `βᵢ` has arity `np + i` by the
-    `DeclSpec` well-formedness check (`derived/src/inductive/spec.rs:271`),
-    and the convention threads through `Telescope`, the carriers,
-    `Ctor::mem`, the step values and the ι rules — a machine-wide contract
-    shared with mini through the one `Machine`. Two candidate routes,
-    neither built: (i) extend the spec with an ω-arity, every `βᵢ` becoming
-    `nw + np + i` — mechanical but touches every consumer of the
-    convention; (ii) hand the level variables to the machine as *ordinary
-    parameters* (`np' = nw + np`) — levels are sets, the machine cannot
-    tell — with the checker's bridge keeping them symbol-applied
-    (`f̂(u⃗)`-style) while set parameters stay `ap`-applied; the spine shape
-    at use sites is the part to get right, since a Lean use applies only
-    the set arguments. Route (ii) is the §1.6 spirit and probably smaller;
-    it needs the `ty_of`/spine bridge to split the two argument kinds.
-  * **2c — the recursor path** (its own `define_abbrev` chains and the
-    eliminating universe): untouched, next after 2b.
+  * **2b — the `βⱼ` field abbreviations** (76 rows staged, now their own
+    `Decline::LevelVar` reason — they were misattributed to the
+    recursive-field label, whose guard is the same free-variable refusal):
+    `βᵢ` has arity `np + i` by the `DeclSpec` well-formedness check
+    (`derived/src/inductive/spec.rs:271`). **Adjudicated 2026-08-10 by a
+    full read of `derived/inductive` and the consumption sites: route
+    (ii) — the ω-variables ride as ordinary parameters, `np' = nw + np` —
+    is feasible and strictly smaller than route (i), because the machine
+    is parameter-agnostic in the strong sense: it never states one fact
+    *about* a parameter.** The evidence: parameters are only ever a
+    leading argument prefix and a leading `∀`-prefix (`carrier.rs:239` and
+    twelve sibling sites); `Ctor::mem`'s hypotheses are exactly the field
+    typings with *no* `p ∈ ?` atom (`ctor.rs:37-41`); the recursor
+    schemas' assumption list is complete and parameter-free
+    (`recursor.rs:47-52`); `rec_doms` follows the same `np + i`
+    convention and the checker never populates it; the spec is
+    caller-relative so mini's `DeclSpec::new(3,…)`/`(np,…)` calls are
+    untouched, and the one shared `np`-keyed cache
+    (`Machine::telescopes`) cannot collide because `Telescope::new`
+    checks arity. The change is checker-only: `GenInd` gains an ordered
+    `omega: Vec<FreeVar>` (declaration level-parameter order, computed
+    from the decl's `levels` before any interp, checked a superset of the
+    bodies' ω-vars), `walk_spec`'s `xs` and `gen_ind_build`'s `np'` use
+    it, and eleven derived-facing argument lists take `wts` as a leading
+    prefix (`ty_of` at 7592/7857, `beta_ax`/`mem` at 7945/7966, and
+    `fire_general`'s `ps` consumers). `nest_spine_eq` needs **no change**
+    — its ω-leading instantiation split is already built and
+    load-bearing. The one hazard: `omega_prefix` sorts by variable id
+    while the declaration list is in level-parameter order; mixing the
+    orders fails closed (both mismatch sites are literal-guarded), and
+    the fix is the single-list discipline — `gi.omega` replaces both
+    `omega_prefix` calls. Route (i) wins only self-documentation (a
+    type-level split `derived/` could enforce) and would matter if a
+    future theorem were genuinely conditional on `wᵢ ∈ ω`; today nothing
+    is.
+    **Built, same day.** `GenInd::omega`/`SpecWalk::omega`
+    (declaration-ordered, `omega_of_levels` under the ambient σ — so a
+    scheduled ground pass computes the empty list and is byte-identical,
+    verified), `np' = nw + np` at `DeclSpec::new`, the eleven prefixes,
+    `gen_minor_typed` taking the Lean parameter count `lnp` separately
+    from the derived-facing list, and the nullary fast path instantiating
+    a `∀w⃗`-closed `Ctor::mem`. All 76 `LevelVar` rows closed; staged,
+    declarations translated 283 → 315, constructor rules 6084 → 6224.
+    Pinned by `route_ii_translates_a_type_valued_field_in_the_staged_state`
+    (`057_typeWithTypeFieldPoly`, a `Type u`-valued field), mutation
+    (empty ω-list) run red and reverted.
+  * **2c — the recursor path**: **the `define_abbrev` half is built** —
+    `RecNest::omega` from the *recursor's* levels (they lead with the
+    eliminating universe, which `gi.omega` alone would miss), the ω-prefix
+    on every level's body symbol and graph, `nest_chain` and
+    `nest_replay`/`nest_agrees` leading with the ω-terms. Staged ι
+    37 → 43, "no curried interpretation" 429 → 399. **The eliminating
+    universe itself remains**: the `T`-policy rows
+    (`…declined (recursor): T-policy 2/3` 1104 → 600 staged) want the
+    motive's target at a *variable* universe, which is blocker 1's `srt`
+    machinery consumed on the recursor side — the two close together, not
+    in sequence.
   The staged drift rows (15/9/6) are the *documented, expected* per-backend
   head drift (`Dt::IndDrift`'s own doc), population-scaled now that these
   nests build at all; a share-only-when-shared-named gating was tried and

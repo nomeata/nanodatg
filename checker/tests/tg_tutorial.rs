@@ -2094,3 +2094,65 @@ fn the_omega_prefix_builds_the_polymorphic_nest_in_the_staged_state() {
         "037_prodType stopped being fully derived in the staged state:\n{text}"
     );
 }
+
+/// `057_typeWithTypeFieldPoly` is a polymorphic inductive **with a
+/// `Type u`-valued field** — the exact shape `LEVELPOLY.md` §5.4 blocker 2b
+/// names: the field's interpretation mentions the ω-variable `û`, and before
+/// route (ii) landed, `walk_spec`'s `define_abbrev(xs = params ++ plains)`
+/// refused the `βⱼ` body (`…declined: field type at a variable level`, 76 on
+/// `init-prelude`), so the declaration did not translate. With the
+/// declaration's level variables riding as leading machine parameters
+/// (`np' = nw + np`) the abbreviation is total and the file is fully derived
+/// in the staged state.
+///
+/// One field is enough for *this* pin because the ordering hazard has its own
+/// discipline (`gi.omega` is declaration-ordered and single-sourced); the
+/// two-parameter ordering itself is pinned by `037_prodType` above, whose
+/// carrier takes `w_u, w_v` in declaration order.
+///
+/// Mutation run against this test (red, then reverted): making
+/// `omega_of_levels` return the empty list restores the refusal — the
+/// `…declined: field type at a variable level` row comes back and the
+/// declaration count drops to zero.
+#[test]
+fn route_ii_translates_a_type_valued_field_in_the_staged_state() {
+    let f = corpus().join("good/tutorial/057_typeWithTypeFieldPoly.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let cfg_path = tmp_cfg("lvar", &f);
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true, "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&f.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
+        .arg(&cfg_path)
+        .env("NANODATG_LEVELPOLY", "1")
+        .env("NANODATG_NO_SCHEDULE", "1")
+        .output()
+        .expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    assert!(out.status.success(), "057 must be accepted in the staged state");
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        rows_totalling(&text, "…declined: field type at a variable level (βⱼ awaits the ω-prefix)"),
+        0,
+        "a Type-valued field declined again — route (ii)'s prefix stopped covering it:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "declarations translated"),
+        1,
+        "the declaration with the Type-valued field did not translate:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "constructors given a term and a typing rule"),
+        2,
+        "the constructor rule population moved:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "TOTAL gaps"),
+        0,
+        "057 stopped being fully derived in the staged state:\n{text}"
+    );
+}
