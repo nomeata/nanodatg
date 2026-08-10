@@ -1744,17 +1744,47 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     taken (iotaN j)
 
   -- ── shape ──
-  let mut cur := memberTy
-  for _ in [0:np] do
+  -- **A declaration may hide its index telescope behind a definition.** Lean
+  -- stores an inductive's type as declared, so `inductive P (X) : Presieve X`
+  -- comes back as `(X : C) → Presieve X` with the indices inside the `def`,
+  -- and a syntactic peel finds no `Sort` at the end and no indices at all.
+  -- Lean's own `numIndices` counts the *unfolded* ones — which is why the
+  -- assertion against the recursor below is the cross-check on this and not a
+  -- second opinion.
+  --
+  -- So: peel syntactically first, and only if that does not reach a sort,
+  -- re-expose the telescope with a **reducing** telescope and carry on with
+  -- the definitionally-equal type that has its binders written out. The retry
+  -- is deliberately not the default — every shape that worked before this
+  -- reaches the same `memberTy` object it always did, so nothing that was
+  -- measured moves.
+  let peel : Expr → Option (Nat × Level) := fun ty => Id.run do
+    let mut cur := ty
+    for _ in [0:np] do
+      match cur with
+      | .forallE _ _ b _ => cur := b
+      | _ => return none
+    let mut n := 0
+    while cur matches .forallE .. do
+      let .forallE _ _ b _ := cur | unreachable!
+      cur := b
+      n := n + 1
     match cur with
-    | .forallE _ _ b _ => cur := b
-    | _ => badShape "fewer binders than parameters"
-  let mut ni := 0
-  while cur matches .forallE .. do
-    let .forallE _ _ b _ := cur | unreachable!
-    cur := b
-    ni := ni + 1
-  let .sort w := cur | badShape "the declaration does not land in a sort"
+    | .sort w => return some (n, w)
+    | _ => return none
+  let (memberTy, ni, w) ←
+    match peel memberTy with
+    | some (n, w) => pure (memberTy, n, w)
+    | none => do
+      let exposed ← forallBoundedTelescope memberTy (some np) fun ps rest =>
+        forallTelescopeReducing rest fun is res => do
+          unless (← whnf res) matches .sort _ do
+            badShape "the declaration does not land in a sort, even after unfolding \
+              its result type"
+          mkForallFVars (ps ++ is) (← whnf res)
+      let some (n, w) := peel exposed
+        | badShape "the declaration does not land in a sort"
+      pure (exposed, n, w)
   -- Recursive means a *field* mentions the declaration — the constructor's
   -- result always does and is not entered.
   let isRec := exportCtors.any fun (_, cty) => Id.run do

@@ -401,7 +401,7 @@ def expectedPrim : List Row :=
   [ ("prim_shapes",
       [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
-       ("Conj3", 4), ("PU", 4), ("PE", 2), ("MNm", 8), ("IdxS", 4),
+       ("Conj3", 4), ("PU", 4), ("Sv", 4), ("PE", 2), ("MNm", 8), ("IdxS", 4),
        ("Dec", 6), ("Conj", 4), ("TagS2", 4), ("TagS", 4), ("PT", 8),
        ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
@@ -412,7 +412,8 @@ def expectedPrim : List Row :=
       , ("MixI", "prim model shape: MixI.mk has an index-variable field")
       , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
       , ("Binder", "prim model shape: Binder.lim has a recursive field that is not")
-      , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")])
+      , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")
+      , ("SvIx", "prim model shape: SvIx.mk has an index-variable field")])
   , ("prim_graph",
       [("G1", 15), ("G4", 15), ("Ac", 13), ("N", 8), ("G3", 13), ("G2", 13),
        ("G5", 13)],

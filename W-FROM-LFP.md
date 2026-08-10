@@ -10,7 +10,50 @@ document. Everything cited was read in a scratch worktree at `27965df`. Every
 number below with a "measured" tag was produced in this session by the command
 shown; §8 names what is not measured.*
 
-## Verdict
+## Verdict — SUPERSEDED 2026-08-10. Build it.
+
+> **This document's verdict was "No third layer. Do not build it." It was
+> right when written and both of its legs have since been cut.** It is
+> corrected here rather than below, because a reader who acts on the first
+> screen is the reader this matters to.
+>
+> **Leg one — the circle — broke this week.** The argument was that the
+> derivation's irreducible closure contains `List` and `Acc`, so a layer
+> modelling every simple inductive as a `W` would model `List` out of `List`.
+> Both members are now derived rather than primitive: `Acc` by the graph route
+> (`MODELGEN.md` §8.7 — the Church carrier plus `Classical.choice` at the
+> recursion's graph), and `List` by the tuple tower (§8.4), which models it
+> with every ι rule `Eq.refl` and no axiom. The W arm therefore emits its path
+> type as a **bespoke tower per declaration** and its accessibility as arm G's
+> construction **inlined**, splicing neither as a primitive — which is what
+> breaks the circularity, independently of axioms.
+>
+> **Leg two — the axiom bill — was answered by a ruling that postdates this
+> document.** §2 measures the derivation at `choice`, `em` and `funext` and
+> calls that "a genuine widening of `modelgen`'s prelude". The owner has since
+> ruled that axiom-freedom is not a goal and the standard axioms may be used
+> liberally. And `em` is not an axiom in Lean 4 — `Classical.em` is a theorem,
+> Diaconescu from `choice` + `propext` + `funext` — so the true delta against
+> what layer 3 already asserts is `propext`, which is a standard axiom on every
+> list this repo keeps (`mini/src/convert.rs`'s `is_standard_axiom`).
+>
+> **Leg three, which this document did not have and is the operative reason.**
+> The framing here is a layer that models *every* simple inductive as a W, and
+> that framing is dead: layer 3 exists, models 122 of `init-prelude`'s 125 over
+> four primitives, and W is **one more arm** for branching recursion. So §3's
+> ledger — "layer 3 deletes nothing, `mini` keeps 16,800 lines" — is an
+> argument against a layer that no longer exists. The arm's own justification
+> is coverage: at the 30M Mathlib prefix, branching and under-a-binder
+> recursion is ~39 of 110 remaining declines, and `Lean.ParserDescr` is one of
+> the two declarations standing between `init-prelude` and full coverage.
+>
+> **What survives unchanged and should still be believed:** §1's account of the
+> derivation, §2's closure measurement, §4 on ι, §5 on what it does not cover,
+> §6 on the `derived/` question (which was always the weaker half of the
+> brief), and §7's finding that cost was never the deciding number. Read on
+> with the verdict inverted, not the evidence.
+
+**The original verdict, as written on 2026-08-09, follows.**
 
 **No third layer. Do not build it.** The derivation is correct and elegant, but
 it does not break the circle, and the reason is measurable rather than

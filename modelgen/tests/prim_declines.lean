@@ -19,6 +19,15 @@
      constructor's own data fields, so the graph route's inversion cannot be
      stated at an arbitrary index. `prim_graph.lean`'s `BadC` is the same
      refusal reached deliberately rather than by accident.
+   * `SvIx` — a carrier whose index telescope is **hidden behind a
+     definition** *and* whose constructor's indices are its own fields. The
+     hidden telescope is no longer a refusal — the shape check unfolds it, and
+     `prim_shapes.lean`'s `Sv` is the positive — so what this pins is that the
+     decline that remains is arm F's **index-variable field**, at its right
+     reason. Before the unfolding it declined as "does not land in a sort",
+     which named the wrong obstruction; eighteen Mathlib declarations at the
+     30M prefix (`CategoryTheory.Presieve.ofArrows` and its kin) sat behind
+     that wrong reason.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
    * `BoxF` — a field whose level keeps an `imax` even boxed: the imax
@@ -76,3 +85,8 @@ inductive Binder : Type where
 
 inductive BoxF (α : Sort u) (β : Sort v) : Sort (max 1 u v) where
   | mk : ((α → β) → β) → BoxF α β
+
+def SvIxFam (x : P) : Type := P → P → Prop
+
+inductive SvIx (x : P) : SvIxFam x where
+  | mk (y z : P) : SvIx x y z

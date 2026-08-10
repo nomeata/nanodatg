@@ -99,6 +99,20 @@
      to the carrier's never-zero `max`; the recursor unboxes by projection
      and needs no transport at all.
 
+   * `Sv` — a carrier whose **index telescope is hidden behind a
+     definition**: `Sv (x : Tri) : SvFam x` where `SvFam x := Tri → Tri →
+     Prop`. Lean stores an inductive's type as *declared*, so a syntactic peel
+     of `Sv`'s type finds `SvFam x` — not a `Sort`, and no indices at all —
+     while `Sv.rec` carries two. This is `CategoryTheory.Presieve.ofArrows`'s
+     shape and that of seventeen more like it in Mathlib. **Two** hidden
+     indices rather than one, because with one a model that guessed a fixed
+     count would still pass; two is where the count has to come from the
+     unfolding. From there it is an ordinary indexed subsingleton and arm F
+     models it. `prim_declines.lean`'s `SvIx` is the same hidden telescope
+     with *field-dependent* indices, which unfolds the same way and is then
+     refused by arm F for its own reason — the pair is what says the
+     unfolding and the refusal are two different things.
+
    The file declares `Eq` and nothing else of the basis, so one run splices
    `Nat`, `PSigma` and `PULiftP` and the report names them. Nothing here
    splices the quotient, `Quot.sound` or a `funext`: the lift's eta replaced
@@ -220,3 +234,8 @@ inductive Weave (α : Type u) (p : Prop) : Type u where
   | s0 : α → Weave α p → p → Weave α p
   | b1 : α → p → Weave α p
   | s1 : α → Weave α p → p → Weave α p
+
+def SvFam (x : Tri) : Type := Tri → Tri → Prop
+
+inductive Sv (x : Tri) : SvFam x where
+  | mk : Sv x Tri.a Tri.b

@@ -3342,3 +3342,81 @@ recursion, or they are what a W arm would be built out of:
 **If a W arm grows the generator rather than shrinking it, that is the signal
 to stop and say so** — which is the standing instruction, recorded here so the
 next reader does not have to be told twice.
+
+## 8.9 The residue, re-measured — and the index telescope behind a definition
+
+### The census that was on file was from a pre-tranche binary
+
+The Mathlib decline census this tranche inherited was produced before
+`PULiftP`, the tuple tower, arm F's widening and arm G. Two of its largest
+decline strings **do not exist in the current source** — `"an empty carrier at
+Sort"` and `"a recursive Type-valued inductive … plan B"` — which is how it was
+caught. It is superseded, and the numbers below replace it.
+
+Re-run like-for-like: the same pre-cut prefixes, the same host, current binary
+against the archived one. PANIC counts are identical in each pair, so the
+denominator is unchanged and the comparison is honest (`Environment.AsyncConsts
+.add` rejects some duplicate-normalized-name declarations in the *input*; they
+never reach the filter, in either run).
+
+| | 3M old → new | 30M old → new |
+|---|---|---|
+| models | 911 → **954** | 3,907 → **4,047** |
+| declines | 67 → **24** | 250 → **110** |
+| an indexed family | 42 → 9 | 164 → **68** |
+| recursive `Type`-valued | 19 → 0 *as such* | 61 → **~39**, only the genuinely branching |
+| does not land in a sort | 0 → 0 | 18 → **0** |
+| basis primitive | 5 → 3 | 5 → 3 |
+| PANICs | — | 176 → 176 |
+
+**Declines at the 30M prefix fell from 250 to 110.** `List` and `Lean.Name`
+were in the old census's W cluster and model by tuple tower today.
+
+### The index telescope behind a definition
+
+Eighteen of those declines were one bug, and it was a bug in the *reason* as
+much as in the coverage. Lean stores an inductive's type **as declared**, so
+
+```lean
+inductive CategoryTheory.Presieve.ofArrows … : Presieve X
+```
+
+comes back as `… → Presieve X`, and a syntactic peel finds no `Sort` at the end
+and **no indices at all** — while `Presieve.ofArrows.rec` carries them, because
+Lean's own `numIndices` counts the *unfolded* telescope. The shape check said
+"the declaration does not land in a sort", which named the wrong obstruction.
+
+The fix is to peel syntactically first and, only when that fails to reach a
+sort, re-expose the telescope with a **reducing** telescope and continue with
+the definitionally-equal type that has its binders written out. The retry is
+not the default on purpose: every shape that worked before reaches the same
+`memberTy` object it always did, and `init-prelude`'s output is **byte-identical
+across the change**, which is the measurement that says so.
+
+The assertion against the recursor's own `numIndices`, which was already there,
+is the cross-check on the unfolded count rather than a second opinion.
+
+**It converted all eighteen into models**, which was more than expected: the
+`Sv` fixture built for it is an indexed *subsingleton* and reaches arm F, but
+the real members are `Prop`-valued relations with several constructors, so they
+small-eliminate and take the Church route, which carries field-dependent
+indices without complaint. Two fixtures pin the pair — `prim_shapes.lean`'s
+`Sv` (hidden telescope, constructor indices from parameters: **models**) and
+`prim_declines.lean`'s `SvIx` (hidden telescope, constructor indices are its
+own fields: unfolds, then declines at arm F's index-variable field, **at the
+right reason**). Two hidden indices rather than one in both, because with one a
+model that guessed a fixed count would still pass.
+
+### Sequencing, on the record
+
+At the 30M prefix the remaining 110 declines are:
+
+| cluster | count | share | owner |
+|---|---|---|---|
+| **an indexed family at a never-zero sort** | 68 | **62 %** | thesis §5.2's skeleton-plus-`good`; `IndexedCarve.lean` compiles it on the thesis's own example. **The largest cluster, and the next tranche.** |
+| branching or under-a-binder recursion | ~39 | 35 % | W — this tranche, and the one on `init-prelude`'s critical path (`Lean.ParserDescr`) |
+| the basis itself | 3 | 3 % | the exemption |
+
+W is not the largest cluster and is being done first because `Lean.ParserDescr`
+is one of the two declarations standing between `init-prelude` and full
+coverage. The indexed family is larger and is deliberately next, not forgotten.
