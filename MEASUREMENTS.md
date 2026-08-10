@@ -7074,3 +7074,79 @@ clause's problem.
 
 Ledger unchanged with the census in: escapes 2 232, gaps 15 734, 159 803 derived
 — byte-identical, so the measurement is side-effect free.
+
+### The 3 213 `ConstMatches` are the goal counter seen from the inside — 2026-08-10
+
+*The oldest open item of this stage, and it closes as a verdict rather than as
+work. Census at the clause, zeros included, total stated — the method's ninth
+answer at a measurement each.*
+
+A quarter of the raw-hoist residue is a saturated constant application whose
+instantiated declared type **is** the domain. The *type* is readable off the
+environment with no reduction; that is what the original 4 119 measured. The
+*membership* needs `has_type_app`, once per argument, and each use needs the
+head's own typing — so a spine `c a₁ … aₙ` needs `⊢ ⟦c⟧ ∈ ⟦T_c⟧` for the head
+**constant**.
+
+Asked as a store lookup, not a derivation:
+
+| of the 3 213, the head constant's own typing is in the store | |
+|---|---:|
+| **yes** | **3** |
+| no | 3 210 |
+| no key, or not a constant head | 0 |
+
+And the clause's own census, every exit:
+
+| `app(f,a) ∈ ty` | 47 617 |
+|---|---:|
+| concluded by the dependent product | 492 |
+| concluded by the function space | **0** |
+| the head could not conceivably be typed (shape screen) | 3 939 |
+| the head has no syntactic type | 9 970 |
+| its type is not a `Π` | 514 |
+| **the head's own typing at that `Π` is not available** | **32 553** |
+| …and the spine's head is a **constant** | **32 553** |
+| …and it is not | **0** |
+| the argument's typing is not available | 149 |
+| no `Π` site / wrong domain / no fibre / did not assemble | **0 / 0 / 0 / 0** |
+
+**68 % of every failure of this clause is one step, and that step is a constant
+head, 32 553 out of 32 553.** Nothing else fails at all: the dependent-product
+machinery — sites, domains, fibres, assembly — is a clean four zeros. There is
+no defect here to find.
+
+#### The verdict
+
+This population is not reachable by plumbing, and it is not an eighth or ninth
+dead end in the sense the others were. **It is the goal counter seen from the
+inside.** `⊢ ⟦c⟧ ∈ ⟦T_c⟧` is precisely the theorem the `translated` row counts,
+and it stands at **26 sealed of 2 059 declarations**. Only 3 of the 3 213 have
+one. The recursion is topological — a declaration's typing needs the typings of
+the declarations its own type is built from — and with 26 sealed there is almost
+no base for it to stand on.
+
+That also explains the asymmetry with the constructor rule, which fires 3 291
+times a run against this clause's 492. **A constructor's base case is
+supplied**: `CtorRule` is a derived theorem about the constructor, built in
+`derived`. An ordinary constant has no such supply, and the only way to get one
+is to have checked the declaration.
+
+**So the lever for this quarter of the residue is the coverage and the order of
+declaration typings — the `translated` row — and not any clause of `has_type`.**
+That is a different kind of item from everything this stage has produced, and it
+is the one the goal statement was always about.
+
+#### Two nulls recorded as nulls
+
+* **`HtClause::AppFs` fires 0 times** on this corpus. The function-space branch
+  exists for typings that `derived`'s ι minor-premise chains state at `fs`, and
+  none of them reaches this clause. Its lemma, `fs_app_mem`, is the same one the
+  `target_mem` entry above identifies as the shape of what that population
+  needs — so the branch is not dead code so much as *not yet reachable*.
+* The `fs` branch's shape test was switched from [`TgBackend::parts`] to
+  `Term::as_app`, applying the `target_head_step` lesson. **It changed
+  nothing**: the whole `init-prelude` ledger is byte-identical, and the
+  diagnostic counter for "the `Π` is an application only the term knows" is
+  **0**. The defect does not recur here, and that is measured rather than
+  assumed.

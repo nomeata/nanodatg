@@ -9980,6 +9980,38 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The target `ty` is not an input: what this derives is whatever the
     /// characteristic property yields, and [`Self::has_type_h`]'s guard decides
     /// whether that is the membership being claimed.
+    ///
+    /// # The 3 213 `ConstMatches` are the goal, not a tranche
+    ///
+    /// *Measured 2026-08-10, task #126. The oldest open item of this stage,
+    /// closed as a verdict rather than as work.*
+    ///
+    /// A quarter of the raw-hoist residue is a saturated constant application
+    /// whose instantiated declared type **is** the domain being asked, so the
+    /// *type* is readable off the environment with no reduction. Turning that
+    /// into the *membership* is this clause's job, once per argument — and each
+    /// use needs the head's own typing, so a spine `c a₁ … aₙ` needs
+    /// `⊢ ⟦c⟧ ∈ ⟦T_c⟧` for the head **constant**.
+    ///
+    /// Asked as a lookup in the shared const store rather than as a derivation:
+    /// of the 3 213, **3** have it and **3 210** do not. And in the clause's own
+    /// census (`ApStep`), of 47 617 asks **32 553 — 68 % — fail at exactly this
+    /// step, and 32 553 of those 32 553 have a constant at the head of the
+    /// spine**. Not one fails at anything else: no `Π` site missing, no domain
+    /// mismatch, no fibre missing, nothing failing to assemble, all zero.
+    ///
+    /// So this population is not reachable by any plumbing in this backend. It
+    /// **is** the goal counter seen from the inside — `⊢ ⟦c⟧ ∈ ⟦T_c⟧` is the
+    /// theorem the `translated` row counts, and it stands at 26 of 2 059. The
+    /// recursion is topological: a declaration's typing needs the typings of the
+    /// declarations its own type is built from, and with 26 sealed there is
+    /// almost no base for it to stand on.
+    ///
+    /// That is also why [`Self::has_type_ctor_app`] works where this does not.
+    /// A constructor's base case is *supplied* — `CtorRule` is a derived theorem
+    /// about the constructor, built in `derived`. An ordinary constant has no
+    /// such supply, and the only way to get one is to have checked the
+    /// declaration.
     fn has_type_app(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9991,44 +10023,100 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Interpreting a `Π` builds a fibre — a Replacement derivation — so the
         // shape check that says the head could conceivably be typed at all comes
         // first, and the type is interpreted only if it passes.
+        note_ap(ApStep::Asked);
         if !self.typeable_shape(ctx, fun, &mut Vec::new()) {
+            note_ap(ApStep::Shape);
             return None
         }
-        let fty0 = self.syn_type(ctx, fun)?;
-        let fty = self.expose_pi(ctx, fty0)?;
-        let Expr::Pi { binder_type, .. } = ctx.read_expr(fty) else { return None };
+        let Some(fty0) = self.syn_type(ctx, fun) else {
+            note_ap(ApStep::NoSynType);
+            return None
+        };
+        let Some(fty) = self.expose_pi(ctx, fty0) else {
+            note_ap(ApStep::NoPi);
+            return None
+        };
+        let Expr::Pi { binder_type, .. } = ctx.read_expr(fty) else {
+            note_ap(ApStep::NoPi);
+            return None
+        };
 
         let fty_t = self.interp(ctx, fty);
         let dom_t = self.interp(ctx, binder_type);
         let (tf, ta) = (self.interp(ctx, fun), self.interp(ctx, arg));
-        let (hf, used_f) = self.has_type_pi(ctx, fun, fty0, &fty_t, assms, depth)?;
-        let (ha, used) = self.has_type_a(ctx, arg, &dom_t, &used_f, depth + 1)?;
-        let hf = reassume(&hf, &used_f, &used)?;
+        let Some((hf, used_f)) = self.has_type_pi(ctx, fun, fty0, &fty_t, assms, depth) else {
+            // **The head's own typing at its `Π`.** Everything below rests on
+            // it, and for a spine `c a₁ … aₙ` it rests recursively on the head
+            // *constant*'s typing — which is the goal's own population. See
+            // `ConstHead`.
+            note_ap(ApStep::HeadTyping);
+            #[cfg(feature = "stepcount")]
+            {
+                let (h, _) = ctx.unfold_apps(fun);
+                note_ap(if matches!(ctx.read_expr(h), Expr::Const { .. }) {
+                    ApStep::HeadTypingConstSpine
+                } else {
+                    ApStep::HeadTypingOther
+                });
+            }
+            return None
+        };
+        let Some((ha, used)) = self.has_type_a(ctx, arg, &dom_t, &used_f, depth + 1) else {
+            note_ap(ApStep::ArgTyping);
+            return None
+        };
+        let Some(hf) = reassume(&hf, &used_f, &used) else {
+            note_ap(ApStep::Assemble);
+            return None
+        };
         let hyp = conj_of(&used);
 
         // A function-space target: `⟦Π⟧` is always a `dprod` now, but a typing
         // stated by a `derived` theorem — the ι rules' minor-premise chains —
         // may still name `fs`, and a function's values lie in its codomain.
-        if let Some((f, args)) = self.parts.get(&fty_t).cloned() {
+        // Read off the *term*, not out of `parts`: the lesson of
+        // `target_head_step` is that the side table's absence is not a fact
+        // about the term. Both are asked so the difference stays counted.
+        #[cfg(feature = "stepcount")]
+        if self.parts.get(&fty_t).is_none() && fty_t.as_app().is_some() {
+            note_ap(ApStep::FsShapeOnlyOnTerm);
+        }
+        if let Some((f, args)) = fty_t.as_app().map(|(f, a)| (f, a.to_vec())) {
             if f == self.pre.fs_sym() && args.len() == 2 && args[0] == dom_t {
                 let lem = self.pre.fs_app_mem.clone();
-                let out = app_in_codomain(&lem, &dom_t, &args[1], &tf, &ta, &hf, &ha, hyp.as_ref())?;
+                let Some(out) =
+                    app_in_codomain(&lem, &dom_t, &args[1], &tf, &ta, &hf, &ha, hyp.as_ref())
+                else {
+                    note_ap(ApStep::Assemble);
+                    return None
+                };
+                note_ap(ApStep::FiredFs);
                 return Some((out, HtClause::AppFs, used))
             }
         }
 
         // Dependent: the `∀x ∈ A. app(f,x) ∈ b(x)` conjunct of the dependent
         // product's defining axiom, then the fibre symbol unfolded.
-        let site = self.pi_sites.get(&fty)?;
+        let Some(site) = self.pi_sites.get(&fty) else {
+            note_ap(ApStep::NoPiSite);
+            return None
+        };
         let (skel, holes, pdom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
         if pdom != dom_t {
+            note_ap(ApStep::PiSiteDomain);
             return None
         }
-        let info = self.pi_info(&skel)?;
-        let fb = info.fibre.as_ref()?;
+        let Some(info) = self.pi_info(&skel) else {
+            note_ap(ApStep::NoFibre);
+            return None
+        };
+        let Some(fb) = info.fibre.as_ref() else {
+            note_ap(ApStep::NoFibre);
+            return None
+        };
         let (dprod_def, b_def) = (fb.dprod_def.clone(), fb.b_def.clone());
         let app = self.pre.ap.app;
-        let out = app_in_fibre(
+        let out: Option<Thm> = app_in_fibre(
             &mut self.env_mut(),
             app,
             &dprod_def,
@@ -10040,7 +10128,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             &hf,
             &ha,
             hyp.as_ref(),
-        )?;
+        );
+        let Some(out) = out else {
+            note_ap(ApStep::Assemble);
+            return None
+        };
+        note_ap(ApStep::FiredDProd);
         Some((out, HtClause::AppDProd, used))
     }
 
@@ -11500,7 +11593,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                             (Some(s), false) if s < here => SkelReach::OpenEarlier,
                             (Some(_), false) => SkelReach::OpenHere,
                         });
-                        note_ctor_reach(self.declared_type_shape(ctx, arg, dom));
+                        let cr = self.declared_type_shape(ctx, arg, dom);
+                        note_ctor_reach(cr);
+                        // **Is the head constant's own typing in the store?**
+                        // The `ConstMatches` population's decisive question,
+                        // asked as a lookup. See [`CONST_HEAD`].
+                        if matches!(cr, CtorReach::ConstMatches) {
+                            let (h, _) = ctx.unfold_apps(arg);
+                            let slot = if let Expr::Const { name, levels, .. } = ctx.read_expr(h) {
+                                match self.const_key(ctx, name, levels) {
+                                    None => 2usize,
+                                    Some(key) => {
+                                        let sp = self.spell(ctx, name);
+                                        let es = self.core.consts().borrow_mut().get(&key, &sp);
+                                        usize::from(!es.iter().any(|e| e.typing.is_some()))
+                                    }
+                                }
+                            } else {
+                                2
+                            };
+                            CONST_HEAD[slot].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if fv.is_empty() {
                             if self.shared.borrow_mut().closed_unknown.insert(ta.clone()) {
                                 CLOSED_UNKNOWN_DISTINCT
@@ -16839,6 +16952,70 @@ static TH_STEP: [std::sync::atomic::AtomicU64; N_TH_STEP] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_TH_STEP];
 fn note_ths(k: ThStep) { TH_STEP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// Every exit of [`TgBackend::has_type_app`] — the clause that would serve the
+/// **3 213 `CtorReach::ConstMatches`**, the oldest open item of this stage.
+///
+/// A saturated constant application whose instantiated declared type *is* the
+/// domain has its type readable off the environment. Turning that into the
+/// *membership* needs this clause, once per argument, and each use rests on the
+/// head's own typing at its `Π` — so a spine `c a₁ … aₙ` rests recursively on
+/// `⊢ ⟦c⟧ ∈ ⟦T_c⟧` for the head **constant**. `HeadTypingConstSpine` is that
+/// case, split out because it is the goal's own population and not a gap in
+/// this clause.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum ApStep {
+    /// The denominator.
+    Asked,
+    /// The head could not conceivably be typed — the cheap shape screen before
+    /// any `Π` is interpreted.
+    Shape,
+    /// The head has no syntactic type.
+    NoSynType,
+    /// Its type is not a `Π`, or does not expose one.
+    NoPi,
+    /// **The head's own typing at that `Π` is not available.**
+    HeadTyping,
+    /// …and the head of the spine is a constant: the recursion has bottomed out
+    /// at `⊢ ⟦c⟧ ∈ ⟦T_c⟧`, which is the thing the project is trying to prove.
+    HeadTypingConstSpine,
+    /// …and it is not.
+    HeadTypingOther,
+    /// The argument's typing is not available.
+    ArgTyping,
+    /// No `Π` site recorded for the exposed type.
+    NoPiSite,
+    /// A site is recorded at a different domain.
+    PiSiteDomain,
+    /// The site has no fibre.
+    NoFibre,
+    /// Something did not assemble. Expected 0.
+    Assemble,
+    /// Concluded by the function space.
+    FiredFs,
+    /// Concluded by the dependent product.
+    FiredDProd,
+    /// Diagnostic: the interpreted `Π` is an application the *term* knows and
+    /// [`TgBackend::parts`] does not. Expected 0 now that the `fs` branch reads
+    /// the term; a positive count would be the `target_head_step` defect
+    /// recurring here.
+    FsShapeOnlyOnTerm,
+}
+const N_AP: usize = 15;
+static AP: [std::sync::atomic::AtomicU64; N_AP] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_AP];
+fn note_ap(k: ApStep) { AP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// For a [`CtorReach::ConstMatches`] raw hoist: is the head constant's **own
+/// typing** in the shared const store, at these very levels?
+///
+/// The decisive question for that population, asked as a lookup rather than a
+/// derivation. If the store has it, the 3 213 are a plumbing problem; if it does
+/// not, they are the goal's own circularity — a declaration's typing needing the
+/// typings of the declarations it is built from.
+static CONST_HEAD: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
 /// Every exit of [`TgBackend::target_mem`] — beta's own domain premise `x ∈ A`,
 /// which [`TgBackend::target_head_step`]'s census showed to be its largest
 /// *genuine* decline (6 170, against 3 173 caused by a side table).
@@ -18324,6 +18501,13 @@ fn ht_report() -> String {
                 cr(CtorReach::Other),
                 cr(CtorReach::NotAConstApp),
             ));
+            let ch: Vec<u64> = CONST_HEAD.iter().map(|c| c.load(Relaxed)).collect();
+            if ch.iter().sum::<u64>() > 0 {
+                s.push_str(&format!(
+                    "        …of the const matches, the HEAD CONSTANT's own typing is in the store: {} yes, {} no, {} no key or not a constant head\n",
+                    ch[0], ch[1], ch[2],
+                ));
+            }
         }
         let cd = |k: CtorDecline| CTOR_DECLINE[k as usize].load(Relaxed);
         let cd_total: u64 = CTOR_DECLINE.iter().map(|c| c.load(Relaxed)).sum();
@@ -18524,6 +18708,34 @@ fn ht_report() -> String {
             if n > 0 {
                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
             }
+        }
+    }
+    // The application clause, every exit. Printed whole, zeros included:
+    // `Assemble` and `FsShapeOnlyOnTerm` are expected 0 and load-bearing.
+    let ap = |k: ApStep| AP[k as usize].load(Relaxed);
+    if ap(ApStep::Asked) > 0 {
+        s.push_str(&format!(
+            "    {:<width$}  {:>10}\n",
+            "app(f,a) ∈ ty — the application clause, by outcome",
+            ap(ApStep::Asked)
+        ));
+        for (l, k) in [
+            ("concluded by the dependent product", ApStep::FiredDProd),
+            ("concluded by the function space", ApStep::FiredFs),
+            ("the head could not conceivably be typed (shape screen)", ApStep::Shape),
+            ("the head has no syntactic type", ApStep::NoSynType),
+            ("its type is not a Π", ApStep::NoPi),
+            ("THE HEAD'S OWN TYPING at that Π is not available", ApStep::HeadTyping),
+            ("…and the spine's head is a constant — the goal's own population", ApStep::HeadTypingConstSpine),
+            ("…and it is not", ApStep::HeadTypingOther),
+            ("the argument's typing is not available", ApStep::ArgTyping),
+            ("no Π site recorded / recorded at another domain / no fibre", ApStep::NoPiSite),
+            ("…recorded at another domain", ApStep::PiSiteDomain),
+            ("…no fibre", ApStep::NoFibre),
+            ("did not assemble", ApStep::Assemble),
+            ("the Π is an application only the term knows", ApStep::FsShapeOnlyOnTerm),
+        ] {
+            s.push_str(&format!("    {:<width$}  {:>10}\n", format!("  …{l}"), ap(k)));
         }
     }
     // Beta's own domain premise, every exit of `target_mem`. Printed whole,
