@@ -93,6 +93,17 @@ inductive Decline where
   it (`MODELGEN.md` §5.2). -/
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
+  /-- **The kernel accepted the declaration and the environment then lost it.**
+  Distinct from [`Modelgen.Decline.nameTaken`], which is the input already
+  holding the name, because the two want opposite responses. This one is
+  Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
+  flattens many modules, so it holds both `_private.M.0.X` and a public `X`,
+  we model both, and `privateToUserName` makes the two model names one
+  (`MODELGEN.md` §8.14). The name is ours, nothing in the input is using it,
+  and the fix is therefore ours too: regenerate under a root whose normalized
+  form cannot collide and rename on the way out. `Modelgen.genPrim` does
+  exactly that, and only on this constructor. -/
+  | nameLost (n : Name)
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
   | cyclicMimics
@@ -112,6 +123,7 @@ def Decline.labelAs (what : String) : Decline → String
   | .dependentFields => s!"{what} model with dependent fields"
   | .notLeans n why => s!"{what} model: the input's {n} is not Lean's ({why})"
   | .nameTaken n => s!"{what} model name taken ({n})"
+  | .nameLost n => s!"{what} model name lost to a normalized-name collision ({n})"
   | .cyclicMimics => s!"{what} model with mutually recursive occurrences"
   | .malformed m => s!"{what} model shape: {m}"
 
@@ -1960,6 +1972,18 @@ structure Iso where
   unmodelled when it does not. [`Modelgen.genPrim`] is where the withdrawal
   happens. Empty for every other arm, so nothing else changes shape. -/
   requires : Array Name := #[]
+  /-- **The root this model was *built* under and the root it must be
+  *emitted* under**, when the two differ. They differ only where a
+  normalized-name collision (`MODELGEN.md` §8.14) made the contract names
+  unusable *in the environment*: the four names are a property of the output
+  and what collides is a property of the async constant map, so the model is
+  generated under a root whose normalized form cannot collide and the
+  export records are renamed back. The renaming is injective and touches only
+  constants this run introduced, so the declaration the kernel accepted and
+  the declaration emitted are the same up to it, and `T._model.self` still
+  means what `modelgen/README.md` says. `none` — and so no renaming at all —
+  for every declaration that did not collide, which is all but a handful. -/
+  emitAs? : Option (Name × Name) := none
   deriving Inhabited
 
 /-- **The export's names rewritten to the model's**: the carrier for each real
@@ -2026,7 +2050,7 @@ def addChecked (d : Declaration) : GenM Unit := do
     -- pins the same distinction from the other side.
     for n in d.getNames do
       if ((← getEnv).find? n).isNone then
-        declineWith (.nameTaken n)
+        declineWith (.nameLost n)
   | .error ex =>
     badShape s!"{d.getTopLevelNames} rejected by the kernel: {← (ex.toMessageData {}).toString}"
 

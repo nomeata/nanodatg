@@ -106,6 +106,63 @@ def names : EDecl → List Name
 
 end EDecl
 
+/-! ## Renaming a generated declaration's root, on the way out
+
+`Iso.emitAs?`'s renaming, applied to the export records rather than to the
+`Declaration`s. Records rather than declarations because the *descent* has to
+be covered too: a model that splices an inductive of its own (arm C's index
+erasure) has that inductive modelled by a recursive `Modelgen.genPrim` call
+whose names are built off the alias root as well, and renaming the slice of
+output the whole call produced catches those without threading a substitution
+through the recursion.
+
+The substitution is a **name-prefix replacement of constants this run
+introduced**, so it is injective and cannot capture: `from` is a root
+containing a component no input name has, and every name under it was minted
+by this call. -/
+
+/-- `from.suffix ↦ to.suffix`, and the identity on everything else. -/
+def renameRoot (fr to : Name) (n : Name) : Name :=
+  if fr.isPrefixOf n then n.replacePrefix fr to else n
+
+/-- The same, inside an expression's constant heads. -/
+def renameRootE (fr to : Name) (e : Expr) : Expr :=
+  e.replace fun sub => match sub with
+    | .const n us => if fr.isPrefixOf n then some (.const (n.replacePrefix fr to) us) else none
+    | _ => none
+
+/-- One export record with its root renamed — every name it introduces, every
+name it refers to, and every constant inside its expressions. **Every field
+that can hold a `Name` is listed**, because one missed field is a record that
+refers to a constant the output does not contain, and no oracle here would
+see it: the statement check reads the environment, which keeps the alias. -/
+def EDecl.renameRoot (fr to : Name) : EDecl → EDecl
+  | .ax n lp t u => .ax (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) u
+  | .defn n lp t v h sf all =>
+    .defn (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v) h sf
+      (all.map (Modelgen.renameRoot fr to))
+  | .thm n lp t v all =>
+    .thm (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v)
+      (all.map (Modelgen.renameRoot fr to))
+  | .opaq n lp t v u all =>
+    .opaq (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v) u
+      (all.map (Modelgen.renameRoot fr to))
+  | .quot n lp t k => .quot (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) k
+  | .induct ts cs rs =>
+    .induct
+      (ts.map fun t => { t with
+        name := Modelgen.renameRoot fr to t.name, type := renameRootE fr to t.type,
+        all := t.all.map (Modelgen.renameRoot fr to),
+        ctors := t.ctors.map (Modelgen.renameRoot fr to) })
+      (cs.map fun c => { c with
+        name := Modelgen.renameRoot fr to c.name, type := renameRootE fr to c.type,
+        induct := Modelgen.renameRoot fr to c.induct })
+      (rs.map fun r => { r with
+        name := Modelgen.renameRoot fr to r.name, type := renameRootE fr to r.type,
+        all := r.all.map (Modelgen.renameRoot fr to),
+        rules := r.rules.map fun u => { u with
+          ctor := Modelgen.renameRoot fr to u.ctor, rhs := renameRootE fr to u.rhs } })
+
 /-- A whole export: the `meta` line verbatim, then the declarations in order. -/
 structure Export where
   metaLine : Json

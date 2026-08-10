@@ -4042,31 +4042,67 @@ next thing), ~52 branching or under-a-binder recursion (W), **10 name taken**
 — the new guard, i.e. exactly the collisions that used to be fatal — and 3
 basis primitives.
 
-**The 10 name-taken declines are a coverage loss, and a recoverable one —
-without a contract change.** They are declarations whose model name is
+**The 10 name-taken declines were a coverage loss, and they are closed —
+without a contract change.** They were declarations whose model name is
 indistinguishable, after private-prefix stripping, from one already emitted.
-Turning a fatal into a decline was the right first move — a decline, never an
-emission. What was recorded here before was that the coverage-preserving fix
-is to disambiguate the *emitted* name, which changes the four-name contract
-and is the owner's call. **That is not the only fix, and the cheaper one is
-ours alone.**
+Turning a fatal into a decline was the right first move; what was recorded
+here after it was that the coverage-preserving fix is to disambiguate the
+*emitted* name, which changes the four-name contract and is the owner's call.
+**That was not the only fix, and the cheaper one was ours alone.**
 
 The four names are a property of the **output**; what collides is a property
-of the **environment** the generator builds a model in. Those can be
-different names. Generate the whole model under a root whose normalized form
-cannot collide — the model prefix is chosen in exactly three places
-(`Simple.lean`'s `primIso`, `Model.lean`'s nested `iso`, `Mutual.lean`'s
-`mutualIso`, each one `let model := Name.str root "_model"`) — and rewrite
-that root to the contract name on the way into the export. The declaration the
-kernel accepted and the declaration emitted then differ by an **injective
-renaming of constants this run introduced**, so nothing about "only what the
-tool generates is checked, one at a time, with checking on" is weakened, and
+of the **environment** the generator builds a model in. Those can be different
+names. So the model is generated under a root whose normalized form cannot
+collide and the export records are renamed back. The declaration the kernel
+accepted and the declaration emitted then differ by an **injective renaming of
+constants this run introduced**, so nothing about "only what the tool
+generates is checked, one at a time, with checking on" is weakened, and
 `T._model.self` still means what `modelgen/README.md` says it means.
-`runCollisionProbe` pins that the escape is open: a second declaration whose
-root normalizes differently is added and found. Not taken here — it wants the
-`Iso`'s name fields renamed in step with its `decls`, and a fixture holding an
-input that declares both `X` and `_private.M.0.X` — but it is a coverage fix
-of 10 with no decision above this seat's pay grade in it.
+
+Four things about how it is built, each of which was a choice with an
+alternative:
+
+* **It is a retry, not a decision taken up front.** `addChecked` now
+  distinguishes `Decline.nameLost` — the kernel took it and the environment
+  lost it — from `Decline.nameTaken`, which is the input already holding the
+  name; the two want opposite responses. `genPrim` re-runs `primIso` under the
+  alias root on `nameLost` **and on nothing else**, so every declaration that
+  models today takes exactly the path it took before. Deciding up front would
+  have meant a normalized-name precomputation over 670,630 input names and a
+  changed path for every private inductive in Mathlib, to fix nine.
+* **The alias is unique per original name, not per declaration.** The
+  collisions here are not only private-against-public: three private
+  `Lean.Compiler.LCNF.State`s from three different modules normalize alike, so
+  one fixed extra component would have put all three back on top of each
+  other. The discriminator is the original name flattened into a single
+  component, which survives `privateToUserName` because that only strips a
+  prefix.
+* **The renaming is over the export records and over the slice of output the
+  whole call produced**, not over `Iso.decls`. It has to be: arm C (§8.15)
+  splices an inductive of its own and that inductive is modelled by a
+  *recursive* `genPrim` whose names are built off the alias root too, and
+  renaming the slice catches those without threading a substitution through
+  the recursion. `Iso` keeps the alias, because `checkModel` looks its names up
+  in the environment and the environment is where the alias lives.
+* **The probe's input is built in-process**, because no `.lean` source can
+  produce the pair — a private `X` and a public `X` in one module is an error,
+  and the collision only exists in an export, which is many modules flattened.
+  `Test.lean`'s `runAliasProbe` parses a fixture and adds a second copy of one
+  inductive under a private name that normalizes onto the original. It checks
+  that both model, that the output carries the contract name, and — the check
+  that would catch a half-done renaming — that the alias root appears **nowhere
+  in the output**, not as a declaration name, not in an `all` list, not as a
+  constant inside any type or value. Neither the kernel nor the statement
+  oracle would catch that, because both read the environment, which keeps the
+  alias on purpose. With the retry disabled the probe fails on two of its four
+  checks, so it is measuring the fix and not the weather.
+
+**Measured on the full export: nine of the ten recovered**, declines 118 → 109
+and models 6,698 → 6,707, `_mgalt` occurring **zero** times in the 5.6 GB
+output, 16,948 statements compared with none differing, instructions
+unchanged at 3.365 T. The tenth was never this class: it is
+`Lean.Syntax._model.0._model.tag` wanting the name `PSigma`, which is the
+basis exemption doing its job.
 
 **And the upstream bug that was reported here is real but is not the cause.**
 Lean's `addDeclCore` does add *private* names to the **public** async-consts
@@ -4323,12 +4359,12 @@ rather than proved.
 
 Full 5.6 GB export, exit 0, against the census §8.14 recorded:
 
-| | before arm C | with arm C |
-|---|---|---|
-| models | 6,640 | **6,698** |
-| declines | 147 | **118** |
-| statements compared, differing | 16,928 / 0 | **16,928 / 0** |
-| instructions | 3.350 T | **3.371 T** (+0.6 %) |
+| | §8.14's census | with arm C | and with §8.14's alias retry |
+|---|---|---|---|
+| models | 6,640 | 6,698 | **6,707** |
+| declines | 147 | 118 | **109** |
+| statements compared, differing | 16,928 / 0 | 16,928 / 0 | **16,948 / 0** |
+| instructions | 3.350 T | 3.371 T | **3.365 T** |
 
 **Say what the denominator now counts.** The +58 models are 29 families that
 used to decline *plus their 29 spliced skeletons*, and a skeleton is a verdict
@@ -4344,10 +4380,11 @@ other:
 They agree to the decimal because a skeleton that models adds one to each side.
 The number to watch is the decline count, and it is **147 → 118**.
 
-Of the 118: 53 an indexed family whose erasure is *not* linear (43 of them
-composed `_model.aux`), ~50 branching or under a binder, 10 name taken
-(§8.14's escape is what those want), 3 basis, and 2 singletons. **No
-withdrawal fired on Mathlib** — every family arm C admitted, it modelled.
+Of the 109: 53 an indexed family whose erasure is *not* linear (43 of them
+composed `_model.aux`), ~50 branching or under a binder, 3 basis, 1 the basis
+exemption reached through a composed tag, and 2 singletons. **No withdrawal
+fired on Mathlib** — every family arm C admitted, it modelled. The name-taken
+cluster is gone; §8.14 is where it went.
 
 At the 30M prefix the same arm closes 25 of 110, which is exactly the count
 `erasure linear: yes` predicted before the arm was built. The prediction and

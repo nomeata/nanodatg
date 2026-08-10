@@ -604,6 +604,84 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
      MODELGEN.md §6.7's obstacle is gone and this tool can move to lean4checker's model"
   return a
 
+/-- Every constant an export record introduces *or* refers to. A leaked alias
+root is a name that appears here and in no declaration of the output, so this
+is what the probe below searches. -/
+def edeclNames : Modelgen.EDecl → Array Name
+  | .ax n _ t _ => #[n] ++ t.getUsedConstants
+  | .defn n _ t v _ _ all => #[n] ++ all.toArray ++ t.getUsedConstants ++ v.getUsedConstants
+  | .thm n _ t v all => #[n] ++ all.toArray ++ t.getUsedConstants ++ v.getUsedConstants
+  | .opaq n _ t v _ all => #[n] ++ all.toArray ++ t.getUsedConstants ++ v.getUsedConstants
+  | .quot n _ t _ => #[n] ++ t.getUsedConstants
+  | .induct ts cs rs =>
+    (ts.toArray.flatMap fun t =>
+       #[t.name] ++ t.all.toArray ++ t.ctors.toArray ++ t.type.getUsedConstants) ++
+    (cs.toArray.flatMap fun c => #[c.name, c.induct] ++ c.type.getUsedConstants) ++
+    (rs.toArray.flatMap fun r =>
+       #[r.name] ++ r.all.toArray ++ r.type.getUsedConstants ++
+       r.rules.toArray.flatMap fun u => #[u.ctor] ++ u.rhs.getUsedConstants)
+
+/-- **The normalized-name collision, closed** — `MODELGEN.md` §8.14.
+
+An export is many modules flattened into one file, so it holds both
+`_private.M.0.X` and a public `X`. We model both, Lean's async constant map
+keys on `privateToUserName`, and the second model's carrier is added to the
+kernel and lost to the environment. `runCollisionProbe` above pins that Lean
+behaves that way and that a differently-normalizing root escapes it; this pins
+that `modelgen` *takes* the escape.
+
+**The input is built here rather than checked in as a fixture, because no
+`.lean` source can produce the pair.** A private `X` and a public `X` in one
+module is an error; the collision only exists in an export, which is many
+modules. So the probe parses a fixture and adds a second copy of one inductive
+under a private name that normalizes back onto the original — which is exactly
+the shape the export has, and `EDecl.renameRoot` is the same function the fix
+uses, applied here to manufacture the problem rather than to solve it.
+
+Three checks, and the third is the one that would catch a half-done renaming:
+
+1. **both model.** Before the retry the second lost its carrier and declined.
+2. **the output carries the contract names.** `_private.M.0.Sv._model.self` and
+   not the alias, so `modelgen/README.md`'s four names still mean what they say
+   and no consumer sees the difference.
+3. **the alias root appears nowhere in the output at all** — not as a
+   declaration name, not in an `all` list, not as a constant inside any type or
+   value. A renaming that missed one field of one record would leave a
+   reference to a constant the output does not declare, and neither the
+   statement oracle nor the kernel would see it: both read the *environment*,
+   which keeps the alias on purpose. -/
+def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
+  let path := s!"{root}/modelgen/tests/prim_shapes.ndjson"
+  let text ← IO.FS.readFile path
+  let .ok x := Modelgen.parse text | return check a false "prim_shapes does not parse"
+  let tgt : Name := `Sv
+  let priv : Name := (`_private.M).mkNum 0 |>.str "Sv"
+  let mut a := a
+  unless privateToUserName priv == tgt do
+    return check a false "the manufactured private name does not normalize onto Sv"
+  let some i := x.decls.findIdx? (·.names.contains tgt)
+    | return check a false "prim_shapes no longer declares Sv"
+  let dup := x.decls[i]!.renameRoot tgt priv
+  let decls := x.decls.extract 0 (i + 1) ++ #[dup] ++ x.decls.extract (i + 1) x.decls.size
+  let env ← importModules #[] {}
+  let ctx : Core.Context :=
+    { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
+  let ((outD, rep), _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (runFilter { x with decls } true true)) ctx { env }
+  let gen := rep.generated.map (·.1)
+  a := check a (gen.contains tgt) "alias: the public Sv no longer models"
+  a := check a (gen.contains priv)
+    s!"alias: the private copy did not model — the normalized-name collision is not \
+       escaped; it declined as {rep.declined.filter (·.1 == priv) |>.map (·.2)}"
+  let selfN := Name.str (Name.str priv "_model") "self"
+  a := check a (outD.any (·.names.contains selfN))
+    s!"alias: the output does not carry {selfN}, so the four-name contract moved"
+  let leaked := outD.flatMap edeclNames |>.filter fun n =>
+    n.components.any (· == `_mgalt)
+  a := check a leaked.isEmpty
+    s!"alias: the alias root leaked into the output on {leaked.toList.take 4}"
+  return a
+
 /-- `def n : Nat → Nat := fun x => x`, under whatever name is asked for. The
 collision probe needs two declarations that differ in nothing but their name. -/
 private def probeIdDecl (n : Name) : Declaration :=
@@ -928,6 +1006,7 @@ def main (args : List String) : IO UInt32 := do
   a ← runSyntax root a
   a ← runEnvProbe root a
   a ← runCollisionProbe a
+  a ← runAliasProbe root a
   a ← runMonoCompose root a
   a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"

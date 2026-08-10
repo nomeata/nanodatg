@@ -1771,10 +1771,18 @@ partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : E
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
 its own, restored — exactly [`Modelgen.mutualIso`]'s arrangement. -/
-def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
+def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name) : GenM Iso := do
   let us := lparams.map Level.param
-  let model := Name.str tname "_model"
+  -- **Where the model is built and where it is emitted can differ.** `root` is
+  -- the former and `tname` the latter; they are the same name for every
+  -- declaration but the handful whose model name is lost to a normalized-name
+  -- collision, where [`Modelgen.genPrim`] retries under an alias root and
+  -- renames the export records back (`MODELGEN.md` §8.14). So every *guard*
+  -- below is about `tname`'s names — those are what reach the output and what
+  -- must not collide with the input — while every name *built* is `root`'s.
+  let model := Name.str root "_model"
+  let emitModel := Name.str tname "_model"
   let selfN := Name.str model "self"
   let ctorN := fun (j : Nat) => Name.str model s!"ctor_{j}"
   let recN := Name.str model "rec_0"
@@ -1800,8 +1808,14 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
   if primBasis.contains tname then
     badShape "a basis primitive (the exemption that makes the construction well-founded)"
 
-  let taken : Name → GenM Unit := fun n => do
+  -- The guard runs on the **emitted** name and, where the two differ, on the
+  -- built one too: the first is the contract this run must not break and the
+  -- second is a constant this run is about to add to the environment.
+  let taken1 : Name → GenM Unit := fun n => do
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
+  let taken : Name → GenM Unit := fun n => do
+    taken1 (Modelgen.renameRoot model emitModel n)
+    if model != emitModel then taken1 n
   taken selfN
   taken recN
   for j in [0:nc] do
@@ -3015,6 +3029,7 @@ the subsingleton rule that minted {ern} does not hold of it"
 
   return { decls := out, levelParams := lparams, members := #[], selfNames := #[selfN]
            numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, spliced
-           requires := if armC then #[skelN] else #[] }
+           requires := if armC then #[skelN] else #[]
+           emitAs? := if root == tname then none else some (root, tname) }
 
 end Modelgen

@@ -385,7 +385,28 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Bool) := do
   let (out, rep, pending) := st
   let saved ← getEnv
-  match ← (primIso tname lparams np ty ctors reserved).run with
+  -- **The retry under an alias root**, and it is a retry rather than a
+  -- decision taken up front on purpose: aliasing changes nothing about the
+  -- output and everything about the risk, so it runs only where the collision
+  -- has actually fired. Every declaration that models today takes exactly the
+  -- path it took before, byte for byte.
+  --
+  -- The alias has to be unique per *original* name and not merely per
+  -- declaration, because the collisions in Mathlib are not only
+  -- private-against-public: three private `Lean.Compiler.LCNF.State`s from
+  -- three different modules normalize alike, so a single `_mgalt` component
+  -- would put all three back on top of each other. The original name flattened
+  -- into one component is the discriminator, and it survives
+  -- `privateToUserName` because that only strips a prefix.
+  let aliasRoot : Name :=
+    Name.str (Name.str tname "_mgalt") ((toString tname).replace "." "_")
+  let mut root := tname
+  let mut res ← (primIso tname root lparams np ty ctors reserved).run
+  if let .error (.nameLost _) := res then
+    setEnv saved
+    root := aliasRoot
+    res ← (primIso tname root lparams np ty ctors reserved).run
+  match res with
   | .error dec =>
     setEnv saved
     if canWait && dec.isFxWait && !(← primFxReady reserved) then
@@ -393,6 +414,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
       pending), false)
   | .ok is =>
+    let out0 := out.size
     let mut out := out
     for gd in is.decls do
       for e in ← toEDecls gd do out := out.push e
@@ -422,6 +444,17 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     -- that says "this skeleton will model" is the shape of "skip is not
     -- pass": it reports success and leaves the hole open on the case it got
     -- wrong. This asks the environment.
+    -- **The rename, over the slice this call produced** — its own records and
+    -- the descent's, which is why it is here and over `EDecl`s rather than
+    -- over `is.decls`: arm C's spliced skeleton is modelled by a recursive
+    -- `genPrim` whose names are built off the alias root too.
+    if let some (fr, to) := is.emitAs? then
+      let mut o2 := (st2.1).extract 0 out0
+      for e in (st2.1).extract out0 (st2.1).size do
+        o2 := o2.push (e.renameRoot fr to)
+      st2 := (o2, { st2.2.1 with
+        spliced := st2.2.1.spliced.map fun (n, ns) =>
+          (Modelgen.renameRoot fr to n, ns.map (Modelgen.renameRoot fr to)) }, st2.2.2)
     for n in is.requires do
       unless (← getEnv).constants.contains (Name.str (Name.str n "_model") "self") do
         -- **Withdraw everything**, and off `st` rather than off the locals:
