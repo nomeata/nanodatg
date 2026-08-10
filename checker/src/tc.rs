@@ -1628,21 +1628,46 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// a *field* of this struct, so there is no path from
     /// `domain_obligation` back to `infer`. Here there is.
     ///
-    /// **The outermost argument only.** `derive_beta` peels the lambda nest one
-    /// binder at a time, so the domain the backend keys `a₁` at is the domain
-    /// of `lam` itself, needing no instantiation — the argument and the domain
-    /// are both to hand. The inner binders' domains are the *instantiated*
-    /// ones, which would mean rebuilding the intermediate lambdas the
-    /// composite `inst` below exists to avoid. What that costs is measured
-    /// rather than assumed; see `MEASUREMENTS.md`.
+    /// **The outermost binder only, and that is a measured stopping point.**
     ///
-    /// Three things keep this from being expensive or unsound:
+    /// `derive_beta` peels the lambda nest one binder at a time, so the domain
+    /// it keys `aₖ` at is the domain of the *k*-th lambda — which for `k > 0`
+    /// is the **instantiated** one, reachable only by rebuilding the
+    /// intermediate lambdas that the composite `inst` in the caller exists to
+    /// avoid. The outermost argument is free: its domain is `lam`'s own.
+    ///
+    /// # The inner binders were built, measured, and removed
+    ///
+    /// Walking the nest — advancing `cur = inst(body, [aₖ])` exactly as
+    /// `derive_beta` does, so the keys line up — works, and it reaches far
+    /// more arguments: 3 313 typed becomes 8 281. **It also fails the escape
+    /// ratchet by a factor of 2.6, and it does not even reduce its own target
+    /// population.** Two restrictions were tried:
+    ///
+    /// | | typed | never-checked hoists | escapes | instr. |
+    /// | --- | ---: | ---: | ---: | ---: |
+    /// | outermost only (this code) | 3 313 | **16 502** | **2 247** | +0.47 % |
+    /// | + inner binders | 8 281 | 12 347 | 5 909 | +5.7 % |
+    /// | + inner binders, closed nests only | 6 442 | 16 688 | 5 661 | +4.6 % |
+    ///
+    /// The mechanism is the one that also killed the open arguments: the walk
+    /// doubles the inference volume, inference *reduces*, reduction raises new
+    /// obligations, and those escape. Restricting to nests that are closed
+    /// throughout — so every intermediate lambda is closed and none mentions a
+    /// local — does not save it, and leaves the never-checked row *worse* than
+    /// doing nothing (16 688 against 16 502). The 12 347 in the middle row is
+    /// not a win either: it comes with 22 139 more obligations asked, so the
+    /// population shrank by being outrun, not by being answered.
+    ///
+    /// Do not re-derive this by retrying the walk. What it would take is a way
+    /// to type an argument that does not go through `infer` — the same
+    /// research question the open arguments raise.
+    ///
+    /// Three things keep what remains from being expensive or unsound:
     /// * the backend is **asked first** (`wants_arg_typing`), so nothing is
     ///   inferred for an argument a check already handed over;
-    /// * `def_eq`, not `assert_def_eq` — a redex the reduction built need not
-    ///   be well-typed at all (`def_eq` compares arbitrary pairs), and a hard
-    ///   failure here would turn an accepted file into a rejected one. A
-    ///   mismatch simply declines;
+    /// * `def_eq`, not `assert_def_eq`, because a redex the reduction built
+    ///   need not be well-typed and a hard failure would cost acceptance;
     /// * [`Self::whnf_typing_depth`] bounds the re-entrancy at one.
     fn beta_arg_typing(&mut self, lam: ExprPtr<'t>, arg: ExprPtr<'t>) {
         if self.whnf_typing_depth > 0 {
@@ -1662,6 +1687,12 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         if self.ctx.has_fvars(arg) {
             return
         }
+        // **Ask the backend before paying.** Inference is not free and beta is
+        // 81 % of all reduction steps, so nothing is inferred for an argument
+        // some application check already handed over. The default
+        // implementation answers `false`, which is why a build with no proof
+        // backend pays nothing at all for any of this — the question, not just
+        // the answer, is the backend's.
         if !self.certifier.wants_arg_typing(self.ctx, arg) {
             return
         }
@@ -1672,7 +1703,15 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // gap cost — the argument's own sub-derivations are what make its
         // typing derivable, and `InferOnly` does not build them.
         let Typed { ty: arg_type, cert: at } = self.infer(arg, InferFlag::Check);
-        // Not `assert_def_eq`: see the doc above.
+        // **`def_eq`, not `assert_def_eq`, and the difference is acceptance.**
+        // `assert_def_eq` fails the check when the two types do not match, and
+        // that is right at an application the user wrote — but a beta redex
+        // the *reduction* built carries no such guarantee (`def_eq` compares
+        // arbitrary pairs, `to_ctor_when_k` fabricates constructor
+        // applications, and a term reached by delta is only as well-typed as
+        // the path that reached it). Asserting here would turn a file the
+        // checker accepts into one it rejects, for a certificate that is
+        // optional by construction. A mismatch simply declines.
         if let Some(eq) = self.def_eq(arg_type, binder_type) {
             let composed = self.certifier.ty_conv(self.ctx, arg, arg_type, binder_type, at, &eq);
             self.certifier.app_arg_checked(self.ctx, arg, binder_type, &composed);

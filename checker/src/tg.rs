@@ -16435,6 +16435,20 @@ enum ArgMem {
     /// A raw hoist whose argument was checked, and whose typing was already a
     /// hole at the check — the `ty_const` cascade seen from the beta rule.
     /// Threading cannot manufacture these; the constant store unblocks them.
+    ///
+    /// # This row is knowledge, not proving — never add it to a numerator
+    ///
+    /// `TypeChecker::beta_arg_typing` moved 1 286 obligations *into* this row
+    /// from [`Self::RawNeverChecked`] (1 640 → 2 926 as that row fell
+    /// 18 656 → 16 502). Nothing about them was proved. What changed is that
+    /// the on-demand inference **visited** them and its typing was a hole, so
+    /// they are now attributed to the cascade instead of to "nobody ever
+    /// looked" — a reclassification out of bucket (i) and into bucket (ii).
+    ///
+    /// The temptation, reading two runs side by side, is to credit the whole
+    /// 2 154 fall in `RawNeverChecked` to the tranche. Only **868** of it is
+    /// obligations now answered. A rise in *this* row is a rise in debt that
+    /// has merely been correctly labelled, and the two must never be summed.
     RawGapAtCheck,
     /// A raw hoist about a term no application check ever visited — built by
     /// the reduction itself (an iota nest's argument, a substitution

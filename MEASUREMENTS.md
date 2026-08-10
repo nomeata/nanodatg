@@ -6691,3 +6691,45 @@ so that atom is **restated** (now: `Proved` and unconditional) rather than
 deleted, and a new `unchecked, open` atom takes over the falsifier it used to
 carry. Mutation-verified: deleting the `has_fvars` guard turns `unchecked,
 open` red.
+
+### The inner binders of a nested redex — built, measured, removed — 2026-08-10
+
+*The named successor to the tranche above. It works, it reaches 2.5× as many
+arguments, and it is not shippable. Recorded so nobody rebuilds it.*
+
+`derive_beta` peels a lambda nest one binder at a time, so the domain it keys
+`aₖ` at is the *k*-th lambda's — instantiated for `k > 0`, and reachable only by
+rebuilding the intermediate lambdas the composite `inst` exists to avoid. The
+walk advances `cur = inst(body, [aₖ])`, exactly as `derive_beta` does, so the
+keys line up; the intermediate lambdas are only built when an O(1) scan says
+some inner argument is closed and unstored.
+
+| | typed | never-checked hoists | **escapes** | gaps | instr. |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline (`f791e3f`) | — | 18 656 | **2 247** | 15 532 | — |
+| **outermost only (shipped)** | 3 313 | **16 502** | **2 247** | 15 761 | +0.47 % |
+| + inner binders | 8 281 | 12 347 | **5 909** | 20 869 | +5.7 % |
+| + inner binders, closed nests only | 6 442 | 16 688 | **5 661** | 20 561 | +4.6 % |
+
+**Escapes 2.6×. That is not a trade, it is a regression**, and the standing
+rule is absolute about this counter for the reason the run demonstrates: the
+walk doubles the inference volume, inference *reduces*, reduction raises new
+obligations (40 060 → 62 199 asked), and those escape. It is the same mechanism
+that disqualified the open arguments, at a different scale.
+
+Two things make the verdict clean rather than a judgement call:
+
+* **The restriction that saved the outermost tranche does not save this one.**
+  Requiring the nest to be closed *throughout* — so every intermediate lambda
+  is closed and none mentions a local — still escapes 5 661.
+* **The middle row's 12 347 is not a win.** It comes with 22 139 more
+  obligations asked; the population shrank by being outrun, not by being
+  answered. And the closed-nest row leaves that population at **16 688,
+  actively worse than the 16 502 the shipped code reaches by doing less.** A
+  measurable that moves the right way while its own denominator moves further
+  is why this stage reports raw hoists beside obligations asked.
+
+What it would take is a way to type an argument that does not go through
+`infer` — which is the same research question the open arguments raise, and not
+this tranche's. The finding is recorded at
+`TypeChecker::beta_arg_typing` so the next reader meets it before the idea.

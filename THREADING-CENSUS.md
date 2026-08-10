@@ -573,11 +573,20 @@ tranche, and they are engineering, not arithmetic:
   written at each assertion (+229 gaps, all six rows downstream of `nat_reduce`
   and `proj_reduce`, both already admitting and both bucket (ii)).
 
-  **What is left of the 7 717 after it**, and where a successor goes: the
-  inner binders of a nested redex (their domains are the instantiated ones,
-  needing the intermediate lambdas the composite `inst` avoids building), and
-  the open arguments, whose cost is the measured 16.8 % unless something
-  cheaper than full inference can type them.
+  **The named successor — the inner binders of a nested redex — was then
+  built, measured and removed.** It works and reaches 2.5× as many arguments
+  (3 313 typed → 8 281), and it fails the escape ratchet by 2.6× (2 247 →
+  5 909), for the same reason the open arguments do: the walk doubles the
+  inference volume, inference *reduces*, reduction raises 22 139 more
+  obligations, and those escape. Restricting to nests closed throughout does
+  not save it (5 661 escapes) and leaves the never-checked row at 16 688 —
+  **worse than the 16 502 the shipped code reaches by doing less**. Recorded at
+  `TypeChecker::beta_arg_typing` and in `MEASUREMENTS.md` so it is not rebuilt.
+
+  So both remaining directions now reduce to one research question: **a way to
+  type an argument that does not go through `infer`.** Every route that types
+  more by inferring more has now been measured, and each pays for its answers
+  with obligations that escape.
 
 *Measurables, restated:* the `raw hoists by cause` row and its two new
 cross-cuts (`lambda typing declines, by cause`; the subject/skeleton reach
