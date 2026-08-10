@@ -106,9 +106,13 @@ pub struct Interp {
     /// `max(l1, l2)` before it applies.
     cumul: Cumul,
     consts: HashMap<ConstKey, ConstInterp>,
-    /// The graph machinery per lambda body **shape**. Identity, not a cache:
-    /// see [`Interp::lam_site`].
-    lams: HashMap<Term, LamSite>,
+    // The graph machinery per lambda body **shape** used to be a private
+    // `lams: HashMap<Term, LamSite>` here, with `lam_by_sym` beside it. Both
+    // are now `nanoda_lib::lam_store::LamStore`, on the shared
+    // [`nanoda_lib::tg::EnvCore`] — see [`Interp::lam_site`]. Identity, not a
+    // cache, was always the rule; over one core with the checker it had
+    // stopped being true, because the two engines keyed the same shape to the
+    // same term and then minted two symbols for it.
     /// The dependent-product machinery per fibre **shape**.
     fibres: HashMap<Term, FibreSite>,
     /// The conditional-singleton machinery per `Prop`-valued `∀` shape.
@@ -121,7 +125,9 @@ pub struct Interp {
     /// from `⟦Π x:A. B⟧` instead of re-interpreting the subterms. Every
     /// interpretation comes from a `Typing` already in hand; taking one apart
     /// is not a second traversal, it is reading the term the traversal built.
-    lam_by_sym: HashMap<FnSym, LamSite>,
+    // `lam_by_sym` moved with `lams`; see above. [`Interp::as_lam`] reads the
+    // shared table, which is why it now takes apart a lambda **the checker
+    // minted** as readily as one of its own — the read-back half of the merge.
     fibre_by_sym: HashMap<FnSym, FibreSite>,
     cond_by_sym: HashMap<FnSym, CondSite>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
@@ -1464,10 +1470,8 @@ impl Interp {
             x_canon,
             cumul,
             consts: HashMap::new(),
-            lams: HashMap::new(),
             fibres: HashMap::new(),
             conds: HashMap::new(),
-            lam_by_sym: HashMap::new(),
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
             prop_sub: None,
@@ -1520,7 +1524,11 @@ impl Interp {
     /// `mini/tests/route_tg.rs::skeleton_key_divergence_sweep` measures.
     pub fn skeleton_keys(&self) -> (Vec<Term>, Vec<Term>, Vec<Term>) {
         (
-            self.lams.keys().cloned().collect(),
+            // The lambda column now comes from the table **both** engines
+            // write, so this and `nanoda_lib::tg::skeleton_keys` return the
+            // same vector by construction and their intersection measures
+            // nothing. `LamStore::asked` is the successor measurement.
+            self.core.lams().borrow().keys(),
             self.fibres.keys().cloned().collect(),
             self.conds.keys().cloned().collect(),
         )
@@ -1872,6 +1880,29 @@ impl Interp {
 
     // ──────────────────────────────────────────────────── the λ clause ──
 
+    /// This occurrence's view of a shared [`nanoda_lib::lam_store::LamSite`]:
+    /// the same symbols and theorems, with this occurrence's holes.
+    fn lam_view(
+        skel: Term,
+        site: &nanoda_lib::lam_store::LamSite,
+        holes: Vec<Term>,
+    ) -> Option<LamSite> {
+        // An **inert** entry — the checker's answer to a refused graph
+        // construction — has no defining axioms, so there is nothing for this
+        // engine to reason with and the caller gets its usual absence. `mini`
+        // declined its own refusals the same way before the tables merged.
+        let g = site.graph.as_ref()?;
+        Some(LamSite {
+            t: g.t,
+            skel,
+            t_ax: g.t_def.clone(),
+            lam: site.lam,
+            lam_ax: g.lam_ax.clone(),
+            holes,
+            k: site.k,
+        })
+    }
+
     /// The graph machinery for one lambda **body shape**, keyed on its
     /// skeleton.
     ///
@@ -1879,24 +1910,25 @@ impl Interp {
     /// *same* graph symbol, or their definitional equality needs a theorem
     /// where reflexivity should do. The `holes` differ per occurrence and are
     /// therefore returned rather than stored.
+    ///
+    /// **And the key is not private any more.** The table is
+    /// [`nanoda_lib::lam_store::LamStore`] on the shared
+    /// [`nanoda_lib::tg::EnvCore`], so "two occurrences" now means two
+    /// occurrences *in either engine*: a shape the checker already minted is
+    /// answered with the checker's symbol, and vice versa. Sharing the core
+    /// had already made the two engines' skeleton **keys** one term —
+    /// `x_canon` and the `hole_var` series come from the core — and the
+    /// symbols were the only thing left doubled. The mint itself, argument
+    /// order and all, is [`nanoda_lib::lam_store::LamStore::site`]: this
+    /// function no longer contains a copy of it.
     pub fn lam_site(&mut self, body_tm: &Term, w: FreeVar) -> Option<LamSite> {
         let mut holes = Vec::new();
         let skel = self.skeleton(body_tm, w, &mut holes);
         let k = holes.len();
-        if let Some(c) = self.lams.get(&skel) {
-            return Some(LamSite { holes, ..c.clone() })
-        }
-        // `t(h⃗, x) = skeleton`, with the holes **first** and the binder
-        // **last** — the argument order every `_n` construction assumes.
-        let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
-        xs.push(self.x_canon);
-        let (t, t_ax) = derived::define_abbrev(&mut self.env_mut(), &xs, &skel)?;
         let p = self.prelude.clone();
-        let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env_mut(), &p.ap, t)?;
-        let site = LamSite { t, skel: skel.clone(), t_ax, lam, lam_ax, holes: Vec::new(), k };
-        self.lams.insert(skel, site.clone());
-        self.lam_by_sym.insert(lam, site.clone());
-        Some(LamSite { holes, ..site })
+        let site =
+            self.core.lam_site(nanoda_lib::lam_store::Minter::Mini, &p, &skel, k, false)?;
+        Self::lam_view(skel, &site, holes)
     }
 
     /// `⟦λ x:A. b⟧ = lam(h⃗,⟦A⟧)`, taken apart again: the site at *this*
@@ -1905,14 +1937,22 @@ impl Interp {
     /// The inverse of [`Interp::lam_term`], and the reason `whnf`'s beta step
     /// needs no second traversal: the redex's own interpretation names the
     /// graph symbol, and the symbol names the site.
+    ///
+    /// Reads the shared table, so it takes apart a lambda **the checker
+    /// minted** exactly as it takes apart one of its own. That is not a
+    /// permission granted here: a `lam` symbol is a `lam` symbol, its site
+    /// carries real theorems over the one shared `Env`, and before the merge
+    /// the same term would simply have been opaque — a gap where reflexivity
+    /// was the proof.
     pub fn as_lam(&self, t: &Term) -> Option<(LamSite, Term)> {
         let (f, mut args) = self.parts_of(t)?;
-        let site = self.lam_by_sym.get(&f)?;
+        let store = self.core.lams().borrow();
+        let (skel, site) = store.by_lam(f)?;
         if args.len() != site.k + 1 {
             return None
         }
         let dom = args.pop()?;
-        Some((LamSite { holes: args, ..site.clone() }, dom))
+        Self::lam_view(skel.clone(), site, args).map(|s| (s, dom))
     }
 
     /// `⟦Π x:A. B⟧`, taken apart: which of §6.2's **two** clauses built it, its
@@ -2965,7 +3005,9 @@ impl Interp {
 
     /// How many per-shape binder symbols carry a defining axiom. Summarised in
     /// the dump rather than listed; see `crate::dump`'s header.
-    pub fn site_count(&self) -> usize { self.lams.len() + self.fibres.len() + self.conds.len() }
+    pub fn site_count(&self) -> usize {
+        self.core.lams().borrow().len() + self.fibres.len() + self.conds.len()
+    }
 }
 
 #[cfg(test)]

@@ -569,9 +569,78 @@ stage 6"):
 
   | site | mini impl | checker impl | common / one-sided | nominal-blind |
   |------|-----------|--------------|--------------------|---------------|
-  | lam  | `Interp::lam_site` (`lams`, `lam_by_sym`) | `lam_info` (`lam_infos`; build-only — the checker has **no** `as_lam`) | 49 / 919+554 | 140 / 673+440 |
+  | lam  | `Interp::lam_site` (`lams`, `lam_by_sym`) | `lam_info` (`lam_infos`, `lam_by_lam`) | 49 / 919+554 | 140 / 673+440 |
   | Π    | `fibres`, `fibre_by_sym` | `pi_infos`, `pi_by_dprod` | 159 / 467+467 | **621 / 3+3** |
   | cond | `conds`, `cond_by_sym` | `prop_infos`, `prop_by_chi` | 208 / 561+545 | **725 / 41+24** |
+
+  *(The lam row said "build-only — the checker has **no** `as_lam`", and
+  that was wrong; corrected here rather than appended to. The tg backend
+  had `Shared::lam_by_lam`, the exact by-symbol index, read in three
+  places — the beta head in `target_eq` and twice in the target-shape
+  classification. What it lacked was `as_lam`'s shape, a decomposition
+  returning the occurrence's holes and domain. The two sides were symmetric
+  in what they stored and asymmetric only in what they offered, which made
+  the λ merge smaller than this row implied.)*
+
+  **The λ third has landed** (task #125): `checker/src/lam_store.rs`, a
+  `LamStore` on the `EnvCore` beside `ConstStore`, holding one `lam` symbol
+  and one `Graph` per body shape for both engines. `mini`'s `lams` /
+  `lam_by_sym` and the tg backend's `lam_infos` / `lam_by_lam` are gone;
+  `Interp::lam_site` and the tg λ clause both call
+  `EnvCore::lam_site`, which is the only place `define_abbrev` + `lambda_n`
+  and the holes-first/binder-last argument order are now written down.
+  `mini`'s `as_lam` reads the shared `by_lam` index, so it takes apart a
+  lambda the *checker* minted.
+
+  **What the merge bought, measured** (`envshare_tg.rs::cross_sweep_tutorial`,
+  the 91 tutorial exports, one thread and one core per file, mini then
+  checker):
+
+  ```text
+  lamTotal  sites=1481  mintedByMini=968  mintedByChecker=513
+            askedByBoth=90  askedByMiniOnly=878  askedByCheckerOnly=513
+            crossHitsChecker=616  crossHitsMini=0  inert=0  failed=0
+  ```
+
+  **90 shapes now name one symbol where they named two** — against the 49
+  the table above predicted, because the duplication *cascades* and merging
+  the leaves merges the nests above them. 1481 sites against 1522 keys
+  across the two old tables is the same 41 shapes counted the other way.
+  `crossHitsMini = 0` is the harness, not a finding: mini runs first, so
+  every crossing is the checker reading mini's mint.
+
+  **And what it did not buy, which is the more useful number.** Deleting
+  the merge — the mutation that gives each engine its own key space again —
+  reddens **one** test, the new one. `mini/tests/{tutorial,designed}.rs`
+  stay green, the arena table is unchanged, and no gap or verdict moves.
+  The merge removes a *hazard* (two carriers for one shape is now
+  unrepresentable) and buys 90 shapes; it does not move a measured
+  certificate, because the two engines mostly do not produce the same λ
+  shape in the first place.
+
+  **Why they do not**, traced on `034_boolType` and pinned as
+  `envshare_tg.rs::the_lam_populations_are_disjoint_on_an_inductive_only_file`:
+  nine shapes, four mini and five checker, **zero shared**. The two engines
+  are not naming one lambda twice there, they are interpreting *different
+  lambdas* — mini generates `Bool`'s recursor itself (the export's
+  recursors are dropped at load) and skeletonises its own graph nest's
+  bodies, while the checker walks the export's `Expr::Lambda` nodes. The
+  shapes do not even share an arity: mini's are single applications of an
+  arity-4 nest symbol to three holes and the binder, the checker's are `x`,
+  `x h`, and a bare hole. **No change to lambda handling can merge those.**
+  The divergence is upstream, in what each engine takes the declaration to
+  be — which is what the tg inductive interpretation's deletion and A3's
+  boundary gate are about, not this tranche.
+
+  **Π and ∀ are the opposite case and are the obvious follow-on.** Their
+  one-sided residues are, per file, *entirely* nominal — `piNomBlind*Only`
+  and `condNomBlind*Only` are 0 on all but the four `12x_quot*` exports —
+  so the same `LamStore` shape applied to `PiInfo`/`FibreSite` and
+  `PropInfo`/`CondSite` collapses ~467 and ~545 duplicate mints
+  immediately, which is an order of magnitude more than λ bought. That is
+  a measurement in hand, not a plan: the λ merge was done first because it
+  was the one named, and it turned out to be the third with the least to
+  gain.
 
   So the Π divergence is **99.5% same-skeleton-two-symbols** — the one-sided
   counts are equal file-by-file across all 89 exports, and sampled pairs are

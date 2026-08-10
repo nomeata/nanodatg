@@ -282,6 +282,11 @@ pub struct RouteReport {
     /// The checker's global evidence report (`tg::global_report`), the gap
     /// column of the checker's half.
     pub tg: String,
+    /// The shared lambda mint's report at end of run — how many `lam` symbols
+    /// exist, who minted each, and how many lookups one engine answered from
+    /// the other's mint. The measurement that distinguishes the one-lambda
+    /// merge from a rename.
+    pub lam: String,
 }
 
 impl RouteReport {
@@ -297,6 +302,7 @@ impl RouteReport {
             checker_error: None,
             cross: String::new(),
             tg: String::new(),
+            lam: String::new(),
         }
     }
 
@@ -501,6 +507,7 @@ impl Routed {
             }
         }
         self.report.cross = ip.core().consts().borrow().report();
+        self.report.lam = ip.core().lams().borrow().report();
         self.report.tg = nanoda_lib::tg::global_report();
         self.report
     }

@@ -230,11 +230,18 @@ fn a_checker_routed_declaration_is_checked_at_every_scheduled_instantiation() {
 /// blinding on one side only is genuine disagreement about what a lambda
 /// body's skeleton *is*; everything else was surface.
 ///
-/// The asymmetry worth naming while measuring it: the checker's lam side is
-/// build-only — no `as_lam`, no `lam_by_sym` — because its dispatch only
-/// ever constructs. Under one mint path it gains a decomposition capability
-/// it never had to build, so unification here is one side gaining, not two
-/// compromising.
+/// *(An earlier version of this header said the checker's lam side was
+/// build-only, "no `as_lam`, no `lam_by_sym`". That was wrong and is
+/// corrected here rather than appended to: the tg backend had
+/// `Shared::lam_by_lam`, the exact by-symbol index, and read it in three
+/// places — the beta head in `target_eq`, and twice in the target-shape
+/// classification. What it lacked was only `as_lam`'s **shape**, a
+/// decomposition returning the occurrence's holes and domain. So the two
+/// sides were symmetric in what they stored and asymmetric only in what they
+/// offered, which is a smaller gap than claimed and made the merge easier,
+/// not harder.)* Under `nanoda_lib::lam_store::LamStore` there is one
+/// `by_lam` index, and `mini`'s `as_lam` takes apart a lambda the *checker*
+/// minted.
 #[test]
 #[ignore]
 fn paired_subterm_lam_divergence() {
@@ -411,8 +418,8 @@ fn nominal_blind(t: &kernel::Term) -> String {
 /// Both engines run one export to completion over one core (mini first, the
 /// checker second — the sequential seam, maximal interpretation surface on
 /// both sides), and then the three skeleton-site tables are compared **as
-/// key sets**: mini's `lams`/`fibres`/`conds` against the checker's
-/// `lam_infos`/`pi_infos`/`prop_infos`. Over a shared core a skeleton key is
+/// key sets**: mini's `fibres`/`conds` against the checker's
+/// `pi_infos`/`prop_infos`. Over a shared core a skeleton key is
 /// a plain term, so `common` counts shapes both dispatches keyed
 /// identically — where today two site objects (two nominal symbols) stand
 /// for one shape, the population one shared mint path merges by
@@ -422,6 +429,33 @@ fn nominal_blind(t: &kernel::Term) -> String {
 /// decisions). `#[ignore]`d: a measurement run, minutes over the corpus;
 /// `cargo test -p mini --features tg skeleton_key_divergence -- --ignored
 /// --nocapture` reproduces it.
+///
+/// # The `lam` column no longer measures anything, and that is the result
+///
+/// This test sized the one-mint-path programme, and the lambda third of it
+/// has since been carried out: `nanoda_lib::lam_store::LamStore` on the
+/// shared core is the *only* λ table now, so `Interp::skeleton_keys` and
+/// `tg::skeleton_keys` return **the same vector** and their intersection is
+/// trivially everything. The `lam*` columns are kept — deleting them would
+/// silently drop the row the merge is measured against — but they are read
+/// as a *witness that the merge is in place*, not as a measurement:
+/// `lamMiniOnly = lamCheckerOnly = 0` is now a tautology, and the assertion
+/// below says so rather than letting a future reader mistake it for evidence.
+///
+/// The measurement it replaced lives on as `LamStore::asked` /
+/// `askedByBoth`, taken from the *asking* side. The baseline it is measured
+/// against, this test at `9ac7d41` over the 91 tutorial exports:
+///
+/// ```text
+/// lamCommon=49   lamMiniOnly=919  lamCheckerOnly=554
+/// piCommon=159   piMiniOnly=467   piCheckerOnly=467
+/// condCommon=208 condMiniOnly=561 condCheckerOnly=545
+/// ```
+///
+/// The `pi` and `cond` rows are the follow-on: their one-sided residues are
+/// **entirely nominal** — per file, `piNomBlind*Only` and `condNomBlind*Only`
+/// are 0 on all but the four `12x_quot*` exports — so those two thirds are
+/// the same merge again, with `PiInfo`/`PropInfo` in place of `LamInfo`.
 #[test]
 #[ignore]
 fn skeleton_key_divergence_sweep() {
@@ -552,6 +586,18 @@ fn skeleton_key_divergence_sweep() {
         totals[0], totals[1], totals[2], totals[3], totals[4], totals[5], totals[6], totals[7],
         totals[8]
     );
+    // The λ third of the one-mint-path programme has landed, so the `lam`
+    // columns are a *witness* and no longer a measurement — one table read
+    // twice cannot disagree with itself. Asserted rather than left implicit,
+    // because a silent 0 is exactly what a reader would mistake for evidence
+    // that the two dispatches agree.
+    assert_eq!(
+        (totals[1], totals[2]),
+        (0, 0),
+        "the λ tables are supposed to be one shared LamStore; a one-sided \
+         lam residue means an engine grew a private table again"
+    );
+    assert!(totals[0] > 0, "no lambda shape at all — the sweep measured nothing");
 }
 
 /// Drive the checker in-process over `export`, on this thread — the same

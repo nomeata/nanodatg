@@ -12,6 +12,7 @@ pub mod env;
 pub mod expr;
 pub mod inductive;
 pub mod instantiations;
+pub mod lam_store;
 pub mod level;
 pub mod name;
 pub mod parser;

@@ -215,6 +215,7 @@ fn cross_sweep_tutorial() {
         .collect();
     files.sort();
     let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
+    let mut lam_totals: std::collections::BTreeMap<String, u64> = Default::default();
     for f in files {
         let name = f.file_stem().unwrap().to_string_lossy().to_string();
         let report = std::thread::Builder::new()
@@ -232,23 +233,125 @@ fn cross_sweep_tutorial() {
                 nanoda_lib::tg::install_shared_core(core.clone());
                 run_checker(&f);
                 let r = core.consts().borrow().report();
-                format!("{r}\tfile={name}")
+                let l = core.lams().borrow().report();
+                format!("{r}\tfile={name}\n{l}\tfile={name}")
             })
             .expect("spawn")
             .join()
             .expect("file thread");
         eprintln!("{report}");
-        if report.starts_with("cross\t") {
-            for kv in report.split('\t').skip(1) {
+        for line in report.lines() {
+            let bucket = match line.split('\t').next() {
+                Some("cross") => &mut totals,
+                Some("lammint") => &mut lam_totals,
+                _ => continue,
+            };
+            for kv in line.split('\t').skip(1) {
                 let (k, v) = kv.split_once('=').expect("k=v");
                 if let Ok(n) = v.parse::<u64>() {
-                    *totals.entry(k.to_string()).or_default() += n;
+                    *bucket.entry(k.to_string()).or_default() += n;
                 }
             }
         }
     }
     let row: Vec<String> = totals.iter().map(|(k, v)| format!("{k}={v}")).collect();
     eprintln!("crossTotal\t{}", row.join("\t"));
+    let row: Vec<String> = lam_totals.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    eprintln!("lamTotal\t{}", row.join("\t"));
+}
+
+/// Both engines over one core and one export, mini first; the shared lambda
+/// mint's report handed back for pinning.
+fn lam_report(file: &str) -> Option<String> {
+    let export = corpus().join(file);
+    if skip_guard::absent(&export) {
+        return None
+    }
+    let core = EnvCore::fresh();
+    let (out, _ip) = mini::run::check_file_with_interp(
+        &export,
+        mini::run::Options::default(),
+        Interp::over(core.clone()),
+    );
+    assert!(out.verdict.is_accepted(), "mini accepts {file}: {:?}", out.verdict);
+    nanoda_lib::tg::install_shared_core(core.clone());
+    run_checker(&export);
+    let report = core.lams().borrow().report();
+    eprintln!("{report}");
+    Some(report)
+}
+
+/// **The one-lambda merge, measured.** Both dispatches walk
+/// `007_betaReduction2` over one core; the shared table is what they both
+/// mint into, and on this file they mint into it *identically*: three body
+/// shapes, all three minted by mini, all three asked for again by the
+/// checker and answered with mini's symbol.
+///
+/// `crossHitsChecker > 0` is the claim. Before the merge that lookup missed
+/// — the two tables were private — and a second `lam` symbol was declared
+/// for the same shape, at which point `⊢ lam₁(h⃗,A) = lam₂(h⃗,A)` was provable
+/// and nothing proved it: a mini typing about the first met a checker
+/// obligation about the second and was refused at the statement guard, a
+/// counted gap where reflexivity was the whole proof.
+///
+/// **Three shapes, not two, and that is deliberate.** Two sites cannot
+/// distinguish a table that merges from one that happens to answer the
+/// second ask; and `mintedByChecker = 0` here is the strong form — the
+/// checker minted *nothing* on this file, so every symbol it used is one
+/// mini already owned.
+///
+/// `inert = 0` and `failed = 0` are the two ways the shared mint can hand
+/// back something weaker than a graph. Both are zero on every corpus
+/// measured, and they are pinned so that a construction that starts refusing
+/// says so here rather than as a drifting gap count somewhere downstream.
+#[test]
+fn one_lam_symbol_serves_both_engines() {
+    let Some(r) = lam_report("good/tutorial/007_betaReduction2.ndjson") else { return };
+    assert_eq!(field(&r, "sites"), 3, "the shape population moved:\n{r}");
+    assert_eq!(field(&r, "mintedByMini"), 3, "{r}");
+    assert_eq!(field(&r, "mintedByChecker"), 0, "the checker minted its own symbol:\n{r}");
+    assert_eq!(field(&r, "askedByBoth"), 3, "a shape stopped being shared:\n{r}");
+    assert_eq!(field(&r, "askedByMiniOnly"), 0, "{r}");
+    assert_eq!(field(&r, "askedByCheckerOnly"), 0, "{r}");
+    assert_eq!(
+        field(&r, "crossHitsChecker"),
+        6,
+        "no lookup was answered from the other engine's mint — the tables are \
+         merged in name only:\n{r}"
+    );
+    assert_eq!(field(&r, "inert"), 0, "a graph construction refused:\n{r}");
+    assert_eq!(field(&r, "failed"), 0, "a mint failed outright:\n{r}");
+}
+
+/// **What the merge does not fix, pinned as a number.** On `034_boolType`
+/// the two engines mint **nine** shapes between them — four mini, five
+/// checker — and *not one is shared*.
+///
+/// This is not the merge failing; it is the merge revealing where the
+/// divergence actually is. The two engines are not naming one lambda twice
+/// here, they are interpreting **different lambdas**: `mini` generates
+/// `Bool`'s recursor itself (the export's recursors are dropped at load) and
+/// skeletonises the bodies of its own graph nest, while the checker walks
+/// the export's `Expr::Lambda` nodes. Traced, the shapes do not even have
+/// the same arity — mini's are single applications of an arity-4 nest symbol
+/// to three holes and the binder, the checker's are `x`, `x h`, and a hole.
+///
+/// So a shared λ table cannot merge them, and no change to lambda handling
+/// will: the divergence is upstream, in what each engine takes the
+/// declaration to *be*. That is what makes this fixture worth keeping — it
+/// is the standing measurement of the residue, and it goes red in the good
+/// direction if routing ever puts one engine's inductive construction behind
+/// the other's walk.
+#[test]
+fn the_lam_populations_are_disjoint_on_an_inductive_only_file() {
+    let Some(r) = lam_report("good/tutorial/034_boolType.ndjson") else { return };
+    assert_eq!(field(&r, "sites"), 9, "{r}");
+    assert_eq!(field(&r, "mintedByMini"), 4, "{r}");
+    assert_eq!(field(&r, "mintedByChecker"), 5, "{r}");
+    assert_eq!(field(&r, "askedByBoth"), 0, "a shape became shared — say so:\n{r}");
+    assert_eq!(field(&r, "crossHitsChecker"), 0, "{r}");
+    assert_eq!(field(&r, "inert"), 0, "{r}");
+    assert_eq!(field(&r, "failed"), 0, "{r}");
 }
 
 /// The same, checker first — the seam is order-independent: installing the

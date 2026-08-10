@@ -1215,8 +1215,8 @@ fn app_in_fibre(
 /// All are introduced by signature extension; that is sound but limiting, and
 /// it is why the rules over them (`zeta`, …) stay in the equational fragment.
 /// `sort`, `lam`, `app` and the dependent product are *not* here: those are real
-/// definitional extensions, held in [`Prelude`], [`Shared::lam_infos`] and
-/// [`Shared::pi_infos`].
+/// definitional extensions, held in [`Prelude`], [`crate::lam_store::LamStore`]
+/// (on the [`EnvCore`], shared with `mini`) and [`Shared::pi_infos`].
 #[derive(Clone, Copy)]
 struct Syms {
     /// Sorts whose level is not a literal successor tower.
@@ -1242,17 +1242,12 @@ struct Syms {
 }
 
 /// Everything known about one lambda *skeleton*. Shared by every lambda whose
-/// body has that shape.
-struct LamInfo {
-    /// The head symbol of the interpretation, `lam_C(h⃗, A)`.
-    lam: FnSym,
-    /// The graph machinery, when it was built; `None` for the inert encoding,
-    /// in which case `lam` is an opaque symbol and beta over this lambda
-    /// reports a gap. Every skeleton gets a graph now — there is no hole-count
-    /// cut-off — so the `None` case is the construction refusing, which it does
-    /// not do on any corpus measured.
-    graph: Option<Graph>,
-}
+/// body has that shape — and, since the one-lambda merge, by both engines:
+/// this is [`crate::lam_store::LamSite`], held on the [`EnvCore`] rather than
+/// on [`Shared`], because `mini` reaches a core and not a `Shared`. The field
+/// names are unchanged (`lam`, `graph`), which is what let the alias replace
+/// the struct without touching a use site.
+type LamInfo = crate::lam_store::LamSite;
 
 /// Everything known about one dependent-`Π` *fibre skeleton*. Shared by every
 /// `Π` whose body has that shape.
@@ -1320,15 +1315,10 @@ struct Fibre {
     dprod_def: Thm,
 }
 
-/// The definitional-extension half of a lambda skeleton.
-struct Graph {
-    /// The body function `t(h⃗, x)`.
-    t: FnSym,
-    /// `⊢ ∀h⃗ ∀x. t(h⃗,x) = skeleton`.
-    t_def: Thm,
-    /// `⊢ ∀h⃗ ∀A ∀y. (y ∈ lam(h⃗,A) ↔ ∃x. (x ∈ A ∧ y = ⟨x, t(h⃗,x)⟩))`.
-    lam_ax: Thm,
-}
+// The definitional-extension half of a lambda skeleton — the body symbol, its
+// defining equation and `lambda_n`'s characteristic theorem — is
+// `crate::lam_store::Graph`, shared with `mini` for [`LamInfo`]'s reason. This
+// file reaches it only through `LamInfo::graph`, so it needs no alias.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // There is no cut-off on the hole count.
@@ -1374,7 +1364,7 @@ struct Graph {
 /// Where one particular lambda *occurrence* sits: which skeleton it uses, and
 /// with what arguments.
 struct LamSite<'t> {
-    /// Key into [`Shared::lam_infos`].
+    /// Key into the shared [`crate::lam_store::LamStore`].
     key: Term,
     /// The abstracted `v`-free subterms, in traversal order.
     holes: Vec<Term>,
@@ -1906,6 +1896,13 @@ pub struct EnvCore {
     /// read/write sites, mini's are `Interp::put_const` and its
     /// constant-evidence miss path.
     consts: Rc<std::cell::RefCell<crate::const_store::ConstStore>>,
+    /// **The shared lambda mint** (`crate::lam_store`): one `lam` symbol and
+    /// one graph per body shape, for *both* engines. On the core for
+    /// [`EnvCore::consts`]'s reason — `mini` reaches a core, not a [`Shared`]
+    /// — and because the key already lives here: a skeleton is written over
+    /// [`EnvCore::x_canon`] and [`EnvCore::hole_var`], so the shapes were
+    /// already one population and only the symbols were two.
+    lams: Rc<std::cell::RefCell<crate::lam_store::LamStore>>,
 }
 
 impl EnvCore {
@@ -1926,6 +1923,7 @@ impl EnvCore {
             wtb: Rc::new(std::cell::RefCell::new(None)),
             machine: Rc::new(std::cell::RefCell::new(None)),
             consts: Rc::new(std::cell::RefCell::new(crate::const_store::ConstStore::default())),
+            lams: Rc::new(std::cell::RefCell::new(crate::lam_store::LamStore::default())),
         }
     }
 
@@ -1933,6 +1931,32 @@ impl EnvCore {
     /// short-lived, like [`EnvCore::env_mut`]'s.
     pub fn consts(&self) -> &Rc<std::cell::RefCell<crate::const_store::ConstStore>> {
         &self.consts
+    }
+
+    /// The shared lambda mint. Same-thread cell, same short-lived-borrow rule:
+    /// [`crate::lam_store::LamStore::site`] itself takes the kernel `Env`, so a
+    /// caller must not be holding [`EnvCore::env_mut`] across it.
+    pub fn lams(&self) -> &Rc<std::cell::RefCell<crate::lam_store::LamStore>> { &self.lams }
+
+    /// The shared site for a body shape, minting on first ask by either
+    /// engine — the funnel both `mini`'s `Interp::lam_site` and the tg
+    /// backend's λ clause go through. Takes the store's cell and the kernel
+    /// `Env` in the right order so neither caller has to.
+    pub fn lam_site(
+        &self,
+        who: crate::lam_store::Minter,
+        pre: &derived::prelude::Prelude,
+        skel: &Term,
+        k: usize,
+        inert_on_refusal: bool,
+    ) -> Option<Rc<crate::lam_store::LamSite>> {
+        // The hole variables are resolved *before* the `Env` is borrowed for
+        // the mint, because `hole_var` borrows it too. Nothing new is minted
+        // here: computing `skel` already asked for `hole_var(0..k)`.
+        let hs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
+        let mut store = self.lams.borrow_mut();
+        let mut env = self.env.borrow_mut();
+        store.site(who, pre, &mut env, &hs, self.x_canon, skel, k, inert_on_refusal)
     }
 
     /// The kernel `Env`, for the duration of one statement. Every use must be
@@ -2033,14 +2057,14 @@ struct Shared {
     core: EnvCore,
     /// The axiom-free interpretation symbols; copied into each backend.
     syms: Syms,
-    /// Head symbol (and, when built, graph machinery) per distinct skeleton.
-    lam_infos: HashMap<Term, Rc<LamInfo>>,
-    /// The same entries, found by the `lam` symbol instead of the skeleton.
-    /// A typing obligation's *target* arrives as a term with no Lean node
-    /// attached, so a target of the shape `app(lam_C(h⃗,A), x)` needs the graph
-    /// machinery behind its head symbol before it can be beta-reduced; this is
-    /// that lookup. The exact analogue of [`Shared::pi_by_dprod`].
-    lam_by_lam: HashMap<FnSym, (Term, Rc<LamInfo>)>,
+    // The lambda tables that used to sit here — `lam_infos` (head symbol and
+    // graph machinery per skeleton) and `lam_by_lam` (the same entries found by
+    // the `lam` symbol, for a target that arrives with no Lean node attached)
+    // — are now [`crate::lam_store::LamStore`], on [`Shared::core`]. They moved
+    // because `mini` kept an identical pair and, over one core, hashed the same
+    // shapes to the same keys and then minted a *second* symbol series for
+    // them. Everything below stays: it is keyed on the skeleton and so, now, on
+    // one symbol series.
     /// Beta theorems, derived lazily: most lambdas are never a redex head.
     lam_betas: HashMap<Term, Option<Sealed>>,
     /// Graph-extensionality theorems, keyed by the *pair* of skeletons being
@@ -2412,8 +2436,9 @@ pub fn skeleton_keys() -> Option<(Vec<Term>, Vec<Term>, Vec<Term>)> {
     SHARED.with(|slot| {
         slot.borrow().as_ref().map(|sh| {
             let sh = sh.borrow();
+            let lam_keys = sh.core.lams().borrow().keys();
             (
-                sh.lam_infos.keys().cloned().collect(),
+                lam_keys,
                 sh.pi_infos.keys().cloned().collect(),
                 sh.prop_infos.keys().cloned().collect(),
             )
@@ -2455,8 +2480,6 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
         let sh = Rc::new(std::cell::RefCell::new(Shared {
             core,
             syms,
-            lam_infos: HashMap::new(),
-            lam_by_lam: HashMap::new(),
             lam_betas: HashMap::new(),
             lam_exts: HashMap::new(),
             pi_exts: HashMap::new(),
@@ -4430,7 +4453,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn hole_var(&mut self, i: usize) -> FreeVar { self.core.hole_var(i) }
 
     /// The graph machinery for a skeleton, if that skeleton has been seen.
-    fn lam_info(&self, key: &Term) -> Option<Rc<LamInfo>> { self.shared.borrow().lam_infos.get(key).cloned() }
+    fn lam_info(&self, key: &Term) -> Option<Rc<LamInfo>> {
+        self.core.lams().borrow().get(key).cloned()
+    }
 
     /// Split `t` into the part that mentions `v` and the maximal `v`-free
     /// subterms, which are pushed onto `holes` and replaced by canonical hole
@@ -4483,21 +4508,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         subst.iter().all(|(v, _)| !t.occurs_free(*v)).then(|| t.clone())
     }
 
-    /// The definitional extension behind one skeleton: the body symbol
-    /// `t(h⃗,x) := skeleton` and its graph `lam(h⃗,A) = {⟨x,t(h⃗,x)⟩ : x ∈ A}`.
-    ///
-    /// Derived once per skeleton and then shared by every occurrence of that
-    /// shape, in every declaration this thread checks.
-    fn build_graph(&mut self, sk: &Term, holes: usize) -> Option<(FnSym, Graph)> {
-        let mut ps: Vec<FreeVar> = Vec::with_capacity(holes + 1);
-        for i in 0..holes {
-            ps.push(self.hole_var(i));
-        }
-        ps.push(self.x_canon);
-        let (t, t_def) = derived::define_abbrev(&mut self.env_mut(), &ps, sk)?;
-        let (lam, lam_ax) = lambda_n(&mut self.env_mut(), &self.pre.clone().ap, t)?;
-        Some((lam, Graph { t, t_def, lam_ax }))
-    }
+    // The definitional extension behind one skeleton — the body symbol
+    // `t(h⃗,x) := skeleton` and its graph `lam(h⃗,A) = {⟨x,t(h⃗,x)⟩ : x ∈ A}` —
+    // used to be built here, by a `build_graph` character-for-character
+    // identical to `mini`'s half of `Interp::lam_site`. It is now
+    // [`crate::lam_store::LamStore::site`], reached through
+    // [`EnvCore::lam_site`], so that the two engines mint one symbol series and
+    // not two.
 
     /// One more than the largest de Bruijn **level** occurring in `e` — the
     /// first level at which the interpretation may open a binder of `e`
@@ -4666,25 +4683,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut holes = Vec::new();
         let sk = self.skeleton(&bt, v, &mut holes)?;
 
-        let info = match self.lam_info(&sk) {
-            Some(i) => i,
-            None => {
-                let arity = u32::try_from(holes.len() + 1).ok()?;
-                let info = match self.build_graph(&sk, holes.len()) {
-                    Some((lam, g)) => Rc::new(LamInfo { lam, graph: Some(g) }),
-                    // Inert: the right *shape*, so that the interpretation stays
-                    // compositional, but with no defining axioms and hence no
-                    // beta. The construction is closed for every skeleton this
-                    // module builds, so this is unreachable in practice — and a
-                    // reported gap rather than a wrong answer if it ever is not.
-                    None => Rc::new(LamInfo { lam: self.env_mut().declare(arity), graph: None }),
-                };
-                let mut sh = self.shared.borrow_mut();
-                sh.lam_infos.insert(sk.clone(), info.clone());
-                sh.lam_by_lam.insert(info.lam, (sk.clone(), info.clone()));
-                info
-            }
-        };
+        // The one mint, shared with `mini`. `inert_on_refusal` is this
+        // backend's own answer to a refused graph construction and is
+        // unchanged: an opaque symbol of the right arity, so the
+        // interpretation stays compositional and the gap is reported
+        // downstream at beta rather than here.
+        let info = self.core.lam_site(
+            crate::lam_store::Minter::Checker,
+            &self.pre.clone(),
+            &sk,
+            holes.len(),
+            true,
+        )?;
 
         let mut args = holes.clone();
         args.push(dom.clone());
@@ -8833,7 +8843,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (hsym, hargs) = self.parts.get(&head).cloned()?;
 
         // ── The head is a lambda graph: beta ─────────────────────────────────
-        let lam = self.shared.borrow().lam_by_lam.get(&hsym).cloned();
+        let lam = self.core.lams().borrow().by_lam(hsym).map(|(k, s)| (k.clone(), s.clone()));
         if let Some((key, info)) = lam {
             let (holes, dom) = hargs.split_last().map(|(d, h)| (h.to_vec(), d.clone()))?;
             let t_def = info.graph.as_ref()?.t_def.clone();
@@ -10510,7 +10520,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let Some((hsym, hargs)) = self.parts.get(&head).cloned() else {
                     return HtTarget::AppVarHead
                 };
-                if self.shared.borrow().lam_by_lam.contains_key(&hsym) {
+                if self.core.lams().borrow().is_lam(hsym) {
                     return HtTarget::AppLamHead
                 }
                 let curried = hsym == self.pre.ap.app && hargs.len() == 2;
@@ -10526,7 +10536,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let kind = match self.parts.get(&cur).cloned() {
                     None => 3usize,
                     Some((s, _)) =>
-                        if self.shared.borrow().lam_by_lam.contains_key(&s) {
+                        if self.core.lams().borrow().is_lam(s) {
                             0
                         } else if self.abbrev_defs.contains_key(&cur) {
                             1
