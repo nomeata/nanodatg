@@ -974,10 +974,69 @@ sub-terms at spines `n₁` and `n₂` cannot both sit in one fibre `V n` unless
 the spine is generalised to a tree — which is the very inductive being built.
 That is plan B's territory, and `Lean.ParserDescr` lives there. -/
 
+/-- **Does `B` factor through the constructor tag?** — the one question that
+decides whether a declaration W can model is *certifiable*.
+
+`scripts/inductive-basis/WFromPaths.lean` builds W with a path step carrying
+the whole label, so `mk` has to decide `x.1 = a` at the label type; that is
+`Classical.propDecidable`, and it costs `[propext, Classical.choice,
+Quot.sound]` on every constant. `WTagged.lean` builds the same W with a path
+step carrying only the **constructor tag**, so the test is `Fin k` equality and
+the bill drops to `[propext, Quot.sound]` — the covered set, since
+`Classical.choice` has been refuted as a term of the checker's language while
+the other two are certified or covered.
+
+The tagged construction needs the branch type to be a function of the tag
+alone, which is exactly: **a recursive field's binder types may not mention the
+constructor's own non-recursive fields.** They may mention the parameters,
+which are fixed for the whole declaration. `DT | mk : (n : Nat) → (Fin n → DT)
+→ DT` is the counterexample and `Lean.Expr.app : Expr → Expr → Expr` is the
+common case, whose recursive fields have no binders at all and so pass
+vacuously.
+
+De Bruijn bookkeeping, since it is what the test actually is: inside a
+recursive field's domain at field position `i`, having opened `j` of the
+domain's own binders, indices `0 … j-1` are those binders, `j … j+i-1` are the
+constructor's earlier fields, and above that the parameters. So a binder type
+must have no loose bvar in `[j, j+i)`.
+
+Non-throwing, and asked of every declaration the W arm would take, so that the
+census reports the certifiable and uncertifiable populations as two numbers
+rather than one. -/
+def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) : Bool :=
+  exportCtors.all fun (_, cty) => Id.run do
+    let mut t := cty
+    for _ in [0:np] do
+      match t with
+      | .forallE _ _ b _ => t := b
+      | _ => return false
+    let mut i := 0
+    while t matches .forallE .. do
+      let .forallE _ dom b _ := t | unreachable!
+      if mentionsAny #[tname] dom then
+        -- peel the field's own binder telescope and check each binder type
+        let mut d := dom
+        let mut j := 0
+        while d matches .forallE .. do
+          let .forallE _ z db _ := d | unreachable!
+          for m in [0:i] do
+            if z.hasLooseBVar (j + m) then return false
+          d := db
+          j := j + 1
+      t := b
+      i := i + 1
+    return true
+
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
-def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr) :
-    GenM (Option Nat) := do
+def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
+    (tagged : Bool := true) : GenM (Option Nat) := do
+  -- **The W arm's bill, printed at the decline that names W.** `tagged` is
+  -- [`Modelgen.tagFactored`] for the whole declaration: yes and the tagged
+  -- construction models it at `[propext, Quot.sound]`, which is covered; no
+  -- and it needs the classical route, which spends `Classical.choice` and is
+  -- not certifiable. Two populations, so the census counts two numbers.
+  let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}"
   let mut cur := tele
   let mut slot : Option Nat := none
   for i in [0:nf] do
@@ -986,10 +1045,10 @@ def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr) :
       if slot.isSome then
         badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
 Nat and a constructor takes one predecessor, so a branching constructor needs the \
-W/path construction (plan B)"
+W/path construction (plan B){bill}"
       unless d.getAppFn.isConstOf tname do
         badShape s!"{cn} has a recursive field that is not a bare occurrence of \
-{tname} — under a binder, or nested, neither of which the tuple tower reaches"
+{tname} — under a binder, or nested, neither of which the tuple tower reaches{bill}"
       slot := some i
     cur := b
   return slot
@@ -1938,7 +1997,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
         linear (arm C splices the erasure and carves the family out of it — \
         MODELGEN.md §8.15 — so its reach is bounded by whether that erasure \
         models, and a branching erasure is W's, not the tuple tower's); \
-        erasure linear: no"
+        erasure linear: no; B factors through the tag: \
+        {if tagFactored tname np exportCtors then "yes" else "no"}"
     -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
@@ -2529,7 +2589,7 @@ the subsingleton rule that minted {ern} does not hold of it"
     let slots : Array (Option Nat) ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
-        recSlotOf tname np cn (numForalls tele) tele
+        recSlotOf tname np cn (numForalls tele) tele (tagFactored tname np exportCtors)
     let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
     let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
     -- **A recursive declaration with no base constructor**, which Lean accepts

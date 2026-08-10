@@ -4386,9 +4386,10 @@ families this arm added, and every one of their 29 skeletons, is
 **axiom-free** — `#print axioms` empty, ι by `Eq.refl` — so all 58 are models
 *and* certificates. That is the column to carry into any future census:
 `Classical.choice` has been refuted as a term of the checker's language, so a
-model that spends it is modelled and not covered, and the 43 indexed families
-still waiting on W will land on the wrong side of that line until item E does
-or the owner decides otherwise.
+model that spends it is modelled and not covered, and the indexed families
+still waiting on W land on the right side of it after all: §8.16 builds the W
+they need at `[propext, Quot.sound]`, and only four declarations in Mathlib
+force `Classical.choice`.
 
 Of the 109: 53 an indexed family whose erasure is *not* linear (43 of them
 composed `_model.aux`), ~50 branching or under a binder, 3 basis, 1 the basis
@@ -4438,3 +4439,106 @@ constructor. It is now a named decline with the guard beside `baseJ`, and
   content, but only the independent case is tested (`Bal`, `Bl`).
 * **The mutual and nested reductions** still land in indices, so they are
   downstream of this arm rather than beside it.
+
+## 8.16 W without `Classical.choice` — `scripts/inductive-basis/WTagged.lean`, and the ceiling
+
+**Verdict: the W route's axiom bill drops from `[propext, Classical.choice,
+Quot.sound]` to `[propext, Quot.sound]`, and that closes the certifiability
+question for 99 of the 103 declarations still waiting on W.** 598 lines, 0
+errors, 0 warnings, 15 `#print axioms` and an asserted dependency closure.
+
+This matters more than an axiom count usually would, because the three axioms
+are no longer interchangeable. `propext` was certified; `Quot.sound` is
+covered; **`Classical.choice` has been refuted** as a term of the checker's
+language — a choice function is never unique, `define` requires `∃!`, so the
+choice function is carried as a free variable under a hypothesis, every theorem
+through it stays hypothetical, and `Sealed` refuses hypothetical theorems.
+A model that spends it is modelled and **not certifiable, indefinitely**. So
+the bill is the difference between a model and a certificate, and
+
+> a W model at `[propext, Quot.sound]` is both.
+
+### What changes, in one line
+
+```text
+WFromPaths.lean   Edge := Σ a : A,  B a      a path step carries the LABEL
+WTagged.lean      Edge := Σ t : K,  B' t     a path step carries the TAG
+```
+
+A label is a constructor tag together with that constructor's non-recursive
+fields, and the fields can be anything, so `a = a'` is not decidable and
+`WFromPaths.lean`'s `mk` reaches for `Classical.propDecidable`. **The tag is a
+`Fin k`.** Nothing is lost by recording only the tag on the path, because the
+label is still stored at the node: `PTree` is `List Edge → Option A` and the
+`Option A` at a path is the whole label. `CFT.tip_inj_data` pins that — a model
+that recorded the tag and dropped the payload passes every other check in the
+file.
+
+**It is a different construction and not a setting**, which is why item E was
+worth building rather than assuming: you cannot instantiate `WFromPaths.lean`'s
+`W A B` at a decidable `A` and get this, because its `mk` is `open Classical
+in` unconditionally. The axiom is in the definition, not in the instance.
+
+### The two survivors, since the point was to know
+
+* **`Quot.sound` is `funext`, and is not removable.** Two trees are equal when
+  they agree at every path and `PTree` is a function type, so `mk_sub`, `mk_ne`
+  and `canon` are each a `funext`. It is the *same* `Quot.sound` the currying
+  glue spends, so the glue's cost is a duplicate rather than an addition —
+  which also corrects the shape of §8.15's note: removing the glue would not
+  have removed the axiom.
+* **`propext` is `simp`'s**, in those same three proofs, and is very likely
+  removable by writing them out. It is **not** removed, because `propext` is
+  certified and the effort buys nothing. Recorded rather than left unexplained.
+
+Three targets, each pinned twice — the derived recursor against a
+transcription and Lean's own recursor against the same transcription: `BT`
+(two recursive fields), `FT` (branching **and carrying data**, the case the
+file exists for, since `BT`'s label type has decidable equality anyway and a
+construction that secretly still decided label equality would pass its pins),
+and `IT` (infinite branching under a binder). Non-degeneracy from the recursor
+and its ι rules alone. The closure asserts **`Nonempty` is unreachable** —
+`Classical.choice`'s own domain — which is the mechanical form of the claim.
+
+### The ceiling, measured
+
+The tagged construction needs the branch type to be a function of the tag
+alone, which is exactly: **a recursive field's binder types may not mention the
+constructor's own non-recursive fields.** They may mention the parameters,
+which are fixed for the declaration. `Modelgen.tagFactored` asks it, and every
+decline that names W now prints `B factors through the tag: yes|no`, so the
+census reports two populations instead of one.
+
+On the full export, of the 103 declines that wait on W:
+
+| | count | bill the tagged W would give | certifiable |
+|---|---|---|---|
+| `B` factors through the tag | **99** | `[propext, Quot.sound]` | **yes** |
+| it does not | **4** | `[propext, Classical.choice, Quot.sound]` | no |
+
+The 99 split 52 indexed families whose erasure branches — those reach W through
+arm C's spliced skeleton — and 47 branching declarations directly.
+
+**And the four are exactly the W-types.** `WType`, `PSet`,
+`FirstOrder.Language.Term` and `PFunctor.Approx.CofixA`: in each, the branching
+arity is a *datum of the node* rather than a function of the constructor —
+`WType.mk : (a : α) → (β a → WType β) → WType β` has its branch type `β a`
+mentioning its own field. There is no tag to factor through, because the shape
+*is* the general W. That is not an artefact of this encoding, and no
+construction is known here that avoids the classical route for it.
+
+So the honest ceiling for the whole thrust, as it stands:
+
+* declines would go **109 → 10** with the W arm built (99 closed, 4 remaining,
+  plus the 6 that are the basis exemption and two singletons);
+* of the closed ones, **all 99 would be certifiable**;
+* the **4** are the irreducible uncertifiable remainder, and they are what
+  #150 has to decide about — not a coverage question but a question about what
+  a certificate means for a genuinely choice-shaped construction.
+
+### What is not done
+
+Nothing is generated: this is a compiled prototype at three targets and
+`Modelgen.primIso` has no W arm. What it settles is the two things that had to
+be settled before one is worth building — that the construction exists at a
+covered bill, and how much of the residue it reaches.
