@@ -133,9 +133,9 @@ the *boundary*, in both directions.
 | fn | today | should take / return | status | instead | diff. |
 | --- | --- | --- | --- | --- | --- |
 | `whnf` (`tc.rs:1389`), `whnf_no_unfolding` (`tc.rs:1426`) | `ExprPtr` only; 28 callers (18 `tc.rs` + 10 `inductive.rs`, re-counted 2026-08-09 — the "28 callers" comment at `tc.rs:1156–1157` is accurate) | **take** `⊢ ⟦e⟧ ∈ ⟦T⟧`; **return** `(e', ⊢ ⟦e⟧ = ⟦e'⟧)` — then `⟦e'⟧ ∈ ⟦T⟧` by Leibniz. The typing *input* is what feeds beta's domain obligations (next row) | **partial** — evidence out exists on demand (`whnf_no_unfolding_aux_with_cert`, `tc.rs:1444`) and is consumed on `def_eq` paths only; evidence *in* does not exist at all | callers that need the equality either use the aux-with-cert path (def_eq) or drop it (all of inference, §1.2 last row); the typing precondition is re-discovered per beta step, next row | signature change M; feeding beta D (below) |
-| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` arrives **threaded where the checker ever held it**: `domain_obligation` first reads `TgBackend::arg_mems` — the store `Certifier::app_arg_checked` fills at `infer_app`'s argument check with the very `ty_conv` composition (`⟦arg⟧ ∈ ⟦binder domain⟧`) the application rule consumes, now built whether or not the head's own derivation is alive — and only then falls back to `has_type_a`, `local_premises`, and the raw hoist | exactly what it now does for checked arguments; the residue is below | **partial** (handoff landed 2026-08-10; fixture `beta_domain_obligation_reads_the_application_checks_handoff`, three atoms, both mutations verified). Measured at `a7b0c6a`: 39 951 asked, 26 724 entries stored, **10 300 answered from the handoff** (102 outright + 10 198 under antecedents, 0 recalls failing their claim), escapes 2 257 → 2 247, gaps 15 542 → 15 532, +0.09 % instructions. The former claim "`infer` typed this very argument when the application was checked" is now **measured, and it is not universal**: the 20 328 remaining raw hoists split by cause into **32** handed off at another domain term, **1 640** whose argument was checked but whose typing was already a hole there (the `ty_const` cascade seen from the beta rule — §3 bucket (ii), and these convert to store entries by themselves when the shared constant store lands), and **18 656 about terms no application check ever visited** — probe-sampled: `Eq.refl`/`HEq.refl` constructor apps built by `to_ctor_when_k`'s K-shortcut, and minor premises inside *other declarations' values* entering by delta, instantiated at the current locals. No intra-declaration handoff reaches those two; what would is typing flowing down the reduction (stage 2 proper) and/or cross-declaration evidence (task #125) | residue: `has_type` search + raw hoist, now cause-attributed in the ledger (`raw hoists by cause`) | **D** — stage 2 for the reduction-built residue |
+| beta steps inside whnf (`Rule::Beta` → `Certifier::beta` → `TgBackend::beta_step`) | the redex's argument typing `⟦a⟧ ∈ ⟦A⟧` arrives **threaded where the checker ever held it**: `domain_obligation` first reads `TgBackend::arg_mems` — the store `Certifier::app_arg_checked` fills at `infer_app`'s argument check with the very `ty_conv` composition (`⟦arg⟧ ∈ ⟦binder domain⟧`) the application rule consumes, now built whether or not the head's own derivation is alive — and only then falls back to `has_type_a`, `local_premises`, and the raw hoist | exactly what it now does for checked arguments; the residue is below | **partial** (handoff landed 2026-08-10; fixture `beta_domain_obligation_reads_the_application_checks_handoff`, three atoms, both mutations verified). Measured at `a7b0c6a`: 39 951 asked, 26 724 entries stored, **10 300 answered from the handoff** (102 outright + 10 198 under antecedents, 0 recalls failing their claim), escapes 2 257 → 2 247, gaps 15 542 → 15 532, +0.09 % instructions. The former claim "`infer` typed this very argument when the application was checked" is now **measured, and it is not universal**: the 20 328 remaining raw hoists split by cause into **32** handed off at another domain term, **1 640** whose argument was checked but whose typing was already a hole there (the `ty_const` cascade seen from the beta rule — §3 bucket (ii), and these convert to store entries by themselves when the shared constant store lands), and **18 656 about terms no application check ever visited** — probe-sampled: `Eq.refl`/`HEq.refl` constructor apps built by `to_ctor_when_k`'s K-shortcut, and minor premises inside *other declarations' values* entering by delta, instantiated at the current locals. No intra-declaration handoff reaches those two. **The second named unblock is now measured, and refuted (2026-08-10).** `Shared::typed_at` records every `(subject, target)` pair a typing rule concluded, with the declaration that concluded it; of the 18 656, **34** are memberships some declaration's inference did conclude (all 34 in an *earlier* declaration, 26 free of antecedents), **0** were concluded in the current declaration, and **18 622** were never a typing rule's conclusion anywhere on the thread. So cross-declaration evidence reaches 0.18 % of this population: what is missing is not the transport of a fact but the fact. The probe is claim-checked and calibrated, not just run: every handoff recall is a pair `typed_at` must know (0 unknown over 10 300 recalls), and **11 031** typings were re-concluded at a pair an *earlier* declaration already held — so the interpreted key does cross declarations abundantly, and a small `earlier` row means the facts are absent, not that the keys fail to line up. `stepcount`-gated | residue: `has_type` search + raw hoist, now cause-attributed and reach-attributed in the ledger (`raw hoists by cause`, `of the never-checked …`) | **D** — stage 2 only |
 | `whnf_reduce` / `whnf_no_unfolding_reduce` (`tc.rs:1396,1454`) | record traces; `Admit::Quot` and `Admit::NatRed` steps have no backend rule; `Rule::ProjRed` and `Rule::Iota` are backend rules since 2026-08-01 (`proj_red_step`, `iota_step`, §1.5) | as-is; missing pieces are backend rules (`quot` needs interpreted `Quot` — 0 quot steps fire on ip — `NatRed` is milestone 4) | done as threading | Admits, counted | out of threading scope |
-| `certify_reduct` / `trace_cert` / `step_cert` / `seq` / `symm_leg` / `compose_legs` / `compose_whnf_legs` (`tc.rs:1195–1387`) | evidence plumbing, endpoint-checked | as-is | **done** (`Admit::Whnf` = bug report, at zero on ip) | — | — |
+| `certify_reduct` / `trace_cert` / `step_cert` / `seq` / `symm_leg` / `compose_legs` / `compose_whnf_legs` (`tc.rs:1195–1387`) | evidence plumbing, endpoint-checked | as-is | **done** (`Admit::Whnf` = bug report, at zero on ip). The reduct memos audited as caches of evidence 2026-08-10 — §1.10 | — | — |
 | `unfold_def` (`tc.rs:2159`), `delta` (`tc.rs:2148`) | `delta` returns cert; `unfold_def` returns term, callers wrap in `Rule::Delta` trace | as-is | done | — | — |
 
 ### 1.4 Definitional equality (`tc.rs:1551–2572`)
@@ -303,6 +303,62 @@ by `local_premises` scanning the term) instead of once at the open.
   threading, which is the strongest single empirical argument for the target
   design in the tree.
 
+### 1.10 The caches, audited as caches of evidence
+
+*Added 2026-08-10.* The goal clause is "evidence passing, **including all its
+cache**", and until now that half had never been audited as such. The standard
+is `TgBackend::arg_mems`': **(a)** what is stored is a real theorem or a real
+term, not a bare answer whose justification was thrown away, and **(b)** a
+recall is *claim-checked* — re-checked against the statement the caller is
+asking about now — with the disagreement counted, not argued away.
+
+| cache | stores | recall | verdict |
+| --- | --- | --- | --- |
+| `infer_cache_check` / `infer_cache_no_check` (`tc.rs:735–803`) | `(ty, cert)` | the stored cert is returned, not recomputed (`tc.rs:735–742`) | **satisfied.** Conditional entries are stored deliberately and licensed by `typing_is_confined`, debug-asserted at the one write |
+| `whnf_cache` / `whnf_no_unfolding_cache` (`tc.rs:1476,1531`) | `Reduct { reduct, trace }`, the trace carrying a lazily-filled certificate slot | `trace_cert` reads the slot; `certify_reduct` fills it, checking the endpoints against the trace first | **satisfied, and the residual reuse measured at nil** — see below |
+| `eq_cache` (`tc.rs:1997–2230`) | union-find edges carrying certificates | `recall_eq` composes an explain path | **documented exception** — see below |
+| `TgBackend::arg_mems` | `(Thm, hyps)` | `derived::establishes` at both ends, `ArgMem::Mismatch` 0 | **satisfied** — the standard |
+| `TgBackend::has_types` | `(Thm, HtClause, hyps)` | **was checked at the write only**; since 2026-08-10 at both ends, 8 630 recalls re-checked, 0 mismatches | **satisfied** |
+| `Shared::prop_exts` | was a bare `Thm` | — | **was the one field in `Shared` against the struct header's own "every `Thm` here is a `Sealed`" rule; now `Option<Sealed>`.** Moves no number today; the point is that it cannot start to |
+| `Shared::false_anchor` | `Option<Sealed>` | had **no read site at all**, while its doc claimed `global_report` used it | **corrected**: the report now reads the field. `note_anchor()` runs one line *before* `Sealed::new`, so the 237 tally could not distinguish "derived and kept" from "derived and refused" |
+| the other ~40 backend and `Shared` memos | terms, symbols, `u16` levels, declines | — | **structurally safe**: the key determines the value, or the value is not a theorem. Full sweep taken 2026-08-10; no trusted theorem recall found |
+
+**The reduct memos, measured.** `reduct.rs`'s module doc promises "memoise a
+result, memoise why": each reduct is reduced once and *derived at most once*.
+The second half is true and worth almost nothing. New ledger row (`reduct memos,
+as caches of evidence`, `certify.rs`): on ip the slot answers **19** asks
+against **21 392** derivations; `certify_reduct` parks **912** and refuses
+**9 295** as not being a live memo entry's root, of which only **72** are the
+full-`whnf` memo's own root. Two repairs were tried and both are refuted:
+
+* parking every derived node under `hypothesis_free` — the guard
+  `certify_reduct` itself uses, which admits *conditional* certificates — took
+  recalls 19 → 36 and blew the ledger up: copies 184 → 15 618, escapes
+  2 247 → **17 670**, gaps 15 532 → **30 955**. A parked conditional certificate
+  is a copy the escape ledger charges for and no rule consumes; this is the
+  recorded 843 → 5037 lesson at ten times the size.
+* parking only *unconditional* certificates, which cost no escape, left the
+  ledger unchanged row for row and took recalls 19 → 27: **8 derivations saved**
+  for +0.03 % instructions.
+
+So the ceiling on the whole idea is 17 derivations in a 21 411-derivation run,
+and the reason is not a missing mechanism: a reduction is certified once
+because `eq_cache` answers the repeat before `whnf` is re-entered. Both
+refutations are recorded at `trace_cert` so the repair is not re-attempted.
+
+**`eq_cache`: a documented exception, and the clause is satisfiable for it.**
+`Admit::Cache` is 260 and stays there. The cache itself is *not* the defect:
+`union_find::hop` (`union_find.rs:287`) returns no hop for a cert-less edge, so
+`explain` cannot cross a conditional-declined union edge and cannot produce a
+path it has no evidence for — it fails closed, which is (b) in the strongest
+form available. What is admitted is the *conclusion the caller wanted* on a
+path the cache legitimately refused to record, and the refusal is right:
+caching conditional certificates was measured and took the tutorial corpus from
+49 escapes to 96 and its gaps 265 → 291 (`certify::is_unconditional`). So the
+clause is satisfiable here, and it is satisfied by **stage 1**, not by cache
+work: fewer certificates conditional at write time is fewer declined edges. A
+row that does not fall after stage 1 is the measurable that stage failed.
+
 ---
 
 ## 2. Staging order
@@ -423,7 +479,18 @@ current locals — so for them "the typing arrives with the whnf call" can only
 mean genuine subject-reduction threading (a typing carried alongside the
 cursor, one Leibniz per step), not a recall of inference; and 1 640 are the
 `ty_const` cascade (bucket (ii)), which the shared constant store converts
-into handoff entries with no stage-2 work at all. Mechanically as before:
+into handoff entries with no stage-2 work at all. **This stage is now the
+18 656's only route.** The alternative the first edition of this section left
+open — cross-declaration evidence, once task #125 gave the two engines one
+constant store and so one comparable interpreted key — was measured on
+2026-08-10 and reaches **34** of them (§1.3). 18 622 are memberships no typing
+rule anywhere in the run ever concluded, so there is nothing to transport;
+and the shape ledger says where the derivations would have to come from —
+**10 538** of the raw hoists are about *a λ whose typing rule did not apply*
+(`has_type_lam`), against 2 970 the same rule does discharge. The reading
+"the keys simply do not line up across declarations" is refuted by the same
+run: 11 031 typings were re-concluded at a pair an earlier declaration already
+held. Mechanically as before:
 `whnf_reduce`'s loop threads a typing alongside the cursor; `Certifier::beta`
 grows a typing parameter; the 28 call sites split into evidence-carrying
 (inference, `ensure_*`) and don't-care (`inductive.rs`, until inductives need
@@ -496,7 +563,7 @@ item. All counts **(ip)**, fresh run at `8d2b9c9`.
 
 | debt | count (ip) | closed by |
 | --- | ---: | --- |
-| beta obligations searched / hoisted instead of arriving with the call | 39 951 asked; **10 300 now answered from the application check's handoff** (2026-08-10, §1.3). The 20 328 raw hoists are cause-split: 32 threading-shaped (another domain term), 1 640 bucket-(ii) (`ty_const` cascade at the argument's own check), 18 656 about reduction-built / delta-imported terms | handoff **landed**; residue: stage 2 proper + the shared constant store |
+| beta obligations searched / hoisted instead of arriving with the call | 39 951 asked; **10 300 now answered from the application check's handoff** (2026-08-10, §1.3). The 20 328 raw hoists are cause-split: 32 threading-shaped (another domain term), 1 640 bucket-(ii) (`ty_const` cascade at the argument's own check), 18 656 about reduction-built / delta-imported terms — of which a cross-declaration typing store reaches **34**, measured | handoff **landed**; residue: stage 2 proper (the 18 656) + the shared constant store (the 1 640) |
 | escaped assumptions (undischarged at a boundary) | 2 247 (2 257 → 2 247 with the handoff: ten obligations about applications of locals now carry per-local antecedents their binders discharge, where the raw membership had none) | stage 1 |
 | `has_type` misses that are "a local" — context guessed, not read | **1 132** (was 11 211) — closed not by stage 1's context stack but by the handoff: an argument whose typing rests on ambient locals now arrives from `infer_app` with those antecedents already attached, so the search never runs to acquire them. The residue is the genuinely-ambient population §3 item 1 describes | handoff (landed); residue stage 1 |
 | `point_of_proof` premises still searched (`Pop`: 41 lam + 34 rule) | 75 | stages 1–2 |

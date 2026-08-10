@@ -1358,6 +1358,99 @@ pub fn bump_certified() {
     CERTIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// **The reduct memos, read as caches of evidence** — the audit the goal
+/// clause's "including all its cache" asks for, made a standing row.
+///
+/// The two reduct memos store a `Reduct { reduct, trace }`, and the trace
+/// carries a slot for its own certificate ([`crate::reduct::Trace::cert`]), so
+/// on paper a memo hit answers with evidence. What the row measures is whether
+/// that is true in practice, because the slot is filled at exactly one place
+/// ([`crate::tc::TypeChecker::certify_reduct`]) and only for a trace that is a
+/// memo entry's *own root*: a composite built by `whnf_reduce`'s
+/// delta-unfolding loop, and every interior `Seq` node of any trace, has a slot
+/// that is never written, and its certificate is rebuilt per call.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum TraceCert {
+    /// A trace node answered from its own slot — the memo returning evidence.
+    Recalled,
+    /// A trace node's certificate was derived because the slot was empty.
+    Derived,
+    /// `certify_reduct` wrote the certificate back into the node.
+    Parked,
+    /// It did not, because the node is not the root of a live memo entry:
+    /// `whnf_reduce`'s delta loop builds a composite over the no-unfolding
+    /// entries, and `whnf_no_unfolding_cheap_proj` builds a trace it never
+    /// memoises. Parking in the latter is what cost 843 → 5037 escapes.
+    NotAMemoRoot,
+    /// …or because the certificate stands under kernel hypotheses, which a
+    /// memo keyed on the input `ExprPtr` alone must never import
+    /// ([`hypothesis_free`]).
+    Hypothetical,
+    /// A `NotAMemoRoot` node that *is* the full-`whnf` memo's own root — the
+    /// share of the refusals a store-back extended to that memo would convert.
+    WhnfRoot,
+}
+
+impl TraceCert {
+    pub const ALL: [TraceCert; 6] = [
+        TraceCert::Recalled,
+        TraceCert::Derived,
+        TraceCert::Parked,
+        TraceCert::NotAMemoRoot,
+        TraceCert::Hypothetical,
+        TraceCert::WhnfRoot,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            TraceCert::Recalled => "recalled from the trace's own slot",
+            TraceCert::Derived => "derived (slot empty)",
+            TraceCert::Parked => "parked back into the memo entry",
+            TraceCert::NotAMemoRoot => "not parked: not a live memo entry's root",
+            TraceCert::Hypothetical => "not parked: stands under kernel hypotheses",
+            TraceCert::WhnfRoot => "  …of those, the full-whnf memo's own root",
+        }
+    }
+}
+
+#[cfg(feature = "stepcount")]
+const N_TRACE_CERT: usize = 6;
+#[cfg(feature = "stepcount")]
+static TRACE_CERT: [std::sync::atomic::AtomicU64; N_TRACE_CERT] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TRACE_CERT];
+
+/// Record one reduct-memo evidence event. Compiles to nothing without
+/// `stepcount`.
+#[inline(always)]
+pub fn bump_trace_cert(k: TraceCert) {
+    #[cfg(feature = "stepcount")]
+    TRACE_CERT[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "stepcount"))]
+    let _ = k;
+}
+
+/// The reduct-memo evidence ledger, or `None` if counting is off or no
+/// reduction was ever certified.
+pub fn trace_cert_report() -> Option<String> {
+    #[cfg(feature = "stepcount")]
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let total: u64 = TraceCert::ALL.iter().map(|k| TRACE_CERT[*k as usize].load(Relaxed)).sum();
+        if total == 0 {
+            return None
+        }
+        let width = TraceCert::ALL.iter().map(|k| k.name().len()).max().unwrap_or(0) + 2;
+        let mut s = String::from("reduct memos, as caches of evidence\n");
+        for k in TraceCert::ALL {
+            let n = TRACE_CERT[k as usize].load(Relaxed);
+            s.push_str(&format!("  {:<width$}  {n:>14}\n", k.name()));
+        }
+        return Some(s)
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
 /// Render the certified-vs-admitted breakdown, or `None` if counting is off.
 ///
 /// This is the honest measure of how far the milestone-3 work has to go: the

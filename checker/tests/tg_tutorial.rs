@@ -966,6 +966,14 @@ fn the_false_anchor_is_tied_to_the_backends_own_term() {
         anchors.is_some_and(|n| n > 0),
         "⟦False⟧ was interpreted but ⊢ ∀x. ¬(x ∈ ⟦False⟧) was not derived at that term"
     );
+    // The tally is bumped one line before `Sealed::new`, so a run in which the
+    // seal was refused every time would still report anchors. The report reads
+    // `Shared::false_anchor` itself and prints this line when the thread is
+    // holding nothing; its absence is the theorem having survived.
+    assert!(
+        !report_lines(&f).iter().any(|l| l.contains("holding no sealed anchor")),
+        "⊢ ∀x. ¬(x ∈ ⟦False⟧) was derived and then not kept: the seal refused it"
+    );
 }
 
 /// Every line of the coverage report for one export.
@@ -1954,4 +1962,63 @@ fn no_tutorial_export_reaches_the_general_iota_rule() {
             f.file_stem().unwrap().to_string_lossy()
         );
     }
+}
+
+/// **Every theorem-carrying memo in the backend re-checks a recall against the
+/// claim the caller is making now** — the goal clause's "including all its
+/// cache", read strictly.
+///
+/// Two memos hand back a real `Thm` on a key match, and both are now checked at
+/// *both* ends rather than at the write alone:
+///
+/// * `TgBackend::arg_mems`, the application check's handoff, whose failure row
+///   is `ARG-MEM RECALLS NOT MATCHING THEIR CLAIM`;
+/// * `TgBackend::has_types`, the `has_type` search's memo, whose failure row is
+///   `HAS-TYPE MEMO RECALLS NOT MATCHING THEIR CLAIM`. Before 2026-08-10 the
+///   guard sat on the miss arm only, and the argument that this sufficed was
+///   sound but derived — the key `(e, ty, assms)` determines the claim *because*
+///   `interp` is a function of the expression within one backend. A derived
+///   safety argument is exactly the kind that goes stale silently, so it is
+///   measured instead.
+///
+/// # Why this cell can fail
+///
+/// Asserting a bug-report row is absent is worthless if the code path never
+/// runs, so the denominators are asserted too: `has-type memo recalls
+/// re-checked against their claim` must be positive on this corpus, and the
+/// handoff must have stored something. Nine seats this week found green cells
+/// that could not go red; this is the guard against being the tenth.
+///
+/// # Mutation, verified
+///
+/// Restating the recall's claim at the wrong target — `Formula::mem(⟦e⟧, ⟦e⟧)`
+/// in place of `Formula::mem(⟦e⟧, ty)` — takes the `has_types` failure row
+/// 0 → 9 999 on `init-prelude`, with gaps 15 532 → 15 733 and escapes
+/// 2 247 → 2 315, and fails this test.
+#[test]
+fn every_theorem_memo_rechecks_its_recall() {
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    assert!(!files.is_empty(), "no tutorial exports found");
+
+    let (mut recalls, mut ht_bad, mut stored, mut am_bad) = (0u64, 0u64, 0u64, 0u64);
+    for f in &files {
+        let text = report(f);
+        recalls += rows_totalling(&text, "has-type memo recalls re-checked");
+        ht_bad += rows_totalling(&text, "HAS-TYPE MEMO RECALLS NOT MATCHING");
+        // This row's trailing token is a word, not a count, so its *presence*
+        // is what is read — and the row prints only when something was stored.
+        stored += text.lines().filter(|l| l.trim_start().starts_with("argument typings handed off")).count() as u64;
+        am_bad += rows_totalling(&text, "ARG-MEM RECALLS NOT MATCHING");
+    }
+    assert!(recalls > 0, "the has-type memo never replayed a positive entry; the check cannot fail");
+    assert!(stored > 0, "the application check handed nothing off; the handoff check cannot fail");
+    assert_eq!(ht_bad, 0, "{ht_bad} has-type memo recall(s) did not establish the claim asked of them");
+    assert_eq!(am_bad, 0, "{am_bad} handoff recall(s) did not establish the claim asked of them");
 }

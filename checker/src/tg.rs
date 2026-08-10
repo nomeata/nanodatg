@@ -677,6 +677,18 @@ fn conj_of(hyps: &[Formula]) -> Option<Formula> {
     Some(it.fold(first, |acc, h| Formula::and(acc, h.clone())))
 }
 
+/// The statement a typing derivation under `hyps` has to establish: the bare
+/// `want` when there are none, `conj(hyps) → want` otherwise. Factored out
+/// because the same claim is now built at three places — the two ends of the
+/// [`TgBackend::has_types`] memo and the [`TgBackend::arg_mems`] handoff — and
+/// a claim check whose two ends build the claim differently checks nothing.
+fn imp_of(hyps: Option<Formula>, want: &Formula) -> Formula {
+    match hyps {
+        None => want.clone(),
+        Some(h) => Formula::imp(h, want.clone()),
+    }
+}
+
 /// `⊢ conj(hyps) → hyps[i]`, by peeling conjuncts off the left-nested form.
 fn conj_proj(hyps: &[Formula], i: usize) -> Option<Thm> {
     let n = hyps.len();
@@ -2069,8 +2081,15 @@ struct Shared {
     /// [`Shared::prop_infos`] on purpose; see [`TgBackend::interp_pi_undet`].
     undet_syms: HashMap<Term, FnSym>,
     /// `∀`-extensionality theorems, keyed by the *pair* of body skeletons being
-    /// related, exactly as [`Shared::pi_exts`] is.
-    prop_exts: HashMap<(Term, Term), Option<Thm>>,
+    /// related, exactly as [`Shared::pi_exts`] is — and, since 2026-08-10,
+    /// sealed exactly as it is. This was the one entry in this struct that held
+    /// a bare `Thm` against the header's rule; nothing downstream tests
+    /// `hyps()` (`CondEq::new` and `TgCert::Proved` both read only the
+    /// conclusion), so a hypothesis-carrying entry would have been re-asserted
+    /// silently at the point of use and surfaced, if at all, as an escape.
+    /// `cond_ext_n` returns no such theorem today: the seal moves no number and
+    /// is there so that it cannot start to.
+    prop_exts: HashMap<(Term, Term), Option<Sealed>>,
     /// `⊢ ∀h⃗ ∀A. chi(h⃗,A) ∈ U₀` per skeleton, derived **lazily**: it is
     /// [`derived::tower::Tower::cond_in_u0`], which runs excluded middle over
     /// `φ` and two `cond_true`/`cond_false` derivations, and only a skeleton
@@ -2333,6 +2352,7 @@ struct Shared {
     /// per thread, and only per-declaration free variables can make two
     /// occurrences of "the same" Lean term interpret apart. That is a property
     /// of the measurement and it is why the ledger splits by declaration.
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
     typed_at: HashMap<(Term, Term), (u32, bool)>,
     /// Serial number of the next `TgBackend`, i.e. of the declaration-check
     /// about to start. Only ever compared for equality/order, so a wrap would
@@ -2345,7 +2365,10 @@ struct Shared {
     /// Kept rather than dropped because it is the one theorem in the run that no
     /// rule consumes: the guarantee in `README.md` is a statement *about* the
     /// interpretation, not a step in it. Holding it here is what lets
-    /// [`global_report`] say whether this run has it.
+    /// [`global_report`] say whether this run has it — and it says so by
+    /// reading *this field*, not the `FALSE_ANCHORS` counter, which is bumped
+    /// one line before the seal and so cannot distinguish "derived and kept"
+    /// from "derived and refused by `Sealed::new`".
     false_anchor: Option<Sealed>,
 }
 
@@ -2654,6 +2677,7 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Which declaration-check this backend is, for [`Shared::typed_at`]. A
     /// backend is built per declaration, so this is the declaration's serial
     /// number on the thread.
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
     seq: u32,
     /// The constant instantiations currently being unfolded, innermost last.
     ///
@@ -8575,8 +8599,31 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         depth: u32,
     ) -> Option<(Thm, Vec<Formula>)> {
         let key = (e, ty.clone(), assms.to_vec());
-        let out = match self.has_types.get(&key) {
-            Some(r) => r.clone(),
+        let hit = self.has_types.get(&key).cloned();
+        let out = match hit {
+            // **The recall is claim-checked too, since 2026-08-10.** The guard
+            // below used to sit on the miss arm alone, and the argument that
+            // this was enough is sound but *derived*: the key `(e, ty, assms)`
+            // determines the guard's `want`, because `interp` is a function of
+            // `e` within a backend (`Self::exprs`) — so the statement checked
+            // at the write is the statement the caller asks about at the read.
+            // The standard `arg_mems` sets is to check at both ends anyway and
+            // count the disagreement, so that the memo's safety is a *measured*
+            // zero rather than an argument that goes stale when `interp` stops
+            // being a function of `e`.
+            Some(r) => {
+                let want = Formula::mem(self.interp(ctx, e), ty.clone());
+                let checked = r.clone().filter(|(t, _, used)| {
+                    used.starts_with(assms) && derived::establishes(t, &imp_of(conj_of(used), &want))
+                });
+                if r.is_some() {
+                    HT_RECALL_CHECKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if checked.is_none() {
+                        HT_RECALL_MISMATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                checked
+            }
             None => {
                 if self.ht_active.contains(&key) {
                     return None
@@ -8594,16 +8641,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     if !used.starts_with(assms) {
                         return false
                     }
-                    let full = match conj_of(used) {
-                        None => want.clone(),
-                        Some(h) => Formula::imp(h, want.clone()),
-                    };
                     // `establishes`, i.e. `hyps().is_empty()` as well as the
                     // conclusion. The assumptions this clause advertises are
                     // *antecedents of the formula*; a kernel `Γ` would be an
                     // extra, unadvertised one, and `self.has_types` is keyed on
                     // `(expr, type, assumptions)` and would replay it silently.
-                    derived::establishes(t, &full)
+                    derived::establishes(t, &imp_of(conj_of(used), &want))
                 });
                 // How deep the recursion actually goes when it works. Nothing
                 // is tested against this; it is reported because a recursion
@@ -10684,11 +10727,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // is a function and a mismatch would be a bug on the order of
         // `Admit::Whnf`.
         if let Some((t, used)) = self.arg_mems.get(&(arg, dom.clone())).cloned() {
-            let want = Formula::mem(ta.clone(), dom.clone());
-            let full = match conj_of(&used) {
-                None => want,
-                Some(h) => Formula::imp(h, want),
-            };
+            let full = imp_of(conj_of(&used), &Formula::mem(ta.clone(), dom.clone()));
             if derived::establishes(&t, &full) {
                 note_arg_mem(if used.is_empty() { ArgMem::Outright } else { ArgMem::UnderAntecedents });
                 note_ht_call(used.is_empty());
@@ -10699,6 +10738,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // verdict on the raw hoists is worthless — which is why this is
                 // counted rather than assumed. Expected 0, in the spirit of
                 // `ArgMem::Mismatch`.
+                #[cfg(feature = "stepcount")]
                 if !self.shared.borrow().typed_at.contains_key(&(ta.clone(), dom.clone())) {
                     PROBE_BLIND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -10753,6 +10793,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     ArgMem::RawNeverChecked
                 };
                 note_arg_mem(cause);
+                #[cfg(feature = "stepcount")]
                 if matches!(cause, ArgMem::RawNeverChecked) {
                     // The reach probe. Was this very membership ever a typing
                     // rule's conclusion — here, or in a declaration checked
@@ -13409,7 +13450,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn prop_ext_thm(&mut self, ka: &Term, kb: &Term) -> Option<Thm> {
         let key = (ka.clone(), kb.clone());
         if let Some(t) = self.shared.borrow().prop_exts.get(&key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let ia = self.prop_info(ka)?;
         let ib = self.prop_info(kb)?;
@@ -13425,7 +13466,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             _ => None,
         };
-        self.shared.borrow_mut().prop_exts.insert(key, thm.clone());
+        self.shared.borrow_mut().prop_exts.insert(key, Sealed::seal(thm.clone()));
         thm
     }
 
@@ -14290,12 +14331,30 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // wins, so the recorded declaration is the *earliest* one that
                 // held the fact — which is the one a cross-declaration store
                 // would have had to carry it from. See [`Shared::typed_at`].
-                let (seq, uncond) = (self.seq, hyps.is_empty());
-                self.shared
-                    .borrow_mut()
-                    .typed_at
-                    .entry((te.clone(), ty.clone()))
-                    .or_insert((seq, uncond));
+                // A measurement, so it compiles to nothing without `stepcount`
+                // — the table is the one part of this backend's bookkeeping
+                // that is a keyed clone of two terms rather than an atomic
+                // bump, and it costs 0.22 % of the run.
+                #[cfg(feature = "stepcount")]
+                {
+                    let (seq, uncond) = (self.seq, hyps.is_empty());
+                    let prev = self
+                        .shared
+                        .borrow_mut()
+                        .typed_at
+                        .entry((te.clone(), ty.clone()))
+                        .or_insert((seq, uncond))
+                        .0;
+                    // **The probe's calibration.** A pair concluded here that
+                    // an *earlier* declaration already concluded is a witness
+                    // that the interpreted key really does agree across
+                    // declarations. Without it, a small `Reach::Earlier*` row
+                    // could mean either "the facts are not there" or "the keys
+                    // do not line up", and those call for opposite work.
+                    if prev < seq {
+                        TYPED_AT_RECONCLUDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 TgTyping::Derived { thm, hyps }
             }
             _ => self.ty_miss(crate::certify::TyGap::Claim),
@@ -14684,11 +14743,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if self.arg_mems.contains_key(&key) {
             return
         }
-        let want = Formula::mem(self.interp(ctx, arg), key.1.clone());
-        let full = match conj_of(hyps) {
-            None => want,
-            Some(h) => Formula::imp(h, want),
-        };
+        let full = imp_of(conj_of(hyps), &Formula::mem(self.interp(ctx, arg), key.1.clone()));
         if derived::establishes(thm, &full) {
             note_arg_mem(ArgMem::Stored);
             self.arg_stored.insert(arg);
@@ -15661,6 +15716,17 @@ fn note_ind_ty(derived: bool) {
 /// declared `False`, not that the anchor failed.
 pub fn false_anchors() -> u64 { FALSE_ANCHORS.load(std::sync::atomic::Ordering::Relaxed) }
 
+/// Whether this thread's [`Shared`] is still **holding** the ⟦False⟧ anchor as
+/// a sealed theorem.
+///
+/// Strictly more than [`false_anchors`] reports: the counter is bumped after
+/// the shape check but *before* `Sealed::new`, so a run in which every seal was
+/// refused would count 237 anchors and hold none. `None` where the thread never
+/// built a `Shared` at all.
+fn held_false_anchor() -> Option<bool> {
+    SHARED.with(|slot| slot.borrow().as_ref().map(|sh| sh.borrow().false_anchor.is_some()))
+}
+
 /// **Binder opens in the interpretation** — `interp_lambda`/`interp_pi` —
 /// split by whether the `(level, ⟦type⟧)` key already had a kernel variable.
 ///
@@ -16107,7 +16173,29 @@ enum Reach {
 const N_REACH: usize = 5;
 static REACH: [std::sync::atomic::AtomicU64; N_REACH] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_REACH];
+#[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
 fn note_reach(k: Reach) { REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// [`TgBackend::has_types`] recalls that fail the claim check at the read end.
+///
+/// Expected 0, and for a reason: the memo's key determines the claim, so a
+/// recall can only fail this if `interp` has stopped being a function of the
+/// expression within a backend. Counted rather than argued — the standard
+/// [`TgBackend::arg_mems`] sets with `ArgMem::Mismatch`.
+static HT_RECALL_MISMATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// [`TgBackend::has_types`] recalls of a *positive* entry — the population
+/// `HT_RECALL_MISMATCH` is the failure count of.
+///
+/// Reported so that "0 mismatches" can be read as evidence rather than as
+/// silence: a zero over zero recalls says nothing, and this is the denominator
+/// that makes the test on the numerator able to fail.
+static HT_RECALL_CHECKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Typings re-concluded at a pair an earlier declaration already concluded —
+/// the calibration for the `Reach` row. See the bump site in
+/// [`TgBackend::typing`].
+static TYPED_AT_RECONCLUDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Handoff recalls whose pair [`Shared::typed_at`] does **not** know — the
 /// reach probe measured blind. A positive count invalidates the `Reach` row
@@ -16733,6 +16821,18 @@ fn ht_report() -> String {
             am(ArgMem::Mismatch),
         ));
     }
+    let ht_rc = HT_RECALL_CHECKED.load(Relaxed);
+    if ht_rc > 0 {
+        s.push_str(&format!(
+            "    has-type memo recalls re-checked against their claim: {ht_rc}\n",
+        ));
+    }
+    let ht_mm = HT_RECALL_MISMATCH.load(Relaxed);
+    if ht_mm > 0 {
+        s.push_str(&format!(
+            "    HAS-TYPE MEMO RECALLS NOT MATCHING THEIR CLAIM (bug report, expected 0): {ht_mm}\n",
+        ));
+    }
     let raw_causes =
         am(ArgMem::RawStoredElsewhere) + am(ArgMem::RawGapAtCheck) + am(ArgMem::RawNeverChecked);
     if raw_causes > 0 {
@@ -16750,6 +16850,10 @@ fn ht_report() -> String {
             rc(Reach::HereUncond) + rc(Reach::HereCond),
             rc(Reach::HereUncond),
             rc(Reach::Never),
+        ));
+        s.push_str(&format!(
+            "      (the interpreted key does cross declarations: {} typings were re-concluded at a pair an earlier declaration already held)\n",
+            TYPED_AT_RECONCLUDED.load(Relaxed),
         ));
         let blind = PROBE_BLIND.load(Relaxed);
         if blind > 0 {
@@ -16890,6 +16994,13 @@ pub fn global_report() -> String {
             "  {:<width$}  {anchors:>12}\n",
             "⟦False⟧ anchored: ⊢ ∀x. ¬(x ∈ ⟦False⟧) at the interpretation's own term",
         ));
+        // The theorem, not the tally: `note_anchor` runs before `Sealed::new`.
+        if held_false_anchor() != Some(true) {
+            s.push_str(&format!(
+                "  {:<width$}  {:>12}\n",
+                "  …but the thread is holding no sealed anchor (bug report)", "none",
+            ));
+        }
     }
     let (bv_minted, bv_reused) = (BINDER_VARS_MINTED.load(Relaxed), BINDER_VARS_REUSED.load(Relaxed));
     if bv_minted + bv_reused > 0 {

@@ -1342,8 +1342,33 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     fn trace_cert(&mut self, t: &Rc<Trace<'t, Cert<'t, 'p>>>) -> DefEq<'t, 'p> {
         let stored = t.cert.borrow().clone();
         if stored.is_some() {
+            crate::certify::bump_trace_cert(crate::certify::TraceCert::Recalled);
             return stored
         }
+        crate::certify::bump_trace_cert(crate::certify::TraceCert::Derived);
+        // **Two refuted parkings, 2026-08-10, measured on `init-prelude`.** The
+        // slot is filled by `certify_reduct` only for a memo entry's own root,
+        // which leaves every interior node of every trace tree — and every
+        // composite `whnf_reduce`'s delta loop builds — deriving again on each
+        // ask (the ledger: 19 recalls against 21 392 derivations). Parking here,
+        // in the node the certificate is about, is the obvious repair and it is
+        // not worth doing:
+        //
+        // * under `hypothesis_free` — the guard `certify_reduct` uses, which
+        //   admits *conditional* certificates — recalls went 19 → 36 and the
+        //   ledger blew up: copies 184 → 15 618, escapes 2 247 → 17 670, gaps
+        //   15 532 → 30 955. A parked conditional certificate is a copy the
+        //   escape ledger charges for and no rule consumes, which is the
+        //   843 → 5037 lesson recorded at `certify_reduct`, one order of
+        //   magnitude larger.
+        // * under `is_unconditional`, which costs no escape, the ledger was
+        //   unchanged row for row and recalls went 19 → 27: **8 derivations
+        //   saved** for +0.03 % instructions.
+        //
+        // So the reuse is not being lost, it is not there: a reduction is
+        // certified once because `eq_cache` answers the repeat question before
+        // `whnf` is re-entered. The slot earns its keep at the memo roots, where
+        // `certify_reduct` already fills it, and nowhere else.
         match &t.node {
             Node::One(rule) => self.step_cert(*rule, t.from, t.to),
             Node::Seq(l, r) => {
@@ -1429,17 +1454,40 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // assumptions are antecedents inside the formula, so it imports nothing
         // and the escape ledger already counts it — but a hypothetical one is
         // not. See `certify::hypothesis_free`.
-        if let Some(c) = cert.as_ref().filter(|c| crate::certify::hypothesis_free(c)) {
-            let memoised = self
-                .tc_cache
-                .whnf_no_unfolding_cache
-                .get(&e)
-                .and_then(|m| m.trace.as_ref())
-                .is_some_and(|m| Rc::ptr_eq(m, t));
-            if memoised {
-                let mut slot = t.cert.borrow_mut();
-                if slot.is_none() {
-                    *slot = Some(c.clone());
+        if let Some(c) = cert.as_ref() {
+            if !crate::certify::hypothesis_free(c) {
+                crate::certify::bump_trace_cert(crate::certify::TraceCert::Hypothetical);
+            } else {
+                let memoised = self
+                    .tc_cache
+                    .whnf_no_unfolding_cache
+                    .get(&e)
+                    .and_then(|m| m.trace.as_ref())
+                    .is_some_and(|m| Rc::ptr_eq(m, t));
+                if memoised {
+                    crate::certify::bump_trace_cert(crate::certify::TraceCert::Parked);
+                    let mut slot = t.cert.borrow_mut();
+                    if slot.is_none() {
+                        *slot = Some(c.clone());
+                    }
+                } else {
+                    crate::certify::bump_trace_cert(crate::certify::TraceCert::NotAMemoRoot);
+                    // How much of the refusal a store-back extended to the
+                    // *full*-`whnf` memo would convert. Counted rather than
+                    // assumed: the delta loop's composite is the obvious
+                    // candidate, but `whnf_no_unfolding_cheap_proj`'s
+                    // never-memoised trace is in the same bucket and must stay
+                    // refused.
+                    #[cfg(feature = "stepcount")]
+                    if self
+                        .tc_cache
+                        .whnf_cache
+                        .get(&e)
+                        .and_then(|m| m.trace.as_ref())
+                        .is_some_and(|m| Rc::ptr_eq(m, t))
+                    {
+                        crate::certify::bump_trace_cert(crate::certify::TraceCert::WhnfRoot);
+                    }
                 }
             }
         }
