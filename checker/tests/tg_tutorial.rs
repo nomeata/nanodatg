@@ -2552,6 +2552,74 @@ fn the_store_miss_that_a_level_construction_could_reach_is_counted_apart() {
     );
 }
 
+/// **The switchover's staging switch does what §5.5 clause 1 says, and nothing
+/// with the flag off** — `NANODATG_UNIFY_SORT=1`.
+///
+/// Two claims, because the switch is worth nothing if either fails.
+///
+/// **It is inert flag-off.** Both call sites sit inside `levelpoly_enabled()`,
+/// so the standing bit-identity promise survives a switch that would otherwise
+/// change every `⟦Sort ℓ⟧` in the program. Asserted as report identity, not as
+/// a gap count: a count can coincide.
+///
+/// **It really unifies the vocabulary.** With it on, the rung-shaped typing
+/// rules stop firing — `IndTy` (an inductive type lies in its universe) goes
+/// to zero, and so do `x ∈ U(x)` and `U₀ ∈ U₁`. Those three are the ones whose
+/// conclusions are literally about tower rungs, so a switch that had somehow
+/// left the ground path in place would keep them alive. On the staged prelude
+/// the same three read 888 / 51 / 17 and go to 0 / 0 / 0; here they are
+/// smaller but the direction is the same, and the *fixture* is what stops the
+/// prelude numbers in §5.4 from being the only evidence.
+///
+/// Mutation run against this test (red, then reverted): making
+/// `unify_sort_enabled` return `false` unconditionally, which restores the
+/// rung rules and fails the second half while leaving the first half green —
+/// which is exactly the asymmetry the two halves exist to separate.
+#[test]
+fn the_switchover_staging_switch_unifies_the_sort_vocabulary() {
+    let f = corpus().join("good/tutorial/015_levelParams.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    // Flag off: the switch cannot be reached, so the report is unmoved.
+    let off = poly_report(&f, "0", true);
+    let off_unified = poly_report_unified(&f, "0", true);
+    assert_eq!(
+        off, off_unified,
+        "the switchover switch changed a flag-off run; the bit-identity promise is broken"
+    );
+
+    // Flag on, staged: the rung-shaped rules go dark, which is what "one
+    // vocabulary" means operationally.
+    let staged = poly_report(&f, "1", false);
+    let unified = poly_report_unified(&f, "1", false);
+    let rung = [
+        "by IndTy: an inductive type lies in its universe",
+        "by x ∈ U(x)",
+        "by U₀ ∈ U₁",
+    ];
+    let before: u64 = rung.iter().map(|r| rows_totalling(&staged, r)).sum();
+    let after: u64 = rung.iter().map(|r| rows_totalling(&unified, r)).sum();
+    assert!(
+        before > 0,
+        "the fixture stopped firing any rung-shaped rule, so it can no longer witness the \
+         vocabulary switch at all:\n{staged}"
+    );
+    assert_eq!(
+        after, 0,
+        "the rung-shaped rules still fired with the vocabulary unified ({before} → {after}); \
+         `⟦Sort 0⟧` is still a tower rung somewhere:\n{unified}"
+    );
+    // Acceptance is what the switchover may not move, in either state.
+    // `poly_report*` asserts exit 0 already; this pins that both ran.
+    assert!(unified.contains("Tarski-Grothendieck kernel"), "no report:\n{unified}");
+}
+
+/// One run of `export` with the switchover's staging switch on.
+fn poly_report_unified(export: &Path, flag: &str, scheduled: bool) -> String {
+    poly_report_env(export, flag, scheduled, true)
+}
+
 /// One staged run of `export`, at the given `NANODATG_LEVELPOLY` setting,
 /// returning the report.
 fn staged_poly_report(export: &Path, flag: &str) -> String {
@@ -2560,6 +2628,11 @@ fn staged_poly_report(export: &Path, flag: &str) -> String {
 
 /// One run of `export` at the given flag setting, scheduled or staged.
 fn poly_report(export: &Path, flag: &str, scheduled: bool) -> String {
+    poly_report_env(export, flag, scheduled, false)
+}
+
+/// One run of `export`, with the switchover's staging switch optionally set.
+fn poly_report_env(export: &Path, flag: &str, scheduled: bool, unify: bool) -> String {
     let cfg_path = tmp_cfg(&format!("upipart{flag}"), export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
@@ -2571,6 +2644,9 @@ fn poly_report(export: &Path, flag: &str, scheduled: bool) -> String {
     cmd.arg(&cfg_path).env("NANODATG_LEVELPOLY", flag);
     if !scheduled {
         cmd.env("NANODATG_NO_SCHEDULE", "1");
+    }
+    if unify {
+        cmd.env("NANODATG_UNIFY_SORT", "1");
     }
     let out = cmd.output().expect("spawn");
     let _ = std::fs::remove_file(&cfg_path);

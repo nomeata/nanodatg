@@ -2453,6 +2453,25 @@ fn levelpoly_enabled() -> bool {
     *F.get_or_init(|| std::env::var_os("NANODATG_LEVELPOLY").is_some_and(|v| v != "0"))
 }
 
+/// **`NANODATG_UNIFY_SORT=1` — the switchover's staging switch**, the twin of
+/// `NANODATG_NO_SCHEDULE=1` and deleted with it at the end.
+///
+/// `LEVELPOLY.md` §5.5's first clause: `interp_sort` answers `srt(ℓ̂)` at
+/// **every** level, numerals included, retiring the ground special case. With
+/// it set, `⟦Sort 0⟧` is `srt(∅)` rather than the tower's `U₀` and `⟦Sort 1⟧`
+/// is `srt(succ ∅)` rather than `U(ω)`, so there is one vocabulary instead of
+/// two and blocker 3's provably-equal-but-not-identical boundary has nothing
+/// to sit on.
+///
+/// It is inert unless [`levelpoly_enabled`] — both call sites are inside that
+/// test — so the standing flag-off bit-identity promise is untouched, and
+/// measured so: `init-prelude` flag off reads 15542 gaps / 2257 escapes with
+/// this set or unset.
+fn unify_sort_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NANODATG_UNIFY_SORT").is_some_and(|v| v != "0"))
+}
+
 thread_local! {
     static SHARED: std::cell::RefCell<Option<Rc<std::cell::RefCell<Shared>>>> =
         const { std::cell::RefCell::new(None) };
@@ -4460,9 +4479,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // `explore/level-poly-target`: a level the σ-schedule cannot ground is
         // interpreted as `srt(ℓ̂)` — a term with facts — when the apparatus is
         // enabled. Dispatching on the canonical representative keeps `⟦·⟧` a
-        // function exactly as the ground path does, and a ground level never
-        // takes this branch, so the two vocabularies cannot collide.
-        if levelpoly_enabled() && !self.level_ground(ctx, l) {
+        // function exactly as the ground path does, and a ground level does not
+        // take this branch, so the two vocabularies cannot collide.
+        //
+        // Under [`unify_sort_enabled`] the ground test is dropped and *every*
+        // level takes it — §5.5's first clause, the state in which there is one
+        // vocabulary rather than two. `init-prelude` and the arena corpus are
+        // both still accepted there (§4.2), so the ground special case is not
+        // load-bearing for *acceptance*; what it is load-bearing for is the
+        // rung-shaped typing rules, six of which go dark, and §5.4 blocker 3
+        // lists them with their populations.
+        if levelpoly_enabled() && (unify_sort_enabled() || !self.level_ground(ctx, l)) {
             if let Some(t) = self.interp_sort_poly(ctx, l) {
                 return t
             }
@@ -4714,7 +4741,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let lp = self.lp()?;
         let Expr::Sort { level, .. } = ctx.read_expr(e) else { return None };
         let l = self.canon_level(ctx, level);
-        if self.level_ground(ctx, l) {
+        if self.level_ground(ctx, l) && !unify_sort_enabled() {
             return None
         }
         let (lhat, assms, hthm) = self.omega_level(ctx, l)?;
