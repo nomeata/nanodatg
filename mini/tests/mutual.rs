@@ -587,10 +587,15 @@ fn num_fields(env: &Environment, ctor: &Name, np: usize) -> Option<usize> {
 /// Compare every recursor mini generated for `path` against the export's own.
 /// Returns `(matched, complaints)`; `Quot`'s two eliminators are skipped,
 /// because the export declares them as `quot` entries and not as recursors.
+/// A fixture the *kernel* rejects is recorded in `rejected` rather than
+/// counted as a mismatch: the fixture directory holds files whose whole
+/// purpose is to be refused, and this oracle is about recursor shape. The
+/// caller decides which rejections were designed; see `REJECTED_BY_DESIGN`.
 fn compare_recursors(
     path: &Path,
     k_diverge: &mut Vec<String>,
     declined: &mut Vec<String>,
+    rejected: &mut BTreeMap<String, String>,
 ) -> (usize, Vec<String>) {
     let stem = path.file_name().unwrap().to_string_lossy().to_string();
     let opts = LoadOptions { mutual: true, nested: true, keep_export_recursors: true, ..Default::default() };
@@ -611,7 +616,14 @@ fn compare_recursors(
     let mut env = Environment::empty();
     for d in &loaded.decls {
         if let Err(m) = mini::kernel::add(&mut env, d) {
-            return (0, vec![format!("{stem}: rejected at {}: {m}", d.name())])
+            // **Stop adding, but go on comparing.** A fixture designed to be
+            // rejected still declares real inductives before the declaration
+            // that fails — `budget_decline.ndjson` declares `Eq` and `Nat`,
+            // whose recursors are exactly what this oracle is for — and
+            // dropping the file on the first error would throw that coverage
+            // away. The environment up to here was accepted by the kernel.
+            rejected.insert(stem.clone(), format!("rejected at {}: {m}", d.name()));
+            break
         }
     }
     let mut ok = 0usize;
@@ -734,6 +746,13 @@ fn compare_recursors(
 /// Not vacuous by construction: the number of comparisons is asserted, so a
 /// change that stopped populating `Loaded::export_recs` — or a fixture list
 /// that lost its mutual files — fails here rather than passing at zero.
+///
+/// A fixture reaches one of three outcomes, and the sweep keeps them apart.
+/// **Compared** is the point of the test. **Declined** is a frontend refusal,
+/// a file this oracle cannot see, and the list must be empty. **Rejected** is a
+/// file the kernel refuses on purpose — `REJECTED_BY_DESIGN` below — and it is
+/// neither a mismatch nor a blind spot; those files still contribute every
+/// recursor they established before the declaration that fails.
 #[test]
 fn the_generated_recursors_are_the_ones_lean_exports() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -767,15 +786,36 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
         files.extend(c);
     }
 
-    let mut total = 0usize;
-    let mut bad: Vec<String> = Vec::new();
-    let mut k_diverge: Vec<String> = Vec::new();
-    let mut declined: Vec<String> = Vec::new();
-    for f in &files {
-        let (ok, mut b) = compare_recursors(f, &mut k_diverge, &mut declined);
-        total += ok;
-        bad.append(&mut b);
-    }
+    // **The sweep runs on a big stack, as every other wholesale sweep in this
+    // suite does** — `envshare_tg.rs` and `route_tg.rs` spawn at 512 MB,
+    // `budget.rs` reaches its fixture through `run::check_file_deep_with`,
+    // which spawns at 256 MB. This loop was the one that did not, and it read
+    // the *whole* fixture directory on the default 2 MB test stack.
+    // `budget_decline.ndjson` is 2100 nested `succ`s whose only purpose is to
+    // drive definitional equality into `DEFEQ_MAX_DEPTH`; loading it aborted
+    // the test process with a stack overflow before a single recursor had been
+    // compared. Moving the fixture out of the swept directory would have
+    // traded the red for lost coverage — it declares `Eq` and `Nat`, whose
+    // recursors are exactly what this oracle is for.
+    let (total, mut bad, k_diverge, mut declined, rejected) = std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(move || {
+            let mut total = 0usize;
+            let mut bad: Vec<String> = Vec::new();
+            let mut k_diverge: Vec<String> = Vec::new();
+            let mut declined: Vec<String> = Vec::new();
+            let mut rejected: BTreeMap<String, String> = BTreeMap::new();
+            for f in &files {
+                let (ok, mut b) =
+                    compare_recursors(f, &mut k_diverge, &mut declined, &mut rejected);
+                total += ok;
+                bad.append(&mut b);
+            }
+            (total, bad, k_diverge, declined, rejected)
+        })
+        .expect("spawn the fixture sweep")
+        .join()
+        .expect("the fixture sweep panicked");
     // **No designed fixture is refused by the frontend any more.** It used to
     // be exactly one — `nested_shapes.ndjson`, for being nested — and the
     // oracle's blind spot was that file. `LoadOptions::nested` opens it here,
@@ -784,6 +824,60 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
     // stays shut; `mini/tests/nested.rs` pins both halves.
     declined.sort();
     assert_eq!(declined, Vec::<String>::new(), "the set of fixtures this oracle cannot see changed");
+
+    // **The third category: a fixture the kernel is *supposed* to reject.**
+    // Sweeping the whole directory reaches files whose entire purpose is to be
+    // refused — a definitional-equality budget designed to be exhausted, a
+    // level equality designed not to hold, an axiom designed to be ill-typed.
+    // `compare_recursors` used to report those as recursor mismatches, which
+    // they are not: nothing was compared, so nothing differed. They are not
+    // `declined` either — that list is frontend *refusal*, a fixture this
+    // oracle cannot see, and these load fine and then fail the kernel.
+    //
+    // **Named, not pattern-matched.** A filter on the error text would swallow
+    // a genuine regression whose message happened to read like one of these;
+    // the exemption is spent per file, and any *other* fixture that starts
+    // being rejected lands in `bad` below and fails.
+    const REJECTED_BY_DESIGN: [&str; 5] = [
+        // 2100 nested `succ`s against `DEFEQ_MAX_DEPTH = 2000`.
+        "budget_decline.ndjson",
+        // The one-per-declaration-loop tranche: each places a declaration the
+        // kernel must refuse at a chosen point in the file — `badFour`,
+        // `badFirst`, `badLast`.
+        "reject_midfile_prefix.ndjson",
+        "used_axiom_after_reject.ndjson",
+        "used_axiom_before_reject.ndjson",
+        // The one the *pipeline* accepts and this sweep does not: `badAx :
+        // Prop Prop` is an unused axiom, which `run` drops before checking.
+        // This oracle wants the declarations as exported, so it adds the axiom
+        // too, and `kernel::add` infers nothing for `Sort 0` applied to
+        // `Sort 0`. Ill-typed by design either way — see
+        // `designed.rs::an_unused_axiom_may_now_be_illtyped`.
+        "unused_axiom_illtyped.ndjson",
+    ];
+    // Non-vacuous in the first direction: an empty allowlist would make the
+    // filter below a no-op that reported success having excused nothing.
+    assert!(!REJECTED_BY_DESIGN.is_empty(), "the intentional-rejection allowlist is empty");
+    // Non-vacuous in the second: **every name on the list must actually
+    // reject.** A fixture that is silently *accepted* — because the budget
+    // moved, or the ill-typed axiom stopped being ill-typed, or the file was
+    // renamed away — is a lost rejection, and this is what makes it red
+    // instead of quietly widening the exemption.
+    let never: Vec<&str> =
+        REJECTED_BY_DESIGN.iter().copied().filter(|f| !rejected.contains_key(*f)).collect();
+    assert!(
+        never.is_empty(),
+        "{} allowlisted fixture(s) were not rejected — the exemption has outlived its cause \
+         or the fixture stopped failing:\n  {}",
+        never.len(),
+        never.join("\n  ")
+    );
+    for (stem, why) in &rejected {
+        if !REJECTED_BY_DESIGN.contains(&stem.as_str()) {
+            bad.push(format!("{stem}: {why}"));
+        }
+    }
+
     assert!(bad.is_empty(), "{} recursor(s) differ from the export:\n{}", bad.len(), bad.join("\n"));
     // **Every K-likeness divergence is the parameter-sort one**, which the
     // comparison above recognises by cause and records instead of failing on;
