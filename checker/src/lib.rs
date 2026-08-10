@@ -6,6 +6,7 @@
 #![deny(clippy::cast_possible_truncation)]
 
 pub mod certify;
+pub mod const_store;
 pub mod debug_printer;
 pub mod env;
 pub mod expr;
