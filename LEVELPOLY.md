@@ -1143,14 +1143,21 @@ and it makes `interp_sort` answer `srt(ℓ̂)` at every level, `⟦Sort 0⟧` be
 reachable" is now answered by running it rather than by argument, and **the
 answer is yes**:
 
-| | staged | + unified | + the ground bridge |
+| | staged (ground path) | + unified | + the ground bridge |
 |---|---:|---:|---:|
 | `init-prelude` acceptance | exit 0 | exit 0 | **exit 0** |
 | arena corpus | 152/0/2/0 | 152/0/2/0 | **152 matched, 0 mismatched, 2 declined, 0 waived** |
-| TOTAL gaps | 10531 | 10752 (+221) | **10535 (+4)** |
-| typing obligations discharged | 1624 | 519 (−1105) | **1569 (−55)** |
-| rule firings | 38587 | 36076 (−2511) | **38434 (−153)** |
-| instructions | 615.18 G | 618.33 G (+0.5 %) | **620.56 G (+0.9 %)** |
+| TOTAL gaps | 10531 | 10752 (+221) | **10531 — parity** |
+| escapes | 1466 | 1548 | **1466 — parity** |
+| typing obligations discharged | 1624 | 519 (−1105) | **1624 — parity** |
+| rule firings | 38587 | 36076 (−2511) | **38569 (−18, 0.05 %)** |
+| instructions | 615.18 G | 618.33 G (+0.5 %) | 625.05 G (+1.6 %) |
+
+**Every outcome measure is at parity.** Gaps, escapes and discharged
+obligations are the ground path's numbers exactly; the residual 18 firings of
+38587 are rules taking a different internal route (`ty_lam` 11, `App` 3,
+`Local` 3, `ty_conv` 1), not coverage lost. The switchover's re-derivation
+half is **done**.
 
 Three readings, all of them load-bearing.
 
@@ -1215,15 +1222,22 @@ actually wanted. That closed **94 %** of the re-derivation half:
 | `Lam` | 105 | **593** |
 | net rule firings vs the ground path | −2511 | **−153** |
 
-What is left is small and named: `ty_pi` 50, `the target type beta-reduced`
-50, `Ctor` 32, `ty_lam` 11, and five rules under five each. `ty_pi` and
-`fs(a,a) ∈ U(a)` are the one shape the bridge does not yet reach — the
-*fibre* position, where the sort is a component of a `dprod(t,t)` rather than
-the subject or the target, so the transport has to go through the fibre
-equation as well. `STILL_DARK` in
+**The fibre position was the last one, and it was not a blocker.** It is the
+same equation at a third place: the sort is neither the subject nor the target
+but a *component* of the subject `dprod(t,t)`, so the library fact is picked
+at the rung and carried back by a Leibniz step whose pattern mentions the
+variable **twice** — `fs(w,w) ∈ dom`, both occurrences substituted at once.
+One step, no new construction. `Ctor` was the same idea once more at a lookup
+*key*: `ind_mems` is keyed by the target and registered at the rung.
+
+So all six dark rules and the three decimated ones were **one missing
+equation, seen at five guards** — `ind_ty_mem`, `domain_premise` in three
+positions (subject, target, fibre), `prop_in_u0`, and the `ind_mems` key.
+`STILL_DARK` in
 `the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does`
-is that list, and the test fails if a name is left there after its rule is
-fixed.
+is now **empty**, and is kept as an asserted-empty constant so a rule that
+goes dark in future has to be written down to pass rather than merely
+tolerated.
 
 **One honest defect the bridge introduced and the fixture caught.** Bridging
 `domain_premise` without also bridging the `HtClause` split left every count
@@ -1338,11 +1352,8 @@ init-prelude at the untouched 15542 gaps / 2257 escapes.
 
 Not blockers 1–2, and not blocker 3 *as a precondition*. What is left is:
 
-* **The rung-shaped typing rules** — **94 % done**, by the one ground-bridge
-  construction above. What remains is 153 firings across nine rules, of which
-  the only distinct *shape* is the fibre position (`ty_pi`, `fs(a,a) ∈ U(a)`)
-  where a sort sits inside a `dprod(t,t)` and the transport must go through
-  the fibre equation too.
+* ~~The rung-shaped typing rules~~ — **done**, at parity on every outcome
+  measure, by the one ground-bridge construction above.
 * **The store answering cross-level uses** (§1.6). Unifying `interp_sort`
   leaves all 483 cross-level misses in place, because the store key is
   `(name, ⟦levels⟧)` and the vocabulary switch does not make a use spelled
@@ -1357,6 +1368,31 @@ Not blockers 1–2, and not blocker 3 *as a precondition*. What is left is:
 
 None of these is blocked on mathematics, and none of them is a level problem
 except the second.
+
+#### A check that reported success having done nothing — a witness for task #137
+
+Recorded here because it happened on this branch and #137's seat should
+inherit a concrete case rather than a principle. It is not fixed here: it is
+cross-cutting and belongs to CI, not to this branch.
+
+**What happened.** A doc-comment rewrite of one fixture used a text slice
+whose end marker sat *past* a neighbouring test, and the replacement deleted
+`the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does`
+outright. `cargo test --test tg_tutorial` then reported
+
+```text
+test result: ok. 38 passed; 0 failed
+```
+
+having previously reported 39. **Nothing failed, because a deleted test does
+not fail.** The loss was caught two commits later by hand, when a `grep` for
+the constant it defined came back empty — not by any check.
+
+The shape is exactly #137's: one aggregate counter (`N passed`) cannot
+distinguish a suite that grew a pass from one that lost a test, and the run
+that lost one is indistinguishable from a healthy run at a smaller number. A
+per-suite expected-test-count, or a manifest of test names diffed across runs,
+would have made it a red rather than a silent −1.
 
 #### Mini, sized
 
