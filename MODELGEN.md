@@ -3229,8 +3229,10 @@ subsume. It is the right worry — but it does not reach this one, and the
 reason is structural rather than a judgement call. **W's well-foundedness is
 `Acc.rec` on the immediate-subtree relation.** A W arm at the type target
 needs that eliminator; `Acc` is no longer a primitive; and arm G is what
-produces it. Deleting arm G in favour of W would leave W with nothing to
-recurse on. That is also why the order was `Acc` first: not sequencing
+gives `Acc` a model, which is what entitles the W arm to use the real `Acc`
+and its definitional ι (§8.10). Deleting arm G in favour of W would leave W
+with nothing to recurse on. That is also why the order was `Acc` first: not
+sequencing
 preference, dependency.
 
 Two further points, and the first is a **correction to the brief that
@@ -3420,3 +3422,53 @@ At the 30M prefix the remaining 110 declines are:
 W is not the largest cluster and is being done first because `Lean.ParserDescr`
 is one of the two declarations standing between `init-prelude` and full
 coverage. The indexed family is larger and is deliberately next, not forgotten.
+
+## 8.10 The rule the arms are built under: model in dependency order, then use the real type
+
+This governs every arm from here and it was got wrong twice in one day, so it
+is written down rather than left as practice.
+
+**The basis is not a wall around the construction.** `Modelgen.primBasis` is
+the set of types that get an *exemption from being modelled at all* — the
+exemption that makes the construction well-founded. It is not a restriction on
+what a model's *right-hand side* may mention.
+
+**The only condition on everything else is acyclicity**: the model of `X` may
+not use `X`, directly or transitively. Emit in dependency order and that holds
+automatically, because the filter walks the export in the order the export
+carries and the export is topologically sorted.
+
+**And a modelled type may then be used as the real type, not through its
+model.** Once `Subtype` has a model, later models use `Subtype` itself — the
+Lean inductive, with definitional ι, `rfl` reductions and ordinary pattern
+matching. The model *discharges the obligation* for that type; there is
+nothing left to prove about it, and routing a later construction through the
+derived interface (`rec_0` applications, propositional `iota_0_j`,
+single-valuedness arguments) would pay twice for something already bought —
+and would infect the later model with propositional ι where definitional ι was
+available. **Write each model the way you would write it in ordinary Lean,
+against ordinary Lean types.**
+
+So, concretely, for the W arm: use real `Acc` with `Acc.rec` reducing by `rfl`,
+and real `List`/`Option`/`Subtype` in the path construction. `Acc` is modelled
+by arm G (§8.7) and `List` by the tuple tower (§8.4); W runs after both.
+
+**Two wrong shapes, recorded because both were proposed and neither is
+obvious.** The first is treating the basis as a wall and Church-encoding
+everything a model needs. The second is subtler and survived a round of
+correction: emitting a *bespoke* path tower per declaration, and the graph
+route *inlined*, so as to name neither `List` nor `Acc`. Both exist only to
+avoid naming types that are already modelled and therefore already paid for.
+Neither buys anything, and the second costs the definitional ι that using the
+real type gives for free.
+
+What this does *not* relax: the basis exemption itself, acyclicity, and the
+oracle bar — a model whose statement does not match the installed recursor's
+rule is a decline, never an emission.
+
+**A consequence for the output, and it is the reason dependency order is not
+merely hygiene.** If the W arm's construction names `Acc` and the input does
+not declare one, the arm must *splice* `Acc` and let it be modelled, rather
+than treat it as a primitive: a spliced-but-unmodelled inductive would quietly
+put a fifth type back in front of a consumer. `init-prelude` declares no `Acc`,
+so this is the live case and not a hypothetical.

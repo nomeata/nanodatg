@@ -17,16 +17,36 @@ shown; §8 names what is not measured.*
 > corrected here rather than below, because a reader who acts on the first
 > screen is the reader this matters to.
 >
-> **Leg one — the circle — broke this week.** The argument was that the
-> derivation's irreducible closure contains `List` and `Acc`, so a layer
-> modelling every simple inductive as a `W` would model `List` out of `List`.
-> Both members are now derived rather than primitive: `Acc` by the graph route
-> (`MODELGEN.md` §8.7 — the Church carrier plus `Classical.choice` at the
-> recursion's graph), and `List` by the tuple tower (§8.4), which models it
-> with every ι rule `Eq.refl` and no axiom. The W arm therefore emits its path
-> type as a **bespoke tower per declaration** and its accessibility as arm G's
-> construction **inlined**, splicing neither as a primitive — which is what
-> breaks the circularity, independently of axioms.
+> **Leg one — there is no circle, and the mistake was in the premise.** The
+> argument was that the derivation's irreducible closure contains `List` and
+> `Acc`, so a layer modelling every simple inductive as a `W` would have to
+> model `List` out of `List`. That treats the basis as a **wall around the
+> whole construction**. It is not. It is the set of types that get an
+> *exemption from being modelled at all*, and the only real condition on
+> everything else is **acyclicity**: the model of `X` may not use `X`, directly
+> or transitively.
+>
+> Under dependency ordering the circle simply does not arise. `List` is
+> modelled first, by the tuple tower (§8.4 — every ι `Eq.refl`, no axiom);
+> `Acc` is modelled first, by the graph route (§8.7). *Then* `W`'s model may
+> use them. Nothing is modelled out of itself at any point.
+>
+> And it may use them as the **real types, not as their models**: modelling a
+> type discharges the obligation for it, so the construction that comes after
+> is entitled to the genuine article — real `Acc` with `Acc.rec` reducing by
+> `rfl`, real `List` and `Subtype` with ordinary pattern matching and
+> definitional ι. Routing W through a model's *derived* interface would pay
+> twice for something already bought, and would infect W with propositional ι
+> where definitional ι was available. So the W arm is written the way one
+> would write it in ordinary Lean, against ordinary Lean types.
+>
+> **A design this document's correction briefly proposed and which is also
+> wrong**: emitting the path type as a bespoke tower per declaration and
+> accessibility as the graph route *inlined*, so as to name neither `List` nor
+> `Acc`. That is strictly more work for no gain — it exists only to avoid
+> naming types that are already modelled and therefore already paid for. It is
+> recorded here because it is the error a reader of leg one is most likely to
+> repeat.
 >
 > **Leg two — the axiom bill — was answered by a ruling that postdates this
 > document.** §2 measures the derivation at `choice`, `em` and `funext` and
@@ -235,6 +255,16 @@ would be `noncomputable`.
 ---
 
 ## 3. Why that does not break the circle
+
+> **REFUTED — see the corrected verdict. This section's premise is false.** It
+> assumes every simple inductive would be modelled *as a `W`*, and therefore
+> that `List`'s own model is a `W` over paths made of `List`. Layer 3 does not
+> work that way: it has several arms, and `List` is modelled by the **tuple
+> tower** (`MODELGEN.md` §8.4), which is not a `W` and does not mention `List`.
+> `W` is one further arm, for branching recursion, and it runs *after*. The
+> ordering the first paragraph below says does not exist is exactly the
+> ordering that obtains. Kept for the record and for §3's second half, whose
+> line-count ledger is separately answered in the verdict.
 
 **The literal circularity.** A layer 3 fires on simple inductives. `List` is a
 simple inductive. Its model would be `W` over a tag family, built out of
