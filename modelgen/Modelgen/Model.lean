@@ -1978,10 +1978,41 @@ def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)
 
 /-- Add a generated declaration, **with checking**. A proof this module builds
-and the kernel rejects is a decline, never an emission. -/
+and the kernel rejects is a decline, never an emission.
+
+**And a declaration the kernel accepts but the environment then loses is a
+decline too.** `Environment.addDeclCore` type-checks first and afterwards
+registers each name in the *async* constant map, which keys on
+`privateToUserName` — the name with its private prefix stripped.
+`AsyncConsts.add` `panic!`s on a duplicate normalized name and returns the map
+**unchanged**, so the constant is in the kernel and invisible to
+`Environment.find?`. That is not survivable here: `MetaM`'s `inferType` goes
+through `find?`, so the very next declaration that names the lost one dies with
+`Unknown constant` — an exit 3, the tool's own failure, with nothing emitted.
+
+It is our own names that collide. An export is many modules flattened into one
+file, so it can hold both `_private.M.0.X` and a public `X`; we model both, and
+`_private.M.0.X._model.self` and `X._model.self` normalize alike. Checking
+membership *after* the add catches it however the two are ordered, which no
+check on the name alone can do — neither ordering has the other's name in hand
+at the time. Costs one map lookup per emitted name.
+
+`Declaration.getNames` omits the auxiliary recursors the kernel computes for
+nested inductives, which are legitimately absent from `find?`; that is exactly
+the set this must not ask about, and it is why the loop is over `getNames`
+rather than over the environment's diff. -/
 def addChecked (d : Declaration) : GenM Unit := do
   match (← getEnv).addDeclCore 0 d none true with
-  | .ok e => setEnv e
+  | .ok e =>
+    setEnv e
+    -- **`find?`, not `constants`.** `Environment.constants` is the *kernel*
+    -- map, which has the constant — the kernel accepted it. `Environment.find?`
+    -- is the one that consults the async map, and it is the one `MetaM` goes
+    -- through, so it is the one that must see it. `Test.lean`'s `runEnvProbe`
+    -- pins the same distinction from the other side.
+    for n in d.getNames do
+      if ((← getEnv).find? n).isNone then
+        declineWith (.nameTaken n)
   | .error ex =>
     badShape s!"{d.getTopLevelNames} rejected by the kernel: {← (ex.toMessageData {}).toString}"
 

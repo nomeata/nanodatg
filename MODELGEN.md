@@ -3696,3 +3696,88 @@ arm's construction names `Acc` (§8.11's dependency list). Without
 splice-and-model, splicing `Acc` would have put an unmodelled fifth inductive
 in the output; with it, `Acc` is spliced and then modelled by arm G, and the
 consumer's obligation stays at four.
+
+## 8.14 The full Mathlib file: from exit 3 to exit 0, and the census
+
+**Before this fix the full export did not process at all.** The run died at
+
+```text
+internal error: Unknown constant
+  `_private.Lean.Meta.Sym.AlphaShareCommon.0.Lean.Meta.Sym.State._model.self`
+```
+
+exit 3, **zero models emitted**, after 4 minutes and 2.81 T instructions. It is
+a regression this tranche caused: coverage rose, `Lean.Meta.Sym.State` began to
+model where it had declined, and a second `_model.self` came into existence.
+
+**The mechanism, and it is our names rather than Lean's machinery.** An export
+is many modules flattened into one file, so it holds both
+`_private.M.0.X` and a public `X`. We model both and emit
+`_private.M.0.X._model.self` and `X._model.self`. `Environment.addDeclCore`
+type-checks first and *then* registers each name in the async constant map,
+which keys on `privateToUserName` — the name with its private prefix stripped.
+`AsyncConsts.add` `panic!`s on a duplicate normalized name and returns the map
+**unchanged**, so the constant sits in the kernel and is invisible to
+`Environment.find?`. `MetaM`'s `inferType` goes through `find?`, so the next
+declaration naming it dies.
+
+**Not fixable by dropping to the kernel API**, and that was checked before it
+was tried: `Driver.lean` and `Test.lean`'s `runEnvProbe` already record that
+`Environment.find?` reads the imported map and then the *async* map, so a
+constant added through `Kernel.Environment` is invisible to the generator —
+`Tree.rec_1`, the constant every nested model is *about*, is the pinned
+witness. The async bookkeeping is not a cost we merely pay; MetaM depends on
+it. It would not have helped anyway: this is a name collision, not an API
+choice.
+
+**The fix is in `addChecked`: a declaration the kernel accepts but the
+environment then loses is a decline.** Checking membership *after* the add is
+what catches it whichever order the two declarations arrive in — neither
+ordering has the other's name in hand at the time, so no check on the name
+alone can work. One subtlety cost a full run: the test must be
+`Environment.find?`, **not** `Environment.constants`. `constants` is the
+kernel map, which *does* have the constant; `find?` is the async-aware one and
+the one `MetaM` uses. The first attempt used `constants`, changed nothing, and
+failed identically.
+
+**Result — the full 5.6 GB export, current binary:**
+
+| | old census (pre-tranche) | now |
+|---|---|---|
+| exit | 0 | **0** |
+| models | 6,323 | **6,640** |
+| declines | 465 | **147** |
+| instructions | 3.288 T | 3.350 T |
+| peak RSS | 23.9 GB | 23.9 GB |
+| wall | — | 5:59 |
+
+**The denominator closes.** 6,593 simple input blocks + 194 composed = 6,787
+verdicts = 6,640 + 147. **Coverage 97.8 %.**
+
+The 147 declines: **82 an indexed family** (56 %, the largest cluster and the
+next thing), ~52 branching or under-a-binder recursion (W), **10 name taken**
+— the new guard, i.e. exactly the collisions that used to be fatal — and 3
+basis primitives.
+
+**The 10 name-taken declines are a coverage loss, and a recoverable one.** They
+are declarations whose model name is indistinguishable, after private-prefix
+stripping, from one already emitted. Turning a fatal into a decline is the
+right first move — a decline, never an emission — but the coverage-preserving
+fix is to disambiguate the generated name so the normalized forms differ. That
+changes the four-name contract and wants a deliberate decision, so it is
+recorded here rather than taken.
+
+**And there is an upstream bug worth reporting.** Lean's `addDeclCore` adds
+*private* names to the **public** async-consts map, because the guard is
+commented out:
+
+```lean
+    -- TODO
+    if true /- !isPrivateName n-/ then
+      env := { env with asyncConstsMap.public := ... }
+```
+
+A private name should not be in the public map at all; that is why it collides
+with the public name it shadows. 854 PANICs on the full file, of which 18
+involve our own `_model` names and the rest are the input's own duplicate
+privates.
