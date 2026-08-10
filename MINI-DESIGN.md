@@ -446,9 +446,19 @@ and stays in scope. `mini::convert::is_standard_axiom` is the line.
 **One narrowing, `#121`.** The argument above is about a symbol something in the
 file *depends on*. An axiom **nothing in the file refers to** opens no pair, so
 there is no `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` to be stuck at and nothing to be evidence for;
-it is ignored — kernel-checked, then dropped before the interpretation pass, and
-named on the verdict line so the skip is visible. `mini::unused_axiom` states
-what "refers to" covers and why one pass rather than a fixed point.
+it is ignored — dropped **before** the per-declaration loop, so it is never
+added and never interpreted, and named on the verdict line so the skip is
+visible. `mini::unused_axiom` states what "refers to" covers and why one pass
+rather than a fixed point.
+
+The drop used to sit *after* a whole-file kernel pass, which checked such an
+axiom's **type** on the way past; `mini::decl_pass` has no whole-file kernel
+pass to sit after, and the owner waived the lost rejection ("it will not
+complain about the type of a dropped axiom; that's not a concern").
+`mini/tests/designed.rs`'s `an_unused_axiom_may_now_be_illtyped` is the waiver
+as a fixture, so the difference is measured rather than described. The
+**used**-axiom decline keeps its ordering — it must lose to any rejection — by
+being issued after the loop rather than before it.
 
 **`Cause::Assumption` is therefore retired**, and the retirement is what the
 decline buys. Once the boundary is enforced at the frontend, the only axioms
@@ -1600,8 +1610,9 @@ mutual export by default (`convert::LoadOptions`); `mini --mutual` opens the
 gate and `mini/tests/mutual.rs` is what uses it.
 
 *And zone B does not have to.* `mini/src/mutual_aux.rs` **encodes the block
-away** before the interpretation pass runs. `run::check_file_with` calls
-`mutual_aux::expand`, which replaces each block it can express by a tag
+away** at the block's own position in the per-declaration loop.
+`mini::decl_pass::Pass::step` drives `mutual_aux::Expander`, which replaces each
+block it can express by a tag
 inductive `Tag (p⃗) : Sort W` with one constructor `Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗` per
 member carrying *that* member's index telescope, one indexed inductive
 `Aux (p⃗) : Tag p⃗ → Sort u` carrying every constructor of every member, and
@@ -1611,10 +1622,17 @@ ordinary declarations over them —
 `Mot := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗`,
 `Tᵢ.rec := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) t` at
 *zone A's own declared type*, and one `theorem … := Eq.refl _` per recursor
-rule at *zone A's own rule*. Those go through `kernel::add` and then through the ordinary
-`Ledger::run`, **under the block's own names** — which is why there is no
-install step: `⟦Tᵢ.{σ}⟧`, `⟦Tᵢ.ctorⱼ.{σ}⟧`, `⟦Tᵢ.rec.{σ}⟧` and the rule
+rule at *zone A's own rule*. Those go through `kernel::add` and then through the
+ordinary evidence walk, **under the block's own names** — which is why there is
+no install step: `⟦Tᵢ.{σ}⟧`, `⟦Tᵢ.ctorⱼ.{σ}⟧`, `⟦Tᵢ.rec.{σ}⟧` and the rule
 theorems land in the store at exactly the keys every later use site reads.
+
+The rule theorems are the one part that is **not** emitted at the block: their
+statements mention an `Eq` the block does not, and the exporter routinely
+declares it after the block, so they are appended at the end of the file. Since
+the loop was fused they are also *stated* there — `mutual_aux::rule_theorems`,
+called from `Expander::append_rules` — because the environment at the block's
+own position has no `Eq` either.
 
 Three things make the rules reflexivity rather than transports, and each is
 load-bearing: `Tag` is an *index* of `Aux` and not a parameter; the minors

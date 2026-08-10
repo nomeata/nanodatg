@@ -189,6 +189,14 @@ impl Pass {
         // one. A per-declaration walk reads it as it goes, so the normalisation
         // has to be done up front and then maintained at every write
         // (`nested_splice::add_sigmas`).
+        //
+        // **Measured: this loop changes nothing today.** Instrumented over the
+        // arena's 154 files, not one pre-pass entry is out of order or carries
+        // a duplicate — `checker::instantiations` already emits them normalised.
+        // It is here to *establish* the precondition the walk has always been
+        // read under rather than to fix a violation of it; the half that is
+        // load-bearing is `add_sigmas`, which keeps it true of the entries the
+        // nested keying and the block encodings add.
         let mut schedule = schedule.clone();
         for v in schedule.values_mut() {
             v.sort();
@@ -335,15 +343,26 @@ impl Pass {
     /// The tables go on the apparatus, which means **building** it — so only
     /// when there is something to put there. A file with no nested declaration
     /// must not acquire an apparatus it would otherwise never have had.
+    ///
+    /// **Written here rather than by `nested_splice`**, and that is the
+    /// module's black box (`ci/check-mutual-blackbox.sh`): a module that
+    /// produces a table of `(Name, σ) -> Name` syntax for the evidence layer to
+    /// consume may not name `crate::interp` to hand it over. So it exposes the
+    /// tables and this does the handing.
+    ///
+    /// Copied after every recognised declaration rather than once at the end,
+    /// because `ledger::fill_declaration` reads `nested[T]` at `T`'s **own**
+    /// position to learn which constants `T`'s model is responsible for. A
+    /// nested declaration's entries never change after it has been keyed, so
+    /// re-copying is idempotent on everything already there.
     fn install_nested_tables(&mut self, ip: &mut Interp) {
         if !self.nested.any() {
             return
         }
         let Some(app) = ip.ind_apparatus() else { return };
-        // Written before the declaration is walked, which is what
-        // `ledger::fill_declaration` needs: it reads `nested[T]` to learn which
-        // constants `T`'s model is responsible for, at `T`'s own position.
-        self.nested.publish(app);
+        app.model_of = self.nested.model_of.clone();
+        app.model_iota = self.nested.model_iota.clone();
+        app.nested = self.nested.nested.clone();
         self.nested_seen = self.nested.seen;
         self.nested_models = self.nested.modelled;
     }
@@ -399,4 +418,127 @@ fn introduced(env: &Environment, d: &Declaration) -> Vec<Name> {
     let owners: std::collections::HashSet<Name> = out.iter().copied().collect();
     out.extend(env.owners.iter().filter(|(_, o)| owners.contains(o)).map(|(n, _)| *n));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{DefKind, IndType};
+    use crate::expr::{forall, konst, sort, Level};
+
+    /// The names `kernel::add` really inserted, read off the environment rather
+    /// than predicted — the oracle [`introduced`] is compared against.
+    fn really_added(before: &Environment, after: &Environment) -> Vec<Name> {
+        let mut v: Vec<Name> =
+            after.consts.keys().filter(|n| !before.consts.contains_key(n)).copied().collect();
+        v.sort_by_key(|n| n.to_string());
+        v
+    }
+
+    fn sorted(mut v: Vec<Name>) -> Vec<Name> {
+        v.sort_by_key(|n| n.to_string());
+        v.dedup();
+        v
+    }
+
+    /// **[`introduced`] is exactly what `kernel::add` inserts**, for every
+    /// declaration kind.
+    ///
+    /// The evidence pass's environment is grown by copying these names across
+    /// from zone A's, so a name this function forgets is a constant the
+    /// interpretation walk cannot resolve — which surfaces as a gap somewhere
+    /// downstream rather than as a failure here. Hence the oracle: the set is
+    /// *measured* off the environment, not asserted against a list.
+    ///
+    /// **Three constructors, and that is the point of the inductive case.** A
+    /// declaration with one constructor cannot tell "copy the constructors"
+    /// from "copy the first constructor", and two cannot tell either from an
+    /// off-by-one; three separate all of them. `Colour.rec` and the owner index
+    /// come along for free, which is the half that has to be read off
+    /// `env.owners` rather than predicted.
+    #[test]
+    fn introduced_is_what_the_kernel_inserted() {
+        let mut env = Environment::empty();
+
+        // `axiom P : Prop`
+        let p = Name::simple("P");
+        let d = Declaration::Axiom { name: p, lparams: vec![], ty: sort(Level::zero()) };
+        let before = env.clone();
+        crate::kernel::add(&mut env, &d).expect("axiom");
+        assert_eq!(sorted(introduced(&env, &d)), really_added(&before, &env), "axiom");
+
+        // `def idP : Prop → Prop := fun x => x`
+        let arrow = forall(sort(Level::zero()), sort(Level::zero()));
+        let d = Declaration::Def {
+            name: Name::simple("idP"),
+            lparams: vec![],
+            ty: arrow,
+            value: crate::expr::lam(sort(Level::zero()), crate::expr::bvar(0)),
+            kind: DefKind::Def,
+        };
+        let before = env.clone();
+        crate::kernel::add(&mut env, &d).expect("def");
+        assert_eq!(sorted(introduced(&env, &d)), really_added(&before, &env), "def");
+
+        // `inductive Colour : Type | red | green | blue` — three atoms.
+        let c = Name::simple("Colour");
+        let ty = sort(Level::zero().succ());
+        let d = Declaration::Inductive {
+            name: c,
+            lparams: vec![],
+            num_params: 0,
+            ty,
+            ctors: ["red", "green", "blue"]
+                .iter()
+                .map(|s| (Name::str(&c, s), konst(c, vec![].into())))
+                .collect(),
+        };
+        let before = env.clone();
+        crate::kernel::add(&mut env, &d).expect("inductive");
+        let got = sorted(introduced(&env, &d));
+        assert_eq!(got, really_added(&before, &env), "inductive");
+        // …and it is not vacuous: five names, the recursor among them.
+        assert_eq!(got.len(), 5, "type former, three constructors and the recursor: {got:?}");
+        assert!(got.contains(&Name::str(&c, "rec")), "the recursor is owned, not named: {got:?}");
+
+        // A `mutual … end` block of two, each with its own constructors.
+        let (a, b) = (Name::simple("Ping"), Name::simple("Pong"));
+        let d = Declaration::Mutual {
+            lparams: vec![],
+            num_params: 0,
+            types: vec![
+                IndType {
+                    name: a,
+                    ty: sort(Level::zero().succ()),
+                    ctors: vec![
+                        (Name::str(&a, "stop"), konst(a, vec![].into())),
+                        (Name::str(&a, "go"), forall(konst(b, vec![].into()), konst(a, vec![].into()))),
+                    ],
+                },
+                IndType {
+                    name: b,
+                    ty: sort(Level::zero().succ()),
+                    ctors: vec![(
+                        Name::str(&b, "back"),
+                        forall(konst(a, vec![].into()), konst(b, vec![].into())),
+                    )],
+                },
+            ],
+        };
+        let before = env.clone();
+        crate::kernel::add(&mut env, &d).expect("block");
+        let got = sorted(introduced(&env, &d));
+        assert_eq!(got, really_added(&before, &env), "mutual block");
+        // Two type formers, three constructors, two recursors.
+        assert_eq!(got.len(), 7, "{got:?}");
+
+        // `Quot`, whose four constants the kernel mints itself.
+        let before = env.clone();
+        crate::kernel::add(&mut env, &Declaration::Quot).expect("quot");
+        assert_eq!(
+            sorted(introduced(&env, &Declaration::Quot)),
+            really_added(&before, &env),
+            "quot"
+        );
+    }
 }

@@ -84,12 +84,13 @@ The brief asked that this be found out rather than assumed. Found:
   run has no trail for the gate to protect — the gate pays its full cost
   (PROFILE §3: computing the key for the never-storing memo is 34% of the
   acceptance run) on runs where its stated purpose cannot occur.
-* **And on the acceptance path the trail was never the issue.** Arming happens
-  *after* the acceptance verdict (`run.rs`: "The interpretation pass runs only
-  on a file mini accepted"), so the file's own zone A runs unarmed; the zone A
-  work that does run inside the armed window — the nested splice's generated
-  models and the mutual expansion, both of which call `kernel::add`
-  (`nested_splice.rs`, `mutual_aux.rs:1027`) — mints gaps that are cleared at
+* **And on the acceptance path the trail was never the issue.** Arming used to
+  happen after the whole-file acceptance verdict; since the pipeline became one
+  per-declaration loop (`mini/src/decl_pass.rs`) it happens before the loop, so
+  the file's own zone A now runs *inside* the armed window along with the zone A
+  work that always did — the mutual expansion's `kernel::add`
+  (`mutual_aux.rs`). That does not change the argument, and the reason is the
+  next clause rather than the position: zone A mints gaps that are cleared at
   the next `enter_pair` before any pair report reads them, and blocking
   aborts at *pair* obligations (`ledger.rs:620`), which zone A mints are not. The empirical
   check is `tutorial_first_blocker`, the armed ratchet that pins *which*

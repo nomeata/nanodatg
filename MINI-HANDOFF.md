@@ -6400,19 +6400,28 @@ with it.**
 ### How "unused" is computed, and what a reference is
 
 `unused_axiom::classify(&decls, is_nonstandard)` runs in
-`run::check_file_with`, **after** the kernel pass and **before** the
-interpretation pass. Both halves of that position are load-bearing:
+`run::check_file_with`, **before** the per-declaration loop — it reads the
+declaration list and no environment, so that is where it belongs:
 
 * **The whole file, not the prefix.** An axiom unused where it is declared may
   be used four hundred declarations later, so the question cannot be answered as
   the declarations stream past — which is why the frontend's
   `Facts::nonstandard_axioms` list is *gone* rather than reused. `check_file_with`
   has the whole list and asks there.
-* **After the kernel.** The ignored axiom's *type* is still checked, so
-  `axiom bad : (fun x => x)` goes on being **rejected**, exactly as mini-lean
-  rejects it. Dropping the declaration at the frontend would have widened
-  acceptance silently. `#56`'s own reason — four `bad/tutorial` fixtures that
-  declare a helper axiom before their ill-typed declaration — survives unchanged.
+* **The dropped axiom is not checked at all, and that is the waived
+  property.** It used to be dropped *after* a whole-file kernel pass, so its
+  type was checked on the way past and `axiom bad : (fun x => x)` was
+  **rejected**. `mini::decl_pass` has no whole-file kernel pass, and the owner
+  waived the loss explicitly ("it will not complain about the type of a dropped
+  axiom; that's not a concern"). `mini/tests/designed.rs`'s
+  `an_unused_axiom_may_now_be_illtyped` is that waiver as a red-before /
+  green-after fixture, so the difference is a measurement and not a note.
+* **The `#56` reason is a different property and it survives.** Four
+  `bad/tutorial` fixtures (044, 047, 050, 054) declare a helper axiom before
+  their ill-typed declaration, so the **used**-axiom decline must lose to a
+  rejection. It does: the decline is issued after the loop ends unrejected, and
+  `a_used_axiom_decline_loses_to_any_rejection` pins it on three cells — the
+  axiom alone, the axiom before the rejection, and the axiom after it.
 
 **A reference is a constant occurrence, never a name.** `referenced` collects
 every `Expr::Const` name and every `Expr::Proj`'s `ind`, over an axiom's type, a

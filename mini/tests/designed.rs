@@ -2326,6 +2326,22 @@ fn reducing_a_proof_is_reflexivity_and_the_walk_says_so() {
 /// names and the `ledger` row carries the count, and both are asserted here.
 /// Exit `0` is asserted too, and deliberately: `Uncertified` and `Untranslated`
 /// are obligations mini *owes*, and nothing in the file rests on either axiom.
+///
+/// # `5 declarations` became `3`, and that is the waived property
+///
+/// The drop used to happen *after* the kernel pass, so the two ignored axioms
+/// were checked and counted and only then withheld from the interpretation.
+/// `mini::decl_pass` runs one per-declaration loop, and
+/// `unused_axiom::classify` reads the declaration list and no environment — so
+/// the drop is ahead of the loop and the axioms are never added at all. The
+/// owner waived the property that went with the old position ("it will not
+/// complain about the type of a dropped axiom; that's not a concern") and
+/// [`an_unused_axiom_may_now_be_illtyped`] is that waiver as a fixture.
+///
+/// The count on the verdict line is the number of declarations zone A checked,
+/// so it has to be **3**: saying 5 would claim two checks that did not happen.
+/// Both halves of the visible-skip requirement are unchanged — the names are on
+/// the verdict line and the count is in the ledger.
 #[test]
 fn an_unused_axiom_is_ignored_and_a_used_one_still_declines() {
     fn raw(name: &str) -> (Option<i32>, String) {
@@ -2352,7 +2368,7 @@ fn an_unused_axiom_is_ignored_and_a_used_one_still_declines() {
         vec![
             "unused_axiom_ignored.ndjson",
             "accept",
-            "5 declarations",
+            "3 declarations",
             "ignored axioms: unusedProp, unusedRel"
         ],
         "the ignored axioms must be **named** on the verdict line — a count alone would let a \
@@ -2390,6 +2406,70 @@ fn an_unused_axiom_is_ignored_and_a_used_one_still_declines() {
         !v.contains("spareAx") && !v.contains("alsoSpare"),
         "reporting an unused axiom as the reason is the old rule, unnarrowed:\n{out}"
     );
+}
+
+/// **The one property the fused pipeline gives up, as a fixture** — an unused
+/// non-standard axiom whose *type* does not typecheck is now accepted.
+///
+/// `unused_axiom_illtyped.ndjson` declares `axiom badAx : Prop Prop`, which is
+/// `Sort 0` applied to `Sort 0` and infers nothing, and one definition that does
+/// not mention it. Under the old pipeline the whole file went through
+/// `kernel::add` first and the drop came after, so mini **rejected** it:
+///
+/// ```text
+/// reject  badAx
+/// Expected a function type in application of Sort 0 to Sort 0, got Sort (0+1)
+/// ```
+///
+/// `mini::unused_axiom::classify` reads the declaration list and no
+/// environment, so in a per-declaration pipeline it belongs ahead of the loop
+/// and the axiom is never added. The owner waived the lost rejection
+/// explicitly: *"yes, it will not complain about the type of a dropped axiom;
+/// that's not a concern."*
+///
+/// **This is a fixture and not a note, because a lost rejection is a
+/// measurement.** It is red on the old pipeline (`reject`, exit 1) and green on
+/// the new one, so if the drop ever moves back behind the kernel the test says
+/// which behaviour changed rather than leaving a silent difference. The
+/// mutation is the same statement read the other way: move
+/// `unused_axiom::classify`'s `retain` after the loop and this goes red.
+///
+/// The skip is still **visible**, which is what keeps the waiver from being a
+/// hole: the axiom is named on the verdict line and counted in the ledger, so a
+/// reader sees that the file declares a symbol mini looked at and did not check.
+#[test]
+fn an_unused_axiom_may_now_be_illtyped() {
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
+        .arg("--verbose")
+        .arg(fixture("unused_axiom_illtyped.ndjson"))
+        .output()
+        .expect("spawn mini");
+    let code = out.status.code();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v = stdout.lines().next().unwrap_or_default().to_string();
+    assert_eq!(
+        code,
+        Some(0),
+        "an unused non-standard axiom is dropped before the loop, so its type is never \
+         checked and the file is accepted:\n{stdout}"
+    );
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec![
+            "unused_axiom_illtyped.ndjson",
+            "accept",
+            "1 declarations",
+            "ignored axioms: badAx"
+        ],
+        "…and the skip stays visible — the count is the declarations zone A actually \
+         checked, and the axiom is named:\n{stdout}"
+    );
+    let l = row(&stdout, "ledger");
+    assert_eq!(l.get("ignoredAxioms"), Some(&1), "the ledger counts it too:\n{stdout}");
+    // **The rest of the file still certifies.** Without this the test would pass
+    // for a run that dropped everything.
+    assert_eq!(evidence(&stdout).get("constEv"), Some(&1), "the definition still certifies:\n{stdout}");
 }
 
 // ────────────────────────────── monomorphization, and what it may rewrite ──
@@ -2548,4 +2628,155 @@ fn quot_lift_of_mk_is_certified_off_the_corpus() {
         convs.get("moved").copied().unwrap_or(0) > 0,
         "no conversion moved — the fixture no longer reaches the quot ι step:\n{out}"
     );
+}
+
+// ─────────────────────────────── the fused pipeline: what the loop buys ──
+
+/// **A rejection mid-file certifies everything before it** — the capability the
+/// per-declaration loop exists for (`mini/src/decl_pass.rs`).
+///
+/// The pipeline used to be a whole-file acceptance pass and then a whole-file
+/// interpretation pass. Acceptance early-returns at the first rejection, so a
+/// file with one bad declaration produced **no certificate at all** — not for
+/// the declarations before the bad one, not for anything. `good/init-prelude`
+/// is the measured case: it stops 231 declarations into 2059 and certified
+/// zero.
+///
+/// # Three good, one bad, two more
+///
+/// `reject_midfile_prefix.ndjson` is six definitions, the fourth ill-typed
+/// (`def badFour : Prop := Type`). Three before the stop and two after, and
+/// both counts are the point: **two atoms cannot tell a prefix from a
+/// constant.** With one good declaration before the stop, `certified=1` is also
+/// what "certify the first declaration only" produces; with none after, it is
+/// also what "certify the whole file" produces. Three and two separate all
+/// four readings — 0 (the old pipeline), 1, 3 (the prefix) and 6.
+///
+/// The verdict, its tag and the exit code are asserted alongside, because the
+/// whole restructure is only legal if they did not move: this file rejected at
+/// `badFour` with exit 1 before and does now.
+#[test]
+fn a_rejection_certifies_the_prefix() {
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
+        .arg("--verbose")
+        .arg(fixture("reject_midfile_prefix.ndjson"))
+        .output()
+        .expect("spawn mini");
+    let code = out.status.code();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(code, Some(1), "the acceptance verdict has not moved:\n{stdout}");
+    assert_eq!(
+        stdout.lines().next().unwrap_or_default().split('\t').collect::<Vec<_>>(),
+        vec!["reject_midfile_prefix.ndjson", "reject", "badFour"],
+        "…and it still names the declaration that failed:\n{stdout}"
+    );
+    let p = row(&stdout, "prefix");
+    assert_eq!(
+        p.get("declarations"),
+        Some(&3),
+        "the three declarations before the stop must have been walked — this is 0 on the \
+         two-pass pipeline:\n{stdout}"
+    );
+    assert_eq!(p.get("pairs"), Some(&3), "…one pair each:\n{stdout}");
+    assert_eq!(
+        p.get("certified"),
+        Some(&3),
+        "…and a constant typing derived for each, which is what 'certified' means:\n{stdout}"
+    );
+    // **And not the whole file.** A run that carried on past the rejection
+    // would read 6 here and would be certifying declarations mini does not
+    // accept.
+    assert!(
+        p.get("declarations") < Some(&6),
+        "the prefix must stop at the rejection, not run through it:\n{stdout}"
+    );
+    // The certification axis says nothing about a rejected file, and the ledger
+    // rows are the observable half of that: `Outcome::ledger` is `None`, so
+    // none of them is printed.
+    assert!(
+        !stdout.lines().any(|l| l.starts_with("ledger\t")),
+        "a rejected file must carry no gap ledger — the two axes stay apart:\n{stdout}"
+    );
+}
+
+/// **A used non-standard axiom declines only when nothing rejected first**, and
+/// the rule is *the rejection always wins*, not *the earlier event wins*.
+///
+/// This is the ordering the fused pipeline had to keep. The decline used to be
+/// issued after a completed whole-file kernel pass, which made it lose to a
+/// rejection for free. With one loop the axiom is known from the parse, so the
+/// decline could have been issued at the top — and four `bad/tutorial` fixtures
+/// (044, 047, 050, 054) declare a helper axiom ahead of the ill-typed
+/// declaration they are about, so doing that would have turned four rejections
+/// into declines: a weaker claim, made silently, on the axis that is supposed
+/// to be exact.
+///
+/// # Three cells, because two cannot tell the rule from its shadow
+///
+/// | fixture | the axiom sits | verdict |
+/// | --- | --- | --- |
+/// | `used_axiom_declines` | alone | `decline` |
+/// | `used_axiom_before_reject` | **before** the ill-typed declaration | `reject` |
+/// | `used_axiom_after_reject` | **after** it | `reject` |
+///
+/// The first two alone are also satisfied by "whichever comes first wins"; the
+/// third is what rules that out. The first is what rules out "never decline".
+#[test]
+fn a_used_axiom_decline_loses_to_any_rejection() {
+    fn verdict(name: &str) -> (Option<i32>, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+            .arg("--no-modelgen")
+            .arg(fixture(name))
+            .output()
+            .expect("spawn mini");
+        let s = String::from_utf8_lossy(&out.stdout).to_string();
+        (out.status.code(), s.lines().next().unwrap_or_default().to_string())
+    }
+
+    let (code, v) = verdict("used_axiom_declines.ndjson");
+    assert_eq!(code, Some(2), "a used non-standard axiom on its own is still an arena decline: {v}");
+    assert!(v.contains("\tdecline\t"), "{v}");
+
+    let (code, v) = verdict("used_axiom_before_reject.ndjson");
+    assert_eq!(code, Some(1), "a rejection after the axiom must win: {v}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec!["used_axiom_before_reject.ndjson", "reject", "badLast"],
+        "…and name the ill-typed declaration, not the axiom"
+    );
+
+    let (code, v) = verdict("used_axiom_after_reject.ndjson");
+    assert_eq!(code, Some(1), "a rejection before the axiom must win too: {v}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec!["used_axiom_after_reject.ndjson", "reject", "badFirst"],
+        "…so the rule is 'a rejection wins', not 'the first event wins'"
+    );
+}
+
+/// **`Outcome::prefix` and the ledger agree on an accepted file.**
+///
+/// The prefix counters are read off the same ledger the accepted outcome
+/// carries, so on a file that ran to the end they must be that ledger's own
+/// `declars`, `pairs` and `constEv`. Asserted because they are two rows a
+/// reader will compare, and because a prefix that quietly stopped counting
+/// early would otherwise look like a small file.
+#[test]
+fn the_prefix_agrees_with_the_ledger_on_an_accepted_file() {
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
+        .arg("--verbose")
+        .arg(fixture("unused_axiom_ignored.ndjson"))
+        .output()
+        .expect("spawn mini");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let p = row(&stdout, "prefix");
+    let l = row(&stdout, "ledger");
+    let e = evidence(&stdout);
+    assert_eq!(p.get("declarations"), l.get("declars"), "prefix vs ledger declars:\n{stdout}");
+    assert_eq!(p.get("pairs"), l.get("pairs"), "prefix vs ledger pairs:\n{stdout}");
+    assert_eq!(p.get("certified"), e.get("constEv"), "prefix vs evidence constEv:\n{stdout}");
+    // Not vacuous: the file does certify something.
+    assert!(p.get("certified") > Some(&0), "the fixture certifies nothing:\n{stdout}");
 }

@@ -4,6 +4,7 @@
 //! # Interface
 //!
 //! ```text
+//! nested_splice::Recogniser         one declaration at a time
 //! nested_splice::recognise(env, decls, schedule) -> Recognised
 //! ```
 //!
@@ -12,6 +13,14 @@
 //! carries `⟦T⟧`, `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧`, together with
 //! [`Recognised::model_iota`], which says which theorem is `T.rec_k`'s rule on
 //! a given constructor.
+//!
+//! [`Recogniser`] is the same thing as a loop body, which is what
+//! [`crate::decl_pass`] drives; [`recognise`] is it over a whole file, and is
+//! what `mini/tests/nested.rs` asks directly. **The per-declaration form needs
+//! nothing the whole-file form has**, and the reason is [`settled`]: a model at
+//! or after the declaration it models is [`Missing::Later`] whatever the
+//! environment holds, so every lookup either resolves in the prefix or is a
+//! decline in both forms.
 //!
 //! # What changed, and why the module no longer splices
 //!
@@ -473,19 +482,6 @@ impl Recogniser {
     /// acquire an apparatus it would otherwise never have had.
     pub fn any(&self) -> bool { !self.nested.is_empty() }
 
-    /// Put the keying on the interpretation apparatus.
-    ///
-    /// Called after every recognised declaration rather than once at the end,
-    /// because [`crate::ledger::fill_declaration`] reads `nested[T]` at `T`'s
-    /// own position to learn which constants `T`'s model is responsible for.
-    /// The tables are the accumulated ones each time: a nested declaration's
-    /// entries never change after it has been keyed, so re-publishing is
-    /// idempotent on everything already there.
-    pub fn publish(&self, app: &mut crate::interp::IndApparatus) {
-        app.model_of = self.model_of.clone();
-        app.model_iota = self.model_iota.clone();
-        app.nested = self.nested.clone();
-    }
 }
 
 /// A recognised model: the export constant beside the model constant that
