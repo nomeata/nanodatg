@@ -284,21 +284,21 @@ def puliftRec (v ℓ : Level) (p motive m t : Expr) : Expr :=
 def puliftDown (ℓ : Level) (p t : Expr) : Expr :=
   puliftRec .zero ℓ p (.lam `x (puliftT ℓ p) p .default) (.lam `h p (.bvar 0) .default) t
 
-/-- **The lift's eta, as an `Eq`**: `Eq (up (down t)) t`, by the recursor at
-the motive `fun z => Eq (up (down z)) z`. The minor closes by `Eq.refl`,
-because `down (up h) ≡ h` by ι — so nothing here is `funext`, which is what
-retires the `False`-Π pad's one axiom.
+/-- **The lift's eta is definitional.** `PULiftP` is a single-constructor,
+index-free, non-recursive inductive, so the kernel's eta-for-structures fires
+on it — `t ≡ up (down t)` for every `t`, at every level, `Prop` or not. So
+this is `Eq.refl`, not a recursor call, and it is here only so that the one
+place that needs an *equation* rather than a conversion has one.
 
-On a **constructor application** `t := up h₀` the recursor ι-reduces this to
-`Eq.refl (up h₀)`, a closed self-equality, and the kernel's K-like reduction
-on `Eq.rec` erases any transport built on it. That is why every ι rule
-downstream of a lift stays `Eq.refl`. -/
+Two consequences the construction leans on. `PULiftP ⊤` is a **definitional
+singleton** at every level (eta collapses `x` onto `up (down x)`, proof
+irrelevance collapses `down x` onto `⊤`'s inhabitant), so a pad built from it
+needs no transport — which is what makes it a strict improvement on the
+`False`-Π pad, whose uniqueness was `funext`. And `motive (up (down t))` and
+`motive t` are convertible, so the maybe-zero route's recursor is the `Prop`
+route's with `up`/`down` at the ends and nothing in between. -/
 def puliftEta (eqi : EqInfo) (ℓ : Level) (p t : Expr) : Expr :=
-  let lift := puliftT ℓ p
-  let motive := Expr.lam `z lift
-    (eqi.mk' ℓ lift (puliftUp ℓ p (puliftDown ℓ p (.bvar 0))) (.bvar 0)) .default
-  let m := Expr.lam `h p (eqi.refl' ℓ lift (puliftUp ℓ p (.bvar 0))) .default
-  puliftRec .zero ℓ p motive m t
+  eqi.refl' ℓ (puliftT ℓ p) t
 
 /-- An **empty** type at exactly `Sort w`, for any `w`: the lift of Church
 `False`. This is the fibre beyond a tag tower's last constructor, and — at a
@@ -355,13 +355,13 @@ old basis used — it is empty exactly when its proposition is. So there are two
 carriers at such a sort, not one: `PULiftP ⊤` (the singleton, below) and
 `PULiftP ⊥` ([`Modelgen.emptyAt`]), and `PEmpty` is no longer out of reach.
 
-Unlike [`Modelgen.dsingAt`]'s pads the singleton is **not definitionally
-canonical**: two inhabitants are equal by the lift's eta, not defeq. So
-wherever one is destructed the applied minor is transported along
-[`Modelgen.puliftEta`] — a recursor call and proof irrelevance, where the
-`False`-Π singleton cost a `funext` — and on a constructor application that
-proof is a *closed self-equality* which the kernel's K-like reduction on
-`Eq.rec` erases, so ι stays `Eq.refl`. -/
+Like [`Modelgen.dsingAt`]'s pads the singleton **is** definitionally
+canonical — structure eta on `PULiftP` plus proof irrelevance on `⊤` — so
+wherever one is destructed the applied minor already has the target type and
+no transport rides along. This is where the
+`False`-Π singleton cost a `funext`. In fact the lift's eta is *definitional*
+(structure eta on `PULiftP`), so the destructor needs no transport at all and
+ι is `Eq.refl` with nothing to erase. -/
 
 /-- The singleton at exactly `Sort ℓ`: the lift of `⊤`. -/
 def unitAt (ℓ : Level) : Expr := puliftT ℓ trueP
@@ -630,6 +630,147 @@ partial def churchBinders (kTys : Array Expr) (j : Nat) (ks : Array Expr)
   else withLocalDeclD (Name.mkSimple s!"k{j}") kTys[j]! fun kv =>
     churchBinders kTys (j + 1) (ks.push kv) k
 
+/-! ## Indices and recursion in the Church encoding
+
+Two features the encoding above does not have, and both are one rewrite of the
+minor-premise types away.
+
+**Indices.** Quantify `C` over the whole index telescope instead of over
+nothing: `T' p⃗ ι⃗ := ∀ C : (∀ ι⃗, Prop), k⃗ → C ι⃗`, with each minor `k_j`
+ending in `C` applied to *constructor j's own* index expressions. The
+declaration's parameters are only ever context, never analysed.
+
+**Recursion.** A recursive field `f : ∀ z⃗, T p⃗ e⃗` becomes `∀ z⃗, C e⃗` in the
+minor's type and `fun z⃗ => f z⃗ C k⃗` in the fold. Strict positivity for a
+single non-nested inductive admits exactly that shape (thesis.txt:647–668), so
+a field that mentions `T` in any *other* position is a nested occurrence and
+is declined rather than mis-rewritten. -/
+
+/-- A field of a constructor, classified. `rec? = some nb` says the field is a
+recursive occurrence under `nb` binders — `nb = 0` for a bare `T p⃗ e⃗`. -/
+structure PField where
+  /-- The binder telescope's length, for a recursive field. -/
+  rec? : Option Nat
+  deriving Inhabited
+
+/-- Rewrite a constructor's telescope for the Church encoding: recursive
+fields' types and the result both get `C` in place of `T p⃗`. Returns the
+rewritten telescope and the per-field classification.
+
+`ni` is the index count; the arguments after the first `np` of an occurrence
+of `T` are its index expressions, and they are copied verbatim. -/
+partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t : Expr)
+    (acc : Array PField := #[]) : GenM (Expr × Array PField) := do
+  if nf == 0 then
+    -- the constructor's result: `T p⃗ ι⃗_j` ↦ `C ι⃗_j`
+    let args := t.getAppArgs
+    unless t.getAppFn.isConstOf tname && args.size == np + ni do
+      badShape s!"a constructor of {tname} does not end in {tname} applied to \
+        {np} parameters and {ni} indices"
+    return (mkAppN C (args.extract np args.size), acc)
+  let .forallE x d b bi := t | badShape "telescope shorter than its field count"
+  let mut d' := d
+  let mut fld : PField := { rec? := none }
+  if mentionsAny #[tname] d then
+    let (dd, nb) ← forallTelescope d fun zs res => do
+      let args := res.getAppArgs
+      unless res.getAppFn.isConstOf tname && args.size == np + ni do
+        badShape s!"a field of {tname} mentions {tname} other than as a recursive \
+          occurrence (∀ z, {tname} p e) — a nested occurrence, which is layer 1's business"
+      for z in zs do
+        if mentionsAny #[tname] (← ityp z) then
+          badShape s!"a recursive field of {tname} binds an argument whose type \
+            mentions {tname}"
+      return (← mkForallFVars zs (mkAppN C (args.extract np args.size)), zs.size)
+    d' := dd
+    fld := { rec? := some nb }
+  withLocalDecl x bi d' fun xv => do
+    -- A later field's type never depends on a recursive one (strict
+    -- positivity forbids it), so instantiating with the rewritten binder is
+    -- safe exactly where it matters and irrelevant elsewhere.
+    let (rest, acc') ← churchSwapAt tname np ni C (nf - 1) (b.instantiate1 xv) (acc.push fld)
+    return (← mkForallFVars #[xv] rest, acc')
+
+/-- The same classification as [`Modelgen.churchSwapAt`] makes, without the
+rewrite — used where the *values* are built, since those are bound at the
+model's restored telescope and not at the export's. -/
+partial def classifyCtor (tname : Name) (nf : Nat) (tele : Expr)
+    (acc : Array PField := #[]) : GenM (Array PField) := do
+  if nf == 0 then return acc
+  let .forallE x d b bi := tele | badShape "telescope shorter than its field count"
+  let fld : PField ←
+    if mentionsAny #[tname] d then
+      forallTelescope d fun zs _ => pure { rec? := some zs.size }
+    else pure { rec? := none }
+  withLocalDecl x bi d fun xv =>
+    classifyCtor tname (nf - 1) (b.instantiate1 xv) (acc.push fld)
+
+/-- **One `Pair`-valued premise of the strong-induction fold.**
+
+Walks constructor `j`'s *export* telescope, binding one variable per field —
+a recursive field at `∀ z⃗, Pair e⃗` rather than at its own type — and ends at
+
+    fun D k => k (c_j elems) (fun _h => minor elems ihs)
+
+where, for each recursive slot, `elems` holds the carrier element read out of
+that slot's pair and `ihs` the induction hypothesis read out beside it, both
+pointwise under the field's own binders. The minor premise takes the fields in
+declaration order and then the hypotheses, which is the order Lean's recursors
+use.
+
+The index expressions are taken from the export telescope as it is walked, not
+read back off the built types: `Pair` is a λ, so `Pair e⃗` is a β-redex and
+whether its arguments are still visible is a fact about whoever last touched
+the expression. This is the bug that cost the first two attempts. -/
+partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
+    (selfAt : Array Expr → Expr) (pairAt : Array Expr → GenM Expr)
+    (motive : Expr) (cN : Name) (minor : Expr) (ps : Array Expr)
+    (nf : Nat) (tele : Expr) (elems ihs : Array Expr) : GenM Expr := do
+  if nf == 0 then
+    let args := tele.getAppArgs
+    let isj := args.extract np args.size
+    unless isj.size == ni do
+      badShape s!"a constructor of {tname} does not present {ni} index arguments"
+    let sfj := selfAt isj
+    let built := mkAppN (.const cN us) (ps ++ elems)
+    return ← withLocalDeclD `D (.sort .zero) fun D => do
+      let armTy ← withLocalDeclD `e sfj fun e => do
+        let qTy ← withLocalDeclD `h sfj fun h =>
+          mkForallFVars #[h] (mkAppN motive (isj.push h))
+        withLocalDeclD `q qTy fun q => mkForallFVars #[e, q] D
+      withLocalDeclD `k armTy fun k => do
+        let proof ← withLocalDeclD `h sfj fun h =>
+          mkLambdaFVars #[h] (mkAppN minor (elems ++ ihs))
+        mkLambdaFVars #[D, k] (mkAppN k #[built, proof])
+  let .forallE x d b bi := tele | badShape "telescope shorter than its field count"
+  if !(mentionsAny #[tname] d) then
+    return ← withLocalDecl x bi d fun xv => do
+      mkLambdaFVars #[xv] (← pairArm tname np ni us selfAt pairAt motive cN minor ps
+        (nf - 1) (b.instantiate1 xv) (elems.push xv) ihs)
+  -- a recursive field `∀ z⃗, T p⃗ e⃗`: bind it at `∀ z⃗, Pair e⃗`
+  let nb ← forallTelescope d fun zs _ => pure zs.size
+  let dPair ← forallBoundedTelescope d (some nb) fun zs res => do
+    let a := res.getAppArgs
+    mkForallFVars zs (← pairAt (a.extract np a.size))
+  withLocalDecl x bi dPair fun pv => do
+    let (el, ih) ← forallBoundedTelescope d (some nb) fun zs res => do
+      let a := res.getAppArgs
+      let ris := a.extract np a.size
+      let sf := selfAt ris
+      let app := mkAppN pv zs
+      let mkArm := fun (k : Expr → Expr → GenM Expr) =>
+        withLocalDeclD `e sf fun e => do
+          let qTy ← withLocalDeclD `h sf fun h =>
+            mkForallFVars #[h] (mkAppN motive (ris.push h))
+          withLocalDeclD `q qTy fun q => do mkLambdaFVars #[e, q] (← k e q)
+      let elArm ← mkArm fun e _ => pure e
+      let el := mkAppN app #[sf, elArm]
+      let ihArm ← mkArm fun _ q => pure (mkApp q el)
+      let ih := mkAppN app #[mkAppN motive (ris.push el), ihArm]
+      return (← mkLambdaFVars zs el, ← mkLambdaFVars zs ih)
+    mkLambdaFVars #[pv] (← pairArm tname np ni us selfAt pairAt motive cN minor ps
+      (nf - 1) (b.instantiate1 el) (elems.push el) (ihs.push ih))
+
 /-! ## The model -/
 
 /-- One constructor's storage plan, settled by level arithmetic before
@@ -653,7 +794,7 @@ def padsAt (plans : Array CPlan) :
     if dsingOk ℓ then
       let (t, c) ← dsingAt ℓ
       return some { ty := t, lv := ℓ, canon := c, canonical := true }
-    return some { ty := unitAt ℓ, lv := ℓ, canon := unitAtCanon ℓ, canonical := false }
+    return some { ty := unitAt ℓ, lv := ℓ, canon := unitAtCanon ℓ, canonical := true }
 
 /-- The constructors, analysed at a parameter scope. -/
 def pctorsAt (exportCtors : Array (Name × Expr)) (plans : Array CPlan)
@@ -709,8 +850,6 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     cur := b
     ni := ni + 1
   let .sort w := cur | badShape "the declaration does not land in a sort"
-  if ni > 0 then
-    badShape "an indexed family (the skeleton-plus-good translation is not implemented)"
   -- Recursive means a *field* mentions the declaration — the constructor's
   -- result always does and is not entered.
   let isRec := exportCtors.any fun (_, cty) => Id.run do
@@ -729,8 +868,8 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
   -- The installed recursor: the statements below are its own, restored.
   let ern := Name.str tname "rec"
   let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
-  unless rv.numMotives == 1 && rv.numMinors == nc && rv.numIndices == 0 do
-    badShape s!"{ern} does not have 1 motive, {nc} minors and 0 indices"
+  unless rv.numMotives == 1 && rv.numMinors == nc && rv.numIndices == ni do
+    badShape s!"{ern} does not have 1 motive, {nc} minors and {ni} indices"
   let large := rv.levelParams.length == lparams.length + 1
   unless (if large then rv.levelParams.tail! else rv.levelParams) == lparams do
     badShape s!"{ern} carries the level parameters {rv.levelParams}"
@@ -748,12 +887,34 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       -- class — empty, unit, payload, enum — is the Church encoding lifted.
       pure .bare
 
-  if isRec then
-    badShape (match route with
-      | .type =>
-        "a recursive Type-valued inductive (the carrier needs the W/path construction — \
-          plan B, not implemented)"
-      | _ => "a recursive proposition (the Church induction derivation is not implemented)")
+  -- What each route can carry. The Church routes gained indices and recursion
+  -- (`churchSwapAt` and the strong-induction fold below); the `Nat`-tagged sum
+  -- has neither, and at a maybe-zero sort the lift would have to be threaded
+  -- through both, which is not done.
+  match route with
+  | PrimRoute.type =>
+    if ni > 0 then
+      badShape "an indexed family at a never-zero sort (the skeleton-plus-good \
+        translation, thesis §5.2, is not implemented — the Church routes carry \
+        indices, the Nat-tagged sum does not)"
+    if isRec then
+      badShape "a recursive Type-valued inductive (the carrier needs the tuple-tower \
+        construction for linear recursion, or W/path in general — not implemented; \
+        scripts/inductive-basis/LinearRec.lean compiles the linear arm)"
+  | PrimRoute.bare =>
+    if ni > 0 then
+      badShape s!"an indexed family at Sort {w}: the lift carries the Church \
+        encoding but the index machinery is not threaded through it"
+    if isRec then
+      badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
+        not threaded through the lift"
+  | PrimRoute.prop =>
+    -- The subsingleton (large-eliminating) arm has no strong induction: a
+    -- recursive subsingleton needs the `AccPhi` carrier of INDUCTIVE-BASIS §3.2,
+    -- and the packed-`Eq` model below is its degenerate `r := ⊥` case.
+    if isRec && large then
+      badShape "a recursive subsingleton proposition (the AccPhi carrier of \
+        INDUCTIVE-BASIS §3.2 is not implemented)"
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
@@ -892,35 +1053,40 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     -- `Prop` and cannot discriminate. The lift of a proposition is exactly
     -- the right size.
     let lift? : Option Level := if route matches PrimRoute.bare then some w else none
+
+    -- The index telescope at a parameter scope, and the Church motive's type
+    -- `C : ∀ ι⃗, Prop` over it. At `ni = 0` this is just `Prop` and everything
+    -- below degenerates to the original non-indexed construction.
+    let idxTeleAt := fun (ps : Array Expr) => instForall memberTy ps
+    let motiveTyAt := fun (ps : Array Expr) => do
+      forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ =>
+        mkForallFVars is (.sort .zero)
+
     let churchAt := fun (ps : Array Expr)
         (k : Expr → Array Expr → Array Expr → GenM Expr) => do
-      -- `C`, the `k_j` binders, and their types, in one scope.
-      withLocalDeclD `C (.sort .zero) fun C => do
+      -- `C`, the `k_j` binders, and their types, in one scope. Each `k_j` is
+      -- constructor `j`'s telescope with `T p⃗` replaced by `C` — at its
+      -- recursive fields as well as at its result.
+      withLocalDeclD `C (← motiveTyAt ps) fun C => do
         let kTys ← exportCtors.mapM fun (_, cty) => do
           let tele ← instForall cty ps
-          churchSwap C (numForalls tele) tele
+          return (← churchSwapAt tname np ni C (numForalls tele) tele).1
         churchBinders kTys 0 #[] (fun ks => k C ks kTys)
 
-    if let some ℓ := lift? then
+    if lift?.isSome then
       for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
-      -- The lift's eta is a recursor call and proof irrelevance; the
-      -- `False`-Π singleton this replaces needed `funext` here.
-      let _ := ℓ
 
-    -- The Church encoding at a parameter scope, under the lift if there is
-    -- one. This is the carrier.
-    let churchTy := fun (ps : Array Expr) => do
-      let p ← churchAt ps fun C ks _ => mkForallFVars (#[C] ++ ks) C
-      match lift? with
-      | none => pure p
-      | some ℓ => pure (puliftT ℓ p)
-
-    -- The bare Church proposition — what sits *under* the lift.
-    let churchProp := fun (ps : Array Expr) =>
-      churchAt ps fun C ks _ => mkForallFVars (#[C] ++ ks) C
+    -- The bare Church proposition at a parameter *and index* scope — what
+    -- sits under the lift, and the carrier itself when there is none.
+    let churchPropAt := fun (ps : Array Expr) (is : Array Expr) =>
+      churchAt ps fun C ks _ => mkForallFVars (#[C] ++ ks) (mkAppN C is)
 
     -- ── the carrier ──
-    let selfVal ← withParams fun ps => do mkLambdaFVars ps (← churchTy ps)
+    let selfVal ← withParams fun ps => do
+      forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ => do
+        let pr ← churchPropAt ps is
+        mkLambdaFVars (ps ++ is)
+          (match lift? with | none => pr | some ℓ => puliftT ℓ pr)
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -928,17 +1094,34 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     out := out.push dSelf
 
     -- ── the constructors ──
+    -- The binders come from the **restored** telescope, because a recursive
+    -- field's type there is `T._model.self p⃗ e⃗` — which δ-unfolds to the
+    -- encoding, so the fold `fun z⃗ => f z⃗ C k⃗` typechecks. Classification is
+    -- positional and read off the export's telescope.
     for j in [0:nc] do
       let (_, cty) := exportCtors[j]!
       let ty := restore tbl cty
+      let nfj ← withParams fun ps => do pure (numForalls (← instForall cty ps))
+      let flds ← withParams fun ps => do classifyCtor tname nfj (← instForall cty ps)
       let val ← withParams fun ps => do
-        let tele ← instForall cty ps
-        forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-          let fold ← churchAt ps fun C ks _ =>
-            mkLambdaFVars (#[C] ++ ks) (mkAppN ks[j]! fs)
+        let rtele ← instForall ty ps
+        forallBoundedTelescope rtele (some nfj) fun fs _ => do
+          let fold ← churchAt ps fun C ks _ => do
+            let args ← (Array.range nfj).mapM fun i => do
+              match flds[i]!.rec? with
+              | none => pure fs[i]!
+              | some 0 => pure (mkAppN fs[i]! (#[C] ++ ks))
+              | some nb =>
+                -- exactly the field's OWN binders: `forallTelescope` would
+                -- whnf through `T._model.self` and open the encoding's Π too.
+                forallBoundedTelescope (← ityp fs[i]!) (some nb) fun zs _ =>
+                  mkLambdaFVars zs (mkAppN (mkAppN fs[i]! zs) (#[C] ++ ks))
+            mkLambdaFVars (#[C] ++ ks) (mkAppN ks[j]! args)
           match lift? with
           | none => mkLambdaFVars (ps ++ fs) fold
-          | some ℓ => mkLambdaFVars (ps ++ fs) (puliftUp ℓ (← churchProp ps) fold)
+          | some ℓ =>
+            forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ => do
+              mkLambdaFVars (ps ++ fs) (puliftUp ℓ (← churchPropAt ps is) fold)
       let d := Declaration.defnDecl
         { name := ctorN j, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
@@ -950,40 +1133,91 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
     let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
+      let idxs := bs.extract (np + 1 + nc) (np + 1 + nc + ni)
       let t := bs[bs.size - 1]!
-      -- Under a lift the fold runs on `down t` and lands at `motive (up (down
-      -- t))`; the last step transports to `motive t` along the lift's eta. At
-      -- `Sort 0` there is no lift, `body = t` and `finish` is the identity.
-      let step : Expr × Expr × (Expr → GenM Expr) ←
+      -- Under a lift the fold runs on `down t`. Its result lands at
+      -- `motive ι⃗ (up (down t))`, which *is* `motive ι⃗ t`: structure eta on
+      -- `PULiftP` gives `t ≡ up (down t)`. So there is no transport, and the
+      -- two routes differ in exactly the `down` here and the `up` in the
+      -- constructors above.
+      let body : Expr ←
         match lift? with
-        | none => pure (t, mkApp motive t, fun e => pure e)
-        | some ℓ => do
-          let p ← churchProp ps
-          let ct := puliftT ℓ p
-          let d := puliftDown ℓ p t
-          pure (d, mkApp motive (puliftUp ℓ p d), fun e =>
-            transportAlong eqi v ℓ ct (puliftUp ℓ p d) t (puliftEta eqi ℓ p t) e
-              (fun z => pure (mkApp motive z)))
-      let body := step.1
-      let goalAt := step.2.1
-      let finish := step.2.2
-      if !large then
-        -- The fold, at `C := goalAt`: every minor's motive is closed by
+        | none => pure t
+        | some ℓ => do pure (puliftDown ℓ (← churchPropAt ps idxs) t)
+      let goalAt := mkAppN motive (idxs.push t)
+      -- `Self ι⃗`, the carrier at an index vector.
+      let selfAt := fun (is : Array Expr) => mkAppN (.const selfN us) (ps ++ is)
+      if !large && ni == 0 && !isRec then
+        -- The plain fold, at `C := goalAt`: every minor's motive is closed by
         -- definitional proof irrelevance — under a lift too, because the two
         -- `up`s differ only in a proof of the encoding's own proposition.
-        mkLambdaFVars bs (← finish (mkAppN body (#[goalAt] ++ minors)))
+        mkLambdaFVars bs (mkAppN body (#[goalAt] ++ minors))
+      else if !large then
+        -- ── strong induction (INDUCTIVE-BASIS §3.1) ──
+        -- The plain fold cannot serve an indexed or recursive declaration: a
+        -- minor premise wants `motive ι⃗_j (c_j f⃗)` and the fold only offers
+        -- `C ι⃗_j`, which proof irrelevance no longer identifies with it once
+        -- the index moves. So fold at the Church **pair**
+        --
+        --     Pair ι⃗ := ∀ D : Prop, (Self ι⃗ → (∀ h : Self ι⃗, motive ι⃗ h) → D) → D
+        --
+        -- of a rebuilt carrier element and a proof about *every* element at
+        -- that index — the `∀ h` is what proof irrelevance collapses, and the
+        -- element component is what a recursive minor premise needs an
+        -- argument for. Every ι rule is still `Eq.refl`, and for a reason
+        -- that has nothing to do with whether the fold reduces: the motive is
+        -- `Prop`-valued, so both sides of every ι equation are proofs of one
+        -- proposition.
+        let pairTy ← forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ => do
+          let sf := selfAt is
+          let inner ← withLocalDeclD `D (.sort .zero) fun D => do
+            let armTy ← withLocalDeclD `e sf fun e => do
+              let qTy ← withLocalDeclD `h sf fun h =>
+                mkForallFVars #[h] (mkAppN motive (is.push h))
+              withLocalDeclD `q qTy fun q => mkForallFVars #[e, q] D
+            mkForallFVars #[D] (.forallE `k armTy D .default)
+          mkLambdaFVars is inner
+        -- one `Pair`-valued premise per constructor
+        let pairAt := fun (is : Array Expr) => do
+          let sf := selfAt is
+          withLocalDeclD `D (.sort .zero) fun D => do
+            let armTy ← withLocalDeclD `e sf fun e => do
+              let qTy ← withLocalDeclD `h sf fun h =>
+                mkForallFVars #[h] (mkAppN motive (is.push h))
+              withLocalDeclD `q qTy fun q => mkForallFVars #[e, q] D
+            mkForallFVars #[D] (.forallE `k armTy D .default)
+        let cs ← (Array.range nc).mapM fun j => do
+          let (_, cty) := exportCtors[j]!
+          let tele ← instForall cty ps
+          pairArm tname np ni us selfAt pairAt motive (ctorN j) minors[j]! ps
+            (numForalls tele) tele #[] #[]
+        let cont ← withLocalDeclD `e (selfAt idxs) fun e => do
+          let qTy ← withLocalDeclD `h (selfAt idxs) fun h =>
+            mkForallFVars #[h] (mkAppN motive (idxs.push h))
+          withLocalDeclD `q qTy fun q => mkLambdaFVars #[e, q] (mkApp q t)
+        mkLambdaFVars bs (mkAppN (mkAppN body (#[pairTy] ++ cs)) #[goalAt, cont])
       else if nc == 0 then
-        mkLambdaFVars bs (← finish (← cfalseElim eqi v goalAt body))
+        -- Church `⊥` at every index: instantiate the encoding at the constant
+        -- family. At `ni = 0` this is the encoding itself.
+        let cf ← withLocalDeclD `p (.sort .zero) fun pv => do
+          let fam ← forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ =>
+            mkLambdaFVars is pv
+          mkLambdaFVars #[pv] (mkApp body fam)
+        mkLambdaFVars bs (← cfalseElim eqi v goalAt cf)
       else do
         -- Large elimination: one constructor, every field a proposition
         -- (the subsingleton rule, which minted this recursor, says so) —
         -- extract each by instantiating the encoding at the field's type.
         unless nc == 1 do
-          badShape s!"{ern} is large-eliminating with {nc} constructors and no indices"
+          badShape s!"{ern} is large-eliminating with {nc} constructors"
+        if ni > 0 then
+          badShape s!"an indexed subsingleton: the packed-index-equation model \
+            (INDUCTIVE-BASIS §3.2's degenerate case, compiled in \
+            scripts/inductive-basis/PropArms.lean as HEq') is not implemented"
         let (_, cty) := exportCtors[0]!
         let tele ← instForall cty ps
         let nf := numForalls tele
@@ -998,7 +1232,7 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
             mkLambdaFVars fs fs[i]!
           es := es.push (mkAppN body #[ft, proj])
           curT := rest.instantiate1 es[i]!
-        mkLambdaFVars bs (← finish (mkAppN minors[0]! es))
+        mkLambdaFVars bs (mkAppN minors[0]! es)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
@@ -1020,11 +1254,18 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       let ps := pre.extract 0 np
       let motive := pre[np]!
       let cty ← instForall modelCTy ps
-      forallBoundedTelescope cty (some (numForalls modelCTy - np)) fun fields _ => do
+      forallBoundedTelescope cty (some (numForalls modelCTy - np)) fun fields res => do
         let major := mkAppN (.const modelC us) (ps ++ fields)
-        let lhs := mkAppN (.const recN recLs) (pre.push major)
+        -- The constructor's own index expressions, read off its result type
+        -- `T._model.self p⃗ ι⃗_j`. The recursor takes them between the minors
+        -- and the major, and the motive takes them before it.
+        let args := res.getAppArgs
+        unless res.getAppFn.isConstOf selfN && args.size == np + ni do
+          badShape s!"{modelC}'s result is not {selfN} at {np} parameters and {ni} indices"
+        let isj := args.extract np args.size
+        let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
-        let α := mkApp motive major
+        let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
         return Declaration.thmDecl
           { name := iotaN j, levelParams := rv.levelParams

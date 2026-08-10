@@ -20,6 +20,18 @@
      recursor is Church-`⊥`'s `Sort w` eliminator under two destructions.
    * `Tor` — a `Prop` with three constructors: small elimination, the Church
      fold at a `Prop` motive.
+   * `IdxP` — an **indexed** `Prop` with two constructors landing at
+     *different* indices: small elimination, so the carrier is the Church
+     encoding with `C` quantified over the index telescope. Non-recursive —
+     it isolates indices from recursion.
+   * `Le3` — **indexed and recursive**, three constructors with pairwise
+     distinguishable telescopes (nullary; one recursive field; a recursive
+     field *followed* by a non-recursive one) landing at three different
+     indices. This is the strong-induction
+     fold: three atoms, because a two-constructor family cannot catch a
+     minor-order bug, and distinguishable telescopes, because ι is `rfl` by
+     proof irrelevance here and so cannot catch one either — what catches a
+     permutation is the minor premise failing to typecheck.
    * `Conj` — a `Prop` structure with **dependent** propositional fields:
      large elimination by sequential extraction, the second field's type
      instantiated at the first's extraction and closed by definitional
@@ -99,6 +111,15 @@ inductive Tor (a b c : Prop) : Prop where
 
 inductive Conj (a : Prop) (b : a → Prop) : Prop where
   | mk : (ha : a) → b ha → Conj a b
+
+inductive IdxP : Tri → Prop where
+  | at_a : IdxP Tri.a
+  | at_b : IdxP Tri.b
+
+inductive Le3 (q : Prop) : Tri → Prop where
+  | base : Le3 q Tri.a
+  | up : Le3 q Tri.a → Le3 q Tri.b
+  | tagged : Le3 q Tri.b → q → Le3 q Tri.c
 
 inductive PU : Sort u where
   | mk : PU
