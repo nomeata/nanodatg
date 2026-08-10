@@ -15015,6 +15015,18 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// restated against the key it will be found under. A gap premise writes
     /// nothing; first write wins, so a memo hit cannot swap an entry under a
     /// derivation already using it.
+    /// Yes exactly when nothing has been handed off about this argument yet.
+    ///
+    /// Keyed on the argument alone, not on `(arg, dom)`: interpreting the
+    /// domain to build the pair costs more than the question is worth, and an
+    /// argument that was handed off at *some* domain is one the check did
+    /// visit, so re-inferring it here would be re-doing the check's work. The
+    /// 32 raw hoists whose cause is `RawStoredElsewhere` are exactly the
+    /// population this coarseness gives up, against 18 656 it is aimed at.
+    fn wants_arg_typing(&mut self, _ctx: &mut TcCtx<'t, 'p>, arg: ExprPtr<'t>) -> bool {
+        !self.arg_stored.contains(&arg) && !self.arg_gapped.contains(&arg)
+    }
+
     fn app_arg_checked(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -18088,23 +18100,38 @@ mod tests {
     /// under the pre-handoff code this exact subject was a raw hoist
     /// (verified red: certificate `Conditional`, one assumption).
     ///
-    /// Three atoms, deliberately, because two pass under either half-bug:
+    /// Four atoms, deliberately, because the shorter sets pass under a
+    /// half-bug:
     /// * `checked` — the application is inferred first; its beta certificate
     ///   must be `Proved` and unconditional. Red if the write site or the read
     ///   site is missing.
-    /// * `unchecked` — a same-shaped redex nobody inferred; its certificate
-    ///   must stay `Conditional` (the honest hoist). Red if the store forges
-    ///   — e.g. if the read stopped requiring an entry.
-    /// * `poisoned` — a true theorem filed under the wrong key (the `checked`
-    ///   entry copied onto the `unchecked` argument): the read guard must
-    ///   refuse it and fall through to the honest hoist, `Conditional` again —
+    /// * `unchecked, closed` — a same-shaped redex **nobody inferred**. This
+    ///   atom used to pin the honest `Conditional` hoist, and it is the atom
+    ///   `TypeChecker::beta_arg_typing` was built to close: `whnf` now infers a
+    ///   closed argument on demand and hands the typing over, so the
+    ///   certificate is `Proved` and unconditional with no application check
+    ///   anywhere in sight. Restated rather than deleted — the assertion moved
+    ///   from `Conditional` to unconditional, which is the tranche's own claim.
+    ///   Red if `beta_arg_typing` stops firing.
+    /// * `unchecked, open` — the same redex with a **free variable** in the
+    ///   argument. This carries the falsifier the previous atom used to: the
+    ///   on-demand inference is deliberately restricted to closed arguments
+    ///   (measured — inferring open ones inflates the run 17 % for no net
+    ///   gain), so the honest hoist must survive here. Red if the store forges,
+    ///   and red if the closedness guard is dropped.
+    /// * `poisoned` — a true theorem filed under the wrong key: the read guard
+    ///   must refuse it and fall through to the honest hoist, `Conditional` —
     ///   never `Admitted`, which is what handing the wrong membership to the
     ///   beta lemma's `u_mp` produces. Red if the recall skips
-    ///   `derived::establishes`.
+    ///   `derived::establishes`. Unaffected by the on-demand path: the poisoned
+    ///   entry already occupies the key, and `app_arg_checked` declines to
+    ///   overwrite an existing entry.
     ///
     /// Mutation-verified: deleting the `app_arg_checked` call in `infer_app`
     /// turns `checked` red; making `domain_obligation` return entries without
-    /// the `establishes` check turns `poisoned` red (`Admitted("beta: …")`).
+    /// the `establishes` check turns `poisoned` red (`Admitted("beta: …")`);
+    /// dropping the `has_fvars` guard in `beta_arg_typing` turns
+    /// `unchecked, open` red.
     #[test]
     fn beta_domain_obligation_reads_the_application_checks_handoff() {
         crate::tests::util::test_export_file(None, |export| {
@@ -18136,9 +18163,11 @@ mod tests {
                      — outright, no hoisted assumption; got {cert:?}"
                 );
 
-                // `unchecked`: same shape, nobody inferred it — the store has
-                // no entry, `has_type` has no rule for a `Π` subject, and the
-                // honest answer is the counted conditional hoist.
+                // `unchecked, closed`: same shape, nobody inferred it — the
+                // store has no entry and `has_type` has no rule for a `Π`
+                // subject. Before `beta_arg_typing` this was the honest
+                // conditional hoist; now `whnf` types the closed argument on
+                // demand and the obligation is discharged outright.
                 let q = tc.ctx.str1("q");
                 let arg2body = tc.ctx.mk_pi(q, style, v0, v1);
                 let arg2 = tc.ctx.mk_pi(p, style, prop, arg2body);
@@ -18147,8 +18176,25 @@ mod tests {
                     .def_eq(app2, arg2)
                     .expect("the checker's verdict does not depend on the backend");
                 assert!(
-                    matches!(cert2, TgCert::Conditional { .. }),
-                    "an unchecked argument's obligation stays an honest hoist — got {cert2:?}"
+                    cert2.is_proved() && crate::certify::is_unconditional(&cert2),
+                    "a closed argument nobody checked must be typed on demand by whnf                      — outright, no hoisted assumption; got {cert2:?}"
+                );
+
+                // `unchecked, open`: the same redex with a free variable in the
+                // argument. The on-demand path is restricted to closed
+                // arguments, so this must still be the honest hoist — and this
+                // atom is what makes the restriction falsifiable.
+                let w = tc.ctx.str1("w");
+                let fv = tc.ctx.mk_dbj_level(w, style, prop);
+                let arg4body = tc.ctx.mk_pi(q, style, fv, v0);
+                let arg4 = tc.ctx.mk_pi(p, style, prop, arg4body);
+                let app4 = tc.ctx.mk_app(id_prop, arg4);
+                let cert4 = tc
+                    .def_eq(app4, arg4)
+                    .expect("the checker's verdict does not depend on the backend");
+                assert!(
+                    matches!(cert4, TgCert::Conditional { .. }),
+                    "an open argument nobody checked stays an honest hoist — got {cert4:?}"
                 );
 
                 // `poisoned`: the `checked` entry — a true theorem — filed

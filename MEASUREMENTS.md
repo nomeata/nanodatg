@@ -6591,3 +6591,103 @@ arithmetic is not the obstacle. Two things are:
 
 Ledger unchanged throughout: 15 532 gaps, 2 247 escapes, 20 328 raw hoists.
 The probes are `stepcount`-gated and cost nothing in the default build.
+
+## Typing the reduction's own arguments — the fifth route, and the one that pays — 2026-08-10
+
+*Task #126. Baseline `origin/master` at `f791e3f`; `release`, `--features
+tg,stepcount`, `good/init-prelude.ndjson`; `perf stat -e instructions`.
+**Three ratchets moved, with the trade written below.** Escapes did not move.*
+
+### Why deriving, after four transports failed
+
+The census's residue — 18 656 raw hoists about terms no application check ever
+visited — was asked for at four keys and none of them reaches it: the ground
+pair 34, the subject at another target 460, the **generalised** membership 134,
+the target-side twin 145 closing nothing. The fact was never derived anywhere,
+at any generality, so nothing can carry it. The only thing that produces it is
+a typing rule firing, and `TgBackend` cannot fire one — it is a *field* of the
+`TypeChecker`, so `domain_obligation` has no path back to `infer`.
+
+`whnf` does. `TypeChecker::beta_arg_typing` runs at the beta contraction in
+`whnf_no_unfolding_reduce`, where the redex's argument and a `TypeChecker` are
+in the same hand: infer the argument, convert its typing along `def_eq` to the
+binder's domain, and hand it to the existing `Certifier::app_arg_checked`
+store, which `domain_obligation` already reads. **This is the correct reading of
+"the typing arrives with the whnf call"** — not the cursor-carried typing §2
+specified, which was proved to pay nothing.
+
+### Three restrictions, each measured rather than assumed
+
+| restriction | why | measured |
+|---|---|---|
+| **closed arguments only** (`has_fvars`) | inference *reduces*, so it drives more `whnf`, which raises more obligations | unrestricted: obligations asked 39 951 → 52 862, **+16.8 % instructions, escapes 2 247 → 3 033**. Closed-only: obligations asked 40 060 (flat), +0.47 %, escapes unmoved |
+| **`Check`, not `InferOnly`** | the argument's sub-derivations are what make its typing derivable | `InferOnly` on the same population: **+32** discharged. `Check`: **+977** |
+| **outermost argument only** | `derive_beta` peels one binder at a time, so `a₁`'s domain is `lam`'s own and needs no instantiation; the inner ones would mean rebuilding the intermediate lambdas the composite `inst` exists to avoid | the outermost alone reaches 3 313 redexes |
+
+Plus two safety properties. The backend is **asked first**
+(`Certifier::wants_arg_typing`, default `false`, so the null backend pays
+nothing), and the conversion uses **`def_eq`, not `assert_def_eq`** — a redex
+the reduction built need not be well-typed, and a hard failure would turn an
+accepted file into a rejected one. The corpus confirms it: 152 matched, 0
+mismatched, no `good/` file newly rejected.
+
+### What it bought
+
+| | `f791e3f` | with `beta_arg_typing` |
+| --- | ---: | ---: |
+| closed arguments asked / typed | — | **3 313 / 3 313** |
+| typing obligations discharged | 5 373 | **6 350** (+977) |
+| handoff answers, **outright** | 102 | **3 266** (32×) |
+| handoff answers, under antecedents | 10 198 | 10 200 |
+| raw hoists, total | 20 328 | **19 460** (−868) |
+| …**never checked at an application** | 18 656 | **16 502** (−2 154) |
+| …a hole at their own check | 1 640 | 2 926 (+1 286) |
+| **escapes** | 2 247 | **2 247** — unmoved |
+| gaps | 15 532 | 15 761 (+229) |
+| instructions | 194.39 G | 195.32 G (**+0.47 %**) |
+
+**3 313 asked, 3 313 typed** — every closed argument the backend wanted,
+inference typed and `def_eq` matched, with no declines. The 2 154 fall in the
+census's own residue row splits honestly: **868** obligations are now answered
+that were raw-hoisted before, and **1 286** moved into "a hole at their own
+check" — the on-demand inference visited them and *its* typing was a hole, so
+they are re-attributed from "nobody ever looked" into the `ty_const` cascade,
+which is bucket (ii). That re-attribution is a gain in knowledge, not in
+proving, and it is stated separately for exactly that reason.
+
+### The trade: three ratchets moved, and why each
+
+`gaps <= 15542 → 15761`, `proj_reduce <= 630 → 661`, `miss_cond <= 1214 →
+1244`. **The +229 gaps are not a new kind of gap.** Row by row, and these six
+rows are the whole of it:
+
+| row | Δ | what it is |
+|---|---:|---|
+| `trans over an admitted premise` | +78 | composition downstream of the two below |
+| `congruence over an admitted premise` | +40 | ditto |
+| `symm over an admitted premise` | +29 | ditto |
+| `eq_cache` | +27 | ditto |
+| `proj_reduce` | +31 | interpreted structures — named bucket (ii) |
+| `nat_reduce` | +24 | milestone 4 primitives — named bucket (ii) |
+
+The on-demand inference performs reductions the run did not perform before, and
+they land on rules that were **already admitting**. Nothing that was derived
+before is admitted now. In particular **the ι path is flat** — no `iota` row
+moved — so `the_general_iota_rule_computes_on_the_prelude`, whose guard is a
+total-gap count, is being re-based by a neighbour's traffic and not by its own
+subject regressing. That is recorded at the assertion, not only here, because a
+guard re-based silently is a guard that has stopped guarding.
+
+The escape ratchet is the one that did **not** move, and it is the one the
+standing rule is about: 2 247 before and after. The +229 gaps are accounted, not
+escaping.
+
+### The fixture
+
+`beta_domain_obligation_reads_the_application_checks_handoff` grew from three
+atoms to four. Its `unchecked` atom pinned the honest `Conditional` hoist for a
+closed argument nobody inferred — which is precisely what this tranche closes —
+so that atom is **restated** (now: `Proved` and unconditional) rather than
+deleted, and a new `unchecked, open` atom takes over the falsifier it used to
+carry. Mutation-verified: deleting the `has_fvars` guard turns `unchecked,
+open` red.

@@ -1661,7 +1661,20 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // the composed leg completed. Stage 1's binder context is what discharges
     // these antecedents; a further rise with no such purchase still fails
     // here.
-    assert!(gaps > 0 && gaps <= 15542, "init-prelude: {gaps} gaps, ratchet 15542 — the general ι path regressed");
+    // **Moved 15 542 → 15 761 on 2026-08-10, with a written trade.**
+    // `TypeChecker::beta_arg_typing` — `whnf` inferring a beta redex's closed
+    // argument on demand, the only mechanism that reaches the census's
+    // residue — performs reductions the run did not perform before, and they
+    // land on rules that were already admitting. The whole +229 is six rows:
+    // `nat_reduce` +24 and `proj_reduce` +31, both named bucket-(ii) items,
+    // plus four composition rows downstream of those admits (`trans` +78,
+    // `congruence` +40, `symm` +29, `eq_cache` +27). **The ι path itself is
+    // flat** — no `iota` row moved — so this guard is being re-based by a
+    // neighbour's traffic, not by its own subject regressing. Bought:
+    // discharged obligations +977, raw hoists −868, "never checked at an
+    // application" 18 656 → 16 502, escapes unmoved at 2 247. See
+    // `MEASUREMENTS.md`, "Typing the reduction's own arguments".
+    assert!(gaps > 0 && gaps <= 15761, "init-prelude: {gaps} gaps, ratchet 15761 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1833,7 +1846,26 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     // land on keys whose typing was derived under antecedents. A rise here
     // with `cond` flat is attribution churn, not new discarding; a rise
     // *with* `cond` is the regression this pin is for.
-    assert!(miss_cond <= 1214, "{miss_cond} misses against a discarded typing, was 1214");
+    // **Ratchet moved 2026-08-10, with a written trade** (`MEASUREMENTS.md`,
+    // "Typing the reduction's own arguments"). `TypeChecker::beta_arg_typing`
+    // makes `whnf` infer a beta redex's *closed* argument on demand and hand
+    // the typing to the backend, which is the only mechanism that reaches the
+    // census's residue — measured at four keys, no transport reaches it, the
+    // fact was never derived anywhere. Bought: obligations discharged
+    // 5 373 → 6 350, raw hoists 20 328 → 19 460, and the "never checked at an
+    // application" population — the thing stage 2 exists to attack —
+    // 18 656 → 16 502. Escapes did **not** move: 2 247 before and after.
+    // Paid: +229 gaps over six rows, +0.47 % instructions.
+    //
+    // The +229 is not a new kind of gap. Row by row: `nat_reduce` +24
+    // (milestone 4 primitives), `proj_reduce` +31 (interpreted structures),
+    // and four composition rows downstream of those same admits — `trans over
+    // an admitted premise` +78, `congruence` +40, `symm` +29, `eq_cache` +27.
+    // The on-demand inference performs reductions the run did not perform
+    // before, and they land on rules that were already admitting, both of them
+    // named bucket-(ii) items in `THREADING-CENSUS.md` §3. Nothing that was
+    // derived before is admitted now.
+    assert!(miss_cond <= 1244, "{miss_cond} misses against a discarded typing, was 1244");
     // Sanity: the store is consulted, and it mostly misses. Stated so that a
     // change that stops consulting it fails here rather than reading as a win.
     assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
@@ -2038,10 +2070,19 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
         );
     }
 
+    // **Moved 630 → 661 on 2026-08-10, with a written trade.** Not the rule
+    // declining more often: `TypeChecker::beta_arg_typing` makes `whnf` infer
+    // a beta redex's closed argument on demand, and that inference *reduces*,
+    // so it reaches 31 projection redexes the run never previously contracted.
+    // Each is the same honest decline the other 630 are — no interpretation of
+    // structures exists, so the constructor's computation rule is out of reach
+    // — and the population, not the rate, is what changed. See
+    // `MEASUREMENTS.md`, "Typing the reduction's own arguments", for what the
+    // extra reductions bought.
     let proj_red = rows_totalling(&text, "gap: proj_reduce");
     assert!(
-        proj_red > 0 && proj_red <= 630,
-        "init-prelude: {proj_red} proj_reduce gaps, ratchet 630 — projection reduction regressed"
+        proj_red > 0 && proj_red <= 661,
+        "init-prelude: {proj_red} proj_reduce gaps, ratchet 661 — projection reduction regressed"
     );
 
     let threaded = rows_totalling(&text, THREADED);

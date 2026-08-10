@@ -51,10 +51,17 @@ pub enum Kind {
     Eta,
     /// Eta for structures: `s ≡ ⟨s.1, ..., s.n⟩`.
     EtaStruct,
+    /// A beta contraction whose argument the backend had no typing for, so
+    /// `whnf` was asked to infer one. See `TypeChecker::beta_arg_typing`.
+    BetaArgAsked,
+    /// …and the inference produced a typing at the binder's domain, handed to
+    /// the backend's store. The gap between the two is arguments `def_eq`
+    /// declined or inference could not type.
+    BetaArgTyped,
 }
 
 /// Number of variants in [`Kind`]. Keep in step with the enum.
-pub const N_KINDS: usize = 13;
+pub const N_KINDS: usize = 15;
 
 /// Human-readable names, indexed by `Kind as usize`.
 pub const KIND_NAMES: [&str; N_KINDS] = [
@@ -71,6 +78,8 @@ pub const KIND_NAMES: [&str; N_KINDS] = [
     "proof irrelevance",
     "eta",
     "eta struct",
+    "beta arg: typing asked of whnf",
+    "beta arg: typing derived and handed off",
 ];
 
 #[cfg(feature = "stepcount")]
@@ -78,7 +87,7 @@ static COUNTS: [AtomicU64; N_KINDS] = [
     AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
     AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
     AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0),
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
 ];
 
 /// Record one step of the given kind. Compiles to nothing without the

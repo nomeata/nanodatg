@@ -533,6 +533,30 @@ pub trait Certifier<'t, 'p> {
         let _ = (ctx, arg, dom, typing);
     }
 
+    /// **Would a typing for this argument be worth inferring?** — asked by
+    /// `whnf` before it pays for one.
+    ///
+    /// [`Self::app_arg_checked`] is fed by `infer_app`, which only ever visits
+    /// the applications *written in the term*. A beta redex the reduction
+    /// itself builds — a minor premise entering by delta, a constructor
+    /// application from `to_ctor_when_k`'s K-shortcut — was never at an
+    /// application check, so the store has nothing for it and the beta rule
+    /// hoists its domain obligation raw. Measured on `init-prelude`: 18 656 of
+    /// the 20 328 raw hoists, and none of the four transports reaches them
+    /// (`THREADING-CENSUS.md` §2) because the fact was never derived anywhere
+    /// at any generality. The only route left is to *derive* it, and the one
+    /// place with both the term and a `TypeChecker` in hand is `whnf` itself.
+    ///
+    /// This is the gate that keeps that from being paid for nothing.
+    /// Inference is not free and beta is 81 % of all reduction steps, so `whnf`
+    /// asks first and infers only when the answer is yes. A backend with no
+    /// store answers `false` and pays nothing, which is why this defaults to
+    /// `false` rather than `true`.
+    fn wants_arg_typing(&mut self, ctx: &mut TcCtx<'t, 'p>, arg: ExprPtr<'t>) -> bool {
+        let _ = (ctx, arg);
+        false
+    }
+
     /// **Application**: from `⟦f⟧ ∈ ⟦Π x:A. B⟧` and `⟦a⟧ ∈ ⟦A⟧` conclude
     /// `⟦f a⟧ ∈ ⟦B[a/x]⟧`.
     ///

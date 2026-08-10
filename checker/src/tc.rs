@@ -231,6 +231,17 @@ pub struct TypeChecker<'x, 't, 'p> {
     /// disjoint — which is what makes `self.certifier.beta(self.ctx, ..)`
     /// possible without fighting the borrow checker at every call.
     pub(crate) certifier: Backend<'x, 't, 'p>,
+    /// **Re-entrancy guard for [`Self::beta_arg_typing`].**
+    ///
+    /// That method calls `infer` from inside `whnf`, and `infer` calls
+    /// `ensure_pi` calls `whnf` — the hot path calling itself, on a step kind
+    /// that is 81 % of all reduction steps. The guard makes the nesting depth
+    /// exactly one: an inference started by the reduction does not itself get
+    /// to start inferences from the reduction. Termination is then immediate
+    /// rather than an argument about shrinking terms, which is the property
+    /// worth having here, since the terms in question are ones the reduction
+    /// just built and no measure orders them.
+    pub(crate) whnf_typing_depth: u32,
 }
 
 impl<'p> ExportFile<'p> {
@@ -391,7 +402,14 @@ impl<'p> ExportFile<'p> {
 impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     pub fn new(dag: &'x mut TcCtx<'t, 'p>, env: &'x Env<'x, 't>, declar_info: Option<DeclarInfo<'t>>) -> Self {
         assert_eq!(dag.dbj_level_counter, 0);
-        Self { ctx: dag, env, tc_cache: TcCache::new(), declar_info, certifier: crate::certify::new_backend(env) }
+        Self {
+            ctx: dag,
+            env,
+            tc_cache: TcCache::new(),
+            declar_info,
+            certifier: crate::certify::new_backend(env),
+            whnf_typing_depth: 0,
+        }
     }
 
     /// Conduct the preliminary checks done on all declarations; a declaration
@@ -1591,6 +1609,78 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         (r, cert)
     }
 
+    /// **Derive the domain obligation of a beta contraction, at the one place
+    /// the term and a `TypeChecker` are in the same hand.**
+    ///
+    /// `Certifier::app_arg_checked`'s store is filled by `infer_app`, which
+    /// visits only the applications *written in the term*. A beta redex the
+    /// reduction itself builds was never at an application check, so the store
+    /// has nothing and the beta rule hoists `⟦a⟧ ∈ ⟦A⟧` raw — 18 656 of the
+    /// 20 328 raw hoists on `init-prelude`.
+    ///
+    /// **Why deriving, rather than any of the four transports.** The fact is
+    /// not somewhere else waiting to be carried. Asked at four keys
+    /// (`THREADING-CENSUS.md` §2): the ground pair reaches 34, the subject at
+    /// another target 460, the *generalised* membership with free variables
+    /// abstracted away 134, and the target-side twin 145 closing nothing. It
+    /// was never derived anywhere, at any generality, so the only thing that
+    /// produces it is a typing rule firing. `TgBackend` cannot fire one — it is
+    /// a *field* of this struct, so there is no path from
+    /// `domain_obligation` back to `infer`. Here there is.
+    ///
+    /// **The outermost argument only.** `derive_beta` peels the lambda nest one
+    /// binder at a time, so the domain the backend keys `a₁` at is the domain
+    /// of `lam` itself, needing no instantiation — the argument and the domain
+    /// are both to hand. The inner binders' domains are the *instantiated*
+    /// ones, which would mean rebuilding the intermediate lambdas the
+    /// composite `inst` below exists to avoid. What that costs is measured
+    /// rather than assumed; see `MEASUREMENTS.md`.
+    ///
+    /// Three things keep this from being expensive or unsound:
+    /// * the backend is **asked first** (`wants_arg_typing`), so nothing is
+    ///   inferred for an argument a check already handed over;
+    /// * `def_eq`, not `assert_def_eq` — a redex the reduction built need not
+    ///   be well-typed at all (`def_eq` compares arbitrary pairs), and a hard
+    ///   failure here would turn an accepted file into a rejected one. A
+    ///   mismatch simply declines;
+    /// * [`Self::whnf_typing_depth`] bounds the re-entrancy at one.
+    fn beta_arg_typing(&mut self, lam: ExprPtr<'t>, arg: ExprPtr<'t>) {
+        if self.whnf_typing_depth > 0 {
+            return
+        }
+        let Lambda { binder_type, .. } = self.ctx.read_expr(lam) else { return };
+        // **Closed arguments only.** Measured: inferring every unstored
+        // argument works — the handoff's outright answers go 102 → 2 334 — but
+        // inference reduces, so it drives more `whnf`, which raises more
+        // obligations, and the run inflates past what the answers buy
+        // (+16.8 % instructions, escapes 2 247 → 3 033). A closed argument is
+        // the case where that trade is best: its typing is context-free, so
+        // the inference memo serves every later occurrence in the run, and it
+        // is exactly the population nothing else can reach — 7 717 raw hoists
+        // over 407 distinct terms, none of which any typing rule anywhere ever
+        // spoke about.
+        if self.ctx.has_fvars(arg) {
+            return
+        }
+        if !self.certifier.wants_arg_typing(self.ctx, arg) {
+            return
+        }
+        crate::stepcount::bump(crate::stepcount::Kind::BetaArgAsked);
+        self.whnf_typing_depth += 1;
+        // `Check`, not `InferOnly`: measured, `InferOnly` on the same population
+        // buys +32 discharged obligations where `Check` buys +977, at the same
+        // gap cost — the argument's own sub-derivations are what make its
+        // typing derivable, and `InferOnly` does not build them.
+        let Typed { ty: arg_type, cert: at } = self.infer(arg, InferFlag::Check);
+        // Not `assert_def_eq`: see the doc above.
+        if let Some(eq) = self.def_eq(arg_type, binder_type) {
+            let composed = self.certifier.ty_conv(self.ctx, arg, arg_type, binder_type, at, &eq);
+            self.certifier.app_arg_checked(self.ctx, arg, binder_type, &composed);
+            crate::stepcount::bump(crate::stepcount::Kind::BetaArgTyped);
+        }
+        self.whnf_typing_depth -= 1;
+    }
+
     fn whnf_no_unfolding_reduce(&mut self, e: ExprPtr<'t>, cheap_proj: bool) -> (ExprPtr<'t>, TracePtr<'t, Cert<'t, 'p>>) {
         if let Some(hit) = self.tc_cache.whnf_no_unfolding_cache.get(&e) {
             return (hit.reduct, hit.trace.clone())
@@ -1632,6 +1722,12 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     b = body;
                     crate::stepcount::bump(crate::stepcount::Kind::Beta);
                 }
+                // **The domain obligation, derived where the term exists.**
+                // The backend is about to owe `⟦a₁⟧ ∈ ⟦A₁⟧` for this
+                // contraction, and for a redex the reduction itself built
+                // nobody has ever derived it. Here — and only here — the term
+                // and a `TypeChecker` are in the same hand.
+                self.beta_arg_typing(e_fun, args[0]);
                 let b = self.ctx.inst(b, &args[..n_args]);
                 let e1 = self.ctx.foldl_apps(b, args.into_iter().skip(n_args));
                 // `n_args` beta contractions happen at once, so the backend is
