@@ -122,18 +122,29 @@
 //! for it. `derived/src/choice.rs` says exactly this and carries `f` as a **free
 //! variable under the antecedent `IsChoiceFn(f,u)`** instead — which makes
 //! every theorem about it hypothetical, and [`crate::ev::Sealed`] (the
-//! checker's, shared) refuses a theorem with hypotheses. Everything else is
-//! ready: `Nonempty` is class (P), its truncation apparatus builds, and
-//! `‖·‖ elim` is exactly `derived::choice::choice_app`'s non-emptiness
-//! antecedent.
+//! checker's, shared) refuses a theorem with hypotheses.
+//!
+//! **The nonemptiness half is already there**, which is worth saying so that
+//! nobody spends an agent on it: `Nonempty` is class (P), its carrier is
+//! `‖·‖`, and
+//! [`TruncFields::elim_psi`](derived::inductive::family::TruncFields::elim_psi)
+//! at one field is `⊢ ∀α. (• ∈ ‖Nonempty α‖ → ∃y. y ∈ β₀(α))` — which is
+//! `derived::choice::choice_app`'s `∃w. w ∈ x` antecedent, modulo the
+//! abbreviation `β₀(α) = ⟦α⟧` every class-(P) consumer already carries. (The
+//! *ladder* beneath `elim_psi` is not usable here and does not need to be: its
+//! `Pⱼ : βⱼ ⊆ 1` is false for a data field.)
 //!
 //! So the missing thing is not a lemma. It is a decision about whether mini's
 //! evidence may carry one distinguished, whole-run hypothesis
 //! `IsChoiceFn(f, U_ω)` — discharged once at the top against
 //! `derived::choice::choice_fn_existence`, which is Carneiro's "fix a choice
 //! function `ε` on `U_ω`" verbatim — and that decision changes what a `Sealed`
-//! means for `checker/` too. `mini/tests/fixtures/standard_axioms.lean` is the
-//! witness that keeps the four pairs measurable until it is taken.
+//! means for `checker/` too. The alternative, a kernel rule turning `⊢ ∃x. φ`
+//! into a fresh symbol with `⊢ φ(c)`, is conservative and small and was
+//! **already declined**: `derived/src/choice.rs` records that "no
+//! `define_choice` primitive was added to let it".
+//! `mini/tests/fixtures/standard_axioms.lean` is the witness that keeps the
+//! four pairs measurable until one of the two is taken.
 
 use kernel::{Formula, Term, Thm};
 

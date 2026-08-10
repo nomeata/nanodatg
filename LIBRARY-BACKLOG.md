@@ -482,8 +482,20 @@ shape recognisers and three `RecBottom` arms in `tg.rs`.
 
 - **`ulift`** — no construction at all: `⟦ulift α⟧ = ⟦α⟧`, `⟦↑e⟧ = ⟦↓e⟧ = ⟦e⟧`
   (thesis.txt:2106–2108). Its typing needs only entry 4's lift.
-- **Typing proofs for `propext` / `Classical.choice` / `Quot.sound`** — they
-  head **zero** typing obligations on `init-prelude` (MEASUREMENTS.md:1009–1016).
+- ~~**Typing proofs for `propext` / `Classical.choice` / `Quot.sound`**~~ — the
+  `init-prelude` measurement behind this entry (MEASUREMENTS.md:1009–1016) is
+  correct and the conclusion drawn from it was wrong the moment `modelgen`
+  became the objective. Those three head zero typing obligations *on
+  init-prelude*; the W construction `scripts/inductive-basis/WFromPaths.lean`
+  emits has the axiom bill `[propext, Classical.choice, Quot.sound]` over all
+  seven derived constants, so **every W model and every arm-G model** would land
+  in `Gap::Axiom` without them. `init-prelude` was the wrong denominator: it is
+  the corpus we inherited, not the output we generate.
+
+  `Quot.sound` (at `Sort 0`) and `propext` are **built** — `mini::axiom`, over
+  `derived::prop::prop_ext`. `Classical.choice` is not, and it is not a library
+  item: see `mini/src/axiom.rs`'s header for why `ε` cannot be a term of the
+  kernel's language and what decision would have to be taken instead.
 - **The ω-recursion theorem / ω-tower completion** — off the critical path
   since the transitivity clause landed; `INDUCTIVES.md` ("Does `N` need the
   ω-tower? No — measured") explicitly warns against restarting it.
