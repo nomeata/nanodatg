@@ -153,7 +153,10 @@ declarations that define the recursion's graph and prove it total and
 single-valued, and on its **arm C** `T._model.skel` — the declaration's index
 erasure, spliced as an ordinary `inductive` and then modelled in turn like
 anything else this pass splices — beside the carving predicate
-`T._model.good`. **These
+`T._model.good`; and on its **arm W** the six `T._model.w…` declarations that
+instantiate the W core (`wD`, `wTel`, `wB`, `wA`, `wtg` and `wF`), beside the
+core itself, which arrives under the `_wcore` prefix and is modelled in turn
+like anything else this pass splices. **These
 are internal.** They exist because the four above have to be *proved* from
 something, they are what differs between the two constructions, and **no
 consumer needs them.** They are named here only so that nobody wonders what
@@ -289,13 +292,13 @@ itself* rejects, recorded with the error Lean gives. `--prim-models` is
 narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
 paths have fixtures too (`tests/prim_declines.lean`, `tests/prim_graph.lean`).
 What it declines today:
-**branching** recursion (a constructor with two recursive fields, or one under
-a binder), indexed carriers at a never-zero sort **whose index erasure is
-itself branching**, indices or recursion at
-a maybe-zero sort, a recursive declaration with no base constructor, one
-level-arithmetic gap, and — on the graph arm — a constructor whose data
-fields are not *literally* the conclusion's indices, since inversion at an
-arbitrary index would then need the index's injectivity.
+**indexed** carriers at a never-zero sort whose index erasure is itself
+branching, a recursive occurrence whose **binder telescope mentions an earlier
+field** (so the branch type does not factor through the tag), indices or
+recursion at a maybe-zero sort, one level-arithmetic gap, and — on the graph
+arm — a constructor whose data fields are not *literally* the conclusion's
+indices, since inversion at an arbitrary index would then need the index's
+injectivity.
 The *recursive subsingleton* is no longer among them: it is the graph arm,
 and `tests/prim_graph.lean` holds six occupants including `Acc`'s own shape.
 An **indexed family at a never-zero sort whose erasure is linear** is no longer
@@ -304,6 +307,19 @@ models that by the same pass, and carves the family out of it — no axioms, no
 per-constructor glue, every ι rule `Eq.refl` (`MODELGEN.md` §8.15). A family
 whose spliced skeleton does *not* model produces **no emission**, so nothing
 unmodelled ever reaches a consumer.
+**Non-indexed branching recursion is no longer among them either** — a
+constructor with two recursive fields, or with one under a binder. That is
+**arm W** (`MODELGEN.md` §8.16, `tests/prim_w.lean`): the tagged W
+construction of `scripts/inductive-basis/WTagged.lean` is spliced as an export
+fragment, the declaration's tags, data towers and branch towers are generated
+from its constructor telescopes, and `T._model.rec_0` is `WT.Wrec` at one
+`Nat.rec` cascade with a currying eta lemma inside each arm. It is the
+*fallback* for the non-indexed Type route and not its default: it fires exactly
+where the tuple tower's `recSlotOf` declines, so every model that took the
+tower before still does. It is also the one arm that costs axioms — the core is
+`[propext, Quot.sound]` — and the one that leaves declarations behind, so
+`Iso.requires` withdraws the whole model if the fragment's own inductives do
+not model in turn.
 Indexed and recursive small-eliminating `Prop`s model,
 the whole maybe-zero class models, *linear* recursion at a never-zero sort
 models (`List` and `Lean.Name`, by tuple towers, every ι `Eq.refl`), and so

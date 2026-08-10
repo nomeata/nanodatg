@@ -8,11 +8,19 @@
      model substitutes only when Lean's front end has already promoted it to
      a parameter. Promotion is blocked here because the fresh index sits
      after a non-promotable one.
-   * `Branch` — a **branching** recursive constructor (two recursive
-     fields): the tuple tower's spine is one `Nat` and a constructor takes
-     one predecessor, so this needs the W/path construction (plan B).
-   * `Binder` — a recursive occurrence **under a binder**, which is the
-     infinitely-branching case and the same boundary from the other side.
+   * `Branch` — a **branching** recursive constructor (two recursive fields)
+     and `Binder` — a recursive occurrence **under a binder** — are **no longer
+     refusals**. They are the two shapes this file was built to refuse, the
+     tuple tower's spine being one `Nat` and a constructor taking one
+     predecessor; **arm W** models both (`MODELGEN.md` §8.16), and they stay
+     here as the positives at the boundary they used to mark. `Branch` is the
+     first W target in the file, so it is the one that carries the spliced W
+     core and the eighteen models of the fragment's own inductives that follow
+     it; `Binder` behind it is its own dozen declarations.
+     `tests/prim_w.lean` is the arm's own fixture and carries the shapes these
+     two do not — data on both sides of a child, a dependent data tower, a
+     parameter and a level parameter, and the arm's own boundary (`Bad`, whose
+     branch type does not factor through the tag).
    * `Inf.below` — the `below` Lean mints for the recursive proposition
      beside it. It is a recursive subsingleton too and reaches **arm G**, and
      is refused there: its index is `Inf.mk a` rather than one of the

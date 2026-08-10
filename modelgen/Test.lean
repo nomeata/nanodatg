@@ -421,12 +421,26 @@ def expectedPrim : List Row :=
        ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
       [ ("Eq", "prim model shape: a basis primitive")])
-  , ("prim_declines", [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4)],
+  -- **`Branch` and `Binder` are on the other side of the boundary now**, and
+  -- this row is where that is recorded: they are the two shapes this file was
+  -- built to refuse — a branching constructor and a recursive occurrence under
+  -- a binder — and arm W (`MODELGEN.md` §8.16) models both. `Branch` is 170
+  -- declarations because it is the first W target in the file and so the one
+  -- that carries the W core; `Binder` behind it is its own dozen.
+  --
+  -- `_wcore.Acc` is 13 here against `prim_w`'s 15 because this file declares a
+  -- `Nonempty` of its own, so `Acc`'s graph arm splices none.
+  , ("prim_declines",
+      [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4), ("Branch", 170),
+       ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6), ("_wcore.HEq", 4),
+       ("_wcore.PProd", 4), ("Binder", 12)],
       [ ("Eq", "prim model shape: a basis primitive")
-      , ("Branch", "prim model shape: Branch.node has two recursive fields")
       , ("MixI", "prim model shape: MixI.mk has an index-variable field")
       , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
-      , ("Binder", "prim model shape: Binder.lim has a recursive field that is not")
       , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")
       , ("SvIx", "prim model shape: SvIx.mk has an index-variable field")])
   , ("prim_graph",
@@ -485,12 +499,47 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model shape: a basis primitive")
       -- withdrawn: the erasure is linear and still does not model, and the
       -- reason carried is the *skeleton's* own rather than "it did not model"
-      , ("IBox", "prim model shape: the spliced index erasure IBox._model.skel did \
+      , ("IBox", "prim model shape: the spliced inductive IBox._model.skel did \
           not model")
       , ("Br", "prim model shape: an indexed family at a never-zero sort whose index \
           erasure is not linear")
-      , ("NoBase", "prim model shape: the spliced index erasure NoBase._model.skel did \
+      , ("NoBase", "prim model shape: the spliced inductive NoBase._model.skel did \
           not model")])
+  -- **Arm W** (`MODELGEN.md` §8.16), and this row is three claims at once.
+  --
+  -- The four models are the shapes the tuple tower cannot express: `Wt` is
+  -- `WEmitted.lean`'s six-constructor target, `Tree` the same branching at a
+  -- parameter and a level parameter, `Br` an infinitary child whose binder is a
+  -- parameter, and `Dep` a data tower whose second field depends on its first.
+  --
+  -- **`Tree` is 173 declarations because it is the first W target in the file**
+  -- and therefore the one that carries the splice: `Nat`, `PSigma` and
+  -- `PULiftP`, then the W core's 160. Every W target after it is its own dozen.
+  -- So the number is a property of *ordering* and not of `Tree`, and if it
+  -- moves, the fragment changed size — which is a thing to notice, since
+  -- `Modelgen.wCoreText` is not in Lake's trace.
+  --
+  -- **The eighteen rows between it and `Q` are the fragment being modelled in
+  -- turn** — `Iso.requires`' rule, the same one arm C's skeleton is under. A
+  -- row going missing here is arm W emitting an unmodelled inductive in front
+  -- of a consumer. `Iff` and `Nonempty` carry no prefix on purpose: the first
+  -- is one of the sixteen names the fragment shares with the input, the second
+  -- is spliced by `_wcore.Acc`'s own model, which is arm G and the one place in
+  -- this row that spends `Classical.choice`.
+  --
+  -- `Bad` is the boundary and stays a decline: `tagFactored` is false for it,
+  -- so there is no `B' : K → Type u` to give the core.
+  , ("prim_w",
+      [("Tree", 173), ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
+       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Q", 8), ("P", 6), ("Wt", 20),
+       ("Dep", 12), ("Br", 12)],
+      [ ("Eq", "prim model shape: a basis primitive")
+      , ("Bad", "prim model shape: Bad.lim has a recursive field that is not a bare \
+          occurrence of Bad")])
   ]
 
 structure TAcc where

@@ -4532,12 +4532,12 @@ rather than proved.
 
 Full 5.6 GB export, exit 0, against the census §8.14 recorded:
 
-| | §8.14's census | with arm C | and with §8.14's alias retry |
-|---|---|---|---|
-| models | 6,640 | 6,698 | **6,707** |
-| declines | 147 | 118 | **109** |
-| statements compared, differing | 16,928 / 0 | 16,928 / 0 | **16,948 / 0** |
-| instructions | 3.350 T | 3.371 T | **3.365 T** |
+| | §8.14's census | with arm C | and with §8.14's alias retry | and with §8.16.2's arm W |
+|---|---|---|---|---|
+| models | 6,640 | 6,698 | 6,707 | **6,770** |
+| declines | 147 | 118 | 109 | **62** |
+| statements compared, differing | 16,928 / 0 | 16,928 / 0 | 16,948 / 0 | **17,270 / 0** |
+| instructions | 3.350 T | 3.371 T | 3.365 T | not re-measured |
 
 **Say what the denominator now counts.** The +58 models are 29 families that
 used to decline *plus their 29 spliced skeletons*, and a skeleton is a verdict
@@ -5126,15 +5126,166 @@ branching arity is a datum of the node, so there is no tag to factor through
 and the classical route — `Classical.choice` on every constant — is the only
 one that reaches them.
 
-**What this settles and what it does not.** It settles the tag scheme, the
-label and branch encodings, both junk hazards, the universe argument, the
-fragment's one missing root, and the shape of the emitted `rec_0` — a
-`Nat.casesOn` cascade whose motive must be well-typed at *every* tag, with the
-eta `funext` inside each arm and the junk arm discharged from emptiness. It
-does **not** generate anything: `Modelgen.primIso` still has no W arm, and what
-remains is `Expr`-building `D`, `Tel`, `B'`, `A`, `tg`, the constructors, that
-cascade and the ι theorems from a declaration's constructor telescopes, plus
-`Iso.requires` over every inductive the arm leaves behind. The cascade is still
-the piece with no precedent in `Simple.lean` — arm C's largest emitted term is
-a `PSigma` and an `Eq.rec` — but it is now a *transcription* rather than a
-design question, and `WEmitted.lean` is the thing to transcribe.
+#### Re-measured with the arm — and the 47 closed exactly
+
+*Full corpus, `--prim-models --check-recursors`, at the commit that lands
+`armW`. The run completed under a 33 GB `ulimit -v` at about 21 GB resident.*
+
+**6,770 models / 62 declines / 17,270 statements compared, none differing** —
+against 6,707 / 109 / 16,948 above. **109 → 62 is exactly the 47** the split
+predicted, and the models rise by 63 rather than by 47 because the fragment's
+own seventeen inductives are modelled in turn beside them.
+`Turing.PartrecToTM2.Λ'` — the one infinitary occupant, the whole reason the
+`mix` arm exists — is a 24-declaration model.
+
+| the 62 | count | what it is |
+|---|---|---|
+| indexed family, **branching** erasure | **51** | declines at the `.type` route guard, before arm C |
+| indexed family, **infinitary** erasure | **2** | same guard, and a different second job |
+| not tag-factored, non-indexed | **3** | `WType`, `PSet`, `FirstOrder.Language.Term` |
+| basis exemption | **3** | `Eq`, `Nat`, `PSigma` |
+| other | **3** | `Lean.Syntax…tag` (name taken), `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+
+**Two corrections to the table above, both from splitting `erasureLinear`'s
+answer into its two reasons** (`Simple.lean`'s `erasureWhy`, which the decline
+now prints):
+
+* **`PFunctor.Approx.CofixA` was counted twice.** It is *both* indexed with a
+  non-linear erasure and not tag-factored, and the earlier classification put
+  it in the second bucket while the tool declines it in the first. So the two
+  populations were 53 and 3, not 52 and 4, and `99 + 4 + 6` was `100 + 3 + 6`.
+* **The 53 are not one job either.** 51 have a *branching* erasure and 2 an
+  *infinitary* one, and that is the difference between two edits. Arm C's
+  `eraseCtorTy` and `spineSwap` replace a recursive field's whole domain, which
+  is right exactly when the occurrence is a bare `T p⃗ e⃗` — so the branching 51
+  keep every assumption arm C already makes, and what they need is for
+  `ctorIdxAt`, `good`'s minor and the constructor's carve proof to carry *all*
+  the recursive slots instead of the last one. The infinitary 2 break the
+  erasure itself and are a different question.
+
+**What the prototypes settle.** The tag scheme, the label and branch encodings,
+both junk hazards, the universe argument, the fragment's one missing root, and
+the shape of the emitted `rec_0` — a cascade whose motive must be well-typed at
+*every* tag, with the eta `funext` inside each arm and the junk arm discharged
+from emptiness. What is left after them is a transcription, and the section
+below is it.
+
+### 8.16.2 The arm, generated — `Simple.lean`'s `armW`
+
+*Every design question above was already settled; what follows is what came out
+of `Expr`-building it. Three places the generated shape had to differ from the
+prototype's, one limit the prototype could not have seen, and the mutation
+table re-measured against the generator rather than against the file.*
+
+**Where it fires.**
+
+```text
+armW := route .type ∧ ni = 0 ∧ isRec ∧ ¬erasureLinear
+        ∧ tagFactored ∧ w.normalize.dec.isSome
+```
+
+`¬erasureLinear` is exactly the complement of [`Modelgen.recSlotOf`]'s two
+refusals — two recursive fields in one constructor, or a recursive occurrence
+that is not a bare `T p⃗` — so the arm fires precisely where the tuple tower
+declines and nowhere else. **It is a fallback, not a default.** The tower
+reaches every linear shape with no fragment and no axiom; moving six thousand
+models onto W would spend both for nothing, and every model that took the tower
+before takes it still.
+
+**What it emits**, per target, beside the fragment:
+
+| name | what |
+|---|---|
+| `T._model.wD` | tag ↦ that constructor's non-recursive fields, a `PSigma` tower |
+| `T._model.wTel` | tag ↦ branch index ↦ that child's binder telescope |
+| `T._model.wB` | `Σ' j : Nat, wTel p⃗ t j` |
+| `T._model.wA` | `Σ' t : Nat, wD p⃗ t` |
+| `T._model.wtg` | `PSigma.fst` |
+| `T._model.self` | `WT.W Nat (wA p⃗) (wB p⃗) (wtg p⃗)` |
+| `T._model.wF` | the core's minor: one `Nat.rec` cascade over the tag |
+| `T._model.ctor_j` | `WT.sup ⟨j, tower⟩ dispatch` |
+| `T._model.rec_0` | `WT.Wrec … (wF p⃗ C minors)` |
+| `T._model.iota_0_j` | `WT.Wrec_iota`, and nothing else |
+
+**`wF` is hoisted rather than inlined**, which is the one structural decision no
+prototype could raise: `F` is named once by `rec_0` and once by *every* ι rule
+while being itself `nc` arms deep, each arm carrying its own eta lemma and each
+eta lemma its own copy of the dispatch cascade. Inlined, the emitted output is
+quadratic in the constructor count and the kernel checks the same cascade
+`nc + 1` times.
+
+**Three departures from `WEmitted.lean`, each forced.**
+
+1. **`PSigma`, not `Sigma`.** The prototype's towers are `Sigma`, whose domain
+   must be a `Type`; a real constructor may have a `Prop` field. `PSigma` is
+   already on [`Modelgen.primBasis`], its eta is the same structure eta, and the
+   universe argument is unchanged.
+2. **`PULiftP ⊤` and `PULiftP ⊥`, not `PUnit` and `Subtype (fun _ => False)`.**
+   The prototype is monomorphic at `Type 0`; a real carrier sits at `Sort w` for
+   a *variable* `w`, and the terminating unit has to be at exactly `Sort w` for
+   the tower's `max` to come out — which is the prototype's own universe
+   argument, now load-bearing at a variable level. [`Modelgen.unitAt`] and
+   [`Modelgen.emptyAt`] are that at every level and are what the rest of
+   `Simple.lean` already uses. The unit is *definitionally* canonical, which is
+   what the eta lemma's `rfl` needs at the end of the tower.
+3. **`Nat.rec`, not `Nat.casesOn`.** `casesOn` is a fragment definition under
+   the prefix; the cascade is written at the shared `Nat.rec` and the succ-minor
+   ignores its hypothesis.
+
+**One limit the prototypes could not have shown, and it is real rather than a
+detail.** A non-recursive field whose type *mentions a recursive field* has
+nowhere to go: the data tower is exactly what the branch type does not see, so
+`D` cannot hold it. `tagFactored` is the same question asked of a recursive
+field's *binders* and does not reach this one, so the arm asks it separately and
+declines by name.
+
+**And the level question is asked before the fragment is spliced.** Both towers
+are written with codomain level `w`, so every non-recursive field and every
+recursive field's binder must satisfy `max ℓ w ≡ w` — Lean's own constraint on
+the declaration, re-asked as a conversion. A field whose level keeps an `imax`
+is what fails it, and it fails before 528 KB reaches the environment.
+
+#### The mutations, re-measured against the generator
+
+Seven, all caught, and **where** they are caught differs from `WEmitted.lean`'s
+table in one instructive way. `tests/prim_w.lean` is the target: `Wt` is the
+prototype's six-constructor shape, `Tree` the same branching at a parameter and
+a level parameter, `Br` an infinitary child whose binder is a parameter, `Dep` a
+data tower whose second field depends on its first.
+
+| mutation | caught at |
+|---|---|
+| the last constructor's **label** collapsed onto tag 0 | `wF` (`Wt`, `Br`), `ctor_1` (`Tree`, `Dep`) |
+| a two-child constructor's children **transposed in its dispatch** | `wF`, `ctor_3` |
+| the junk **tag** inhabited | `wF`, at every target |
+| the junk **branch** inhabited | `ctor_0`, at every target |
+| the data tower **drops its leading field** | `ctor_4`, `wD` |
+| the infinitary child's **branch index dropped** | `wF` |
+| the last constructor collapsed onto tag 0 **consistently** | **`iota_0_5` and nothing else** |
+
+**The last row is the pin, and it is the only mutation with no type error behind
+it** — exactly as `WEmitted.lean` predicted. A *partial* collapse is caught
+early because the generator writes the tag into three places that must agree:
+the constructor's label, the recursor arm's target, and the ι rule. Collapse it
+in all three at once — both towers a tag shorter, the constructor at tag 0, the
+cascade one arm shorter — and the two model constructors simply *become the same
+term*, with no type error anywhere. `Wt.leaf` and `Wt.alt` have the same field
+telescope, so their minors have the same type; `Br.z` and `Br.lim` likewise once
+`lim`'s branch tower is the empty one. The kernel then rejects
+`Wt._model.iota_0_5` and `Br._model.iota_0_1` with a *declaration* type
+mismatch, and nothing else in the run is red. **The ι rule is the pin, carried
+into the generated arm and measured there.**
+
+**The junk being uninhabited is load-bearing for elaboration**, and that
+survives the transcription too: both junk mutations are kernel rejections at a
+constructor or at `wF`, not wrong models that pass.
+
+#### What the arm leaves behind
+
+The fragment's own inductives — seventeen of them after the two basis
+exemptions — are spliced into the output and modelled in turn by §8.13's
+descent, and they are `Iso.requires`, so a fragment inductive that does not
+model withdraws the whole W model. `requires` is empty for every W target after
+the first in a run, and that is not a hole: [`Modelgen.genPrim`] rolls the
+environment back on every withdrawal and on every decline, so a fragment that is
+*present* was put there by an earlier model whose own `requires` were met.

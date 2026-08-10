@@ -2265,6 +2265,14 @@ one `K` the scheme uses. Prefixed like any other ordinary definition: the
 instance is not a name anything downstream keys on, unlike the axioms, and a
 `_wcore` copy of it cannot collide with an input that has its own. -/
 def wCoreDecEqNat : Name := wCoreRoot ++ `instDecidableEqNat
+/-- **`funext` under the prefix** — the arm's one per-constructor cost, and the
+reason it is taken from the fragment rather than derived beside the model:
+[`Modelgen.funextDecl`] would splice a second `funext` at the same `Eq`, and
+the fragment already carries Lean's own (`WT.mk_sub` and `WT.canon` use it) at
+the *shared* `Eq`, so the eta lemma and the contract's ι theorems are one
+equality throughout. Prefixed like any other ordinary definition: nothing
+downstream keys on the name. -/
+def wCoreFunext : Name := wCoreRoot ++ `funext
 
 /-- **The W core in the environment, and the declarations that had to be added
 to put it there** — `#[]` when it is already in, which is every call after the

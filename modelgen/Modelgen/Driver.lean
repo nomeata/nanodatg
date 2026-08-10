@@ -434,7 +434,12 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         -- skeleton did not model" names where a value stopped rather than
         -- why, which is the defect class this repository has paid for most.
         let inner := (st2.2.1.declined.find? fun (m, _) => m == n).map (·.2)
-        let why := s!"prim model shape: the spliced index erasure {n} did not model, so \
+        -- **"spliced inductive", not "spliced index erasure".** Arm C's
+        -- skeleton was the only occupant when this was written; arm W's
+        -- fragment (§8.16) is seventeen more, and none of them is an index
+        -- erasure. A reason that misnames what stopped is the defect class
+        -- this line already exists to avoid.
+        let why := s!"prim model shape: the spliced inductive {n} did not model, so \
           emitting would leave an unmodelled inductive in front of a consumer \
           (MODELGEN.md §8.15's rule) — {inner.getD "and the descent recorded no reason"}"
         return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },

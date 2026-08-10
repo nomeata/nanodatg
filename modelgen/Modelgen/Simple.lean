@@ -1834,6 +1834,126 @@ partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : E
     | _ => fields 0 t
   params 0 e
 
+/-! ## Arm W's kit
+
+`MODELGEN.md` §8.16 and `scripts/inductive-basis/WEmitted.lean`, which is the
+file this arm transcribes. The scheme, for a declaration at `Sort w = Type u`
+with constructors `c⃗`:
+
+    D   p⃗ t   := Σ' (a : nrᵗ₁), … Σ' (a : nrᵗₖ), 𝟙        -- ⊥ off the end
+    Tel p⃗ t j := Σ' (x : Xⱼ,₁), … Σ' (x : Xⱼ,ₘ), 𝟙        -- ⊥ off the end
+    B'  p⃗ t   := Σ' j : Nat, Tel p⃗ t j
+    A   p⃗     := Σ' t : Nat, D p⃗ t
+    tg  p⃗     := PSigma.fst
+
+**Both towers end in a unit at exactly `Sort w` and neither may collapse**, and
+that is what makes the universes come out: the core fixes `A` and `B'` at the
+same `Type u`, a tower over the field types alone lands at `Type (max v⃗)` —
+below `u` in general — and there is no `ULift` here to close the gap. Ending
+every tower at [`Modelgen.unitAt`] `w`, which is at exactly `Sort w`, makes the
+max exactly `w` for free at every arity including zero.
+
+`Σ'` is `PSigma` rather than the fragment's `Sigma` for a second reason beside
+the levels: a non-recursive field may sit at `Prop`, and `Sigma`'s domain may
+not. `PSigma` is on [`Modelgen.primBasis`] and both towers' etas are the
+kernel's structure eta either way.
+
+**The junk is uninhabited in both directions and that is load-bearing for
+elaboration, not only for correctness.** `D p⃗ t` for `t ≥ nc` and `Tel p⃗ t j`
+for `j` past that constructor's recursive-field count are
+[`Modelgen.emptyAt`] `w`; the constructors' and the recursor's junk arms are
+discharged from that emptiness, so a junk arm sent to the *unit* does not
+quietly produce a `W` bigger than the target — it fails to typecheck. -/
+
+/-- **A `Nat.rec` cascade over a tag**: `armAt k` at `k` for `k < n`, and
+`junkAt` from `n` on. This is the shape a generator emits where a human writes
+a `match`, and it is a cascade rather than a `match` because a `match` would
+mint a `T.match_1` that the model would then owe the output.
+
+`motAt k` is the motive **at depth `k`** — a lambda over the *remaining* index,
+whose body speaks of `succ^k` of it — and `s` is the sort that motive lands in.
+The two `succ` chains meet because `succ^k (succ t)` and `succ^(k+1) t` are the
+same term, so the succ-minor built at depth `k+1` already has the type depth
+`k` asks for and no transport rides along.
+
+`n = 0` degenerates to `junkAt` with no `Nat.rec` at all, which is the branch
+tower of a constructor with no children. -/
+partial def natCascade (s : Level) (n : Nat) (motAt : Nat → GenM Expr)
+    (armAt : Nat → GenM Expr) (junkAt : Expr → GenM Expr) (k : Nat) (sc : Expr) :
+    GenM Expr := do
+  if k == n then return ← junkAt sc
+  let mot ← motAt k
+  let base ← armAt k
+  let step ← withLocalDeclD `t (.const `Nat []) fun t =>
+    withLocalDeclD `ih (mkApp mot t).headBeta fun ih => do
+      mkLambdaFVars #[t, ih] (← natCascade s n motAt armAt junkAt (k + 1) t)
+  return natRec s mot base step sc
+
+/-- **One tower's type**, over the fields `xs⟦i…⟧` and ending at the unit at
+`Sort w`. Every level is written with codomain level `w`, not with the tower's
+own `max`: the kernel checks the `β` against `Sort w` by conversion, and
+[`Modelgen.wTowerLevel`] is what says the conversion holds before anything is
+built. -/
+partial def wTowerTy (w : Level) (xs : Array Expr) (i : Nat) : GenM Expr := do
+  if i == xs.size then return unitAt w
+  let α ← ityp xs[i]!
+  let ℓ ← ilevel α
+  let β ← mkLambdaFVars #[xs[i]!] (← wTowerTy w xs (i + 1))
+  return psigmaT ℓ w α β
+
+/-- **Is a tower over these fields at `Sort w`?** `max ℓᵢ w ≡ w` at every field,
+which is Lean's own constraint on the declaration re-asked as a conversion:
+a field of an inductive at `Sort w` sits at some `Sort ℓ` with `max ℓ w = w`.
+Asked before anything is spliced, so a declaration this refuses costs no
+splice, and asked of the *expression* rather than assumed — a field whose level
+keeps an `imax` is exactly the shape that fails it. -/
+def wTowerLevel (w : Level) (xs : Array Expr) : GenM (Option Level) := do
+  for x in xs do
+    let ℓ ← ilevel (← ityp x)
+    unless ← isLevelDefEq (mkLevelMax' ℓ w) w do return some ℓ
+  return none
+
+/-- **One level of a tower at a substitution** — the `α` and `β` that
+[`Modelgen.wTowerTy`] wrote at field `i`, with the earlier fields replaced by
+whatever the caller has in their place (projections when a tower is being taken
+apart, values when one is being built).
+
+**The binder type is substituted too**, and that is the whole reason this is a
+function rather than two lines at each call site: `β` is `fun (x : Xᵢ) => …`,
+`Xᵢ` mentions the earlier fields, and abstracting the field variable closes the
+*body* over it while leaving the domain pointing at a variable that is no
+longer in scope. A tower whose fields do not depend on each other never notices;
+`tests/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
+kernel `declaration has free variables`. -/
+def wTowerAt (w : Level) (xs : Array Expr) (i : Nat) (pre : Array Expr) :
+    GenM (Level × Expr × Expr) := do
+  let sub := fun (vs : Array Expr) (e : Expr) => e.replaceFVars (xs.extract 0 vs.size) vs
+  let α := sub pre (← ityp xs[i]!)
+  let ℓ ← ilevel α
+  let rest ← wTowerTy w xs (i + 1)
+  let β ← withLocalDeclD (← xs[i]!.fvarId!.getUserName) α fun x =>
+    mkLambdaFVars #[x] (sub (pre.push x) rest)
+  return (ℓ, α, β)
+
+/-- **The components of a tower, read back out of it.** At step `i` the earlier
+fields are already projections, so the `α` and `β` this rebuilds are the ones
+`wTowerTy` wrote with those substituted in — which is what makes the projection
+well-typed when a later field's type mentions an earlier one. -/
+partial def wTowerProjs (w : Level) (xs : Array Expr) (i : Nat) (d : Expr)
+    (acc : Array Expr) : GenM (Array Expr) := do
+  if i == xs.size then return acc
+  let (ℓ, α, β) ← wTowerAt w xs i acc
+  wTowerProjs w xs (i + 1) (psigmaSnd ℓ w α β d) (acc.push (psigmaFst ℓ w α β d))
+
+/-- **A tower built from field values** — the same `α` and `β` as
+[`Modelgen.wTowerProjs`] rebuilds, so `⟨proj⃗ d⟩` and `d` are the same tower and
+structure eta closes the round trip with no transport. -/
+partial def wTowerMk (w : Level) (xs : Array Expr) (i : Nat) (vals : Array Expr) :
+    GenM Expr := do
+  if i == xs.size then return unitAtCanon w
+  let (ℓ, α, β) ← wTowerAt w xs i (vals.extract 0 i)
+  return psigmaMk ℓ w α β vals[i]! (← wTowerMk w xs (i + 1) vals)
+
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
@@ -1979,20 +2099,37 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- Non-throwing on purpose: it is asked of *every* indexed family, and the
   -- ones it says no to are declined with the answer printed, so the Mathlib
   -- census measures the arm's reach instead of estimating it.
-  let erasureLinear : Bool := exportCtors.all fun (_, cty) => Id.run do
-    let mut t := cty
-    for _ in [0:np] do
-      match t with
-      | .forallE _ _ b _ => t := b
-      | _ => return false
-    let mut nrec := 0
-    while t matches .forallE .. do
-      let .forallE _ dom b _ := t | unreachable!
-      if mentionsAny #[tname] dom then
-        nrec := nrec + 1
-        unless dom.getAppFn.isConstOf tname do return false
-      t := b
-    return nrec <= 1
+  --
+  -- **Two reasons, counted apart.** The erasure can fail to be linear by
+  -- branching (two recursive fields) or by being infinitary (a recursive
+  -- occurrence under a binder), and the two are different jobs for arm W: the
+  -- first keeps every occurrence a bare `T p⃗ e⃗`, which is what
+  -- [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] assume, and the second
+  -- does not. The census counts them separately because the answer to "relax
+  -- this guard" is different for each.
+  let erasureWhy : Option String := Id.run do
+    for (cn, cty) in exportCtors do
+      let mut t := cty
+      let mut short := false
+      for _ in [0:np] do
+        match t with
+        | .forallE _ _ b _ => t := b
+        | _ => short := true
+      if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
+      let mut nrec := 0
+      let mut bare := true
+      while t matches .forallE .. do
+        let .forallE _ dom b _ := t | unreachable!
+        if mentionsAny #[tname] dom then
+          nrec := nrec + 1
+          unless dom.getAppFn.isConstOf tname do bare := false
+        t := b
+      unless bare do
+        return some s!"infinitary: {cn} has a recursive occurrence that is not a bare \
+{tname}"
+      if nrec > 1 then return some s!"branching: {cn} has {nrec} recursive fields"
+    return none
+  let erasureLinear : Bool := erasureWhy.isNone
 
   -- What each route can carry. The Church routes gained indices and recursion
   -- (`churchSwapAt` and the strong-induction fold below); the `Nat`-tagged sum
@@ -2007,7 +2144,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
         models, and a branching erasure is W's, not the tuple tower's); \
         erasure linear: no; B factors through the tag: \
         {if tagFactored tname np exportCtors then "yes" else "no"}\
-        ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}"
+        ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}\
+        ; why: {erasureWhy.getD "-"}"
     -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
@@ -2073,6 +2211,7 @@ graph route's inversion cannot be stated at an arbitrary index"
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
+  let mut requires : Array Name := #[]
   let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
 
   let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
@@ -2101,6 +2240,40 @@ graph route's inversion cannot be stated at an arbitrary index"
   -- emission.
   let armC := (route matches PrimRoute.type) && ni > 0 && erasureLinear
 
+  -- **Arm W**: the tagged W construction, `MODELGEN.md` §8.16 and
+  -- `scripts/inductive-basis/WEmitted.lean`. It is the *fallback* for the
+  -- non-indexed Type route and not its default, and that is deliberate: the
+  -- tuple tower reaches every linear shape with no axiom and no fragment, so
+  -- taking W wherever it applies would move six thousand models onto a heavier
+  -- construction for nothing. `!erasureLinear` is exactly the complement of
+  -- [`Modelgen.recSlotOf`]'s two refusals — two recursive fields in one
+  -- constructor, or a recursive occurrence that is not a bare `T p⃗` — so this
+  -- fires precisely where the tower declines and nowhere else.
+  --
+  -- Three further conditions, each a real limit of the scheme rather than a
+  -- convenience:
+  --
+  -- * **`tagFactored`.** The core's branch type is `B' : K → Type u` at
+  --   `K = Nat` with `tg = PSigma.fst`, so it is a function of the *tag* and
+  --   cannot see the label's data. A recursive field whose binder telescope
+  --   mentions an earlier field — `(n : Nat) → (Fin n → T) → T` — has a branch
+  --   type that does not factor through the tag, and there is no `B'` to give
+  --   the core. These are the corpus's four irreducible declarations.
+  -- * **the carrier is `Type u`.** `WT.W.{u}` fixes `A` and `B'` at `Type u`;
+  --   a never-zero `w` that is not a successor has no such `u`.
+  -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
+  --   by, so it never reaches here.
+  let armW := (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear
+    && tagFactored tname np exportCtors && w.normalize.dec.isSome
+  -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
+  -- only when the arm is taken.
+  let wDN := Name.str model "wD"
+  let wTelN := Name.str model "wTel"
+  let wBN := Name.str model "wB"
+  let wAN := Name.str model "wA"
+  let wTgN := Name.str model "wtg"
+  let wFN := Name.str model "wF"
+
   -- ── the kit arm C needs: Church conjunction's two projections and its
   -- introduction, built here because [`Modelgen.andCOf`] gives the type only.
   let andCMk := fun (A B a b : Expr) => withLocalDeclD `D (.sort .zero) fun D => do
@@ -2114,6 +2287,257 @@ graph route's inversion cannot be stated at an arbitrary index"
     let sel ← withLocalDeclD `a A fun a => withLocalDeclD `b B fun b =>
       mkLambdaFVars #[a, b] b
     pure (mkAppN p #[B, sel])
+
+  -- ── arm W's builders ──
+  -- Defined here rather than inside the arm because the **ι block below needs
+  -- them too**: an arm W ι rule is `WT.Wrec_iota` at this declaration's own
+  -- `F`, its label and its dispatch, and those have to be rebuilt at the ι
+  -- theorem's telescope. Defining a closure costs nothing to a declaration
+  -- that never calls it, and every one of these declines rather than returning
+  -- a wrong answer when it is called at a shape arm W does not reach.
+  let wNatT : Expr := .const `Nat []
+  -- `Type u` for the `Sort w` the carrier is at. Meaningless — and unused —
+  -- unless `armW`, which is where `w.normalize.dec` is checked.
+  let uL := w.normalize.dec.getD .zero
+
+  -- **Constructor `k`'s field split**, as positions into its own telescope.
+  -- The data tower holds the non-recursive fields and the branch tower the
+  -- recursive ones, and the two index *different* subsequences of one
+  -- telescope: a generator that took "the fields before the first recursive
+  -- one" as the data would silently lose every field that sits after a child.
+  let wShapeOf : Nat → GenM (Array Nat × Array Nat) := fun k => do
+    let (cn, cty) := exportCtors[k]!
+    let mut t := cty
+    for _ in [0:np] do
+      let .forallE _ _ b _ := t
+        | badShape s!"{cn}'s telescope is shorter than {np} parameters"
+      t := b
+    let mut nrs : Array Nat := #[]
+    let mut rcs : Array Nat := #[]
+    let mut i := 0
+    while t matches .forallE .. do
+      let .forallE _ dom b _ := t | unreachable!
+      if mentionsAny #[tname] dom then rcs := rcs.push i
+      else
+        -- **A non-recursive field may not mention a recursive one.** Its type
+        -- would have to be built inside `D`, and `D` holds the fields the
+        -- *branch* type does not see; there is nowhere in the scheme to put it.
+        -- `tagFactored` is the same question asked of a recursive field's
+        -- binders and does not reach this one.
+        for m in rcs do
+          if dom.hasLooseBVar (i - 1 - m) then
+            badShape s!"{cn}'s field {i} mentions its own recursive field {m}, so the \
+data tower would have to hold a type the branch tower cannot see"
+        nrs := nrs.push i
+      t := b
+      i := i + 1
+    return (nrs, rcs)
+  let wRecCount : Nat → GenM Nat := fun k => return (← wShapeOf k).2.size
+
+  -- The five definitions the core is instantiated at, as applications of the
+  -- names declared in the arm. `D` and `Tel` are the towers; `B'`, `A` and
+  -- `tg` are one line each and exist as declarations rather than as inlined
+  -- terms so that `self`, every constructor and `rec_0` name them instead of
+  -- carrying a copy.
+  let wDAt : Array Expr → Expr := fun ps => mkAppN (.const wDN us) ps
+  let wTelFn : Array Expr → Expr → GenM Expr := fun ps t =>
+    withLocalDeclD `j wNatT fun j =>
+      mkLambdaFVars #[j] (mkAppN (.const wTelN us) (ps ++ #[t, j]))
+  let wBAt : Array Expr → Expr → GenM Expr := fun ps t =>
+    return psigmaT (.succ .zero) w wNatT (← wTelFn ps t)
+  let wAAt : Array Expr → Expr := fun ps => mkAppN (.const wAN us) ps
+  let wBFn : Array Expr → Expr := fun ps => mkAppN (.const wBN us) ps
+  let wTgAt : Array Expr → Expr := fun ps => mkAppN (.const wTgN us) ps
+  let wDecEq : Expr := .const wCoreDecEqNat []
+  let wSup : Array Expr → Expr → Expr → Expr := fun ps a f =>
+    mkAppN (.const wCoreSup [uL]) #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, a, f]
+  -- `⟨t, d⟩ : A p⃗` and `⟨j, tel⟩ : B' p⃗ t`, with the tag and the branch index
+  -- as *expressions* — the recursor's cascade needs both at a variable index.
+  let wLabel : Array Expr → Expr → Expr → Expr := fun ps t d =>
+    psigmaMk (.succ .zero) w wNatT (wDAt ps) t d
+  let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps t j tel =>
+    return psigmaMk (.succ .zero) w wNatT (← wTelFn ps t) j tel
+  let wSelfAt : Array Expr → Expr := fun ps => mkAppN (.const selfN us) ps
+
+  -- The two towers, at a parameter scope.
+  let wDataTy : Array Expr → Nat → GenM Expr := fun ps k => do
+    let (nrs, _) ← wShapeOf k
+    let tele ← instForall exportCtors[k]!.2 ps
+    forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
+      wTowerTy w (nrs.map (fs[·]!)) 0
+  let wTelTy : Array Expr → Nat → Nat → GenM Expr := fun ps k r => do
+    let (_, rcs) ← wShapeOf k
+    let tele ← instForall exportCtors[k]!.2 ps
+    forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+      forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => wTowerTy w zs 0
+
+  -- **The dispatch cascade at tag `k`**, as a function of the branch index:
+  -- `wDispAt ps k child sc : Tel p⃗ k sc → T._model.self p⃗`. `child r zs vs` is
+  -- the `r`-th child at the binder values `vs` — the constructor's own field
+  -- where a constructor is being built, and `f ⟨r, ⟨z⃗⟩⟩` where the recursor
+  -- is. One builder for both is what makes the eta lemma's `rfl` hold: the
+  -- term the lemma's left side reduces to is *this* term.
+  let wDispAt : Array Expr → Nat → (Nat → Array Expr → Array Expr → GenM Expr) →
+      Expr → GenM Expr := fun ps k child sc => do
+    let (_, rcs) ← wShapeOf k
+    let tag := natNumeral k
+    let selfTy := wSelfAt ps
+    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[tag, jj])
+    let s ← ilevel (.forallE `tel (dom (natNumeral 0)) selfTy .default)
+    let motAt : Nat → GenM Expr := fun r =>
+      withLocalDeclD `j wNatT fun j =>
+        mkLambdaFVars #[j] (.forallE `tel (dom (natSuccs r j)) selfTy .default)
+    let armAt : Nat → GenM Expr := fun r => do
+      let tele ← instForall exportCtors[k]!.2 ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
+          withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
+            mkLambdaFVars #[tel] (← child r zs (← wTowerProjs w zs 0 tel #[]))
+    let junkAt : Expr → GenM Expr := fun t =>
+      withLocalDeclD `tel (dom (natSuccs rcs.size t)) fun tel => do
+        mkLambdaFVars #[tel] (← emptyAtElim eqi w w selfTy tel)
+    natCascade s rcs.size motAt armAt junkAt 0 sc
+  -- The same, packaged as `fun b : B' p⃗ k => …`. The eta lemma below is
+  -- stated against **these** `b.1` and `b.2`, so the two must be built here.
+  let wDispLam : Array Expr → Nat → (Nat → Array Expr → Array Expr → GenM Expr) →
+      GenM Expr := fun ps k child => do
+    let tag := natNumeral k
+    let β ← wTelFn ps tag
+    withLocalDeclD `b (← wBAt ps tag) fun b => do
+      let b1 := psigmaFst (.succ .zero) w wNatT β b
+      let b2 := psigmaSnd (.succ .zero) w wNatT β b
+      mkLambdaFVars #[b] (mkApp (← wDispAt ps k child b1) b2)
+
+  -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
+  -- glue. `MODELGEN.md` §8.16 and `WEmitted.lean`'s middle section: it is
+  -- enough to prove `∀ j tel, dispatch j tel = f ⟨j, tel⟩` and instantiate at
+  -- `b.1, b.2`, because `⟨b.1, b.2⟩ ≡ b` is `PSigma`'s definitional eta — so
+  -- **no `PSigma.rec` appears in the proof at all**. Every real branch is
+  -- `Eq.refl`: at branch `r` the left side reduces to `f ⟨r, ⟨tel.1, …, ⟨⟩⟩⟩`
+  -- and the right is `f ⟨r, tel⟩`, and those are the same term by that eta
+  -- once more and by the terminating unit's own canonicity. Off the end of the
+  -- telescope the branch is uninhabited and the arm is its eliminator.
+  let wEtaAt : Array Expr → Nat → Expr → GenM Expr := fun ps k f => do
+    let (_, rcs) ← wShapeOf k
+    let tag := natNumeral k
+    let selfTy := wSelfAt ps
+    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[tag, jj])
+    let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
+      return mkApp f (← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 vs))
+    let stmt : Expr → Expr → GenM Expr := fun jj tel => do
+      let lhs := mkApp (← wDispAt ps k child jj) tel
+      return eqi.mk' w selfTy lhs (mkApp f (← wBranch ps tag jj tel))
+    let motAt : Nat → GenM Expr := fun r =>
+      withLocalDeclD `j wNatT fun j => do
+        let jj := natSuccs r j
+        let body ← withLocalDeclD `tel (dom jj) fun tel => do
+          mkForallFVars #[tel] (← stmt jj tel)
+        mkLambdaFVars #[j] body
+    let armAt : Nat → GenM Expr := fun r => do
+      let tele ← instForall exportCtors[k]!.2 ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
+          withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
+            mkLambdaFVars #[tel]
+              (eqi.refl' w selfTy (mkApp f (← wBranch ps tag (natNumeral r) tel)))
+    let junkAt : Expr → GenM Expr := fun t => do
+      let jj := natSuccs rcs.size t
+      withLocalDeclD `tel (dom jj) fun tel => do
+        mkLambdaFVars #[tel] (← emptyAtElim eqi .zero w (← stmt jj tel) tel)
+    let β ← wTelFn ps tag
+    let bTy ← wBAt ps tag
+    let pointwise ← withLocalDeclD `b bTy fun b => do
+      let b1 := psigmaFst (.succ .zero) w wNatT β b
+      let b2 := psigmaSnd (.succ .zero) w wNatT β b
+      mkLambdaFVars #[b] (mkApp (← natCascade .zero rcs.size motAt armAt junkAt 0 b1) b2)
+    let cod ← withLocalDeclD `x bTy fun x => mkLambdaFVars #[x] selfTy
+    return mkAppN (.const wCoreFunext [w, w])
+      #[bTy, cod, ← wDispLam ps k child, f, pointwise]
+
+  -- **One constructor's label and dispatch, from its own field vector** — the
+  -- constructor's body, and the two arguments the ι rule hands `Wrec_iota`.
+  let wCtorParts : Array Expr → Nat → Array Expr → GenM (Expr × Expr) :=
+    fun ps k fields => do
+      let (nrs, rcs) ← wShapeOf k
+      let nrv := nrs.map (fields[·]!)
+      let tower ← wTowerMk w nrv 0 nrv
+      let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
+        return (mkAppN fields[rcs[r]!]! vs).headBeta
+      return (wLabel ps (natNumeral k) tower, ← wDispLam ps k child)
+
+  -- **`F`, the minor the core's recursor takes** — one `Nat.rec` cascade over
+  -- the tag whose motive must be well-typed at *every* tag, the eta lemma's
+  -- transport inside each arm, and the junk arm discharged from the emptiness
+  -- of `D`. This is the term `WEmitted.lean` exists to have shown builds.
+  let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
+    let selfTy := wSelfAt ps
+    -- The frame every arm and the motive share: `(d : D p⃗ t) (f : B' p⃗ t → self)
+    -- (ih : (b : B' p⃗ t) → C (f b))`, and the label `⟨t, d⟩` built from `d`.
+    let frame : Expr → (Expr → Expr → Expr → Expr → GenM Expr) → GenM Expr :=
+      fun tag k => do
+        let bt ← wBAt ps tag
+        withLocalDeclD `d (mkAppN (.const wDN us) (ps ++ #[tag])) fun d => do
+          withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
+            let ihT ← withLocalDeclD `b bt fun b =>
+              mkForallFVars #[b] (mkApp motive (mkApp f b))
+            withLocalDeclD `ih ihT fun ih => k d f ih (wLabel ps tag d)
+    let motBody : Nat → Expr → GenM Expr := fun kk t =>
+      frame (natSuccs kk t) fun d f ih a =>
+        mkForallFVars #[d, f, ih] (mkApp motive (wSup ps a f))
+    let s ← withLocalDeclD `t wNatT fun t => do ilevel (← motBody 0 t)
+    let motAt : Nat → GenM Expr := fun kk =>
+      withLocalDeclD `t wNatT fun t => do mkLambdaFVars #[t] (← motBody kk t)
+    let armAt : Nat → GenM Expr := fun kk => do
+      let (nrs, rcs) ← wShapeOf kk
+      let tag := natNumeral kk
+      frame tag fun d f ih a => do
+        -- the children and their induction hypotheses, read off `f` and `ih`
+        let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
+          return mkApp f (← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 vs))
+        let disp ← wDispLam ps kk child
+        let tele ← instForall exportCtors[kk]!.2 ps
+        let nf := numForalls tele
+        let (projs, kids, ihs) ← forallBoundedTelescope tele (some nf) fun fs _ => do
+          let nrv := nrs.map (fs[·]!)
+          let projs ← wTowerProjs w nrv 0 d #[]
+          let mut kids : Array Expr := #[]
+          let mut ihs : Array Expr := #[]
+          for r in [0:rcs.size] do
+            let (kd, ihv) ← forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
+              let bv ← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 zs)
+              return (← mkLambdaFVars zs (mkApp f bv), ← mkLambdaFVars zs (mkApp ih bv))
+            kids := kids.push kd
+            ihs := ihs.push ihv
+          return (projs, kids, ihs)
+        -- Lean's minor takes the fields in declaration order and then the
+        -- hypotheses, which is what the two towers have to be re-interleaved
+        -- into: the data tower's components and the branch tower's children
+        -- index different subsequences of one telescope.
+        let mut args : Array Expr := #[]
+        for i in [0:nf] do
+          match nrs.findIdx? (· == i) with
+          | some q => args := args.push projs[q]!
+          | none =>
+            let some r := rcs.findIdx? (· == i)
+              | badShape s!"{exportCtors[kk]!.1}'s field {i} is in neither tower"
+            args := args.push kids[r]!
+        let base := mkAppN minors[kk]! (args ++ ihs)
+        -- The minor's result is `C` at the constructor **rebuilt from the
+        -- children**, which is `sup ⟨k, d⟩ dispatch` and not `sup ⟨k, d⟩ f`.
+        -- The eta lemma is what closes that, and it is the one place this arm
+        -- spends anything the tuple tower does not.
+        let h ← wEtaAt ps kk f
+        let αf := Expr.forallE `b (← wBAt ps tag) selfTy .default
+        mkLambdaFVars #[d, f, ih]
+          (← transportAlong eqi v w αf disp f h base fun z => pure (mkApp motive (wSup ps a z)))
+    let junkAt : Expr → GenM Expr := fun t => do
+      let tag := natSuccs nc t
+      frame tag fun d f ih a => do
+        mkLambdaFVars #[d, f, ih] (← emptyAtElim eqi v w (mkApp motive (wSup ps a f)) d)
+    withLocalDeclD `a (wAAt ps) fun a => do
+      let a1 := psigmaFst (.succ .zero) w wNatT (wDAt ps) a
+      let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
+      mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
   if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
@@ -2538,6 +2962,189 @@ the subsingleton rule that minted {ern} does not hold of it"
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
+  else if armW then
+    -- ════ arm W: branching and infinitary, out of the spliced W core ════
+    --
+    -- `MODELGEN.md` §8.16, transcribed from
+    -- `scripts/inductive-basis/WEmitted.lean`. Six definitions, the
+    -- constructors, one `Nat.rec` cascade for `rec_0` and one `WT.Wrec_iota`
+    -- per rule. Everything below is at the *tag* scheme: `K = Nat`, junk
+    -- uninhabited in both directions, and both towers ending at exactly
+    -- `Sort w`.
+    unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
+    for n in [wDN, wTelN, wBN, wAN, wTgN, wFN] do taken n
+
+    -- **The level question, before anything is spliced.** Both towers are
+    -- written with codomain level `w`, so every field and every recursive
+    -- field's binder must satisfy `max ℓ w ≡ w` — Lean's own constraint on the
+    -- declaration, re-asked as a conversion. A field whose level keeps an
+    -- `imax` is what fails it, and it fails here rather than 528 KB later.
+    withParams fun ps => do
+      for k in [0:nc] do
+        let (cn, cty) := exportCtors[k]!
+        let (nrs, rcs) ← wShapeOf k
+        let tele ← instForall cty ps
+        forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+          if let some ℓ ← wTowerLevel w (nrs.map (fs[·]!)) then
+            badShape s!"{cn} has a non-recursive field at Sort {ℓ} and the carrier is \
+Sort {w}, so the data tower does not land at the carrier's own sort"
+          for i in rcs do
+            forallTelescope (← ityp fs[i]!) fun zs res => do
+              unless res.getAppFn.isConstOf tname && res.getAppNumArgs == np do
+                badShape s!"{cn}'s recursive field {i} is not a bare {tname} at its own \
+parameters under its binders, so it is nested rather than infinitary"
+              if let some ℓ ← wTowerLevel w zs then
+                badShape s!"{cn}'s recursive field {i} has a binder at Sort {ℓ} and the \
+carrier is Sort {w}, so the branch tower does not land at the carrier's own sort"
+
+    for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+    -- **The core itself**, `MODELGEN.md` §8.16's fragment. `#[]` when it is
+    -- already in, which is every W target after the first in a run.
+    let core ← ensureWCore reserved
+    for d in core do out := out.push d; spliced := spliced ++ d.getNames
+    -- **The inductives the core brought with it, which this model may not
+    -- leave unmodelled** — `Iso.requires`' rule, and the same one arm C's
+    -- skeleton is under. Empty when the fragment was already spliced, and that
+    -- is not a hole: [`Modelgen.genPrim`] rolls the environment back on every
+    -- withdrawal and on every decline, so a fragment that is *present* was put
+    -- there by an earlier model whose own `requires` were met.
+    let wRequires : Array Name := core.flatMap fun d =>
+      match d with
+      | .inductDecl _ _ types _ =>
+        (types.map (·.name)).toArray.filter (!primBasis.contains ·)
+      | _ => #[]
+
+    let unitMot : Expr := .lam `x wNatT (.sort w) .default
+    let junkTy : Expr → GenM Expr := fun _ => pure (emptyAt w)
+
+    -- ── `D` — tag ↦ that constructor's non-recursive fields ──
+    let dTy ← withParams fun ps =>
+      mkForallFVars ps (.forallE `t wNatT (.sort w) .default)
+    let dVal ← withParams fun ps => withLocalDeclD `t wNatT fun t => do
+      mkLambdaFVars (ps.push t)
+        (← natCascade (.succ w) nc (fun _ => pure unitMot) (wDataTy ps) junkTy 0 t)
+    let dD := Declaration.defnDecl
+      { name := wDN, levelParams := lparams, type := dTy, value := dVal
+        hints := ← hintsFor dVal, safety := .safe }
+    addChecked dD
+    out := out.push dD
+
+    -- ── `Tel` — tag ↦ branch index ↦ that child's binder telescope ──
+    -- Two cascades, and the inner one is what `WGeneric.lean` has no analogue
+    -- of: a branch index past a constructor's recursive-field count must be as
+    -- empty as a tag past the constructor count, or `W` acquires children no
+    -- constructor produces and the model is strictly bigger than the target.
+    let telTyD ← withParams fun ps => mkForallFVars ps
+      (.forallE `t wNatT (.forallE `j wNatT (.sort w) .default) .default)
+    let telVal ← withParams fun ps =>
+      withLocalDeclD `t wNatT fun t => withLocalDeclD `j wNatT fun j => do
+        let arm : Nat → GenM Expr := fun k => do
+          natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
+            (wTelTy ps k) junkTy 0 j
+        mkLambdaFVars (ps ++ #[t, j])
+          (← natCascade (.succ w) nc (fun _ => pure unitMot) arm junkTy 0 t)
+    let dTel := Declaration.defnDecl
+      { name := wTelN, levelParams := lparams, type := telTyD, value := telVal
+        hints := ← hintsFor telVal, safety := .safe }
+    addChecked dTel
+    out := out.push dTel
+
+    -- ── `B'`, `A` and `tg` ──
+    let bTyD ← withParams fun ps =>
+      mkForallFVars ps (.forallE `t wNatT (.sort w) .default)
+    let bVal ← withParams fun ps => withLocalDeclD `t wNatT fun t => do
+      mkLambdaFVars (ps.push t) (← wBAt ps t)
+    let dB := Declaration.defnDecl
+      { name := wBN, levelParams := lparams, type := bTyD, value := bVal
+        hints := ← hintsFor bVal, safety := .safe }
+    addChecked dB
+    out := out.push dB
+
+    let aTyD ← withParams fun ps => mkForallFVars ps (.sort w)
+    let aVal ← withParams fun ps =>
+      mkLambdaFVars ps (psigmaT (.succ .zero) w wNatT (wDAt ps))
+    let dA := Declaration.defnDecl
+      { name := wAN, levelParams := lparams, type := aTyD, value := aVal
+        hints := ← hintsFor aVal, safety := .safe }
+    addChecked dA
+    out := out.push dA
+
+    let tgTyD ← withParams fun ps =>
+      mkForallFVars ps (.forallE `a (wAAt ps) wNatT .default)
+    let tgVal ← withParams fun ps => withLocalDeclD `a (wAAt ps) fun a => do
+      mkLambdaFVars (ps.push a) (psigmaFst (.succ .zero) w wNatT (wDAt ps) a)
+    let dTg := Declaration.defnDecl
+      { name := wTgN, levelParams := lparams, type := tgTyD, value := tgVal
+        hints := ← hintsFor tgVal, safety := .safe }
+    addChecked dTg
+    out := out.push dTg
+
+    -- ── the carrier ──
+    let selfVal ← withParams fun ps => mkLambdaFVars ps
+      (mkAppN (.const wCoreSelf [uL]) #[wNatT, wAAt ps, wBFn ps, wTgAt ps])
+    let dSelf := Declaration.defnDecl
+      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+        hints := ← hintsFor selfVal, safety := .safe }
+    addChecked dSelf
+    out := out.push dSelf
+
+    -- ── the constructors ──
+    for j in [0:nc] do
+      let ty := restore tbl exportCtors[j]!.2
+      let val ← withParams fun ps => do
+        let rtele ← instForall ty ps
+        forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do
+          let (a, disp) ← wCtorParts ps j fs
+          mkLambdaFVars (ps ++ fs) (wSup ps a disp)
+      let d := Declaration.defnDecl
+        { name := ctorN j, levelParams := lparams, type := ty, value := val
+          hints := ← hintsFor val, safety := .safe }
+      addChecked d
+      out := out.push d
+
+    -- ── `F`, the core's minor, as its own declaration ──
+    -- **Hoisted rather than inlined**, because it is named once by `rec_0` and
+    -- once by *every* ι rule while being itself `nc` arms deep, each arm
+    -- carrying its own eta lemma: inlined, the emitted output is quadratic in
+    -- the constructor count for nothing, and the kernel checks the same
+    -- cascade `nc + 1` times. Hoisted, the ι rule's left side and its proof
+    -- name the same constant.
+    let recTy := restore tbl rv.type
+    let fTy ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
+      let ps := pre.extract 0 np
+      let motive := pre[np]!
+      let selfTy := mkAppN (.const selfN us) ps
+      withLocalDeclD `a (wAAt ps) fun a => do
+        let bt ← wBAt ps (mkApp (wTgAt ps) a)
+        withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
+          let ihT ← withLocalDeclD `b bt fun b =>
+            mkForallFVars #[b] (mkApp motive (mkApp f b))
+          withLocalDeclD `ih ihT fun ih =>
+            mkForallFVars (pre ++ #[a, f, ih]) (mkApp motive (wSup ps a f))
+    let fVal ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
+      mkLambdaFVars pre
+        (← wMkF (pre.extract 0 np) pre[np]! (pre.extract (np + 1) (np + 1 + nc)))
+    let dF := Declaration.defnDecl
+      { name := wFN, levelParams := rv.levelParams, type := fTy, value := fVal
+        hints := ← hintsFor fVal, safety := .safe }
+    addChecked dF
+    out := out.push dF
+
+    -- ── the recursor ──
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+      let ps := bs.extract 0 np
+      let major := bs[bs.size - 1]!
+      mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v])
+        #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, bs[np]!,
+          mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)), major])
+    let dRec := Declaration.defnDecl
+      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
+    requires := wRequires
   else if route matches PrimRoute.type then
     -- ════ the Type route ════
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
@@ -3095,14 +3702,30 @@ the subsingleton rule that minted {ern} does not hold of it"
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
-        -- **Every ι theorem is `Eq.refl` except arm G's.** There the value is
-        -- a `Classical.choice` application, which reduces to nothing, so the
-        -- rule is proved instead: both sides are graph points at this
-        -- constructor and the graph is single-valued. The *statement* is the
-        -- shared one above either way, which is what keeps the oracle's
-        -- syntactic comparison honest across the arms.
+        -- **Every ι theorem is `Eq.refl` except arm G's and arm W's.**
+        --
+        -- Arm G's value is a `Classical.choice` application, which reduces to
+        -- nothing, so the rule is proved instead: both sides are graph points
+        -- at this constructor and the graph is single-valued.
+        --
+        -- Arm W's is `WT.Wrec_iota` and nothing else, at this declaration's own
+        -- `F`, label and dispatch — `Wrec` is a well-founded recursion, so its
+        -- ι is a theorem rather than a conversion. **That theorem is the pin
+        -- for a collapsed tag assignment**, which is the one wrong model no
+        -- type error stops: two constructors of the same shape sharing a tag
+        -- have minors of the same type, so the two model constructors simply
+        -- become the same term and every other check still passes. Measured in
+        -- `WEmitted.lean`, where it is the narrowest of seven mutations.
+        --
+        -- The *statement* is the shared one in all three cases, which is what
+        -- keeps the oracle's syntactic comparison honest across the arms.
         let proof ←
-          if !armG then pure (eqi.refl' v α lhs) else do
+          if armW then do
+            let (a, disp) ← wCtorParts ps j fields
+            pure (mkAppN (.const wCoreIota [uL, v])
+              #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, motive,
+                mkAppN (.const wFN recLs) pre, a, disp])
+          else if !armG then pure (eqi.refl' v α lhs) else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
             let atSlot := fun (nm : Name) => rsI.mapM fun i => do
               let fty ← ityp fields[i]!
@@ -3128,7 +3751,7 @@ the subsingleton rule that minted {ern} does not hold of it"
 
   return { decls := out, levelParams := lparams, members := #[], selfNames := #[selfN]
            numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, spliced
-           requires := if armC then #[skelN] else #[]
+           requires := if armC then #[skelN] else requires
            emitAs? := if root == tname then none else some (root, tname) }
 
 end Modelgen
