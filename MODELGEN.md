@@ -2957,6 +2957,28 @@ decline needs. So the decline stands, and it now carries the finer reason:
 *rejected by a level checker that is incomplete in a way lean4lean does not
 repair either*. Nothing is emitted that Lean's kernel would refuse.
 
+**The decline stands, and since §8.6.2 it is taken one stage later.** The
+planner's own level equality is complete now, so `BoxF`'s pad is *planned*
+rather than refused, and the refusal comes from `addChecked` — Lean's kernel,
+whose `lean::is_equivalent` has exactly the `max`-absorption gap the two
+`BoxF` rows above record. The report line moved with it:
+
+```text
+before  BoxF: declined — prim model shape: BoxF.mk's fields reach Sort
+               imax (imax u v) v and the carrier is Sort max 1 u v: no pad
+               or codomain box closes the gap
+after   BoxF: declined — prim model shape: [BoxF._model.self] rejected by
+               the kernel: (kernel) application type mismatch
+```
+
+This is worth stating precisely because it is the answer to an obvious
+question — *if the planner stops refusing, can the models be checked by an
+unpatched kernel after all?* **No.** The two shapes the planner newly
+attempts over the whole 195-file corpus, `BoxF` and `IBox`, are rejected by
+the stock kernel, and they are rejected for the same reason the planner used
+to refuse them. The two gaps are the same gap in two implementations; closing
+the near one only moves which one you hit.
+
 Two further findings, both from reading lean4lean's own notes and source:
 
 * lean4lean **documents** the incompleteness as deliberate-for-now
@@ -3086,25 +3108,44 @@ compare canonical `max`-of-`var + k` forms at the leaves). Everything Lean
 accepts is still accepted by Lean's own code, and every *new* acceptance is
 counted and reported.
 
-### The finding that was not expected: it takes two layers, not one
+### The finding that was not expected: it took two layers, not one — and now takes one
 
 `modelgen`'s §8.6 decline is **not** a kernel refusal. It is taken by the
-planner, in `Modelgen/Simple.lean`, which asks `Lean.Meta.isLevelDefEq`
-whether the candidate pad `max (max 1 ℓ⃗) w` equals the carrier's `w`. That is
-the **elaborator's** level equality, compiled Lean, and it is a *different
-function* from the kernel's C++ `lean::is_equivalent` with its own
-incompleteness. So:
+planner, in `Modelgen/Simple.lean`, which asks whether the candidate pad
+`max (max 1 ℓ⃗) w` equals the carrier's `w`. It used to ask that with
+`Lean.Meta.isLevelDefEq` — the **elaborator's** level equality, compiled
+Lean, a *different function* from the kernel's C++ `lean::is_equivalent` and
+with its own incompleteness. So, as measured when this section was written:
 
 * with the **kernel alone** patched — `lean::is_equivalent`, `lean::is_geq`,
-  reachable as `NANODATG_LEVELHACK_META=0` — the corpus does not move at all.
+  reachable as `NANODATG_LEVELHACK_META=0` — the corpus did not move at all.
   Measured over 193 files (`vendor/arena-tests` plus `modelgen/tests`,
   `--prim-models`): **193 of 193 exports byte-identical**, 0 reports changed,
   and **0 escapes** anywhere. Not merely "no decline closed": the kernel's
   level comparison never once had an opinion the stock one lacked, because the
-  planner refuses first and the offending level never reaches `addDeclCore`.
+  planner refused first and the offending level never reached `addDeclCore`.
 * with `Lean.Meta.isLevelDefEq` patched **as well**, `BoxF` is planned, and
   then the (also patched) kernel accepts it — and only then do kernel escapes
   appear at all. The kernel gap is downstream of the elaborator gap.
+
+**The elaborator layer is no longer one of the two.** `Modelgen.LevelAlgebra`
+ports the `level_algebra.c` decision procedure into Lean and the planner
+consults it directly (§8.6.2), so the planner's own level equality is
+complete without anything being interposed. Re-measured on
+`tests/prim_declines.ndjson` with the kernel-only patch:
+
+```text
+NANODATG_LEVELHACK_META=0, control planner   BoxF: declined — … no pad or
+                                                   codomain box closes the gap
+NANODATG_LEVELHACK_META=0, complete planner  BoxF: model of 4 declarations
+```
+
+The `193 of 193` null above was therefore a statement about the *planner*,
+not about the kernel: the kernel's opinion was unreachable because nothing
+ever asked it. Ask it, and one layer is enough. What remains load-bearing is
+the **kernel** half — six call sites, all in C++ — and the elaborator half,
+which is the half that needs an unstripped, statically-Lean-linked host, can
+be dropped.
 
 Six call sites are rewritten for the kernel and three for the elaborator; the
 banner names each. Deliberately left alone: `lean::is_geq_core`'s recursion
@@ -3225,6 +3266,17 @@ variables over `0..4`, **0** over `0..8`, same pairs. And: **this is a
 measurement against a bounded oracle, not a completeness proof**, which is worth
 saying twice and is said twice.
 
+A third, from §8.6.2's re-run: **`zero LA_UNKNOWN` is a property of this
+sample, not of the procedure.** The table above spends 200,000 of its six
+million pairs at depth 8; a flat sweep of 250,000 over every depth 3–8 and
+every variable count 3–6 spends a million there, and the arena cap does then
+fire — **46 pairs**, all at depths 6–8, all in `≥`, 26 of them at depth 8 with
+six variables. That is the cap behaving as designed: `LA_UNKNOWN` is "no
+opinion", the caller falls back to stock, and nothing unsound follows. It is
+worth stating because "zero `LA_UNKNOWN`" invites the reading that the caps
+are unreachable, and they are not — they are merely out of reach of the
+levels a real declaration produces.
+
 ### The claim this costs
 
 Under `--interpose-levels`, "checked by Lean's kernel" is false for anything
@@ -3290,6 +3342,112 @@ lean4lean's. `level_algebra.c` is C with a written correctness argument and six
 million measured pairs, and that is a weaker kind of evidence. If the project
 ever wants the level repair *proved* rather than measured, lean4lean is where
 that work would go, and the prune patch is the head start.
+
+## 8.6.2 The planner's own level equality, complete, with no interposition
+
+§8.6.1 needed to patch two layers because the planner asked its level
+questions with `Lean.Meta.isLevelDefEq`. Three calls in `Modelgen/Simple.lean`
+and one in `Modelgen/Mutual.lean` — our own lines, asking a question about our
+own construction. Nothing about them needs `mprotect`, an unstripped host, or
+a loaded `.so`: they can simply call a complete procedure.
+
+`Modelgen/LevelAlgebra.lean` is that procedure, a port of the `imax`
+case-split decision procedure in `interpose/level_algebra.c`, working over a
+private AST so that Lean's simplifying smart constructors cannot interfere
+with the algorithm's invariants. `LevelAlgebra.isLevelDefEqComplete` is what
+the planner calls.
+
+### The elaborator gets first refusal, and that ordering is the whole design
+
+The obvious shape — ask completely, everywhere — is **wrong, and was measured
+wrong**. A level equality that only the complete procedure can see is one
+**Lean's kernel cannot see either**. So a plan reached by the complete
+procedure is a plan `addChecked` rejects, and reaching for it *first* trades a
+plan that works for one that does not:
+
+| `init-prelude` | models | declines |
+|---|---|---|
+| control (`NANODATG_PLANNER_STOCK_LEVELS=1`) | 125 | 4 |
+| complete procedure asked **first** | **124** | **5** |
+| complete procedure asked as a **fallback** | 125 | 4 |
+
+`Trans` is the declaration in the middle row. Its bare chain is one the
+complete procedure equates to the carrier and the stock kernel does not, so it
+took the unboxed plan and was rejected — where the elaborator's own refusal
+had sent it to the boxing retry, which the stock kernel accepts.
+
+So the planner runs its whole three-question cascade with `isLevelDefEq`
+first, bare levels then boxed, and only if all of that fails does it run the
+same cascade again with the complete procedure. Every declaration that models
+today models by the route it took before; the complete procedure is consulted
+only where the alternative is a decline. `isLevelDefEqComplete` is likewise a
+*widening* — it returns the elaborator's answer whenever that is `true`, so
+`unknown` needs no special handling and level metavariables, which it cannot
+assign and the elaborator can, are decided entirely by the elaborator.
+
+### What moves: nothing, and that is the measurement
+
+195 files (`vendor/arena-tests` plus `modelgen/tests`), `--prim-models`,
+control against the same binary:
+
+| | control | complete |
+|---|---|---|
+| exports byte-identical | — | **195 of 195** |
+| models / declines | 893 / 228 | **893 / 228** |
+| escapes | 0 | **2** |
+
+`init-prelude` is 125 / 4 either way, and its export is byte-identical. The
+`pre-10000000` Mathlib prefix is 1,686 / 36 either way with **zero** escapes —
+the complete procedure never once had an opinion the elaborator lacked there.
+Cost is **+0.009 %** on `init-prelude` (3.2329 G → 3.2332 G instructions);
+the fallback runs only after a decline would otherwise be taken, so there is
+almost nothing to pay for.
+
+The two escapes in the whole corpus are `BoxF` and `IBox`, and **neither
+closes a decline** — each moves one from the planner to the kernel (§8.6). A
+run reports its own census, always, because zero is as often the interesting
+number:
+
+```text
+levels: 3 planner comparisons, 1 escapes
+levels: escape  max (max 1 (imax (imax u v) v)) 1 u v  ≡  max 1 u v
+```
+
+`NANODATG_PLANNER_STOCK_LEVELS=1` is the control and
+`NANODATG_PLANNER_LEVEL_TRACE=1` prints each escaping pair, mirroring
+`interpose.c`'s `NANODATG_LEVELHACK=off` and `_TRACE` for the same reason: an
+A/B should be a property of one binary, not of two builds.
+
+### What it buys: one layer instead of two
+
+Coverage does not move, so the case for the change is not coverage. It is
+that **the elaborator half of the interposition is no longer load-bearing**.
+With the planner complete, a kernel-only patch closes `BoxF`, where before it
+moved nothing at all (§8.6.1's `193 of 193`). The half that is dropped is the
+half that needs an unstripped, statically-Lean-linked host.
+
+### The port is fuzzed at the C's own scale
+
+A translation inherits no measurements, so `LevelFuzz.lean` re-runs §8.6.1's
+experiment against the port: **6,000,000 pairs**, depths 3–8 over 3–6
+variables, 24 configurations, scored against the same bounded semantic
+oracle. **0 false accepts**, in both `≡` and `≥`.
+
+`interpose/fuzz_ref.c` drives the C over the *identical* pair stream — same
+xorshift64 seed, same generator, left-to-right sequenced so the stream is not
+a property of the C compiler — and prints an FNV-1a digest of its verdict
+stream. Digests agree on **17 of the 24** configurations. The 7 that differ
+are exactly the 7 where the C's arena cap returns `LA_UNKNOWN`: **46 pairs**,
+all of them in `≥`, which the planner never asks. The port has no arena and
+decides those 46, consistently with the oracle. For equivalence — the
+operation the planner actually uses — the port and the C agree on all
+6,000,000.
+
+The same fuzz refutes the one other candidate for a second incompleteness.
+`Level.isNeverZero` gates the planner's route selector (`Simple.lean`), and it
+is a *structural* test where `laGeq ℓ 1` is a complete one. Over the same
+6,000,000 levels they disagree **0 times**. It is not a gap, and the four
+call sites really were the whole of it.
 
 ## 8.7 Arm G: the recursive subsingleton, by the graph — and `Acc` leaves the basis
 

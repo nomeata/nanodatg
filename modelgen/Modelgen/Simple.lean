@@ -166,10 +166,17 @@ single-valuedness and is propositional.
   This one is a **level-incompleteness** decline, not a type error: the
   padded chain equals the carrier's level at every instantiation and Lean's
   normal-form level defeq does not see it. `MODELGEN.md` §8.6 has the
-  lean4lean cross-check, and §8.6.1 closes it — the decline is taken *here*,
-  by `isLevelDefEq` below, so it needs the **elaborator's** level equality
-  repaired and not only the kernel's, which is what
-  `modelgen --interpose-levels` does.
+  lean4lean cross-check.
+
+  **The decline is no longer taken here.** The planner's level equality is
+  complete ([`Modelgen.LevelAlgebra`], §8.6.2): it falls back to the `imax`
+  case-split decision procedure wherever `isLevelDefEq` would otherwise
+  refuse, so the pad is *planned*. What refuses instead is `addChecked` —
+  Lean's **kernel**, whose `lean::is_equivalent` has the same
+  `max`-does-not-absorb-`imax` gap. So the shape still declines under a stock
+  kernel, one stage later and with the kernel's own message, and closing it
+  needs `modelgen --interpose-levels`. That now takes the *kernel* half
+  alone, where before §8.6.1 it took both layers.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
 * the four **basis primitives themselves** — the exemption that makes the

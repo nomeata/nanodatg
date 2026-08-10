@@ -39,10 +39,17 @@ fi
 echo "== 3+4. modelgen, stock vs interposed, on $(basename "$FIX") =="
 a=$("$MG" "$FIX" --prim-models -o /dev/null 2>&1)
 b=$("$MG" "$FIX" --prim-models --interpose-levels "$SO" -o /dev/null 2>&1)
+# The stock decline is a *kernel* refusal since MODELGEN.md §8.6.2, not the
+# planner's "no pad or codomain box closes the gap" — the planner's own level
+# equality is complete now, so the pad is planned and `addChecked` is what
+# says no. Still a decline, still this assertion; only the message moved.
 echo "$a" | grep -q "^BoxF: declined" || fail "stock modelgen did not decline BoxF"
 echo "$b" | grep -q "^BoxF: model of" || fail "interposed modelgen did not model BoxF"
 echo "$b" | grep -q "witness flipped reject -> accept" || fail "take-verification did not report a flip"
-echo "$b" | grep -q "statements: 9 compared .* 0 differ" || fail "statement oracle disagreed"
+# 11, not the 9 this asserted until now: the count had grown with the fixture
+# and the assertion had gone stale on master, failing for both the stock and
+# the complete planner alike.
+echo "$b" | grep -q "statements: 11 compared .* 0 differ" || fail "statement oracle disagreed"
 echo "   ok: BoxF declined stock, modelled interposed, statement oracle clean"
 
 echo "== 5. fuzz: false accepts must be zero =="
