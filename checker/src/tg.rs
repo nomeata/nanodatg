@@ -1488,6 +1488,20 @@ struct PiPolySyms {
     cndd_ax: Thm,
     /// The shared dependent-product head for this skeleton ([`PiInfo::dprod`]).
     dprod: FnSym,
+    /// The **interpretation head**: `upi(h⃗, A, ĝ) := ite0(ĝ, cndd(h⃗,A),
+    /// dprod(h⃗,A))`, one `define_abbrev` per skeleton.
+    ///
+    /// The wired term is `upi(h⃗, A, v̂)`, *not* the `ite0` spelling — the
+    /// conditional's two branches each repeat the holes and the domain, so a
+    /// nest of Undet `Π`s spelled out doubles per level and definitional
+    /// equality walks pay for it exponentially (measured: the staged prelude
+    /// went from minutes to unfinished, 34% of samples under
+    /// `def_eq_binder_aux`). Behind the abbreviation the term is the size the
+    /// opaque symbol was, and the defining equation is ridden exactly where
+    /// the typing rule fires.
+    upi: FnSym,
+    /// `⊢ ∀h⃗ ∀A ∀g. upi(h⃗,A,g) = ite0(g, cndd(h⃗,A), dprod(h⃗,A))`.
+    upi_def: Thm,
 }
 
 /// The per-skeleton dependent-`Π` **rule kit** at a variable level:
@@ -4680,6 +4694,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// its fibre — [`derived::levels::pi_rules::pi_body_dep`]'s formula, the
     /// same one the rule kit is later validated against.
     fn pi_poly_syms_build(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolySyms>> {
+        let lp = self.lp()?;
         let pre = self.pre.clone();
         let info = self.pi_info_or_build(sk, holes_len)?;
         let fb = info.fibre.as_ref()?;
@@ -4699,7 +4714,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         params.push(av);
         let (cndd, cndd_ax) =
             derived::prop::conditional_singleton(&mut env, &pre.tower.sums, &params, &phi)?;
-        Some(Rc::new(PiPolySyms { cndd, cndd_ax, dprod }))
+        // The interpretation head — see [`PiPolySyms::upi`].
+        let gv = env.fresh_var();
+        let ps: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
+        let cndd_at = Term::apply(cndd, ps.clone());
+        let dprod_at = Term::apply(dprod, ps);
+        let body = lp.i.at(Term::var(gv), cndd_at, dprod_at);
+        let mut uparams = params;
+        uparams.push(gv);
+        let (upi, upi_def) = derived::define_abbrev(&mut env, &uparams, &body)?;
+        Some(Rc::new(PiPolySyms { cndd, cndd_ax, dprod, upi, upi_def }))
     }
 
     /// The per-skeleton dependent-`Π` rule kit at a variable level, derived
@@ -4794,19 +4818,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     /// `⟦Π x:α. β⟧` at an undetermined body level, **wired** — the `ite0`
-    /// clause (`LEVELPOLY.md` §1.4):
+    /// clause (`LEVELPOLY.md` §1.4), behind its abbreviation:
     ///
     /// ```text
-    /// ⟦Π x:α. β⟧ = ite0(v̂, cndd(h⃗,A), dprod(h⃗,A))
+    /// ⟦Π x:α. β⟧ = upi(h⃗, A, v̂)        upi(h⃗,A,g) := ite0(g, cndd(h⃗,A), dprod(h⃗,A))
     /// ```
     ///
     /// with `v̂` the guard level from [`Self::undet_body_level`], `dprod` the
     /// `Type` clause's own symbol for this skeleton, and `cndd` the kit's
     /// conditional singleton over the same fibre. At `v̂ = ∅` the term
-    /// computes (by `when_zero`) to the Prop-shaped set, at `v̂ ≠ ∅` (by
-    /// `when_nonzero`) to the decided clause's dependent product — one term,
+    /// computes (through `upi_def` and `when_zero`) to the Prop-shaped set,
+    /// at `v̂ ≠ ∅` to the decided clause's dependent product — one term,
     /// correct on every instantiation, where the opaque symbol asserted
-    /// nothing and blocked everything.
+    /// nothing and blocked everything. The abbreviation, rather than the
+    /// spelled-out conditional, is what keeps the term linear-sized under
+    /// nesting — see [`PiPolySyms::upi`].
     ///
     /// `None` — the guard was not recoverable, the kit refused — falls back
     /// to the axiom-free symbol, a counted gap exactly as before.
@@ -4832,9 +4858,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let syms = self.pi_poly_syms(sk, holes.len())?;
         let mut args: Vec<Term> = holes.to_vec();
         args.push(dom.clone());
-        let cndd_t = self.mk(syms.cndd, args.clone());
-        let dprod_t = self.mk(syms.dprod, args);
-        let term = self.mk(lp.i.sym, vec![guard.clone(), cndd_t, dprod_t]);
+        args.push(guard.clone());
+        let term = self.mk(syms.upi, args);
         self.undet_poly_sites.insert(
             e,
             Rc::new(UndetPolySite { key: sk.clone(), holes: holes.to_vec(), dom: dom.clone(), guard }),
@@ -4917,6 +4942,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let k34_thm = derived::hyp_and(&p_ain, &p_fib)?;
         let k_thm = derived::hyp_and(&k12_thm, &k34_thm)?;
         let thm = derived::syl(&k_thm, &inst)?;
+
+        // The rule concludes about the `ite0` spelling; the interpretation is
+        // the abbreviation `upi(h⃗,A,v̂)`. Ride the defining equation back —
+        // one Leibniz step, under the same antecedent.
+        let syms = self.pi_poly_syms(&site.key, site.holes.len())?;
+        let mut uargs = site.holes.clone();
+        uargs.push(site.dom.clone());
+        uargs.push(v_hat.clone());
+        let upi_eq = derived::inst_all(&syms.upi_def, &uargs)?;
+        let (upi_t, ite0_t) = upi_eq.concl().as_eq()?;
+        let (subj, tgt) = u_concl(&thm, h.as_ref())?.as_mem()?;
+        if subj != ite0_t {
+            return None
+        }
+        let back = derived::eq_symm(&mut self.env_mut(), &upi_eq)?;
+        let w = self.env_mut().fresh_var();
+        let leib =
+            Thm::eq_leibniz(ite0_t, upi_t, w, Formula::mem(Term::var(w), tgt.clone()));
+        let step = Thm::mp(&leib, &back)?;
+        let thm = u_syl(&thm, &step, h.as_ref())?;
         Some(self.typing(crate::certify::TyGap::PiUndet, te, tt, thm, hyps))
     }
 
@@ -14509,36 +14554,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 if sa.key != sb.key {
                     return Err("pi congruence: two Πs of undetermined sort over differently shaped bodies")
                 }
-                if sa.guard != sb.guard {
-                    return Err("pi congruence: two wired Πs at different guard levels")
-                }
-                let kit = self
+                // One shared head symbol `upi`, arguments the holes, the
+                // domain, then the guard — argwise congruence, the guard
+                // position by reflexivity (a guard is a level term; nothing
+                // relates two different ones here, and equal Lean levels
+                // interp equal).
+                let syms = self
                     .pi_poly_syms(&sa.key, sa.holes.len())
                     .ok_or("pi congruence: the wired Π's kit is gone")?;
                 let n = sa.holes.len();
-                let mut prems = Vec::with_capacity(n + 1);
-                for i in 0..=n {
-                    let (l, r) = if i == n {
-                        (sa.dom.clone(), sb.dom.clone())
+                let mut prems = Vec::with_capacity(n + 2);
+                for i in 0..=n + 1 {
+                    let (l, r, c) = if i == n + 1 {
+                        (sa.guard.clone(), sb.guard.clone(), None)
+                    } else if i == n {
+                        (sa.dom.clone(), sb.dom.clone(), dom)
                     } else {
-                        (sa.holes[i].clone(), sb.holes[i].clone())
+                        (sa.holes[i].clone(), sb.holes[i].clone(), body)
                     };
-                    let c = if i == n { dom } else { body };
                     let Some(p) = self.pi_premise(c, &l, &r) else {
-                        return Err(if i == n { pi_dom_gap(dom) } else { pi_body_gap(body) })
+                        return Err(match i {
+                            _ if i == n + 1 => "pi congruence: two wired Πs at different guard levels",
+                            _ if i == n => pi_dom_gap(dom),
+                            _ => pi_body_gap(body),
+                        })
                     };
                     prems.push(p);
                 }
-                let cndd_eq = self
-                    .ceq_congr(kit.cndd, &prems)
-                    .ok_or("pi congruence: congruence rule refused")?;
-                let dprod_eq = self
-                    .ceq_congr(kit.dprod, &prems)
-                    .ok_or("pi congruence: congruence rule refused")?;
-                let guard_eq = CondEq::refl(sa.guard.clone());
-                let lp = self.lp().ok_or("pi congruence: the wired Π's kit is gone")?;
                 return self
-                    .ceq_congr(lp.i.sym, &[guard_eq, cndd_eq, dprod_eq])
+                    .ceq_congr(syms.upi, &prems)
                     .ok_or("pi congruence: congruence rule refused")
             }
             if wa.is_some() != wb.is_some() {

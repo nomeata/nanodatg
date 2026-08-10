@@ -611,43 +611,75 @@ at this branch's head:
   `dprod` form at a variable rung — the derivation the deletion was waiting
   on, and it went through as assembly, with **no fundamental blocker**.
   Master's `⟦Π⟧` is a `dprod` at every codomain, so the wiring consumes one
-  rule shape. The unbuilt half is that wiring, now mapped function by
-  function (2026-08-10 reading):
-  * **The guard level.** `clause_after` reaches the undetermined level at
-    its `_ =>` arm and discards it; `Clause` carries no payload. The wired
-    interp needs it, so a sibling walk (`undet_body_level`, mirroring
-    `body_clause`/`clause_after` but returning the level) recomputes it at
-    the Undet site, canonicalised through `canon_level` — the same
-    representative discipline the sort seam uses. Only the
-    `Undet::Param` flavour is addressable; `undet_unknown()` (the walk gave
-    up — 10516 expressions staged) has no level in hand and keeps the
-    opaque symbol.
-  * **The term.** `ite0(v̂, chi(h⃗,A), dprod(h⃗,A))` via `self.mk` on the
-    apparatus's `ite0` symbol so `parts` records it and congruence is
-    generic. The two halves come from the *pure skeleton cores* —
-    `pi_info`/`build_fibre` and `prop_info`/`build_cond` — **without** the
-    per-site `pi_sites`/`prop_sites` registration (a new
-    `undet_poly_sites` map carries `{level, sk, holes, dom}`); the old
-    "must not share tables" warning on `interp_pi_undet` is about the
-    opaque symbol and does not apply, since the halves *are* the clause
-    terms the instantiations compute to.
-  * **The rule.** Per skeleton: a `DProdN`-adapter over the checker fibre
-    stack (`build_fibre`'s `b`/`img`/`dprod` are already
-    `image_symbol_n`/`dprod_symbol_n`-shaped), `dprod_subset_funspace_n` +
-    `least_universe_replacement_n` derived from its axioms,
-    `dprod_in_universe_pair_n` assembled, then `levels::pi_rules::pi_rules`
-    — whose constructor needs the full chain (`Rec`, `Ite0`, `Order`,
-    `UTower`, `Srt`, `Rules`, `Tower`), so `LevelPoly` (apparatus) grows
-    those fields plus a per-skeleton `PiRules` cache. `ty_pi`'s Undet arm
-    then instantiates `pi_imax_dep` at `(h⃗, û, v̂, A)` with the
-    `u ∈ ω`/`v ∈ ω` evidence from `omega_level`, conditional via the assms
-    channel, boundary-quantified at declarations like every other level
-    hypothesis.
-  * **The measures.** `no evidence: ty_pi_undet` 2407 → toward 0 (staged);
-    the `Undet::Param` expression population 6005; the "clauses never
-    meet" functionality test and the pi-congruence Undet rows are the
-    invariants to re-pin, with the congruence rows expected to *fall* (two
-    wired Undet Πs of equal shape are equal terms).
+  rule shape. **The wiring is built** (commits `62b59f2`, `619b562`), as
+  mapped, with two corrections the build forced:
+  * **The guard level.** `undet_body_level`, the sibling walk of
+    `body_clause` returning the level, **memoised** (the walk descends both
+    children of a `Π` and expressions are DAGs; unmemoised, the staged
+    prelude did not finish) and consumed **raw, not canonicalised**: the
+    obligation's target `srt(ℓ̂)` is built from the raw arms of the
+    *obligation's* canonical level, so raw-to-raw is what agrees, and
+    canonicalising one side was measured to disagree exactly where canon
+    reshapes (`imax u u` under a `succ`). A spelling drift is a counted
+    miss. Only the `Undet::Param` flavour is addressable; `undet_unknown()`
+    keeps the opaque symbol.
+  * **The term.** `upi(h⃗, A, v̂)`, one `define_abbrev` per skeleton with
+    `upi(h⃗,A,g) := ite0(g, cndd(h⃗,A), dprod(h⃗,A))` — **not** the spelled
+    conditional: the two branches each repeat the holes, so a nest of Undet
+    `Π`s doubles per level and every def-eq walk pays it exponentially
+    (measured: the staged prelude went from minutes to *unfinished* at
+    26:40 wall, 34% of samples under `def_eq_binder_aux`; behind the
+    abbreviation it runs in ~14 s). The typing rule rides `upi_def` back in
+    one Leibniz step; congruence is argwise over `upi` (guard position by
+    reflexivity). Built via `self.mk`, so `parts` records the layer and
+    congruence composes generically. The `dprod` half is the
+    `Type` clause's **own symbol** for the skeleton (`pi_info_or_build`,
+    the factored tail of `finish_pi_site`) — the nonzero branch *is* the
+    decided clause's term. The Prop half is **not** `build_cond`'s `chi`,
+    and cannot be: `define_abbrev` does not dedupe, so `build_cond`'s fibre
+    symbol differs from `build_fibre`'s, and `pi_imax_dep` needs one fibre
+    `b` for both the `cndd` characteristic formula and the fibres conjunct.
+    The kit therefore mints `cndd` per skeleton over the `PiInfo` fibre;
+    `cndd(h⃗,A)` is provably-equal-not-identical to `chi(h⃗,A)` — one more
+    bounded blocker-3 seam, listed there.
+  * **The rule.** Per skeleton (`Shared::pi_poly`, refusals memoised): the
+    `DProdN` adapter over the `PiInfo` fibre stack (`dprod_members_n` +
+    `dprod_subset_funspace_n` over the already-built symbols),
+    `universe_replacement_n` → `least_universe_replacement_n`,
+    `dprod_in_universe_of_n` → `dprod_in_universe_pair_n` (the
+    `UniverseParts` all come off the prelude tower: `space.c2`,
+    `funspace_of`, `union`, `bin_union`), then `levels::pi_rules`.
+    `LevelPoly` grew the `Rules` field it needed (`ru`, pinned by
+    `bundled_rules_are_over_this_chain`). `ty_pi`'s Undet arm instantiates
+    `pi_imax_dep` at `(h⃗, û, v̂, A)` — the `û`/`v̂` arms read off the
+    obligation's canonical `IMax`, the guard checked against the site's —
+    with the `u ∈ ω` evidence rebuilt by `omega_level_rec` under the full
+    antecedent, and the rule's two mathematical premises, `A ∈ srt(û)` and
+    the fibres conjunct, **acquired as antecedents** exactly as a local's
+    typing is: carried, counted, discharged where a binder's guard matches
+    (the fixture's `pnest` pins the discharge — the enclosing λ's own
+    guard closes the `A ∈ srt(û)` premise, the uniform typing invariant
+    showing through).
+  * **The fixture.** `checker/test_resources/UndetPi` — three Undet `Π`s:
+    guard through a `Local`, through a `Const`, and under a binder;
+    `by ty_pi_undet` 3 flag-on, `no evidence: ty_pi_undet` 3 flag-off
+    (the red state and the bit-identity promise in one test). Mutations
+    run red and reverted: the `û`/`v̂` instantiation swap (`piu`'s distinct
+    arms make it observable) and the premise-projection swap.
+  * **The measures** (staged, init-prelude, first `upi` run — wall 14 s,
+    RSS 202 MB, exit 0): `no evidence: ty_pi_undet` 2407 → **2103**, with
+    **304** sites answered by the wired rule (`by ty_pi_undet`, conditional
+    certificates); TOTAL gaps 10521 → 10531 (the same honest direction as
+    §4.2's +20 — no-evidence rows trade into carried-premise rows and the
+    escape ledger's over-report). The recursor rows did **not** move at
+    this coverage (ι computed 43, `T-policy 2/3` 600, `no curried` 399
+    unchanged) — the brief's "blocker 1 closes 2c's residue too" is not yet
+    confirmed at 304/2407 wired and not yet refuted; note the `T-policy`
+    row's only decline site is the level-independent no-nullary-constructor
+    gate (`gen_rec_bottom`), which blocker 1's machinery cannot move —
+    what could move is `no curried`/ι, unadjudicated until the unwired
+    2103 (guard-walk misses, dominated by the `undet_unknown` flavour and
+    canonicalisation drift) are decomposed.
 * **Blocker 2 — ι and the nests at a symbolic eliminating universe.**
   **First slice built** (the ω-prefix, commit `b6d93fa`): `gen_ty_nest` and
   `gen_ctor_nest` thread the level variables free in their domains as
