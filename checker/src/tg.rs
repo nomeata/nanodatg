@@ -3574,6 +3574,146 @@ enum FieldDom {
     Rec,
 }
 
+/// **Why an ι site had no curried recursor nest** — the partition behind the
+/// `iota: this recursor has no curried interpretation` gap row.
+///
+/// The row itself is a single number (399 on the staged `init-prelude`), and a
+/// single number cannot say whether the work behind it is one construction or
+/// twelve. These variants are the [`TgBackend::rec_nest`] refusal sites,
+/// one-to-one: `rec_nest` returns `Result<_, RecMiss>` and *every* `Err` in it
+/// names one of them, so the rows below **sum to the gap row exactly**. That
+/// equality is the partition claim, and it is asserted by fixture
+/// (`the_rec_nest_outcome_rows_partition_the_no_curried_row`) against the gap
+/// ledger, which counts on an unrelated code path.
+///
+/// The `Bottom*` half is [`TgBackend::rec_bottom`]'s — which W-recursor the
+/// nest would have bottomed out in, and why none was available. The rest is the
+/// nest walk above it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RecMiss {
+    /// The head names no recursor declaration in this environment.
+    NotRecursor,
+    /// Indices, several motives, `K`-like, or a mutual block: the general
+    /// bottom's shape gate.
+    BottomShape,
+    /// The eliminated declaration belongs to one of the three hand-written
+    /// recognisers, whose own shape test refused this use. The two stacks build
+    /// different sets and there is no bridging theorem.
+    BottomRecognised,
+    /// The recursor's universe-parameter list is not the declaration's with the
+    /// motive's in front.
+    BottomLevels,
+    /// The general inductive path has no translation of the eliminated
+    /// declaration (its own `…declined:` row says why).
+    BottomInd,
+    /// Minor-premise, rule or parameter counts disagree with the spec.
+    BottomCounts,
+    /// **The `T`-policy gate**: the declaration has no nullary constructor, so
+    /// there is no canonical closed point for the motive. Level-independent.
+    BottomTPolicy,
+    /// The Lean-facing type former (`gen_ty_nest`) refused.
+    BottomTyNest,
+    /// `derived::inductive::GenRecursor::build` refused the spec.
+    BottomBuild,
+    /// The W-machinery or the recursor core is unavailable in this backend.
+    BottomMachinery,
+    /// A hand-written bottom (`Bool`/`N`/`List`) matched the shape but its own
+    /// derivation stack was unavailable.
+    BottomHandwritten,
+    /// The recursor's type is not a `Π` all the way to its major premise.
+    Domains,
+    /// The recursor takes fewer than four arguments in all.
+    ArityShallow,
+    /// Fewer than `np + 4` arguments: the nest walk's hard floor of two minor
+    /// premises, inherited from the two-constructor hand-written bottoms. A
+    /// single-constructor structure sits at `np + 3` and is refused here.
+    ArityMinors,
+    /// The general bottom's exact arity `np + n + 2` is not met.
+    ArityGeneral,
+    /// The `T`-policy term could not be read off the walk's own domains.
+    TPolicyTerm,
+    /// `GenRecursor::rec_of` refused at these parameters.
+    RecOf,
+    /// A domain or the bottom mentions an ω-variable the recursor's levels do
+    /// not name — the fail-closed guard of blocker 2c's ω-prefix.
+    OmegaEscape,
+    /// A `define_abbrev`, `lambda_n` or `beta_conditional_n` refused inside the
+    /// nest walk.
+    Abbrev,
+    /// The head abbreviation `⟦T.rec⟧ = lam₀(D₀)` refused.
+    Head,
+}
+
+const N_RECMISS: usize = 20;
+
+impl RecMiss {
+    const fn name(self) -> &'static str {
+        match self {
+            RecMiss::NotRecursor => "…the head names no recursor",
+            RecMiss::BottomShape => "…bottom: indices / several motives / K-like / mutual",
+            RecMiss::BottomRecognised => "…bottom: a hand-written recogniser owns it",
+            RecMiss::BottomLevels => "…bottom: the recursor's level list is not ind+motive",
+            RecMiss::BottomInd => "…bottom: the declaration has no general translation",
+            RecMiss::BottomCounts => "…bottom: minor/rule/param counts disagree",
+            RecMiss::BottomTPolicy => "…bottom: T-policy 3, no nullary constructor",
+            RecMiss::BottomTyNest => "…bottom: the Lean-facing type former refused",
+            RecMiss::BottomBuild => "…bottom: the derived layer refused the recursor",
+            RecMiss::BottomMachinery => "…bottom: W-machinery unavailable",
+            RecMiss::BottomHandwritten => "…bottom: a hand-written stack was unavailable",
+            RecMiss::Domains => "…the recursor type is not a Π to the major premise",
+            RecMiss::ArityShallow => "…fewer than four recursor arguments",
+            RecMiss::ArityMinors => "…fewer than np+4 arguments (the two-minor floor)",
+            RecMiss::ArityGeneral => "…the general bottom's np+n+2 arity is not met",
+            RecMiss::TPolicyTerm => "…the T-policy term is not in the walk's domains",
+            RecMiss::RecOf => "…rec_of refused at these parameters",
+            RecMiss::OmegaEscape => "…a domain mentions an unnamed ω-variable",
+            RecMiss::Abbrev => "…an abbreviation or beta lemma refused",
+            RecMiss::Head => "…the head abbreviation refused",
+        }
+    }
+    const ALL: [RecMiss; N_RECMISS] = [
+        RecMiss::NotRecursor,
+        RecMiss::BottomShape,
+        RecMiss::BottomRecognised,
+        RecMiss::BottomLevels,
+        RecMiss::BottomInd,
+        RecMiss::BottomCounts,
+        RecMiss::BottomTPolicy,
+        RecMiss::BottomTyNest,
+        RecMiss::BottomBuild,
+        RecMiss::BottomMachinery,
+        RecMiss::BottomHandwritten,
+        RecMiss::Domains,
+        RecMiss::ArityShallow,
+        RecMiss::ArityMinors,
+        RecMiss::ArityGeneral,
+        RecMiss::TPolicyTerm,
+        RecMiss::RecOf,
+        RecMiss::OmegaEscape,
+        RecMiss::Abbrev,
+        RecMiss::Head,
+    ];
+}
+
+static REC_MISSES: [std::sync::atomic::AtomicU64; N_RECMISS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_RECMISS];
+
+/// Record the reason one ι site found no curried nest. Called from exactly one
+/// place — [`TgBackend::derive_iota`]'s `rec_nest` arm — so the rows partition
+/// the gap row rather than merely accompanying it.
+fn note_rec_miss(m: RecMiss) {
+    REC_MISSES[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Test-visible reads of the ι-site partition.
+#[doc(hidden)]
+pub fn rec_miss_counts() -> Vec<(&'static str, u64)> {
+    RecMiss::ALL
+        .iter()
+        .map(|m| (m.name(), REC_MISSES[*m as usize].load(std::sync::atomic::Ordering::Relaxed)))
+        .collect()
+}
+
 static DECLINES: [std::sync::atomic::AtomicU64; N_DECLINE] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_DECLINE];
 /// Distinct `(declaration, levels)` pairs the general path translated.
@@ -3622,6 +3762,17 @@ fn gen_report() -> String {
         if n > 0 {
             row(&mut s, d.name(), n);
         }
+    }
+    let missed: u64 = REC_MISSES.iter().map(|c| c.load(Relaxed)).sum();
+    if missed > 0 {
+        s.push_str("    ι sites with no curried nest, by reason (a partition):\n");
+        for m in RecMiss::ALL {
+            let n = REC_MISSES[m as usize].load(Relaxed);
+            if n > 0 {
+                row(&mut s, m.name(), n);
+            }
+        }
+        row(&mut s, "  (sum — equals the `no curried interpretation` gap row)", missed);
     }
     s
 }
@@ -7126,15 +7277,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         name: &NamePtr<'t>,
         levels: LevelsPtr<'t>,
-    ) -> Option<RecBottom> {
+    ) -> Result<RecBottom, RecMiss> {
         if self.enum_rec_shape(ctx, name).is_some() {
-            return Some(RecBottom::Enum(self.bool_recursor()?))
+            return self.bool_recursor().map(RecBottom::Enum).ok_or(RecMiss::BottomHandwritten)
         }
         if self.nat_rec_shape(ctx, name).is_some() {
-            return Some(RecBottom::Nat(self.nat_recursor()?))
+            return self.nat_recursor().map(RecBottom::Nat).ok_or(RecMiss::BottomHandwritten)
         }
         if self.list_rec_shape(ctx, name).is_some() {
-            return Some(RecBottom::List(self.list_recursor()?))
+            return self.list_recursor().map(RecBottom::List).ok_or(RecMiss::BottomHandwritten)
         }
         self.gen_rec_bottom(ctx, name, levels).map(|(g, tn)| RecBottom::General(g, tn))
     }
@@ -7160,10 +7311,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         name: &NamePtr<'t>,
         levels: LevelsPtr<'t>,
-    ) -> Option<(Rc<GenRec>, Rc<GenTyNest>)> {
-        let Some(Declar::Recursor(r)) = self.decls.get_declar(name) else { return None };
+    ) -> Result<(Rc<GenRec>, Rc<GenTyNest>), RecMiss> {
+        let Some(Declar::Recursor(r)) = self.decls.get_declar(name) else {
+            return Err(RecMiss::NotRecursor)
+        };
         if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
-            return None
+            return Err(RecMiss::BottomShape)
         }
         let ind_name = r.all_inductives[0];
         // Same seam as [`Self::ind_const`]'s: a declaration one of the
@@ -7171,9 +7324,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // recursor, even when its own `*_rec_shape` refused this use. The two
         // stacks build different sets and there is no bridging theorem.
         if self.recognised_ind(ctx, &ind_name) {
-            return None
+            return Err(RecMiss::BottomRecognised)
         }
-        let ind = self.decls.get_inductive(&ind_name)?;
+        let Some(ind) = self.decls.get_inductive(&ind_name) else {
+            return Err(RecMiss::BottomInd)
+        };
         // **The eliminator-class consistency check, and the level split.** A
         // class-(T) recursor carries exactly one more universe parameter than
         // the declaration — the motive's, large elimination by Lean's reason 1
@@ -7186,17 +7341,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let rec_lp = ctx.read_levels(r.info.uparams).len();
         let given = ctx.read_levels(levels);
         if rec_lp != ind_lp + 1 || given.len() != rec_lp {
-            return None
+            return Err(RecMiss::BottomLevels)
         }
         let ind_levels = ctx.alloc_levels_slice(&given[1..]);
-        let gi = self.gen_ind(ctx, ind_name, ind_levels)?;
+        let Some(gi) = self.gen_ind(ctx, ind_name, ind_levels) else {
+            return Err(RecMiss::BottomInd)
+        };
         let n = gi.ind.spec.ctors.len();
         if r.num_minors as usize != n
             || r.rec_rules.len() != n
             || r.num_params as usize != gi.param_vars.len()
         {
             note_decline(Decline::Shape);
-            return None
+            return Err(RecMiss::BottomCounts)
         }
         // `T`-policy 1 or 2 — [`Self::t_policy`] decides which. Policy 3, a
         // declaration with no nullary constructor at all, has no canonical
@@ -7204,7 +7361,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // the corpus's biggest instance).
         if !gi.ind.spec.ctors.iter().any(|c| c.args.is_empty() && c.recs == 0) {
             note_decline(Decline::TPolicy);
-            return None
+            return Err(RecMiss::BottomTPolicy)
         }
         // A hit is only usable if it is over **this** backend's carrier.
         //
@@ -7225,9 +7382,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // per backend, and refused rather than guessed if it does not build.
         let Some(tn) = self.gen_ty_nest(&gi, ind_name, &ind_lv) else {
             note_decline(Decline::Params);
-            return None
+            return Err(RecMiss::BottomTyNest)
         };
-        let key = (self.name_key(ind_name)?, ind_lv);
+        let Some(nk) = self.name_key(ind_name) else { return Err(RecMiss::BottomInd) };
+        let key = (nk, ind_lv);
         let hit = self.shared.borrow().gen_recs.get(&key).cloned();
         if let Some(g) = hit {
             match &g {
@@ -7235,11 +7393,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     GEN_REC_GUARD_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 // A memoised decline, or a package over this very carrier.
-                _ => return g.map(|g| (g, tn)),
+                // A memoised `None` can only be a `GenRecursor::build` refusal:
+                // every earlier refusal above returns before the lookup.
+                _ => return g.map(|g| (g, tn)).ok_or(RecMiss::BottomBuild),
             }
         }
-        let core = self.rec_core()?;
-        let mach = self.machine()?;
+        let Some(core) = self.rec_core() else { return Err(RecMiss::BottomMachinery) };
+        let Some(mach) = self.machine() else { return Err(RecMiss::BottomMachinery) };
         let built = {
             let m = mach.borrow();
             let mut env = self.env_mut();
@@ -7268,7 +7428,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 sh.gen_recs.insert(key, out.clone());
             }
         }
-        out.map(|g| (g, tn))
+        out.map(|g| (g, tn)).ok_or(RecMiss::BottomBuild)
     }
 
     /// Build (or recall) the curried nest interpreting `T.rec.{us}`. See
@@ -7283,10 +7443,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         name: NamePtr<'t>,
         levels: LevelsPtr<'t>,
-    ) -> Option<Rc<RecNest>> {
+    ) -> Result<Rc<RecNest>, RecMiss> {
         let key = (name, self.interp_levels(ctx, levels));
         if let Some(n) = self.rec_nests.get(&key) {
-            return Some(n.clone())
+            return Ok(n.clone())
         }
         // The per-thread entry, if the name is the export file's. Read as a
         // **hint**: what it supplies to the walk below is the variables to open
@@ -7295,6 +7455,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let cached =
             shared_key.as_ref().and_then(|k| self.shared.borrow().rec_nests.get(k).cloned());
         let bottom = self.rec_bottom(ctx, &name, levels)?;
+        // Every `Err` below names one [`RecMiss`]; the partition claim depends
+        // on there being no bare `None`/`?` exit left in this function.
 
         // ── The domains, from the recursor's own type ───────────────────────
         //
@@ -7313,7 +7475,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // taken from the store until `reuse_rec_nest` has checked the walk
         // against it. This is `walk_spec`'s reuse discipline, at a recursor
         // instead of a constructor.
-        let Declar::Recursor(r) = self.decls.get_declar(&name)? else { return None };
+        let Some(Declar::Recursor(r)) = self.decls.get_declar(&name) else {
+            return Err(RecMiss::NotRecursor)
+        };
         let (uparams, ty) = (r.info.uparams, r.info.ty);
         // Blocker 2c's ω-prefix: the recursor's own levels lead with the
         // eliminating universe, so this list covers the motive's domain too —
@@ -7327,11 +7491,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         for i in 0..depth {
             let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(cur)
             else {
-                return None
+                return Err(RecMiss::Domains)
             };
             doms.push(self.interp(ctx, binder_type));
             let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-            let lkey = unique_key(ctx, local)?;
+            let Some(lkey) = unique_key(ctx, local) else { return Err(RecMiss::Domains) };
             let v = match cached.as_ref().and_then(|c| c.vars.get(i)) {
                 Some(v) => *v,
                 None => self.env_mut().fresh_var(),
@@ -7341,14 +7505,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             cur = ctx.inst(body, &[local]);
         }
         if vars.len() < 4 {
-            return None
+            return Err(RecMiss::ArityShallow)
         }
 
         // The stored nest, if it survives being checked against this walk.
         if let Some(c) = cached {
             if let Some(n) = self.reuse_rec_nest(&c, &vars, &doms, &bottom) {
                 self.rec_nests.insert(key, n.clone());
-                return Some(n)
+                return Ok(n)
             }
             note_dt(Dt::NestDrift);
         }
@@ -7364,10 +7528,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // With a parameter the minors move along by one, and so does the target.
         let np = match self.decls.get_declar(&name) {
             Some(Declar::Recursor(r)) => r.num_params as usize,
-            _ => return None,
+            _ => return Err(RecMiss::NotRecursor),
         };
         if depth < np + 4 {
-            return None
+            return Err(RecMiss::ArityMinors)
         }
         let bottom_body = match &bottom {
             // `t_last(C,F,T,b) := app(brec(F,T), b)` — the motive is carried but
@@ -7399,17 +7563,23 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             RecBottom::General(g, _) => {
                 let n = g.gi.ind.spec.ctors.len();
                 if depth != np + n + 2 {
-                    return None
+                    return Err(RecMiss::ArityGeneral)
                 }
                 let mut ps: Vec<Term> = g.gi.omega.iter().map(|v| Term::var(*v)).collect();
                 ps.extend(vars[..np].iter().map(|v| Term::var(*v)));
                 let minors: Vec<Term> =
                     vars[np + 1..np + 1 + n].iter().map(|v| Term::var(*v)).collect();
-                let t_policy = self.t_policy(&g.gi, &doms, &minors, np)?;
-                let mach = self.machine()?;
+                let Some(t_policy) = self.t_policy(&g.gi, &doms, &minors, np) else {
+                    return Err(RecMiss::TPolicyTerm)
+                };
+                let Some(mach) = self.machine() else { return Err(RecMiss::BottomMachinery) };
                 let rec_term = {
                     let m = mach.borrow();
-                    g.gr.rec_of(&m, &g.gi.ind, &g.core.r, &ps, &minors, &t_policy)?
+                    let r = g.gr.rec_of(&m, &g.gi.ind, &g.core.r, &ps, &minors, &t_policy);
+                    match r {
+                        Some(t) => t,
+                        None => return Err(RecMiss::RecOf),
+                    }
                 };
                 ap.apply(rec_term, major)
             }
@@ -7427,7 +7597,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             .iter()
             .any(|v| !omega.contains(v))
         {
-            return None
+            return Err(RecMiss::OmegaEscape)
         }
         let mut lams: Vec<FnSym> = vec![];
         let mut betas: Vec<Thm> = vec![];
@@ -7442,9 +7612,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             let mut xs: Vec<FreeVar> = omega.clone();
             xs.extend_from_slice(&vars[..=k]);
-            let (tk, tk_def) = derived::define_abbrev(&mut self.env_mut(), &xs, &body)?;
-            let (lamk, lamk_ax) = lambda_n(&mut self.env_mut(), &ap, tk)?;
-            let betak = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)?;
+            let Some((tk, tk_def)) = derived::define_abbrev(&mut self.env_mut(), &xs, &body) else {
+                return Err(RecMiss::Abbrev)
+            };
+            let Some((lamk, lamk_ax)) = lambda_n(&mut self.env_mut(), &ap, tk) else {
+                return Err(RecMiss::Abbrev)
+            };
+            let Some(betak) = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)
+            else {
+                return Err(RecMiss::Abbrev)
+            };
             lams.push(lamk);
             betas.push(betak);
             t_defs.push(tk_def);
@@ -7457,7 +7634,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         betas.reverse();
         t_defs.reverse();
 
-        let (head, head_def) = self.ind_abbrev(name, &key.1, &inner?)?;
+        let Some(inner) = inner else { return Err(RecMiss::ArityShallow) };
+        let Some((head, head_def)) = self.ind_abbrev(name, &key.1, &inner) else {
+            return Err(RecMiss::Head)
+        };
         let head_sym = self.parts.get(&head).map(|(f, _)| *f);
         let nest = Rc::new(RecNest { omega, head, head_def, lams, betas, t_defs, prefixes, bottom });
         // Publish, so that the next declaration mentioning this recursor gets
@@ -7475,7 +7655,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             self.shared.borrow_mut().rec_nests.entry(k).or_insert(entry);
         }
         self.rec_nests.insert(key, nest.clone());
-        Some(nest)
+        Ok(nest)
     }
 
     /// **Check a stored [`RecNest`] against this backend's walk**, and hand it
@@ -9423,7 +9603,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     // constructors: real sets, with real membership theorems.
                     // See [`Inductives`].
                     t
-                } else if let Some(n) = self.rec_nest(ctx, name, levels) {
+                } else if let Ok(n) = self.rec_nest(ctx, name, levels) {
                     // A recursor this backend can compute: the curried nest of
                     // lambda graphs with `derived`'s W-recursor at the bottom.
                     // See [`RecNest`]. Still a `define_abbrev` symbol, so the
@@ -12434,8 +12614,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if args.len() < depth {
             return Err("iota: the recursor is not applied to its major premise")
         }
-        let Some(nest) = self.rec_nest(ctx, name, levels) else {
-            return Err("iota: this recursor has no curried interpretation")
+        let nest = match self.rec_nest(ctx, name, levels) {
+            Ok(n) => n,
+            Err(m) => {
+                // The only `note_rec_miss` site in the program — which is what
+                // makes the rows a partition of the gap row below rather than
+                // a second, independently-drifting count.
+                note_rec_miss(m);
+                return Err("iota: this recursor has no curried interpretation")
+            }
         };
 
         // ── Split off the trailing arguments, on both sides ──────────────────

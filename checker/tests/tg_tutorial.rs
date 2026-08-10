@@ -2337,9 +2337,124 @@ fn the_undet_pi_decomposition_is_absent_with_the_flag_off() {
     assert_eq!(rows_totalling(&text, "by ty_pi_undet"), 0, "flag off wired something:\n{text}");
 }
 
+/// Every row of the ι-site partition, in report order. Kept here rather than
+/// derived from the report so that *adding* a `RecMiss` variant without adding
+/// it here is caught by the sum check below: an unlisted row that fires makes
+/// the listed rows fall short of the gap ledger.
+const REC_MISS_ROWS: [&str; 20] = [
+    "…the head names no recursor",
+    "…bottom: indices / several motives / K-like / mutual",
+    "…bottom: a hand-written recogniser owns it",
+    "…bottom: the recursor's level list is not ind+motive",
+    "…bottom: the declaration has no general translation",
+    "…bottom: minor/rule/param counts disagree",
+    "…bottom: T-policy 3, no nullary constructor",
+    "…bottom: the Lean-facing type former refused",
+    "…bottom: the derived layer refused the recursor",
+    "…bottom: W-machinery unavailable",
+    "…bottom: a hand-written stack was unavailable",
+    "…the recursor type is not a Π to the major premise",
+    "…fewer than four recursor arguments",
+    "…fewer than np+4 arguments (the two-minor floor)",
+    "…the general bottom's np+n+2 arity is not met",
+    "…the T-policy term is not in the walk's domains",
+    "…rec_of refused at these parameters",
+    "…a domain mentions an unnamed ω-variable",
+    "…an abbreviation or beta lemma refused",
+    "…the head abbreviation refused",
+];
+
+/// **The ι-site partition, and its level-independence** — `LEVELPOLY.md` §5.4
+/// blocker 2c.
+///
+/// `iota: this recursor has no curried interpretation` is one number (399 on
+/// the staged `init-prelude`), and the commissioning brief hoped blocker 1's
+/// `srt` machinery would move it. This test is the instrument that decided
+/// otherwise, at fixture scale, and it makes two claims.
+///
+/// **It is a partition.** [`RecMiss`] has one variant per `rec_nest` refusal
+/// site and `note_rec_miss` is called from exactly one place — the ι site that
+/// asked — so the rows must sum to the gap row, which `certify.rs`'s ledger
+/// counts on an entirely unrelated code path. Three files carry three
+/// *different* reasons, which is what makes a mis-attribution visible: a
+/// mutation that merges two reasons into one slot keeps every sum right and is
+/// caught only by the per-file labels disagreeing.
+///
+/// **It does not depend on the level machinery.** The same rows are asserted in
+/// all four states — flag on and off, scheduled and staged. That is the
+/// measurement behind blocker 2c's re-attribution: not one of the 399 sites is
+/// refused for a reason a level has any part in, so no amount of `srt` wiring
+/// can move this row. A run whose rows differed between the flag states would
+/// mean the opposite, and would be a real finding rather than a broken test.
+///
+/// Mutations run against this test (each red, then reverted): dropping the
+/// `note_rec_miss` call at the ι exit takes every sum to 0 against ledgers
+/// reading 1/3/1/1/1; and returning `RecMiss::BottomTPolicy` from the
+/// `BottomShape` gate keeps all five sums right while moving `077`'s three
+/// sites onto the T-policy row — the mis-attribution a sum alone cannot see,
+/// and the reason this test needs three distinct reasons rather than one.
+#[test]
+fn the_rec_nest_outcome_rows_partition_the_no_curried_row() {
+    // (file, the one reason that file carries, how many sites)
+    let cases: [(&str, &str, u64); 5] = [
+        ("074_prodRecEqns", "…bottom: T-policy 3, no nullary constructor", 1),
+        ("077_RBTree.id_spec", "…bottom: indices / several motives / K-like / mutual", 3),
+        ("094_ruleK", "…bottom: indices / several motives / K-like / mutual", 1),
+        ("116_rtreeRecReduction", "…bottom: the declaration has no general translation", 1),
+        ("118_accRecReduction", "…bottom: indices / several motives / K-like / mutual", 1),
+    ];
+    let mut seen: Vec<&str> = vec![];
+    for (stem, reason, want) in cases {
+        let f = corpus().join(format!("good/tutorial/{stem}.ndjson"));
+        if skip_guard::absent(&f) {
+            return
+        }
+        seen.push(reason);
+        for (flag, scheduled) in [("1", false), ("0", false), ("1", true), ("0", true)] {
+            let state = if scheduled { "scheduled" } else { "staged" };
+            let text = poly_report(&f, flag, scheduled);
+            let ledger = rows_totalling(&text, "gap: iota: this recursor has no curried");
+            let mut sum = 0;
+            for row in REC_MISS_ROWS {
+                let got = rows_totalling(&text, row);
+                let expect = if row == reason { want } else { 0 };
+                assert_eq!(
+                    got, expect,
+                    "{stem} ({state}, flag={flag}): the row {row:?} reads {got}, \
+                     expected {expect}:\n{text}"
+                );
+                sum += got;
+            }
+            assert_eq!(
+                sum, ledger,
+                "{stem} ({state}, flag={flag}): the reason rows sum to {sum} but the gap ledger \
+                 counted {ledger} sites with no curried nest — not a partition:\n{text}"
+            );
+            // Non-vacuity: a run that asked for no ι step at all satisfies 0 == 0.
+            assert!(
+                sum >= 1,
+                "{stem} ({state}, flag={flag}) stopped exercising the recursor path:\n{text}"
+            );
+        }
+    }
+    seen.sort_unstable();
+    seen.dedup();
+    assert!(
+        seen.len() >= 3,
+        "the fixture set collapsed to {} distinct reasons; a mis-attribution mutation is only \
+         observable at two or more, and the third is what pins which row moved",
+        seen.len()
+    );
+}
+
 /// One staged run of `export`, at the given `NANODATG_LEVELPOLY` setting,
 /// returning the report.
 fn staged_poly_report(export: &Path, flag: &str) -> String {
+    poly_report(export, flag, false)
+}
+
+/// One run of `export` at the given flag setting, scheduled or staged.
+fn poly_report(export: &Path, flag: &str, scheduled: bool) -> String {
     let cfg_path = tmp_cfg(&format!("upipart{flag}"), export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
@@ -2347,13 +2462,16 @@ fn staged_poly_report(export: &Path, flag: &str) -> String {
         serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
     );
     std::fs::write(&cfg_path, cfg).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
-        .arg(&cfg_path)
-        .env("NANODATG_LEVELPOLY", flag)
-        .env("NANODATG_NO_SCHEDULE", "1")
-        .output()
-        .expect("spawn");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"));
+    cmd.arg(&cfg_path).env("NANODATG_LEVELPOLY", flag);
+    if !scheduled {
+        cmd.env("NANODATG_NO_SCHEDULE", "1");
+    }
+    let out = cmd.output().expect("spawn");
     let _ = std::fs::remove_file(&cfg_path);
-    assert!(out.status.success(), "the fixture must be accepted in the staged state (flag={flag})");
+    assert!(
+        out.status.success(),
+        "the fixture must be accepted (flag={flag}, scheduled={scheduled})"
+    );
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
