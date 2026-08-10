@@ -1,7 +1,7 @@
 import Modelgen.Mutual
 
 /-!
-# The model of a **simple inductive from five primitives**, generated
+# The model of a **simple inductive from four primitives**, generated
 
 The third construction in this package, behind `--prim-models` and off by
 default. Where the first two constructions remove *nesting* and *mutuality*,
@@ -10,12 +10,15 @@ non-nested) inductive's carrier, constructors, recursor and ι rules are
 emitted as ordinary `def`s and `theorem`s over a fixed basis of primitive
 inductives —
 
-    Eq   PSigma   Nat   Acc   PULiftP
+    Eq   PSigma   Nat   PULiftP
 
 — each spliced into the output at Lean's own shape if the input lacks it,
 exactly as the existing prelude splice does for `Eq`. A consumer that
-recognises the four interface names then needs to implement only the five
-primitives (plus `Quot`), not general inductives.
+recognises the four interface names then needs to implement only the four
+primitives (plus `Quot`), not general inductives — and, if the input reaches
+[`Modelgen.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
+them. `Nonempty` is not a fifth primitive: it is `Classical.choice`'s own
+domain, needs no exemption, and self-models by the Church route.
 
 **`False` is not in the basis**: it is *derived* (Church `∀ p : Prop, p`,
 with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
@@ -31,17 +34,17 @@ itself crosses the same line twice, for `PUnit` and `PEmpty`, with
 The Σ is **`PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
 Sort (max 1 u v)` — because `Subtype`, structures with `Prop` fields, and
 every `Prop`-fibred pair in the constructions below need a Σ over `Sort`,
-which a `Type`-only `Sigma` cannot give without `PLift`, a sixth inductive.
-`Acc` is in the basis for the subsingleton-recursive **large** eliminator —
-the one grant the kernel makes to a *declaration* that an emitted `def` does
-not inherit — and for the recursive `Type`-valued construction that will
-consume it. Neither is implemented here, so `Acc` is never spliced: the
-prelude splice's rule is "only what a model actually needs". It is also, as
-of `scripts/inductive-basis/AccFromChoice.lean`, **derivable rather than
-primitive**: the Church encoding plus `Classical.choice` at the recursion's
-*graph* gives `Acc.rec`'s exact type, with ι a theorem instead of `rfl`. That
-would take the basis to four; the arm is not wired, so the list below is
-still five and this is a note about where it is going.
+which a `Type`-only `Sigma` cannot give without `PLift`, a fifth inductive.
+
+**`Acc` is not in the basis either, and used to be.** It was there for the
+subsingleton-recursive **large** eliminator — the one grant the kernel makes
+to a *declaration* that an emitted `def` does not inherit — and that grant is
+now derived rather than assumed: [`Modelgen.graphArm`] defines the recursion
+by its *graph* and extracts the value, packaged with its graph proof, with
+`Classical.choice`, which gives `Acc.rec`'s exact type with ι a theorem
+instead of `rfl`. `scripts/inductive-basis/AccFromChoice.lean` is the
+derivation and `AccArmShapes.lean` its uniformity; `MODELGEN.md` §8.7 is the
+arm. So `Acc` models like any other declaration now.
 
 ## The three routes, by the carrier's sort
 
@@ -123,7 +126,10 @@ every type the old basis reached at a bare sort was inhabited.
 
 **Every ι theorem is `Eq.refl`** on all three routes. On the Church routes
 with a `Prop`-valued motive that is free for a reason unrelated to reduction:
-both sides of every ι equation are proofs of one proposition.
+both sides of every ι equation are proofs of one proposition. **The graph arm
+below is the one exception**: its recursor's value is a `Classical.choice`
+application, which reduces to nothing, so its ι is proved from the graph's
+single-valuedness and is propositional.
 
 ## What declines, and why
 
@@ -134,12 +140,13 @@ both sides of every ι equation are proofs of one proposition.
 * **indexed at a never-zero sort** (the composed `T._model.aux`) — thesis
   §5.2's skeleton-plus-`good`; `scripts/inductive-basis/IndexedCarve.lean`
   compiles it on the thesis's own example.
-* **a recursive subsingleton** (`Inf`) — INDUCTIVE-BASIS §3.2's carrier.
-  `scripts/inductive-basis/AccPhi.lean` compiles it over a primitive `Acc`,
-  *and* refutes the thesis's own `accφ` reduction at thesis.txt:1838;
-  `AccFromChoice.lean` then derives the large eliminator itself from the
-  Church encoding and `Classical.choice`, by the graph route, so wiring this
-  arm would take `Acc` out of the basis rather than put it to work.
+* **a recursive subsingleton whose data fields are not the conclusion's
+  indices** — the graph arm's own boundary, not the class: a *recursive
+  subsingleton* models, by [`Modelgen.graphArm`]. What that arm cannot reach
+  is an index it cannot invert at: a constant (`mk : P 0 → P 0`) or one built
+  from a proof field, which is the shape of the `below` Lean mints beside
+  every recursive `Prop`. `INDUCTIVE-BASIS.md` §3.2 is the carrier and
+  `MODELGEN.md` §8.7 the arm.
 * **indices or recursion at a maybe-zero sort** — neither is threaded
   through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
@@ -150,7 +157,7 @@ both sides of every ι equation are proofs of one proposition.
   lean4lean cross-check.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
-* the five **basis primitives themselves** — the exemption that makes the
+* the four **basis primitives themselves** — the exemption that makes the
   construction well-founded.
 -/
 
@@ -158,8 +165,14 @@ open Lean Meta
 
 namespace Modelgen
 
-/-- The five, by name. A declaration in this set is the basis and is not
+/-- The four, by name. A declaration in this set is the basis and is not
 modelled — the exemption that makes the construction well-founded.
+
+**`Acc` was the fifth and is not here any more.** Its one grant — the
+subsingleton-recursive large eliminator — is derived by
+[`Modelgen.graphArm`], so `Acc` is an ordinary declaration and models like
+one. `Nonempty` never joins this list either, though the graph arm names it:
+`Classical.choice`'s domain is not an exemption, and it self-models.
 
 `False` is **not** among them: it is derived (Church `∀ p : Prop, p`, with
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to

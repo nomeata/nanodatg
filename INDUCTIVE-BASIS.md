@@ -674,12 +674,13 @@ Unmeasured / argued-only, exhaustively:
   `Acc.rec`'s exact type from the Church encoding plus `Classical.choice` by
   the graph route (§4). For a checker willing to carry choice the basis is
   **four**, `{Eq, PSigma, Nat, PULiftP}`. What remains open here is not the
-  derivation but its *generality as a schema*: the file compiles the recipe
-  for `Acc`'s own shape and for one indexed shape with an extra proof
-  argument, and `AccArmShapes.lean` extends it to further constructor
-  shapes; neither is the arbitrary-telescope schema, which is the same gap
-  the two entries above have. `modelgen` has not wired the arm, so the
-  *tool's* basis is still five.
+  derivation but its *generality as a schema* — and that is now **closed by
+  construction rather than by argument**: `Modelgen.graphArm` emits the recipe
+  for an arbitrary declaration of the class, and the tool's basis is four.
+  What the schema does *not* reach is recorded with it: the constructor's data
+  fields must be the conclusion's indices one for one, so a constant index, or
+  one built from a proof field (the `below` Lean mints beside a recursive
+  `Prop`), declines. `MODELGEN.md` §8.7 has the boundary and its fixtures.
 * Impossibility proofs for `PSigma`, for `Eq`-transport, for
   `PULiftP`-over-`PEmpty`, and for the sixth item: none exist; each is
   classified at its honest grade in §4.
