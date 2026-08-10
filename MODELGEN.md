@@ -3020,23 +3020,18 @@ def BoxF_model_self.{u,v} (α : Sort u) (β : Sort v) : Sort (max 1 u v) :=
 | stock lean4lean (`3dc52e0`) | **reject** — byte-identical message |
 | patched lean4lean | **accept** |
 
-So, precisely: **the `BoxF` carrier is accepted by a locally repaired level
-checker and rejected by Lean's normaliser and by stock lean4lean.** That is a
-result about the level algorithm. It is **not** a licence to emit: the
+So, precisely: **the `BoxF` carrier is accepted by a repaired level checker
+and rejected by Lean's normaliser and by stock lean4lean.** That is a result
+about the level algorithm, and by itself it was **not** a licence to emit: the
 contract is that a proof Lean's kernel rejects is a decline, never an
-emission, so `BoxF` **remains a decline** and `prim_declines.lean` still
-pins it.
+emission, so under a stock kernel `BoxF` **remains a decline** and
+`prim_declines.lean` still pins it. §8.6.1 is what changes for a *non-stock*
+kernel, and it changes only there.
 
-Nothing in `modelgen` requires the better algorithm today, and coverage does
-not move: `init-prelude` contains no `BoxF`-shaped declaration — the fixture
-is designed, precisely to hold this refusal path open. What the cross-check
-settles is that the sixth item is a real gap, which side of it lean4lean is
-on, and that one prune closes it on everything measured.
-
-### Two caveats, both load-bearing
+### Two caveats on the lean4lean cross-check, both load-bearing
 
 * **The version gap was checked by diff, not by rebuild.** The clone's
-  `origin/master` (`1a16b72`) is 24 commits ahead of the pinned `3dc52e0`,
+  `origin/master` (`1a16b72`) was 24 commits ahead of the pinned `3dc52e0`,
   and includes `#22` "use the standard library level operations" and `#23`
   "Verify the standard library universe level operations". `Lean4Lean/
   Level.lean` differs across that gap by exactly three things — a docstring,
@@ -3047,12 +3042,191 @@ on, and that one prune closes it on everything measured.
   function. `origin/master` needs `v4.33.0-rc2`, which is not installed, so
   it was not rebuilt.
 * **lean4lean's own replay tool could not be run.** `lake exe lean4lean Init`
-  segfaults on this clone — *before* the patch as well as after, confirmed by
+  segfaulted on that clone — *before* the patch as well as after, confirmed by
   reverting to stock and reproducing — most plausibly because the clone's
   `lean-toolchain` was retargeted from upstream's to our `v4.29.1`. So `lake
-  build` (150 jobs, clean) and the re-proved soundness lemma are the whole of
+  build` (150 jobs, clean) and the re-proved soundness lemma were the whole of
   the sanity check; nothing exercised the patched checker over a large real
-  corpus. This is the weakest link in §8.6 and it is not hidden.
+  corpus. That was the weakest link in the cross-check, and §8.6.1 is what
+  removed the need for it: the replacement now runs inside Lean's own kernel
+  over the whole corpus.
+
+## 8.6.1 The repair, in Lean's actual kernel, at run time
+
+The cross-check above answers "is the gap real and would a better algorithm
+close it" with a *second* checker. `modelgen/interpose/` answers it with the
+**first** one: it rewrites Lean's level comparison in the running process, so
+the model can be planned and checked by Lean itself rather than argued about
+against a reimplementation. Two things come out of that, and the second was
+not expected.
+
+### What it is
+
+A shared object, `modelgen/interpose/levelhack.so`, built by `cc -shared` from
+two C files and needing no Lean headers or libraries. Loaded by
+`Lean.loadDynlib` — a plain `IO` action — or by `LD_PRELOAD`. Its ELF
+constructor reads the host executable's own `.symtab` out of `/proc/self/exe`,
+finds Lean's level functions, `mprotect`s `.text` writable, and rewrites the
+four-byte relative displacement of **selected call sites** so they land on a
+replacement. `modelgen --interpose-levels SO` is the supported entry point.
+
+Call sites and not the function prologue, because that leaves each original
+byte-identical and callable at its own address. The replacement is therefore
+a strict one-sided extension,
+
+```text
+hook(u, v)  =  stock(u, v)  ||  complete(u, v)
+```
+
+where `stock` is Lean's untouched code and `complete` is a decision procedure
+for the level algebra (`modelgen/interpose/level_algebra.h` carries the
+algorithm and its correctness argument: push `imax` down until its second
+argument is a variable, case-split on whether that variable is zero, and
+compare canonical `max`-of-`var + k` forms at the leaves). Everything Lean
+accepts is still accepted by Lean's own code, and every *new* acceptance is
+counted and reported.
+
+### The finding that was not expected: it takes two layers, not one
+
+`modelgen`'s §8.6 decline is **not** a kernel refusal. It is taken by the
+planner, in `Modelgen/Simple.lean`, which asks `Lean.Meta.isLevelDefEq`
+whether the candidate pad `max (max 1 ℓ⃗) w` equals the carrier's `w`. That is
+the **elaborator's** level equality, compiled Lean, and it is a *different
+function* from the kernel's C++ `lean::is_equivalent` with its own
+incompleteness. So:
+
+* with the **kernel alone** patched — `lean::is_equivalent`,
+  `lean::is_geq` — the corpus does not move at all. Measured: 193 files
+  (`vendor/arena-tests` plus `modelgen/tests`), every report byte-identical to
+  the stock run, and the only escape in any run is the take-verification's own
+  probe. The kernel never gets the chance to refuse, because the planner
+  refuses first.
+* with `Lean.Meta.isLevelDefEq` patched **as well**, `BoxF` is planned, and
+  then the (also patched) kernel accepts it.
+
+Six call sites are rewritten for the kernel and one for the elaborator; the
+banner names each. Deliberately left alone: `lean::is_geq_core`'s recursion
+into `lean::is_geq`, and `Lean.Meta.solve`'s recursion into
+`lean_is_level_def_eq`. Those are the stock algorithms' own internals and
+`stock` has to keep meaning what Lean does.
+
+### `BoxF`, closed
+
+```text
+stock       BoxF: declined — prim model shape: BoxF.mk's fields reach
+                  Sort imax (imax u v) v and the carrier is Sort max 1 u v:
+                  no pad or codomain box closes the gap
+interposed  BoxF: model of 4 declarations
+            statements: 9 compared against the installed recursors' own
+                        rules, 0 differ
+```
+
+The census for that run: `Meta.isLevelDefEq` 9 calls, **1** decided only by
+the interposition — the pad; `is_equivalent` 9 calls, **4** decided only by
+the interposition, one of which is the probe, so **3** were the model itself;
+`is_geq` 17 calls, **0** escapes.
+
+### Soundness, measured
+
+A more complete procedure accepts strictly more, so the number that matters is
+*false accepts*: pairs the procedure calls equal that a semantic oracle refutes.
+Note the asymmetry — an oracle that finds a counterexample has settled the
+question, an oracle that finds none has settled nothing — so the false-accept
+count is exact and the "missed" counts are upper bounds.
+
+Fuzz, random levels, oracle = every assignment over a bounded range, run
+in-process against the real `lean::is_equivalent` and `lean::is_geq`:
+
+| pairs | depth | vars | replacement false accepts | replacement missed | Lean `is_equivalent` missed | Lean `is_geq` missed |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2,000,000 | 4 | 3 | **0** | 0 | 1,806 | 25,950 |
+| 1,000,000 | 4 | 3 | **0** | 0 | — | — |
+| 1,000,000 | 5 | 4 | **0** | 0 | — | — |
+| 500,000 | 6 | 3 | **0** | 0 | 205 | 9,681 |
+| 500,000 | 3 | 3 | **0** | 0 | — | — |
+| 500,000 | 6 | 5 | **0** | 0 | — | — |
+| 300,000 | 4 | 6 | **0** | 0 | — | — |
+| 200,000 | 8 | 3 | **0** | 0 | — | — |
+
+Over 6 million pairs: **zero false accepts, and zero `LA_UNKNOWN`** (the
+resource-cap answer, which falls back to stock). Lean's own two functions also
+had zero false accepts everywhere, as they must.
+
+Two honesty notes on that table. The `missed` column is zero only after the
+oracle is widened: at three variables an oracle over `0..4` — the one the
+lean4lean survey used — reported 99 spurious `>=` "misses" per 200,000 pairs,
+because `4 >= w` holds on `0..4` and fails at `5`; widening to `0..12` took
+them to zero. At four or more variables the oracle range has to shrink to keep
+the point count bounded, and the artifact returns: 45 spurious misses at five
+variables over `0..4`, **0** over `0..8`, same pairs. And: **this is a
+measurement against a bounded oracle, not a completeness proof**, which is
+worth saying twice and is said twice.
+
+### The claim this costs
+
+Under `--interpose-levels`, "checked by Lean's kernel" is false for anything
+that only passed because of an escape. So the flag is off by default; the load
+prints a banner naming every rewritten call site; the exit prints a census
+splitting every level comparison into *accepted by stock*, *accepted only under
+interposition*, and *rejected by both*; and the load **fails hard** unless both
+the kernel's verdict and the elaborator's verdict on the §8.6 witness observably
+flip from reject to accept. Not "`mprotect` returned 0" — an observed change in
+what Lean answers. An interposition that quietly did nothing and let the run
+continue would be the tenth instance of `DECISIONS.md` 2026-08-08's "a check
+reporting success having done nothing", and the take-verification exists to make
+it unreachable.
+
+That check earned itself twice during construction. The first witness used
+`PUnit`, which is not in `modelgen`'s `importModules #[] {}` environment, so the
+verdict failed to flip for a reason that had nothing to do with the patch. And
+the check was first written as a `Bool`-valued *pure* function of the
+environment — which it is not, that being the entire point — and Lean's compiler
+duly evaluated the before and after calls once, reporting "no flip" on a run
+where the flip had happened. Both were caught by the refusal, not by anyone
+reading a log.
+
+**`nanodatg`'s own `kernel/` is untouched.** The thing rewritten here is Lean's
+C++ kernel inside the `modelgen` process; the Rust trusted computing base is not
+involved and is not modified.
+
+### The dependency, stated
+
+The kernel's level functions are **local** symbols (`nm` type `t`), absent from
+`.dynsym`. `LD_PRELOAD` symbol interposition cannot reach them — there is no PLT
+indirection to hijack — which is why the addresses are read out of `.symtab`
+instead. So this works only on a host that is **unstripped** and links Lean
+**statically**. The shipped `libleanshared.so` is stripped of local symbols, so
+the `lean` CLI cannot be patched this way at all; `modelgen` and Lake
+executables generally can. On a host it cannot patch, the library aborts the
+process with a diagnostic rather than loading and doing nothing — which is also
+why its constructor clears `LD_PRELOAD`, since `Lean.findSysroot` shells out to
+that same unpatchable `lean`.
+
+Nothing is hardcoded except the **mangled symbol names**; addresses are resolved
+at run time, so rebuilding the host is fine, and a Lean release that renames or
+inlines any of the five will make the load fail loudly rather than silently.
+
+### Can lean4lean be dropped? Yes — use and mention
+
+**Use: already gone.** `vendor-l4l/` is not in the tree (it was gitignored, like
+`/vendor`), and nothing in the repository builds, runs, or links lean4lean.
+What survives is the record: `scripts/inductive-basis/lean4lean-level-prune.patch`
+and `scripts/inductive-basis/LevelSurvey.lean`.
+
+**Mention: keep the survey, drop the dependency.** The survey table above is a
+true measurement and is the reason anyone believed the gap was real; it stays.
+What lean4lean was *for* — an oracle for "would a better algorithm close this,
+and is the repair sound" — is superseded on every axis by the interposition:
+the replacement runs inside Lean's own kernel rather than beside it, is measured
+at 6 million pairs rather than 33,670, and is exercised over the whole corpus,
+which is exactly the thing §8.6's second caveat said had never been done.
+
+One thing lean4lean still has that this does not: **a proof**. The prune patch
+carried `isEquiv'_wf` across, so its soundness was as machine-checked as stock
+lean4lean's. `level_algebra.c` is C with a written correctness argument and six
+million measured pairs, and that is a weaker kind of evidence. If the project
+ever wants the level repair *proved* rather than measured, lean4lean is where
+that work would go, and the prune patch is the head start.
 
 ## 8.7 Arm G: the recursive subsingleton, by the graph — and `Acc` leaves the basis
 

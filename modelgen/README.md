@@ -15,6 +15,16 @@ comes from. Only the declarations a tool *generates* are checked, one at a time,
 by Lean's kernel via `Environment.addDeclCore` with checking on. **A proof the
 generator builds and the kernel rejects is a decline, never an emission.**
 
+**One flag suspends that sentence, and only that flag.**
+`modelgen --interpose-levels SO` rewrites Lean's own level-comparison machine
+code inside the running process, so the kernel it is checked against is not
+stock (`modelgen/interpose/`, `MODELGEN.md` §8.6). Under that flag "checked by
+Lean's kernel" is false for anything that passed only because of the change,
+and the run prints a census at exit separating the two populations. Every
+number elsewhere in this file and in `MODELGEN.md`, unless it says otherwise,
+is from a **default run with the flag off** and is a claim about Lean's real
+kernel.
+
 ## Why you might want this
 
 A checker that consumes Lean exports has to reimplement two awkward things:
@@ -101,7 +111,10 @@ reduced. Every other arm's ι is still `Eq.refl` and has no internals.
 carries the construction, its measured coverage (122 of `init-prelude`'s 125
 simple inductives; every decline with a printed reason), its cost (+26 %
 instructions there), and §8.6 the lean4lean cross-check on the one decline
-that is a level-arithmetic gap rather than a type error.
+that is a level-arithmetic gap rather than a type error — plus §8.6.1, which
+closes that decline by rewriting Lean's level comparison in memory
+(`--interpose-levels`) and reports what it costs the "checked by Lean's kernel"
+claim.
 
 **They compose in one pass.** A nested declaration's model *is* a mutual block,
 so the second construction runs on it too — and with `--prim-models` the third

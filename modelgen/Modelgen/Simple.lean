@@ -154,7 +154,10 @@ single-valuedness and is propositional.
   This one is a **level-incompleteness** decline, not a type error: the
   padded chain equals the carrier's level at every instantiation and Lean's
   normal-form level defeq does not see it. `MODELGEN.md` §8.6 has the
-  lean4lean cross-check.
+  lean4lean cross-check, and §8.6.1 closes it — the decline is taken *here*,
+  by `isLevelDefEq` below, so it needs the **elaborator's** level equality
+  repaired and not only the kernel's, which is what
+  `modelgen --interpose-levels` does.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
 * the four **basis primitives themselves** — the exemption that makes the
