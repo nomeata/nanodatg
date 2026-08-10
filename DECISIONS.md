@@ -3328,3 +3328,56 @@ done. The one thing it still has is a machine-checked soundness proof of the
 repair; `level_algebra.c` has a written argument and a measurement. If the repair
 should ever be *proved*, lean4lean and `scripts/inductive-basis/lean4lean-level-prune.patch`
 are where that starts.
+
+## 2026-08-10 — A ratchet that only ever loosens has stopped measuring
+
+**The principle behind the escape rule, written down as a principle.** It has
+been operating in this project for weeks and existed only as individual
+comments at individual assertions, which is exactly the state in which a rule
+gets applied inconsistently and then quietly dropped.
+
+This repository guards its frontier with *ratchets*: `assert!(gaps <= 15734)`,
+`assert!(esc <= 2232)`, `assert!(threaded >= 9)`. Each names a number a run
+produced and forbids the next run from doing worse. The value is that they fail
+on a regression nobody was looking for. The failure mode is that **every
+pressure on them is downward on strictness**: a tranche that improves one
+counter while nudging another gets shipped, the nudged bound gets raised with a
+trade written, and nothing ever pushes a bound back the other way. After enough
+of those, the bound sits far from the run and the guard cannot fail.
+
+So the rule is symmetric, and both halves are obligations:
+
+* **Loosening requires a written trade** — at the assertion and in
+  `MEASUREMENTS.md`, naming what was bought, and distinguishing a guard re-based
+  by a *neighbour's* traffic from one whose own subject regressed. That half was
+  already practised.
+* **Tightening is required whenever the counter improves.** A run that comes in
+  under a bound and leaves the bound where it was has *spent* the improvement on
+  slack. This half was not written down, and the escape ratchet sat at 2 257
+  against runs of 2 247 for most of a session because of it.
+
+Both halves were exercised together on 2026-08-10 (task #126,
+`TgBackend::target_head_step`): gaps 15 761 → 15 734 and escapes 2 257 → 2 232
+tightened, `projection_reduction_is_a_rule_fed_by_inference`'s reach bound
+11 → 9 loosened with a trade.
+
+### The check that stops a re-baseline from laundering a regression
+
+A loosened bound is only honest if the *reason* was verified rather than
+assumed, and the two readings usually look identical in the row being moved. In
+the 11 → 9 case, "two projection reductions were lost" and "two were never
+attempted" produce the same number. What separated them was **the rest of the
+ledger, not the row**:
+
+* `gap: proj_reduce` fell 661 → 659, in lockstep — a loss would have left the
+  gap count alone or raised it;
+* the three *search* rows the test protects were unmoved at 34 / 41 / 0;
+* **no row of the gap ledger rose at all**, and 12 more real kernel theorems
+  were derived.
+
+That is the population changing, not the rate. **Whenever a ratchet is
+loosened, the diff of the whole gap ledger is the evidence, and "no row rose" is
+the sentence to be able to write.** If some row did rise, the trade has to name
+it. See `MEASUREMENTS.md`, "The head reduction that never reached its delta
+branch", and `DECISIONS.md`'s 2026-08-08 "SKIP is not PASS" entry, of which this
+is the same idea applied to a number rather than to a skipped test.

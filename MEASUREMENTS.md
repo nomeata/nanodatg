@@ -6997,3 +6997,80 @@ to decompose. It is also now the *older* question — the 2 923 + 250
 table-caused declines outside the constructor population are closed by this
 change wherever the delta branch serves them, and what remains of them is
 `ThStep`'s business rather than `CtorReach`'s.
+
+### Beta's own domain premise: 6 170, and it is a missing fact — 2026-08-10
+
+*The largest genuine decline left by the census above, asked the same way. The
+suspicion going in was that it would be the second instance of the
+`target_head_step` pattern — a component reading a cache's absence as a fact
+about the world. **It is not**, and the rows that say so are mostly zeros.*
+
+`target_mem` derives beta's premise `x ∈ A` or declines; it never assumes it. So
+the question is not why it refuses but where the premise could legitimately come
+from. Census at the clause, every exit, zeros included, partition exact:
+
+| beta's own domain premise `x ∈ A` | 13 856 |
+|---|---:|
+| an assumption in force said so | 293 |
+| a term-level fact about the operators | 409 |
+| a constructor's membership | 5 265 |
+| an inductive type in its universe | 223 |
+| the application check's handoff held it | 245 |
+| the `has_type` recursion derived it | 1 251 |
+| **no Lean node interprets to the subject** | **5 250** |
+| a node was found; the recursion still declined | 920 |
+| a node was found that reinterprets to something else | **0** |
+
+The rows sum to the denominator. They did not on the first run — the handoff
+return was uninstrumented and 245 went missing — which is the whole reason a
+census states its total.
+
+#### Four rows, three of them zeros
+
+| | |
+|---|---:|
+| declines where the subject was **already assumed at another domain** | **0** |
+| …and nothing in scope mentioned it at all | 6 170 |
+| no-node subjects that are open set **applications** | 5 250 / 5 250 |
+| …whose head is a **λ graph** (so the subject is itself a redex) | **0** |
+| …that **this backend built** — in `parts`, absent from `exprs_rev` | **5 250 / 5 250** |
+| a node found that reinterprets to something else | **0** |
+
+Read together these close every cheap route and identify the expensive one:
+
+* **Not a conversion.** 0 of 6 170 have the subject assumed at another domain.
+  This is the sharpest contrast with the constructor-premise result above, where
+  the answer was 1 376 of 1 376 and the debt *was* a conversion. The same
+  question, asked at two clauses, gets opposite answers — which is why it is
+  asked rather than assumed.
+* **Not a contraction.** 0 have a λ graph at the head.
+* **Not a cache.** Every one of the 5 250 is a term the *derivation* assembled
+  and the *interpretation* never produced — a reduct, living only in the target
+  theory. `exprs_rev` is right to have no node, and `NodeMismatch = 0` says it
+  is not lying. This is exactly what `target_head_step` was **not**: there the
+  term carried the structure and the table had merely not been told; here there
+  is no node to find.
+
+#### The verdict, and what it would take
+
+**The eighth measured dead end, and the first that is a genuine absence rather
+than a cost.** What is missing is a term-level route to `app(f,a) ∈ dom` that
+does not pass through an `ExprPtr`. The prelude already has the shape of one —
+`fs_app_mem`, "a function's values lie in its codomain" — but using it needs
+`f ∈ fs(A, dom)` for a head that is a partially reduced spine (4 438 curried,
+812 a defined constant), and nothing on the thread holds a function-space
+membership for those. `has_type_app` derives the analogous fact, but reads the
+`Π` off the head's *syntactic Lean type*, which is precisely what a reduct does
+not have.
+
+So this is not reachable by threading, by transport, or by another lookup. It
+needs a function-space membership for reduced spines, which is a derivation
+question for `derived/` rather than a plumbing question for the backend — and it
+is the first item this stage has produced that belongs on that side of the line.
+
+The residual 920 do have a node; 638 are applications of an **opaque** constant,
+the uninterpreted-inductive obstruction, which is a named bucket and not this
+clause's problem.
+
+Ledger unchanged with the census in: escapes 2 232, gaps 15 734, 159 803 derived
+— byte-identical, so the measurement is side-effect free.

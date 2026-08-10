@@ -9111,6 +9111,42 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The node is only a *hint*: it is checked to interpret to `x` before it is
     /// used, and [`Self::has_type_a`]'s guard checks the resulting theorem
     /// against the claim regardless.
+    ///
+    /// # Why the 6 170 declines are a missing fact and not a missing lookup
+    ///
+    /// *Measured 2026-08-10, task #126, after the same census closed
+    /// [`Self::target_head_step`]. `TmStep` is the census; this is its reading.*
+    ///
+    /// This is the largest *genuine* decline in the target-beta walk, and the
+    /// obvious suspicion after `target_head_step` was that it is the same shape:
+    /// a component reading a cache's absence as a fact about the world. **It is
+    /// not**, and four rows say so — three of them zeros that were counted for
+    /// exactly that reason.
+    ///
+    /// * **0 of 6 170** had the subject already assumed at *another* domain. So
+    ///   this is not a conversion problem; nothing in scope mentions these
+    ///   subjects at all. (Contrast [`LocalPrem`], where the answer was 1 376 of
+    ///   1 376 and the debt *was* a conversion.)
+    /// * **5 250 of 6 170** fail because no Lean node interprets to the subject,
+    ///   and **5 250 of 5 250** of those are open set *applications*.
+    /// * **0** of them have a λ graph at the head, so the subject is never
+    ///   itself a redex — the contract-it-first route is empty.
+    /// * **5 250 of 5 250 are terms this backend built**: present in
+    ///   [`Self::parts`], absent from `exprs_rev`. They are *reducts*, produced
+    ///   by contracting a type in the target theory, and no Lean expression
+    ///   interprets to them because none ever did. `TmStep::NodeMismatch` is
+    ///   **0**, so the index is not lying either.
+    ///
+    /// The reverse index is therefore correct and the node genuinely does not
+    /// exist. What is missing is a term-level route to `app(f,a) ∈ dom` that
+    /// does not go through an `ExprPtr` — the prelude's `fs_app_mem` is the
+    /// shape of one, and it would need `f ∈ fs(A, dom)`, a function-space
+    /// membership for a head that is a partially reduced spine (4 438 curried,
+    /// 812 a defined constant). Nothing on the thread holds that.
+    ///
+    /// The remaining 920 do have a node and the recursion still declined; 638 of
+    /// them are applications of an *opaque* constant, i.e. the uninterpreted
+    /// inductive obstruction, which is a named bucket and not this clause's.
     fn target_mem(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9120,20 +9156,86 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         depth: u32,
     ) -> Option<(Thm, Vec<Formula>)> {
         let hyp = conj_of(assms);
+        note_tm(TmStep::Asked);
         if let Some(t) = self.assumed(x, dom, assms) {
+            note_tm(TmStep::Assumed);
             return Some((t, assms.to_vec()))
         }
         if let Some(t) = self.domain_premise(x, dom) {
+            note_tm(TmStep::DomainPremise);
             return Some((u_a1i(&t, hyp.as_ref()), assms.to_vec()))
         }
         if let Some(t) = self.ind_mems.get(&(x.clone(), dom.clone())).cloned() {
+            note_tm(TmStep::IndMem);
             return Some((u_a1i(&t, hyp.as_ref()), assms.to_vec()))
         }
         if let Some(t) = self.ind_ty_mem(x, dom) {
+            note_tm(TmStep::IndTyMem);
             return Some((u_a1i(&t, hyp.as_ref()), assms.to_vec()))
         }
-        let e = *self.exprs_rev.get(x)?;
+        // **Is the premise already stated in scope, at another domain?** The
+        // question `LocalPrem` asked of the constructor rule, asked here: an
+        // assumption about this very subject that `assumed` could not use is a
+        // conversion away, while none at all is a missing fact. Counted at every
+        // decline below, so the two are told apart rather than merged into a
+        // single miss.
+        #[cfg(feature = "stepcount")]
+        let in_scope = assms.iter().any(|f| f.as_mem().is_some_and(|(s, _)| s == *x));
+        #[cfg(feature = "stepcount")]
+        let note_scope = |k: TmScope| TM_SCOPE[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(e) = self.exprs_rev.get(x).copied() else {
+            // **The clause's own reverse index has no Lean node for `x`.** Every
+            // route below this point needs one — the handoff is keyed on it and
+            // `has_type_a` takes an `ExprPtr`, not a term. So a term the
+            // *derivation* built rather than the *interpretation* is refused
+            // here, whatever could be proved about it. Whether that is the
+            // second instance of the `parts` pattern or a genuine absence is
+            // what the shape rows say.
+            note_tm(TmStep::NoNode);
+            #[cfg(feature = "stepcount")]
+            {
+                note_scope(if in_scope { TmScope::NoNodeInScope } else { TmScope::NoNodeAbsent });
+                let mut fv = Vec::new();
+                x.free_vars(&mut fv);
+                TM_NONODE[match (x.as_app().is_some(), fv.is_empty()) {
+                    (true, true) => 0usize,
+                    (true, false) => 1,
+                    (false, true) => 2,
+                    (false, false) => 3,
+                }]
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // **The subject is itself a set application. Of what?** If its
+                // own head is a λ graph then `x` is a redex and contracting it
+                // is a route that needs no Lean node at all; if the head and
+                // the argument each have a node while the application does
+                // not, the index is missing a term the derivation assembled
+                // out of two it knows. Both are the `parts` shape; neither is
+                // assumed. Asked of the *term*, not of a table.
+                let r = self.tb_reach(x, true);
+                TM_NONODE_HEAD[r as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // **Did this backend build the subject itself?** `parts`
+                // records every term [`TgBackend::mk`] made, so `parts` knowing
+                // it while `exprs_rev` does not is precisely "the derivation
+                // assembled this, the interpretation never produced it" — a
+                // structural fact about reducts, not a cache that was not
+                // filled. The distinction decides whether this row is the
+                // `parts` pattern again or a genuine absence.
+                if self.parts.contains_key(x) {
+                    TM_NONODE_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if let Some((_, xargs)) = x.as_app() {
+                    if xargs.len() == 2 {
+                        let h = self.exprs_rev.contains_key(&xargs[0]);
+                        let a = self.exprs_rev.contains_key(&xargs[1]);
+                        TM_NONODE_PARTS[usize::from(h) + 2 * usize::from(a)]
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+            return None
+        };
         if self.interp(ctx, e) != *x {
+            note_tm(TmStep::NodeMismatch);
             return None
         }
         // **Threaded, before the search** — the same store
@@ -9167,11 +9269,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     } else {
                         TbMiss::HandoffUnderAntecedents
                     });
+                    note_tm(TmStep::Handoff);
                     return Some((t, used))
                 }
             }
         }
-        self.has_type_a(ctx, e, dom, assms, depth + 1)
+        let out = self.has_type_a(ctx, e, dom, assms, depth + 1);
+        match &out {
+            Some(_) => note_tm(TmStep::Search),
+            None => {
+                note_tm(TmStep::SearchFailed);
+                #[cfg(feature = "stepcount")]
+                {
+                    note_scope(if in_scope {
+                        TmScope::SearchFailedInScope
+                    } else {
+                        TmScope::SearchFailedAbsent
+                    });
+                    let sh = self.ht_shape(ctx, e);
+                    TM_SEARCH_SHAPE[sh as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        out
     }
 
     /// `⊢ conj(assms) → (te ∈ ty)` when one of the assumptions says so.
@@ -16719,6 +16839,88 @@ static TH_STEP: [std::sync::atomic::AtomicU64; N_TH_STEP] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_TH_STEP];
 fn note_ths(k: ThStep) { TH_STEP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// Every exit of [`TgBackend::target_mem`] — beta's own domain premise `x ∈ A`,
+/// which [`TgBackend::target_head_step`]'s census showed to be its largest
+/// *genuine* decline (6 170, against 3 173 caused by a side table).
+///
+/// The clause is honest: it derives the premise or declines, and never assumes
+/// it. So the question this census asks is not why it refuses but **where the
+/// premise could legitimately come from**, and the rows are ordered as the
+/// clause tries them. `Asked` is the denominator; the five success rows and the
+/// three failure rows partition it.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum TmStep {
+    /// The denominator: every premise this clause was asked for.
+    Asked,
+    /// An assumption in force already said so.
+    Assumed,
+    /// A term-level fact about the operators themselves.
+    DomainPremise,
+    /// An interpreted inductive's constructor membership.
+    IndMem,
+    /// An inductive type in its universe.
+    IndTyMem,
+    /// The application check's handoff already held it.
+    Handoff,
+    /// The `has_type` recursion derived it.
+    Search,
+    /// **No Lean node interprets to `x`.** Every remaining route needs one: the
+    /// handoff is keyed on it and `has_type_a` takes an `ExprPtr`. A term the
+    /// derivation built rather than the interpretation is refused here.
+    NoNode,
+    /// A node was found and did not interpret back to `x`. Expected **0** — the
+    /// reverse index would have to disagree with the forward one.
+    NodeMismatch,
+    /// A node was found and the whole `has_type` recursion still declined.
+    SearchFailed,
+}
+const N_TM: usize = 10;
+static TM: [std::sync::atomic::AtomicU64; N_TM] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TM];
+fn note_tm(k: TmStep) { TM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// At each [`TmStep`] decline: was a membership about **this very subject**
+/// already among the assumptions in force, at a domain [`TgBackend::assumed`]
+/// could not bridge?
+///
+/// The question [`LocalPrem`] asked of the constructor rule. An assumption at
+/// the wrong domain is a *conversion* away; none at all is a missing fact, and
+/// the two want opposite work. Merging them into one miss count is what hid the
+/// answer last time.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum TmScope {
+    NoNodeInScope,
+    NoNodeAbsent,
+    SearchFailedInScope,
+    SearchFailedAbsent,
+}
+const N_TM_SCOPE: usize = 4;
+static TM_SCOPE: [std::sync::atomic::AtomicU64; N_TM_SCOPE] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TM_SCOPE];
+/// Shape of the subject at a [`TmStep::NoNode`]: application or not, closed or
+/// open. An *application* with no node is a term the derivation assembled — the
+/// `parts` pattern's shape; a bare variable with no node is a different animal.
+static TM_NONODE: [std::sync::atomic::AtomicU64; 4] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+/// What a [`TmStep::NoNode`] subject is an application *of*, read off the term
+/// by [`TgBackend::tb_reach`]. A λ-graph head means the subject is itself a
+/// redex, which is a route that needs no Lean node.
+static TM_NONODE_HEAD: [std::sync::atomic::AtomicU64; N_TB_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_TB_REACH];
+/// Whether the reverse index knows the subject's head and argument separately,
+/// when it does not know their application: `1 +` head, `2 +` argument.
+static TM_NONODE_PARTS: [std::sync::atomic::AtomicU64; 4] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+/// [`TmStep::NoNode`] subjects that **this backend built** — present in
+/// [`TgBackend::parts`] and absent from `exprs_rev`. The reduct population, as
+/// against anything the index merely failed to record.
+static TM_NONODE_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Shape of the Lean node at a [`TmStep::SearchFailed`].
+static TM_SEARCH_SHAPE: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
+
 /// Can the target-beta clause even *start* on the domain of an unsettled
 /// constructor premise? A pure shape lookup at the
 /// [`LocalPrem::UnrelatedApp`] population — no derivation, no counters
@@ -18321,6 +18523,80 @@ fn ht_report() -> String {
             let n = TB[m as usize].load(Relaxed);
             if n > 0 {
                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
+            }
+        }
+    }
+    // Beta's own domain premise, every exit of `target_mem`. Printed whole,
+    // zeros included: `NodeMismatch` is expected 0 and is load-bearing.
+    let tm = |k: TmStep| TM[k as usize].load(Relaxed);
+    if tm(TmStep::Asked) > 0 {
+        s.push_str(&format!(
+            "    {:<width$}  {:>10}\n",
+            "beta's own domain premise x ∈ A, by outcome",
+            tm(TmStep::Asked)
+        ));
+        for (l, k) in [
+            ("an assumption in force said so", TmStep::Assumed),
+            ("a term-level fact about the operators", TmStep::DomainPremise),
+            ("a constructor's membership", TmStep::IndMem),
+            ("an inductive type in its universe", TmStep::IndTyMem),
+            ("the application check's handoff held it", TmStep::Handoff),
+            ("the has_type recursion derived it", TmStep::Search),
+            ("NO LEAN NODE interprets to the subject", TmStep::NoNode),
+            ("a node was found; the recursion still declined", TmStep::SearchFailed),
+            ("a node was found that reinterprets to something else", TmStep::NodeMismatch),
+        ] {
+            s.push_str(&format!("    {:<width$}  {:>10}\n", format!("  …{l}"), tm(k)));
+        }
+        let sc = |k: TmScope| TM_SCOPE[k as usize].load(Relaxed);
+        s.push_str(&format!(
+            "    {:<width$}  {:>10}\n",
+            "      …of the declines, the subject was already assumed at ANOTHER domain",
+            sc(TmScope::NoNodeInScope) + sc(TmScope::SearchFailedInScope)
+        ));
+        s.push_str(&format!(
+            "    {:<width$}  {:>10}\n",
+            "      …and nothing in scope mentioned it at all",
+            sc(TmScope::NoNodeAbsent) + sc(TmScope::SearchFailedAbsent)
+        ));
+        for (i, l) in ["an application, closed", "an application, open", "not an application, closed", "not an application, open"]
+            .iter()
+            .enumerate()
+        {
+            let n = TM_NONODE[i].load(Relaxed);
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …no-node subject was: {l}")));
+        }
+        for (i, l) in ["head is a λ graph — the subject is itself a redex", "head is curried", "head is a defined constant", "head is opaque", "head shape unknown", "not a two-argument application"]
+            .iter()
+            .enumerate()
+        {
+            let n = TM_NONODE_HEAD[match i {
+                0 => TbReach::HeadLam as usize,
+                1 => TbReach::HeadCurried as usize,
+                2 => TbReach::HeadAbbrev as usize,
+                3 => TbReach::HeadOpaque as usize,
+                4 => TbReach::HeadUnrecorded as usize,
+                _ => TbReach::Unrecorded as usize,
+            }]
+            .load(Relaxed);
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …no-node subject: {l}")));
+        }
+        s.push_str(&format!(
+            "    {:<width$}  {:>10}\n",
+            "      …no-node subject the DERIVATION built (in `parts`, not in the index)",
+            TM_NONODE_BUILT.load(Relaxed)
+        ));
+        for (i, l) in ["index knows neither head nor argument", "…knows the head only", "…knows the argument only", "…knows BOTH, but not their application"]
+            .iter()
+            .enumerate()
+        {
+            let n = TM_NONODE_PARTS[i].load(Relaxed);
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …{l}")));
+        }
+        for m in HtMiss::ALL {
+            let n = TM_SEARCH_SHAPE[m as usize].load(Relaxed);
+            if n > 0 {
+                s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …declined node was: {}", m.name())));
             }
         }
     }
