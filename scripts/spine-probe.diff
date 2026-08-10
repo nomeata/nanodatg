@@ -1,13 +1,21 @@
-# MEASUREMENT PROBE — the spine study, worktree-only, never to be landed.
+# MEASUREMENT PROBE — the spine study and the two ledger-deletion runs.
+# Worktree-only, never to be landed.
 #
 # `git apply scripts/spine-probe.diff` onto a scratch worktree, then
 #
 #   cargo build --release --features nanoda_lib/stepcount,nanoda_lib/tg --bin nanoda_bin
-#   ./target/release/nanoda_bin cfg.json 2>&1 | grep PROBE      # census, side-effect free
-#   NANODA_SPINE_EXPERIMENT=1 …                                 # rebuild + ask, result discarded
-#   NANODA_SPINE_EXPERIMENT=1 NANODA_SPINE_FIX=1 …              # …and returned, so the ledger speaks
+#   ./target/release/nanoda_bin cfg.json 2>&1 | grep PROBE   # census, side-effect free
+#   NANODA_SPINE_EXPERIMENT=1 …                              # rebuild the node + ask, discarded
+#   NANODA_SPINE_EXPERIMENT=1 NANODA_SPINE_FIX=1 …           # …and returned
+#   NANODA_REDUCT_ASSUME=1 …                                 # delete TbMiss::Reduct
 #
-# What it adds, all under `#[cfg(feature = "stepcount")]`:
+# The last two are the *method*: delete a decline population outright and read
+# the whole ledger, rather than judging the population by its own size. Both
+# came out at approximately zero; see MEASUREMENTS.md, "Beta's own domain
+# premise is not a blocker" and "The target-beta clause is worth fifteen gaps".
+#
+# What it adds, all under `#[cfg(feature = "stepcount")]` except the one
+# `reduct_assumed` stub that keeps the call site compiling without it:
 #
 #   * `Shared::typed_subj_ty` — one representative *target* per subject, so
 #     "was this term ever typed" can be followed by "at what". `typed_subj`
@@ -15,18 +23,19 @@
 #   * `TgBackend::spine_probe` — at every `TmStep::NoNode`, peels the subject's
 #     application spine to its atom head and counts: spine length, what the
 #     atom head is, whether each leaf has a Lean node, and which of the facts a
-#     function-space route would need the thread actually holds.
-#   * The experiment: rebuild the missing application node from the leaves with
-#     `foldl_apps`, check it interprets to the subject, and ask the ordinary
-#     `has_type` recursion about it. Off unless `NANODA_SPINE_EXPERIMENT` is
-#     set, because it derives.
+#     function-space route would need the thread actually holds. Then, under
+#     the env var, rebuilds the missing application node from the leaves with
+#     `foldl_apps` and asks the ordinary `has_type` recursion about it.
+#   * `TgBackend::reduct_assumed` — **acquires** the reduct's own typing as a
+#     new antecedent instead of declining, exactly as `has_type_local` does.
+#     Nothing is admitted and no kernel rule is added: the theorem is
+#     `conj_proj`, a real projection out of the assumption list, and the
+#     antecedent is returned to the caller where the escape ledger counts it.
 #
-# The census half is side-effect free: with the experiment off, `init-prelude`'s
+# The census half is side-effect free: with every env var off, `init-prelude`'s
 # whole ledger is byte-identical (15734 gaps, 2232 escapes, 159803 derived).
-# See MEASUREMENTS.md, "beta's own domain premise is not a blocker", for the
-# numbers and the verdict.
 diff --git a/checker/src/tg.rs b/checker/src/tg.rs
-index d1ff669..06671d7 100644
+index 6df44d3..e454ece 100644
 --- a/checker/src/tg.rs
 +++ b/checker/src/tg.rs
 @@ -2413,6 +2413,12 @@ struct Shared {
@@ -50,7 +59,71 @@ index d1ff669..06671d7 100644
              typed_skel: HashMap::new(),
              closed_unknown: std::collections::HashSet::new(),
              decl_seq: 0,
-@@ -9099,6 +9106,156 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+@@ -8855,6 +8862,53 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+     /// comes back in the returned assumption list, where the caller discharges
+     /// it at a binder or the escape ledger counts it. There is no path here that
+     /// takes it on trust.
++    /// PROBE: **acquire** the reduct's own typing as a new antecedent, instead
++    /// of declining when the recursion cannot derive it.
++    ///
++    /// This is [`Self::has_type_local`]'s move — a formula-level assumption,
++    /// returned to the caller, discharged at a binder or counted by the escape
++    /// ledger — applied to the one row the domain-premise study left standing.
++    /// Nothing is admitted and no kernel rule is added: the theorem is
++    /// [`conj_proj`], `⊢ conj(used) → used[i]`, a real projection.
++    ///
++    /// It exists to answer *what would the ledger do if `TbMiss::Reduct`
++    /// vanished*, which is the question that decides whether this frontier is
++    /// two layers deep or more. Off unless `NANODA_REDUCT_ASSUME` is set,
++    /// because it moves gaps into escapes.
++    #[cfg(feature = "stepcount")]
++    fn reduct_assumed(
++        &mut self,
++        ctx: &mut TcCtx<'t, 'p>,
++        e: ExprPtr<'t>,
++        ty2: &Term,
++        used0: &[Formula],
++    ) -> Option<(Thm, Vec<Formula>)> {
++        if !reduct_assume() {
++            return None
++        }
++        let te = self.interp(ctx, e);
++        let f = Formula::mem(te, ty2.clone());
++        if used0.contains(&f) {
++            return None
++        }
++        let mut used = used0.to_vec();
++        used.push(f);
++        let t = conj_proj(&used, used.len() - 1)?;
++        RA_TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        Some((t, used))
++    }
++
++    #[cfg(not(feature = "stepcount"))]
++    fn reduct_assumed(
++        &mut self,
++        _ctx: &mut TcCtx<'t, 'p>,
++        _e: ExprPtr<'t>,
++        _ty2: &Term,
++        _used0: &[Formula],
++    ) -> Option<(Thm, Vec<Formula>)> {
++        None
++    }
++
+     fn has_type_target_beta(
+         &mut self,
+         ctx: &mut TcCtx<'t, 'p>,
+@@ -8864,7 +8918,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+         depth: u32,
+     ) -> Option<(Thm, HtClause, Vec<Formula>)> {
+         let (eq0, ty2, used0) = self.target_head_step(ctx, ty, assms, depth)?;
+-        let Some((inner, used)) = self.has_type_a(ctx, e, &ty2, &used0, depth + 1) else {
++        let step = self.has_type_a(ctx, e, &ty2, &used0, depth + 1);
++        let Some((inner, used)) = step.or_else(|| self.reduct_assumed(ctx, e, &ty2, &used0)) else {
+             note_tb(TbMiss::Reduct);
+             return None
+         };
+@@ -9099,6 +9154,156 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
          TbReach::HeadOpaque
      }
  
@@ -207,7 +280,7 @@ index d1ff669..06671d7 100644
      /// `⊢ conj(used) → x ∈ dom` for a term `x` that arrived without a Lean node
      /// — beta's own domain premise, at a *target*.
      ///
-@@ -9231,6 +9388,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+@@ -9267,6 +9472,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                              .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                      }
                  }
@@ -221,7 +294,7 @@ index d1ff669..06671d7 100644
              }
              return None
          };
-@@ -15059,6 +15223,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+@@ -15245,6 +15457,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                          TYPED_AT_RECONCLUDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                      }
                      self.shared.borrow_mut().typed_subj.entry(te.clone()).or_insert(seq);
@@ -233,7 +306,7 @@ index d1ff669..06671d7 100644
                      let skel = mem_skeleton(te, ty);
                      self.shared.borrow_mut().typed_skel.entry(skel).or_insert(seq);
                  }
-@@ -16917,6 +17086,43 @@ static TM_NONODE_PARTS: [std::sync::atomic::AtomicU64; 4] =
+@@ -17223,6 +17440,52 @@ static TM_NONODE_PARTS: [std::sync::atomic::AtomicU64; 4] =
  /// [`TgBackend::parts`] and absent from `exprs_rev`. The reduct population, as
  /// against anything the index merely failed to record.
  static TM_NONODE_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -267,6 +340,15 @@ index d1ff669..06671d7 100644
 +    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 +    *ON.get_or_init(|| std::env::var_os("NANODA_SPINE_EXPERIMENT").is_some())
 +}
++/// PROBE: reduct typings acquired as antecedents rather than declined.
++static RA_TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++/// Whether [`TgBackend::reduct_assumed`] runs — the "delete the residue and read
++/// the whole ledger" experiment at `TbMiss::Reduct`.
++#[cfg(feature = "stepcount")]
++fn reduct_assume() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("NANODA_REDUCT_ASSUME").is_some())
++}
 +/// Whether the rebuilt node's derivation is **returned** rather than discarded
 +/// — the experiment as a landing, so the gap ledger says what it would be worth.
 +#[cfg(feature = "stepcount")]
@@ -277,7 +359,23 @@ index d1ff669..06671d7 100644
  /// Shape of the Lean node at a [`TmStep::SearchFailed`].
  static TM_SEARCH_SHAPE: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
      [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
-@@ -18599,6 +18805,105 @@ fn ht_report() -> String {
+@@ -18831,6 +19094,15 @@ fn ht_report() -> String {
+                 s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
+             }
+         }
++        {
++            let n = RA_TAKEN.load(Relaxed);
++            if n > 0 {
++                s.push_str(&format!(
++                    "    {:<width$}  {n:>10}\n",
++                    "  …PROBE reduct typing ACQUIRED as an antecedent"
++                ));
++            }
++        }
+         for (l, m) in [("premise x ∈ A not settled", TbMiss::Domain), ("reduct still not typeable", TbMiss::Reduct)]
+         {
+             let n = TB[m as usize].load(Relaxed);
+@@ -18979,6 +19251,105 @@ fn ht_report() -> String {
                  s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("      …declined node was: {}", m.name())));
              }
          }

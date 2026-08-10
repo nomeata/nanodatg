@@ -7379,3 +7379,99 @@ Three consequences worth carrying:
 * **The frontier is the reduct's own typing** (`TbMiss::Reduct`, 9 306 rising
   to 14 021 the moment the premise above stops absorbing them), not anything a
   function-space lemma reaches.
+
+## The target-beta clause is worth fifteen gaps — 2026-08-10
+
+*The method from the section above, turned on the frontier that section found.
+`TbMiss::Reduct` was the row that absorbed every decline the domain premise
+stopped making, so the question is the same one: delete it and read the whole
+ledger. Instrument: `scripts/spine-probe.diff`, `NANODA_REDUCT_ASSUME=1`.*
+
+### How a typing row is deleted without admitting anything
+
+`reduct_assumed` **acquires** the reduct's own typing as a new antecedent
+instead of declining — [`has_type_local`]'s move, applied one clause along. No
+admission and no kernel rule: the theorem is `conj_proj`, `⊢ conj(used) →
+used[i]`, a real projection out of the assumption list, and the antecedent is
+returned to the caller, where a binder discharges it or the escape ledger counts
+it. So the experiment is not "pretend the fact holds"; it is "hoist the fact and
+let the ledger charge for it", which is what makes the ledger reading honest.
+
+### Three runs
+
+| | A: baseline | B: reduct acquired | C: B + the node rebuild |
+|---|---:|---:|---:|
+| **gaps** | 15 734 | **15 719** | **15 719** |
+| **escapes** | 2 232 | **2 235** | **2 235** |
+| **derived (real kernel `Thm`)** | 159 803 | **159 821** | **159 821** |
+| obligations asked / discharged | 40 060 / 6 389 | 40 060 / 6 389 | 40 060 / 6 389 |
+| `TbMiss::Reduct` | 9 306 | **0** | **0** |
+| `TbMiss::Domain` | 6 170 | 5 474 | **405** |
+| reduct typings acquired | — | 4 753 | 9 958 |
+| raw hoists, all causes | 19 144 | 13 067 | 13 067 |
+| deepest derivation | 20 | 23 | 23 |
+
+**B and C are identical on every ledger row.** Stacking the node rebuild on top
+— which more than doubles the acquisitions, 4 753 → 9 958, and takes the domain
+premise from 6 170 declines to 405 — changes **not one number**. Two independent
+closures of the two frontier rows of one clause, and the second is free of
+effect given the first.
+
+The whole movement, gap row by gap row:
+
+| row | A | B |
+|---|---:|---:|
+| trans over an admitted premise | 8 457 | 8 451 |
+| symm over an admitted premise | 487 | 481 |
+| proj_reduce | 659 | 656 |
+| beta: the lambda has no function-graph interpretation | 7 | 4 |
+| undischarged assumption survived to the boundary (= escapes) | 2 232 | 2 235 |
+
+−6 −6 −3 −3 +3 = **−15**.
+
+### What absorbs it: not a third row, a cascade
+
+The coordinator's question was whether a third row absorbs the residue, which
+would make the frontier deeper than two layers. It is worse and simpler than
+that: **no single row absorbs it, because the gap ledger is not made of
+originating failures.** In the baseline,
+
+| | |
+|---|---:|
+| trans over an admitted premise | 8 457 |
+| pi congruence over an admitted body premise | 1 147 |
+| symm over an admitted premise | 487 |
+| pi congruence over an admitted domain premise | 137 |
+| **"over an admitted premise", total** | **10 228 of 15 734 (65 %)** |
+
+Two thirds of the ledger is a rule that received a gap as a premise and reported
+one in turn. Closing a clause that originates gaps therefore buys, at best, the
+sub-tree of the cascade it feeds — and this clause feeds fifteen of it. The
+6 077 raw hoists the acquisition removes (19 144 → 13 067) are real work that
+the ledger, correctly, does not credit: they were never what the ledger counted.
+
+### The verdict
+
+**`has_type_target_beta` is not on `init-prelude`'s critical path.** 13 856
+firings, two frontier rows, 9 958 acquisitions when both are deleted, and a
+ledger that moves 15 gaps of 15 734 (**0.1 %**) and three escapes the wrong way.
+The goal counter — 40 060 obligations asked, 6 389 discharged — does not move at
+all.
+
+This converges with what the `checker/` seat established independently in the
+same window: the within-declaration cascade is `ty_conv`'s subject (8 045) plus
+`ty_app`'s argument (4 693), with four zeros saying the structural rules never
+lack their premise; and it is a **wall, not a bootstrap** — 1 040 declarations
+have nothing blocking them and fail anyway, and ten base cases move the ready
+set by 86. Two routes, arriving from opposite ends, at the same statement: the
+constraint is upstream of every clause that has been measured at this frontier,
+and it is the supply of *originating* typings, not the reach of any rule that
+consumes them.
+
+**Practical consequence for briefing.** The three cheap deletions run in about
+fourteen seconds each and answered, between them, two tranches' worth of design
+questions. The ordering that works is: split the population, delete it, read the
+whole ledger, *then* decide whether there is a construction to write. Judged by
+residue size, the domain premise (6 170) and the reduct row (9 306) were the two
+largest items at this frontier; judged by the ledger they are worth zero and
+fifteen.
