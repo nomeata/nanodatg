@@ -2545,13 +2545,12 @@ recursive field *followed* by a non-recursive one.
 
 `vendor/arena-tests/good/init-prelude.ndjson` has 126 inductive types. One
 (`Lean.Syntax`) is nested and is §1's business. Of the 125 simple ones,
-**121 model and 4 decline**, each decline with its printed reason:
+**122 model and 3 decline**, each decline with its printed reason:
 
 | declined | count | reason |
 |---|---|---|
 | `Eq`, `Nat` | 2 | the basis itself — the exemption that makes the construction well-founded |
 | `Lean.ParserDescr` | 1 | a **branching** recursive constructor (`binary`, `sepBy`, `sepBy1` each take two `ParserDescr`s) — the tuple tower's spine is one `Nat`, so this needs W/path (§8.4) |
-| `HEq` | 1 | an indexed **subsingleton** — the packed-index-equation model, INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case, compiled as `HEq'` in `scripts/inductive-basis/PropArms.lean` |
 
 plus, on the composed side, `Lean.Syntax._model.0._model.aux` — indexed at a
 never-zero sort, thesis §5.2's skeleton-plus-`good` (§8.3).
@@ -2579,6 +2578,12 @@ Four of those ten are now models:
   models them with every ι rule `Eq.refl` and no axiom. `Lean.ParserDescr` is
   the one that genuinely branches, and it is the only member of that class
   left.
+* **`HEq`** was the last indexed subsingleton. It models by the packed index
+  equation (§8.1): the whole index telescope into one `PSigma`, one `Eq` at
+  it, one `Eq.rec` to discharge it, resting on `PSigma` structure eta for
+  `pack (unpack y) ≡ y`. ι is `Eq.refl`. **The arm is bounded at one
+  constructor field** — see §8.2's fixture note, which is the honest part of
+  this row.
 
 `PUnit` models on the maybe-zero route, `PULift` on a `PULiftP ⊤` pad, and
 `Trans` on a boxed field.
@@ -2586,10 +2591,10 @@ Four of those ten are now models:
 ### The three oracles
 
 Every generated declaration goes through `Environment.addDeclCore` with
-checking on. §4's statement oracle runs on all of it: **278 statements
+checking on. §4's statement oracle runs on all of it: **280 statements
 compared against the installed recursors' own rules, 0 differ**. Replaying
 the whole output export from bytes, through `addDeclCore` with checking on,
-accepts **2340 declarations and rejects 0** — `modelgen/EnvProbe.lean` mode
+accepts **2344 declarations and rejects 0** — `modelgen/EnvProbe.lean` mode
 `C`, which is new; mode `A` deliberately swallows rejections because it is
 asking about visibility, and nothing in the tree counted them before.
 
@@ -2626,6 +2631,8 @@ different fixture could not:
 | ι stated at reversed index arguments | `Le3.below`, `Nat.le.below` | `Le3`, `IdxP` — one index cannot distinguish an index ordering |
 | every step constructor given tag 0 (a non-injective tag collision) | `MNm`, `Weave` | `Lst` — one step constructor, so a collision is a no-op |
 | the step constructor storing the predecessor's spine, not its successor | `Lst`, `MNm`, `Weave` | — |
+| the packed index telescope unpacked in reverse | `Hq` | `IdxS`, `TagS` — one index, so reversing a singleton is a no-op |
+| the extracted fields handed to the minor in reverse | *nothing* | every arm-F shape had ≤ 1 field; this is the mutation that found the defect above, by **not** going red |
 
 The third is the two-atoms lesson one dimension up, and it is why the
 fixture needs a two-index family. Note also that on the Church routes ι is
@@ -2725,18 +2732,19 @@ cross-checks it against lean4lean.
 
 ## 8.5 Cost, measured
 
-`perf stat -e instructions`, `init-prelude`, two runs each, deterministic to
-0.02 %:
+`perf stat -e instructions`, `init-prelude`, three runs each; the shared box contends, so the first
+run of a batch was discarded as an outlier (3.325 × 10⁹) and the three that
+agree to 0.1 % are reported:
 
 | | instructions | output bytes |
 |---|---|---|
 | `modelgen` (layers 1+2) | 2.567 × 10⁹ | 3,857,568 |
-| `modelgen --prim-models` | 3.232 × 10⁹ | 4,770,946 |
+| `modelgen --prim-models` | 3.230 × 10⁹ | 4,779,318 |
 
-**+25.9 % instructions and +23.7 % output bytes for 122 models** (121 input
-inductives and one composed tag) — about 5.5 × 10⁶ instructions per model.
+**+25.8 % instructions and +23.9 % output bytes for 123 models** (122 input
+inductives and one composed tag) — about 5.4 × 10⁶ instructions per model.
 Against the tranche that first landed layer 3 (3.164 × 10⁹ for 116 models)
-this is **+2.2 % for six more models**, which is the honest shape of the
+this is **+2.1 % for seven more models**, which is the honest shape of the
 change: the new arms cost the same order of work per declaration as the old
 ones, and nothing in the common path got slower. Reproduce with:
 

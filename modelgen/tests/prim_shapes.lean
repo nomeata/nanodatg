@@ -71,6 +71,25 @@
      base chain, so the pad is doing real work. `s0` and `s1` are given the
      *same* telescope deliberately — that is what lets a non-injective tag
      collision typecheck and therefore be caught only by an ι rule.
+   * `IdxS` — an indexed **subsingleton** at its simplest: one constructor,
+     no fields, one index. Large elimination, so the carrier is the packed
+     index equation and not a Church fold.
+   * `TagS` — the same with a genuine `Prop` field, which rides as an extra
+     Church-conjoined component and comes back out by small elimination.
+   * `TagS2` and `TagS3` — two `Prop` fields, dependent and non-dependent.
+     These **decline**, and they live here rather than in `prim_declines`
+     because that is what they were added to find out. `TagS`'s single field
+     cannot catch a field-order bug — a mutation reversing the extracted
+     fields is a no-op on one field, and was measured green until these
+     existed — and asking the question turned up that the packed-equation
+     model's sequential extraction is wrong at two fields as well. The arm
+     now declines above one field rather than emit an unverified threading;
+     these two hold that boundary open.
+   * `Hq` — `HEq`'s shape widened to **three** indices, the second dependent
+     on the first (`{β : Sort u}` then `b : β`). Three atoms: with one index
+     the packing is the identity and with two a transposition is invisible in
+     half the shapes, so three is the first arity at which a pack/unpack
+     ordering bug has to show.
    * `TrL` — `Trans`'s shape: a Π-typed field at an **imax** level, stored
      **boxed** (codomain wrapped `Σ'(_ : S), D 1`) so the level collapses
      to the carrier's never-zero `max`; the recursor unboxes by projection
@@ -168,6 +187,21 @@ inductive MNm : Type where
   | anon : MNm
   | str : MNm → Tri → MNm
   | num : MNm → Opt Tri → MNm
+
+inductive IdxS : Tri → Prop where
+  | mk : IdxS Tri.a
+
+inductive TagS (q : Prop) : Tri → Prop where
+  | mk : q → TagS q Tri.a
+
+inductive TagS2 (q : Prop) (t : q → Prop) : Tri → Prop where
+  | mk : (h : q) → t h → TagS2 q t Tri.a
+
+inductive TagS3 (q s : Prop) : Tri → Prop where
+  | mk : q → s → TagS3 q s Tri.a
+
+inductive Hq : {α : Sort u} → α → {β : Sort u} → β → Tri → Prop where
+  | refl (a : α) : Hq a a Tri.a
 
 inductive Weave (α : Type u) (p : Prop) : Type u where
   | b0 : Weave α p

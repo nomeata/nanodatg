@@ -2,6 +2,12 @@
    decline path of `Modelgen/Simple.lean`, each asserting the refusal and
    its printed reason:
 
+   * `MixI` — an indexed subsingleton with an **index-variable field**: a
+     fresh constructor argument that literally *is* one of the output's
+     indices, which the subsingleton rule admits but the packed-equation
+     model substitutes only when Lean's front end has already promoted it to
+     a parameter. Promotion is blocked here because the fresh index sits
+     after a non-promotable one.
    * `Branch` — a **branching** recursive constructor (two recursive
      fields): the tuple tower's spine is one `Nat` and a constructor takes
      one predecessor, so this needs the W/path construction (plan B).
@@ -47,6 +53,9 @@ inductive P : Type where
 
 inductive Idx : P → Prop where
   | mk : Idx P.one
+
+inductive MixI (q : P → Prop) : P → P → Prop where
+  | mk (k : P) (h : q k) : MixI q P.one k
 
 inductive Branch : Type where
   | leaf : Branch

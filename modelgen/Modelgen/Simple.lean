@@ -750,6 +750,60 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
     let (rest, acc') ← churchSwapAt tname np ni C (nf - 1) (b.instantiate1 xv) (acc.push fld)
     return (← mkForallFVars #[xv] rest, acc')
 
+/-! ## Packing an index telescope
+
+The subsingleton arm (INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case) states
+its Henry-Ford equations as **one** `Eq` at the whole index telescope packed
+into a right-nested `PSigma`, rather than one `Eq` per index. It has to: a
+later index's type may mention an earlier one — `HEq`'s telescope is
+`{β : Sort u} (b : β)`, which is already the dependent worst case — and
+separate equations cannot be stated, let alone transported along, in that
+situation.
+
+The three functions below are driven by the *packed type* rather than by the
+telescope. That is deliberate: reading a component's type back off a built
+expression is only valid while nothing has beta-reduced it, and that
+assumption has already cost this file two attempts (see
+[`Modelgen.pairArm`]). A `PSigma` application is stable under everything the
+elaborator does to it, so destructuring it is safe. -/
+
+/-- `Σ'(x₁ : A₁) … A_n` over an opened index telescope, right-nested, with the
+last index's *type* as the final component — so a one-index telescope packs to
+that type alone, with no `PSigma` at all. Closed over the telescope. -/
+partial def packTyOf (is : Array Expr) (k : Nat) : GenM (Expr × Level) := do
+  let ty ← ityp is[k]!
+  let ℓ ← ilevel ty
+  if k + 1 == is.size then return (ty, ℓ)
+  let (inner, ℓi) ← packTyOf is (k + 1)
+  let β ← mkLambdaFVars #[is[k]!] inner
+  return (psigmaT ℓ ℓi ty β,
+    (mkLevelMax' (mkLevelMax' (.succ .zero) ℓ) ℓi).normalize)
+
+/-- Read a `PSigma` application apart: its two levels, its `α` and its `β`. -/
+def psigmaParts (R : Expr) : GenM (Level × Level × Expr × Expr) := do
+  let args := R.getAppArgs
+  unless R.getAppFn.isConstOf `PSigma && args.size == 2 do
+    badShape "the packed index type is not a PSigma application"
+  let [u, v] := R.getAppFn.constLevels! | badShape "PSigma carries the wrong level list"
+  return (u, v, args[0]!, args[1]!)
+
+/-- The packing of a value vector, driven by the packed type. -/
+partial def packChain (n : Nat) (R : Expr) (vs : Array Expr) (k : Nat) : GenM Expr := do
+  if n <= 1 then return vs[k]!
+  let (u, v, α, β) ← psigmaParts R
+  let snd ← packChain (n - 1) (Expr.app β vs[k]!).headBeta vs (k + 1)
+  return psigmaMk u v α β vs[k]! snd
+
+/-- The `n` components read back out of a packed term. Structure eta makes
+`pack (unpack y) ≡ y`, which is what lets the recursor's motive be stated
+about a packed variable and still apply to the declaration's own indices. -/
+partial def unpackChain (n : Nat) (R : Expr) (y : Expr) : GenM (Array Expr) := do
+  if n <= 1 then return #[y]
+  let (u, v, α, β) ← psigmaParts R
+  let f := psigmaFst u v α β y
+  let sn := psigmaSnd u v α β y
+  return #[f] ++ (← unpackChain (n - 1) (Expr.app β f).headBeta sn)
+
 /-! ## Linear recursion at a never-zero sort: the tuple tower
 
 `INDUCTIVE-BASIS.md` §3.4, compiled in `scripts/inductive-basis/LinearRec.lean`
@@ -1038,6 +1092,7 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       badShape "a recursive subsingleton proposition (the AccPhi carrier of \
         INDUCTIVE-BASIS §3.2 is not implemented)"
 
+
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
   let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
@@ -1050,7 +1105,174 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
 
-  if route matches PrimRoute.type then
+  -- The indexed subsingleton has a different carrier from the Church routes —
+  -- a packed index equation, not a fold — so it branches before them.
+  -- Bounded at one field: the sequential extraction below is measured
+  -- correct at zero fields (`HEq`) and one (`TagS`), and **measured wrong at
+  -- two** — `prim_shapes`'s `TagS2`/`TagS3` were added precisely to ask, and
+  -- both are red at the recursor's minor application, dependent and
+  -- non-dependent alike. The one-field cases are not a coincidence that
+  -- happens to pass: at zero and one field there is nothing to order. Rather
+  -- than emit a model whose field threading is unverified, the arm declines
+  -- above one and says so.
+  let armF := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
+
+  if armF then
+    -- ════ arm F: the indexed subsingleton, by one packed index equation ════
+    --
+    -- Shape (thesis.txt:700–710): one constructor, every field a `Prop` or a
+    -- variable that literally *is* one of the output's indices. The kernel
+    -- then grants a `Sort w` motive, and the model has to deliver it — the
+    -- Church fold cannot, since it only eliminates into `Prop`.
+    --
+    -- Carrier: the constructor's `Prop` fields, Church-conjoined with **one**
+    -- `Eq` at the whole index telescope packed into a `PSigma`
+    -- ([`Modelgen.packTyOf`]) — the Henry-Ford equation, stated once because
+    -- a later index's type may mention an earlier one:
+    --
+    --     T' p⃗ ι⃗ := ∀ r : Prop, (∀ f⃗, Eq Pk (pack ι⃗_ctor) (pack ι⃗) → r) → r
+    --
+    -- Recursor: extract the fields by small elimination (their target is a
+    -- `Prop`, so no large eliminator for ∃/∧ is consumed), extract the
+    -- equation the same way, and discharge the indices with a single
+    -- `Eq.rec` whose motive rebuilds a carrier proof at each packed point.
+    -- Every mismatch between the rebuilt proof and the caller's is closed by
+    -- proof irrelevance, and `pack (unpack y) ≡ y` by structure eta is what
+    -- makes the motive typecheck at all. ι is `Eq.refl`: at the constructor
+    -- the stored equation *is* `Eq.refl`, and `Eq.rec`'s own ι rule fires.
+    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    let (_, cty0) := exportCtors[0]!
+
+    -- Everything below is built at a parameter scope and an index scope.
+    let atScope := fun {α : Type} (k : Array Expr → Array Expr → Expr → Level → GenM α) =>
+      withParams fun ps => do
+        forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+          let (pk, ℓpk) ← packTyOf is 0
+          k ps is pk ℓpk
+
+    -- The constructor's own index expressions must be built from the
+    -- parameters alone. An *index-variable field* — a fresh variable that is
+    -- literally one of the output's indices — is admitted by the
+    -- subsingleton rule but is not handled here; Lean's front end promotes
+    -- such a field to a parameter whenever it can, so it is rare.
+    let ctorIdxAt := fun (ps : Array Expr) => do
+      let tele ← instForall cty0 ps
+      let nf := numForalls tele
+      forallBoundedTelescope tele (some nf) fun fs res => do
+        let args := res.getAppArgs
+        unless res.getAppFn.isConstOf tname && args.size == np + ni do
+          badShape s!"{exportCtors[0]!.1} does not end in {tname} at {np} parameters \
+and {ni} indices"
+        let idx := args.extract np args.size
+        for e in idx do
+          if fs.any (fun f => e.containsFVar f.fvarId!) then
+            badShape s!"{exportCtors[0]!.1} has an index-variable field: its index \
+expressions mention its own fields, which the packed-equation model substitutes only \
+when the front end has already promoted them to parameters"
+        if nf > 1 then
+          badShape s!"an indexed subsingleton whose constructor has {nf} fields: the \
+packed-equation model's sequential field extraction is verified at zero fields and one, \
+and prim_shapes' TagS2/TagS3 measure it wrong at two, so it declines above one rather \
+than emit an unverified threading"
+        for f in fs do
+          unless (← ilevel (← ityp f)).normalize.isZero do
+            badShape s!"{exportCtors[0]!.1} has a field that is not a proposition, so \
+the subsingleton rule that minted {ern} does not hold of it"
+        pure idx
+
+    -- `∀ f⃗, Eq Pk (pack ι⃗_ctor) (pack ι⃗) → r`, the encoding's one minor.
+    let minorTyAt := fun (ps is : Array Expr) (pk : Expr) (ℓpk : Level) (r : Expr) => do
+      let tele ← instForall cty0 ps
+      let nf := numForalls tele
+      let idx ← ctorIdxAt ps
+      let lhs ← packChain ni pk idx 0
+      let rhs ← packChain ni pk is 0
+      forallBoundedTelescope tele (some nf) fun fs _ => do
+        mkForallFVars fs (.forallE `heq (eqi.mk' ℓpk pk lhs rhs) r .default)
+
+    let carrierAt := fun (ps is : Array Expr) (pk : Expr) (ℓpk : Level) =>
+      withLocalDeclD `r (.sort .zero) fun r => do
+        mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk ℓpk r) r .default)
+
+    -- ── the carrier ──
+    let selfVal ← atScope fun ps is pk ℓpk => do
+      mkLambdaFVars (ps ++ is) (← carrierAt ps is pk ℓpk)
+    let dSelf := Declaration.defnDecl
+      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+        hints := ← hintsFor selfVal, safety := .safe }
+    addChecked dSelf
+    out := out.push dSelf
+
+    -- ── the constructor ──
+    let ty := restore tbl cty0
+    let cval ← withParams fun ps => do
+      let rtele ← instForall ty ps
+      let nf := numForalls rtele
+      forallBoundedTelescope rtele (some nf) fun fs _ => do
+        forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+          let (pk, ℓpk) ← packTyOf is 0
+          let idx ← ctorIdxAt ps
+          let pkc ← packChain ni pk idx 0
+          let body ← withLocalDeclD `r (.sort .zero) fun r => do
+            withLocalDeclD `k (← minorTyAt ps idx pk ℓpk r) fun kk =>
+              mkLambdaFVars #[r, kk] (mkAppN kk (fs.push (eqi.refl' ℓpk pk pkc)))
+          mkLambdaFVars (ps ++ fs) body
+    let dCtor := Declaration.defnDecl
+      { name := ctorN 0, levelParams := lparams, type := ty, value := cval
+        hints := ← hintsFor cval, safety := .safe }
+    addChecked dCtor
+    out := out.push dCtor
+
+    -- ── the recursor ──
+    let recTy := restore tbl rv.type
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
+      let ps := bs.extract 0 np
+      let motive := bs[np]!
+      let minor := bs[np + 1]!
+      let idxs := bs.extract (np + 1 + nc) (np + 1 + nc + ni)
+      let t := bs[bs.size - 1]!
+      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+        let (pkT, ℓpk) ← packTyOf is 0
+        let pk := pkT.replaceFVars is idxs
+        let idx ← ctorIdxAt ps
+        let pkc ← packChain ni pk idx 0
+        let tele ← instForall cty0 ps
+        let nf := numForalls tele
+        -- extract the fields, sequentially: a later field's type is
+        -- instantiated at the earlier extractions.
+        let eqTy := eqi.mk' ℓpk pk pkc (← packChain ni pk idxs 0)
+        let mut es : Array Expr := #[]
+        let mut curT := tele
+        for _ in [0:nf] do
+          let .forallE _ ft rest _ := curT | badShape "telescope shorter than its field count"
+          let i := es.size
+          let proj ← forallBoundedTelescope tele (some nf) fun fs _ => do
+            withLocalDeclD `h eqTy fun h => mkLambdaFVars (fs.push h) fs[i]!
+          es := es.push (mkAppN t #[ft, proj])
+          curT := rest.instantiate1 es[i]!
+        -- and the equation
+        let eqProj ← forallBoundedTelescope tele (some nf) fun fs _ =>
+          withLocalDeclD `h eqTy fun h => mkLambdaFVars (fs.push h) h
+        let heq := mkAppN t #[eqTy, eqProj]
+        -- one `Eq.rec` at the packed point: the motive rebuilds a carrier
+        -- proof at each `y`, and `pack (unpack y) ≡ y` makes it typecheck.
+        let fam := fun (y : Expr) (h : Expr) => do
+          let ys ← unpackChain ni pk y
+          let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
+            withLocalDeclD `k (← minorTyAt ps ys pk ℓpk r) fun kk =>
+              mkLambdaFVars #[r, kk] (mkAppN kk (es.push h))
+          pure (mkAppN motive (ys.push rebuilt))
+        let motiveE ← withLocalDeclD `y pk fun y => do
+          withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
+            mkLambdaFVars #[y, hy] (← fam y hy)
+        let pki ← packChain ni pk idxs 0
+        mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
+    let dRec := Declaration.defnDecl
+      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
+  else if route matches PrimRoute.type then
     -- ════ the Type route ════
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames

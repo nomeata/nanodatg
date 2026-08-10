@@ -379,17 +379,19 @@ is the control that says the guard is not refusing everything. `Eq` declines
 as basis in both, because both declare it. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
-      [("Weave", 13), ("Opt", 6), ("Tri", 8), ("IdxP", 6), ("Le3", 8),
+      [("Tri", 11), ("Weave", 10), ("Opt", 6), ("IdxP", 6), ("Le3", 8),
        ("Le3.below", 8), ("PM", 6), ("Emp", 2), ("PU", 4), ("PE", 2),
-       ("MNm", 8), ("Dec", 6), ("Conj", 4), ("PT", 8), ("Tor", 8),
-       ("Boxed", 4), ("PI", 4), ("Sub", 4), ("UL", 4), ("Lst", 6),
-       ("TrL", 4), ("Big", 4), ("PF", 4)],
-      [("Eq", "prim model shape: a basis primitive")])
-  , ("prim_declines", [("P", 9)],
+       ("MNm", 8), ("IdxS", 4), ("Dec", 6), ("Conj", 4), ("TagS", 4),
+       ("PT", 8), ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
+       ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
       [ ("Eq", "prim model shape: a basis primitive")
-      , ("Idx", "prim model shape: an indexed subsingleton")
+      , ("TagS3", "prim model shape: an indexed subsingleton whose constructor has 2")
+      , ("TagS2", "prim model shape: an indexed subsingleton whose constructor has 2")])
+  , ("prim_declines", [("P", 9), ("Idx", 4)],
+      [ ("Eq", "prim model shape: a basis primitive")
       , ("Inf", "prim model shape: a recursive subsingleton proposition")
       , ("Branch", "prim model shape: Branch.node has two recursive fields")
+      , ("MixI", "prim model shape: MixI.mk has an index-variable field")
       , ("Inf.below", "prim model shape: a recursive subsingleton proposition")
       , ("Binder", "prim model shape: Binder.lim has a recursive field that is not")
       , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")])
