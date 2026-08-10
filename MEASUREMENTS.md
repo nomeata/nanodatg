@@ -6784,3 +6784,101 @@ the counter every other route moved the wrong way.
 
 The 11 743 remainder — dominated by the 223 distinct closed lambdas — is not
 reachable this way and stays where §2 leaves it.
+
+### Decomposing the hoist into per-argument antecedents — built, measured, removed — 2026-08-10
+
+*The named successor to the entry above, and its refutation. The tranche was
+"stop hoisting the whole membership where the constructor rule can decompose
+it", resting on one claim: that per-argument antecedents are debt a binder can
+discharge while a whole hoisted membership is not. **The claim is false of this
+population**, and the census that shows why is shipped.*
+
+`HtClause::CtorApp` is conditional — `⊢ (a₁ ∈ A₁ ∧ …) → c a⃗ ∈ T[a⃗]` — but
+`has_type_ctor_app` declines the *whole* clause when any premise cannot be
+settled, sending the caller to the raw hoist. Acquiring the unsettled premise as
+an antecedent instead is one line, and the same move `has_type_local` already
+makes for a context local's own typing.
+
+**Measured before it was built.** A decline census at the rule itself, counted
+only from the rule lookup onwards (the clause is tried at every application, so
+"the head is not an interpreted inductive" is the whole traffic of the checker
+and says nothing):
+
+| where the ctor rule was found | |
+|---|---:|
+| fired | 1 739 |
+| **a premise unsettled** | **3 066** |
+| no rule at these levels | 2 441 |
+| wrong arity — a partial or over-application | 2 911 |
+| instantiate / premise shape / assemble | 0 / 0 / 0 |
+
+Of the 3 066, 2 664 premises had already settled before the one that did not, so
+the debt really is concentrated: most of each declined clause was paid for. And
+**1 376 — 45 % — are premises about a context local**, which is exactly the
+shape the tranche wanted.
+
+#### The refutation, in one row
+
+A binder introduces `⟦w⟧ ∈ ⟦A⟧` at the local's *declared* `A`, and nothing else.
+So the premise's domain has to be that, or the acquired antecedent is stated
+where no binder ever discharges it. Bucketed rather than argued:
+
+| of the 1 376 local premises, the rule's domain was | |
+|---|---:|
+| the local's own type | **0** |
+| its type, up to a delta chain | **0** |
+| the other unfolding direction | **0** |
+| unrelated — and a **set application** `app(⟦T⟧, p⃗)` | **1 376** |
+| unrelated, anything else | 0 |
+
+The first two rows are 0 *by construction* — `assumed` would have matched them —
+and are counted anyway so that the finding reads as evidence rather than as an
+absent measurement: a positive `SameDomain` would mean `assumed` is failing to
+match what it should. **The population is 100 % the un-contracted Lean-facing
+curried spine**: the rule states its premise at `app(⟦T⟧, p⃗)` while the local's
+type interprets to `U(…)` or `⟦Bool⟧`. What is missing is the *contraction* —
+`has_type_target_beta`'s job — not a decomposition.
+
+#### Built anyway, and measured five ways
+
+Obligations asked stayed flat at **40 060** in every variant — the first route
+this session that does not outrun its own denominator — and the goal's own
+counter (**26 sealed, 17 distinct declarations**) is identical to the digit
+throughout.
+
+| | escapes | gaps | raw hoists | asked |
+| --- | ---: | ---: | ---: | ---: |
+| declining (shipped) | **2 247** | 15 761 | 16 502 | 40 060 |
+| acquire every unsettled premise | 2 252 | 15 736 | 15 745 | 40 060 |
+| …at most one per clause | 2 252 | 15 736 | 16 027 | 40 060 |
+| …only a local argument | 2 249 | 15 751 | 15 977 | 40 060 |
+| …only a non-local argument | 2 250 | 15 746 | 16 270 | 40 060 |
+| …only at the outermost obligation | **2 247** | 15 761 | 15 881 | 40 060 |
+
+**Escapes do not fall in any variant**, so the standing rule applies and the
+route is removed. The restriction that saved the outermost tranche does not save
+this one either, and it fails in a new way worth naming: the outermost-only row
+is free because it is **inert**. Escapes, gaps and the sealed count are
+unchanged to the digit; the only number that moves is the raw-hoist
+attribution, and −621 there is knowledge and not proving — the same distinction
+`ArgMem::RawGapAtCheck`'s doc draws about its own row. **A variant whose sole
+effect is to relabel 621 hoists is the "skip is not pass" failure wearing the
+shape of a win**, and reading it as one is precisely what two-sided reporting
+exists to stop.
+
+#### What is kept
+
+The decomposition is gone; the census is not. `CtorDecline`, `CTOR_PREM_SHAPE`
+and `LocalPrem` ship, print zero when nothing reaches them, and were verified
+side-effect free — the whole `init-prelude` ledger is byte-identical to the
+baseline with them in. The verdict table is at `TgBackend::has_type_ctor_app`,
+so the next reader meets it before the idea.
+
+**The edge this localises.** The standing rule says a stage that does not move
+escapes has left a specific edge unthreaded, and here the per-clause counters
+name it: the general inductive's constructor rule states its premises at the
+curried spine `app(⟦T⟧, p⃗)`, and `has_type` reaches that only through
+`has_type_target_beta`. The next question is therefore not about hoisting at all
+but about why the target-beta clause does not contract these 1 376 — which is a
+question about `target_head_step` and its own domain premise, not about the
+constructor rule.

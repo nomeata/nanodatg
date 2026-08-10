@@ -9540,6 +9540,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `List.cons α h` on its own — is not covered: its typing statement is
     /// `∈ fs(⟦List α⟧, ⟦List α⟧)`, which needs the middle graph's function-space
     /// theorem rather than the beta equations, and is not derived.
+    ///
+    /// # Declining the whole clause, rather than hoisting the premise
+    ///
+    /// *Built, measured and removed on 2026-08-10. Recorded so nobody rebuilds
+    /// it; `MEASUREMENTS.md` has the table.*
+    ///
+    /// The rule is conditional, so the obvious improvement is to **acquire** an
+    /// unsettled premise as an antecedent instead of declining — one line, the
+    /// same move [`Self::has_type_local`] makes — on the argument that a
+    /// per-argument antecedent `⟦aᵢ⟧ ∈ ⟦Aᵢ⟧` is debt a binder discharges while
+    /// the whole membership `c a⃗ ∈ T[a⃗]` the caller hoists instead is not.
+    ///
+    /// **The argument is false of this population, and `LocalPrem` is why.**
+    /// A binder introduces `⟦w⟧ ∈ ⟦A⟧` at the local's *declared* `A`; of the
+    /// 1 376 unsettled premises about a local, **0** are stated there, 0 are a
+    /// delta chain away in either direction, and **1 376 are stated at a set
+    /// application** `app(⟦T⟧, p⃗)` — the Lean-facing curried spine, before
+    /// contraction. So the decomposition does not produce dischargeable debt;
+    /// it restates the same debt at a domain no binder mentions.
+    ///
+    /// Measured end to end on `init-prelude`, obligations asked flat at 40 060
+    /// throughout (the first route this session that does not outrun its own
+    /// denominator) and the goal's own counter — 26 sealed, 17 declarations —
+    /// **identical in every variant**:
+    ///
+    /// | | escapes | gaps | raw hoists |
+    /// | --- | ---: | ---: | ---: |
+    /// | declining (shipped) | **2 247** | 15 761 | 16 502 |
+    /// | acquire every unsettled premise | 2 252 | 15 736 | 15 745 |
+    /// | …at most one per clause | 2 252 | 15 736 | 16 027 |
+    /// | …only a local argument | 2 249 | 15 751 | 15 977 |
+    /// | …only a non-local argument | 2 250 | 15 746 | 16 270 |
+    /// | …only at the outermost obligation | **2 247** | 15 761 | 15 881 |
+    ///
+    /// Escapes do not fall in any variant. The one that is free is free because
+    /// it is **inert**: escapes, gaps and the sealed count are unchanged to the
+    /// digit, and the only number that moves is the raw-hoist attribution —
+    /// which is knowledge, not proving, exactly as `ArgMem::RawGapAtCheck`'s row
+    /// says of itself. Reading its −621 as a win is the mistake the two-sided
+    /// reporting exists to stop.
     fn has_type_ctor_app(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9559,12 +9599,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // `⟦Sort ℓ⟧` and of the abbreviation symbols minted for *these* levels,
         // so a use at other levels must miss rather than read the wrong one.
         let lv = self.interp_levels(ctx, levels);
-        let rule = self.ctor_rules.get(&(name, lv)).cloned()?;
+        let Some(rule) = self.ctor_rules.get(&(name, lv)).cloned() else {
+            note_ctor_decline(CtorDecline::NoRule);
+            return None
+        };
         if args.len() != rule.vars.len() {
+            note_ctor_decline(CtorDecline::Arity);
             return None
         }
         let ts: Vec<Term> = args.iter().map(|a| self.interp(ctx, *a)).collect();
-        let inst = derived::inst_all(&rule.thm, &ts)?;
+        let Some(inst) = derived::inst_all(&rule.thm, &ts) else {
+            note_ctor_decline(CtorDecline::Instantiate);
+            return None
+        };
 
         let mut proofs: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(ts.len());
         let mut used = assms.to_vec();
@@ -9573,30 +9620,85 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             for (v, t) in rule.vars.iter().zip(ts.iter()) {
                 f = f.subst(*v, t);
             }
-            let (subj, dom) = f.as_mem()?;
+            let Some((subj, dom)) = f.as_mem() else {
+                note_ctor_decline(CtorDecline::PremiseShape);
+                return None
+            };
             // The premise must be about the argument it is supposed to be about.
             if subj != ts[i] {
+                note_ctor_decline(CtorDecline::PremiseShape);
                 return None
             }
             // Each premise may acquire further assumptions of its own; `used`
             // grows monotonically and every earlier proof is re-stated under the
             // final list before the conjunction is built.
-            let (p, grown) = self.has_type_a(ctx, args[i], &dom, &used, depth + 1)?;
+            let Some((p, grown)) = self.has_type_a(ctx, args[i], &dom, &used, depth + 1) else {
+                // **The decomposition tranche's population, and its refutation.**
+                // This is the point at which the clause declines and the caller
+                // hoists the whole membership `c a⃗ ∈ T[a⃗]` instead. Acquiring
+                // *this premise* as an antecedent here — exactly as
+                // [`Self::has_type_local`] acquires a local's own typing — was
+                // built and measured on 2026-08-10 and is **not** shippable; see
+                // [`CtorDecline`] and `MEASUREMENTS.md`. The counters below are
+                // why, and they stay so the verdict can be re-read rather than
+                // re-derived.
+                note_ctor_decline(CtorDecline::Premise);
+                #[cfg(feature = "stepcount")]
+                {
+                    let sh = self.ht_shape(ctx, args[i]);
+                    CTOR_PREM_SHAPE[sh as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    CTOR_PREM_SETTLED.fetch_add(i as u64, std::sync::atomic::Ordering::Relaxed);
+                    CTOR_PREM_TOTAL
+                        .fetch_add(rule.prems.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    // **Is the unsettled premise about a local the enclosing
+                    // binder could pay for?** [`Self::has_type_local`] acquires
+                    // the local's typing at its *own* declared type, so a local
+                    // premise reaching here means the rule's domain is not that
+                    // type, not even up to delta — and the antecedent a
+                    // decomposition would hoist is therefore stated where no
+                    // binder introduces one. Bucketed rather than argued, and
+                    // the two impossible rows are counted so the zeros are
+                    // evidence and not silence.
+                    if let Expr::Local { binder_type, .. } = ctx.read_expr(args[i]) {
+                        let a = self.interp(ctx, binder_type);
+                        let k = if a == dom {
+                            LocalPrem::SameDomain
+                        } else if self.unfolds_to(&a, &dom).is_some() {
+                            LocalPrem::UnfoldsToDomain
+                        } else if self.unfolds_to(&dom, &a).is_some() {
+                            LocalPrem::DomainUnfoldsTo
+                        } else if dom.as_app().is_some_and(|(f, _)| f == self.pre.ap.app) {
+                            LocalPrem::UnrelatedApp
+                        } else {
+                            LocalPrem::UnrelatedOther
+                        };
+                        LOCAL_PREM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                return None
+            };
             proofs.push((p, grown.clone()));
             used = grown;
         }
 
         let hyp = conj_of(&used);
-        let mut proofs: Vec<Thm> =
-            proofs.iter().map(|(p, from)| reassume(p, from, &used)).collect::<Option<_>>()?;
-        let mut acc = proofs.pop()?;
-        while let Some(p) = proofs.pop() {
-            acc = match hyp.as_ref() {
-                None => derived::and_intro(&p, &acc),
-                Some(_) => derived::hyp_and(&p, &acc)?,
-            };
-        }
-        let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &acc, hyp.as_ref())?;
+        let assemble = (|| {
+            let mut proofs: Vec<Thm> =
+                proofs.iter().map(|(p, from)| reassume(p, from, &used)).collect::<Option<_>>()?;
+            let mut acc = proofs.pop()?;
+            while let Some(p) = proofs.pop() {
+                acc = match hyp.as_ref() {
+                    None => derived::and_intro(&p, &acc),
+                    Some(_) => derived::hyp_and(&p, &acc)?,
+                };
+            }
+            u_mp(&u_a1i(&inst, hyp.as_ref()), &acc, hyp.as_ref())
+        })();
+        let Some(out) = assemble else {
+            note_ctor_decline(CtorDecline::Assemble);
+            return None
+        };
+        note_ctor_decline(CtorDecline::Fired);
         Some((out, HtClause::CtorApp, used))
     }
 
@@ -16793,6 +16895,104 @@ enum CtorReach {
 const N_CTOR_REACH: usize = 10;
 static CTOR_REACH: [std::sync::atomic::AtomicU64; N_CTOR_REACH] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_CTOR_REACH];
+
+/// Why [`TgBackend::has_type_ctor_app`] did or did not conclude, once its rule
+/// was found. Counted from the rule lookup onwards and **not** before: the
+/// clause is tried at every application, so "the head is not an interpreted
+/// inductive" is the whole traffic of the checker and says nothing.
+///
+/// This is the decline census the decomposition tranche needs. The claim under
+/// test is that where the rule *applies* and its recursion does not complete,
+/// hoisting the unsettled **premise** is better debt than hoisting the whole
+/// membership — better because a per-argument antecedent is the shape a binder
+/// discharges. That claim is only worth anything if `Premise` is where the
+/// declines are; if they are `NoRule`, no decomposition exists to make.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum CtorDecline {
+    /// The head is an interpreted inductive's constructor, but no rule is
+    /// registered at *these* universe levels. Nothing to decompose.
+    NoRule,
+    /// The spine is not the rule's arity — a partial application, or an
+    /// over-application the rule does not describe.
+    Arity,
+    /// Instantiating the rule at the interpreted arguments failed.
+    Instantiate,
+    /// A premise is not a membership, or is a membership about the wrong
+    /// argument. Expected 0; a positive count means the rule's own shape
+    /// invariant is not holding.
+    PremiseShape,
+    /// **The tranche's population.** Some premise `⟦aᵢ⟧ ∈ ⟦Aᵢ⟧` could not be
+    /// settled, so the whole clause declined and the caller hoisted the whole
+    /// membership. `CTOR_PREM_SHAPE` says what the unsettled argument was.
+    Premise,
+    /// Every premise settled but the conjunction or the modus ponens did not
+    /// assemble. Expected 0.
+    Assemble,
+    /// The clause concluded. The denominator, so that no numerator above can be
+    /// read without it.
+    Fired,
+}
+const N_CTOR_DECLINE: usize = 7;
+static CTOR_DECLINE: [std::sync::atomic::AtomicU64; N_CTOR_DECLINE] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_CTOR_DECLINE];
+fn note_ctor_decline(k: CtorDecline) {
+    CTOR_DECLINE[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+/// The shape of the argument whose premise went unsettled, at every
+/// [`CtorDecline::Premise`]. **The measurement the tranche turns on**: a
+/// premise about a context local is debt a binder discharges, a premise about a
+/// closed lambda is the same debt in a smaller box.
+static CTOR_PREM_SHAPE: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
+/// Premises that *did* settle before the first that did not, summed over every
+/// [`CtorDecline::Premise`], against the premise count of the rules involved.
+/// How much of each declined clause was already paid for.
+static CTOR_PREM_SETTLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CTOR_PREM_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// For an unsettled premise about a **context local**: how the rule's premise
+/// domain relates to the local's own declared type.
+///
+/// **This is the row that refuted the decomposition tranche** (2026-08-10), and
+/// it decides it for the largest bucket. A binder discharges `⟦w⟧ ∈ ⟦A⟧` for
+/// the local's declared `A` and nothing else, so `SameDomain` is the only row
+/// where hoisting the premise as a per-argument antecedent produces debt a
+/// binder can pay. The two `Unfolds` rows are debt a *delta chain* would close.
+/// The `Unrelated*` rows need a conversion — reduction, the cost every previous
+/// route died of.
+///
+/// Measured on `init-prelude`: **0, 0, 0, 1 376, 0.** Every unsettled local
+/// premise is stated at a set *application*, and none at the local's own type.
+/// So "per-argument antecedents are debt a binder discharges" — the claim the
+/// tranche rested on — is false of this population: the antecedent is at
+/// `app(⟦T⟧, p⃗)`, an un-contracted spine no binder introduces.
+///
+/// The first two rows are expected 0 *by construction* and counted anyway, so
+/// that the finding reads as evidence rather than as an absent measurement: a
+/// positive `SameDomain` would mean [`TgBackend::assumed`] is failing to match
+/// what it should, and a positive `UnfoldsToDomain` that its delta bridge is.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum LocalPrem {
+    /// Expected **0**: [`TgBackend::assumed`] would have matched it outright.
+    SameDomain,
+    /// Expected **0**: `assumed` bridges exactly this direction already.
+    UnfoldsToDomain,
+    /// The rule's domain unfolds to the local's type — the bridge `assumed`
+    /// does *not* try, and the only row here a delta-only fix would reach.
+    DomainUnfoldsTo,
+    /// Neither unfolds to the other, and the domain is a set **application** —
+    /// `app(⟦T⟧, p⃗)`, the Lean-facing curried spine before it is contracted.
+    /// **The whole population.** What is missing is the contraction, which is
+    /// [`TgBackend::has_type_target_beta`]'s job, not a decomposition's.
+    UnrelatedApp,
+    /// Neither unfolds to the other and the domain is not an application.
+    UnrelatedOther,
+}
+const N_LOCAL_PREM: usize = 5;
+static LOCAL_PREM: [std::sync::atomic::AtomicU64; N_LOCAL_PREM] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_LOCAL_PREM];
 #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
 fn note_ctor_reach(k: CtorReach) {
     CTOR_REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -17675,6 +17875,47 @@ fn ht_report() -> String {
                 cr(CtorReach::Other),
                 cr(CtorReach::NotAConstApp),
             ));
+        }
+        let cd = |k: CtorDecline| CTOR_DECLINE[k as usize].load(Relaxed);
+        let cd_total: u64 = CTOR_DECLINE.iter().map(|c| c.load(Relaxed)).sum();
+        if cd_total > 0 {
+            s.push_str(&format!(
+                "      …and where the ctor rule was FOUND, did it conclude: {} fired, {} a premise unsettled, {} no rule at these levels, {} wrong arity, {} instantiate, {} premise shape, {} assemble\n",
+                cd(CtorDecline::Fired),
+                cd(CtorDecline::Premise),
+                cd(CtorDecline::NoRule),
+                cd(CtorDecline::Arity),
+                cd(CtorDecline::Instantiate),
+                cd(CtorDecline::PremiseShape),
+                cd(CtorDecline::Assemble),
+            ));
+            if cd(CtorDecline::Premise) > 0 {
+                s.push_str(&format!(
+                    "        (of {} premises, {} had settled before the one that did not)\n",
+                    CTOR_PREM_TOTAL.load(Relaxed),
+                    CTOR_PREM_SETTLED.load(Relaxed),
+                ));
+                for m in HtMiss::ALL {
+                    let n = CTOR_PREM_SHAPE[m as usize].load(Relaxed);
+                    if n > 0 {
+                        s.push_str(&format!(
+                            "        the unsettled premise was about: {:<40} {n:>6}\n",
+                            m.name()
+                        ));
+                    }
+                }
+                let lp = |k: LocalPrem| LOCAL_PREM[k as usize].load(Relaxed);
+                if LOCAL_PREM.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+                    s.push_str(&format!(
+                        "        …and for a LOCAL, the rule's domain vs the local's own type: {} same, {} type unfolds to domain, {} domain unfolds to type, {} unrelated (of which {} a set application)\n",
+                        lp(LocalPrem::SameDomain),
+                        lp(LocalPrem::UnfoldsToDomain),
+                        lp(LocalPrem::DomainUnfoldsTo),
+                        lp(LocalPrem::UnrelatedApp) + lp(LocalPrem::UnrelatedOther),
+                        lp(LocalPrem::UnrelatedApp),
+                    ));
+                }
+            }
         }
         let sk = |k: SkelReach| SKEL[k as usize].load(Relaxed);
         let sk_total: u64 = SKEL.iter().map(|c| c.load(Relaxed)).sum();
