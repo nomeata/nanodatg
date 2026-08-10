@@ -486,8 +486,18 @@ constant store and so one comparable interpreted key — was measured on
 2026-08-10 and reaches **34** of them (§1.3). 18 622 are memberships no typing
 rule anywhere in the run ever concluded, so there is nothing to transport;
 and the shape ledger says where the derivations would have to come from —
-**10 538** of the raw hoists are about *a λ whose typing rule did not apply*
-(`has_type_lam`), against 2 970 the same rule does discharge. The reading
+**10 538** of the raw hoists are about a λ (`HtMiss::Lam` — the *subject's*
+shape), against 2 970 the same rule does discharge. That row was read as "the
+lambda rule did not apply" and **that reading is refuted** (2026-08-10): with
+every decline point in `has_type_lam` attributed, 32 831 of 35 321 declines are
+"the rule applied, the **body** has no typing", and the nine structural ways
+the rule itself can fail — graph, skeleton, fibre, lemma — fire **zero** times
+on the whole prelude. The declines are a nested-λ cascade (21 263 untypeable
+bodies are themselves lambdas); the genuine leaves are **applications**
+(10 209) and Πs (690), so the rule the residue wants is the application rule
+and `ty_const` behind it. A second front the same measurement exposes: **8 496**
+of those body obligations are stated at a target that beta-reduces, while
+`HtClause::TargetBeta` discharges **125** in the whole run. The reading
 "the keys simply do not line up across declarations" is refuted by the same
 run: 11 031 typings were re-concluded at a pair an earlier declaration already
 held. Mechanically as before:
@@ -496,6 +506,23 @@ grows a typing parameter; the 28 call sites split into evidence-carrying
 (inference, `ensure_*`) and don't-care (`inductive.rs`, until inductives need
 it). The `ensure_pi` slice landed 2026-08-09 (`infer_app` composes the
 reduction leg via `ty_conv`).
+**The cursor-carried typing does not pay the beta rule's debt, and that is
+structural** (measured 2026-08-10, `MEASUREMENTS.md`, "Where the lambda typing
+rule actually declines"): `⟦(λx:A.b) a⟧ ∈ ⟦T⟧` says nothing about `⟦a⟧ ∈ ⟦A⟧`,
+because membership of a set-application is not a statement about the argument.
+The transported typing is correct and is consumed by nothing that owes a domain
+obligation. The same measurement splits the 18 622 by whether the *subject* was
+ever typed at all: **7 717 are closed terms no typing rule anywhere ever spoke
+about** (unreachable by any transport — only a rule firing where none fires
+today produces the fact), and **10 445 are open**, i.e. substitution instances
+of subterms of other declarations' values entering by delta. For the open half
+the ground fact is absent by construction but its *generalised* form was
+concluded in the declaration the value came from, so the reachable mechanism is
+a generalised typing threaded through **delta**, instantiated by the
+reduction's own substitution, with each binder's `⟦u⟧ ∈ D` supplied by the
+enclosing beta step's obligation. A cross-declaration store that carries a
+*conversion* reaches 460 of the 18 622 (2.5 %), confirming the refutation
+below at the sharper question.
 *Measurables:* the `raw hoists by cause` ledger row — this stage attacks the
 "never checked at an application" 18 656; escapes continue down. If
 local-headed misses remain after stage 1, its context is not reaching the

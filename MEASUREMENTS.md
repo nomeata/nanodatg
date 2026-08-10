@@ -6253,3 +6253,133 @@ assert!(distinct >= <first measurement>);// ratchet, may only rise
 scheduled improves `sealed / population` for free, and only a floor under the
 denominator catches it. The two `assert_eq!`s are deliberately not ratchets —
 a ratchet on a vacuity guard is a vacuity guard that can be loosened.
+
+## Where the lambda typing rule actually declines, and what the raw hoists are about — 2026-08-10
+
+*Task #126, stage 2. Baseline `origin/master` at `d772b16`; `release`,
+`--features tg,stepcount`, `vendor/arena-tests/good/init-prelude.ndjson`;
+`perf stat -e instructions`. Two permanent ledger rows landed here. The ledger
+is otherwise unchanged: 15 532 gaps, 2 247 escapes, 20 328 raw hoists
+(32 / 1 640 / 18 656 by cause) before and after.*
+
+### Why this was measured before anything was threaded
+
+`THREADING-CENSUS.md` §2 names stage 2's largest named shape: **10 538 of the
+20 328 raw hoists are about "a λ whose typing rule did not apply"
+(`HtMiss::Lam`), against 2 970 the same rule does discharge — first place to
+look.** `HtMiss` records the *subject's shape*, so that row says a lambda was
+the thing being typed. It does not say the rule failed to apply, and it turns
+out not to.
+
+### `lambda typing declines, by cause` — the rule applies; the recursion runs out
+
+Every `?` in `TgBackend::has_type_lam` and `has_type_lam_prop` is now
+attributed. **35 321 declines on `init-prelude`:**
+
+| cause | count |
+|---|---:|
+| the rule applied; the **BODY** has no typing | **32 831** |
+| the target is not a function type at all | 1 019 |
+| the target has no readable head | 545 |
+| the target is a Π over a different domain | 372 |
+| the discharge left unexpected assumptions | 294 |
+| proof λ: the BODY has no typing | 259 |
+| proof λ: the target is not `⟦∀x:A. β⟧` | 1 |
+| *everything else* — no graph, no skeleton, skeleton shape, no fibre, fibre mismatch, retarget, discharge, lemma, `→` over a different domain | **0** |
+
+**93 % of the declines are the recursion, not the rule.** The nine structural
+ways the rule can fail — the graph, the skeleton, the fibre, the lemma
+application — fire zero times between them on the whole prelude. The typing
+rule for lambdas is not the missing piece and no work on it will move the
+10 538. This refutes the census's "first place to look" as a direction while
+confirming its count.
+
+### What the untypeable bodies are, and what they are typed at
+
+The cross-cut of the 33 090 `BODY has no typing` declines:
+
+| the body was | count | | stated at | count |
+|---|---:|---|---|---:|
+| **a lambda** | **21 263** | | something else | 21 773 |
+| an application of a defined constant | 4 218 | | `app(lam(…), x)` — beta-reduces | **8 496** |
+| an application of a lambda | 3 782 | | `app(w, x)` for a context local | 2 030 |
+| an application of an opaque constant | 2 209 | | a defined constant | 291 |
+| a Π — needs `dprod_in_universe` | 690 | | `app(c, x)` for a defined `c` | 104 |
+| a let, projection or literal | 435 | | curried, spine head a lambda graph | 101 |
+| a local / an opaque constant / other | 234 | | curried, other | 36 |
+
+Two readings, both actionable and neither about lambdas:
+
+* **The decline is a nested-λ cascade.** 21 263 of the untypeable bodies are
+  themselves lambdas, so one failure deep in a λ-chain is counted once per
+  enclosing binder. The genuine leaves are **applications** — 10 209 of them,
+  split over defined-constant, lambda and opaque heads — plus 690 Πs. The rule
+  the residue wants is the *application* rule (and behind it `ty_const`), not
+  the lambda rule.
+* **8 496 of these obligations are stated at a target that beta-reduces**,
+  while `HtClause::TargetBeta` discharges **125** obligations in the whole run.
+  The existing ledger explains the shortfall: `has_type_target_beta` reaches
+  12 874 redexes and loses 6 004 to *its own* `x ∈ A` premise and 8 624 to the
+  reduct still not being typeable. The target-side reduction is a second front
+  with the same shape as the subject-side one.
+
+### The subject-only reach probe: splitting the census's 18 622
+
+`Shared::typed_at` is keyed on the **pair** `(subject, target)`, so its
+headline — 18 622 of the 18 656 never-checked raw hoists were "never a typing
+rule's conclusion anywhere on the thread" — conflates a missing *fact* with a
+missing *conversion*: a subject some declaration typed at a definitionally
+equal target that interprets apart would count as never concluded. The new
+subject-only index `Shared::typed_subj` separates them, cross-cut by whether
+the subject is closed:
+
+| of the 18 622 | count |
+|---|---:|
+| subject typed at some **other** target, closed, in an earlier declaration | 455 |
+| subject typed at some other target, open, in this declaration | 5 |
+| **closed subject no typing rule anywhere ever spoke about** | **7 717** |
+| **open subject (free variables) no typing rule anywhere ever spoke about** | **10 445** |
+
+**The census's refutation survives the sharper question.** A conversion-carrying
+cross-declaration store reaches 460 (2.5 %), not the population — the same
+order as the 34 the pair-keyed probe found. But the split of the remainder is
+the new information, and it says the two halves need *different* mechanisms:
+
+* **7 717 closed subjects.** A closed term no typing rule anywhere ever
+  concluded anything about. Nothing can be transported to these, from any
+  declaration, generalised or not; only a rule firing where none fires today
+  produces the fact. These are not reachable by threading.
+* **10 445 open subjects.** These carry the current declaration's free
+  variables, so they are *substitution instances*: the term is a subterm of
+  another declaration's value, entering by delta and instantiated at the
+  current locals. The ground fact is absent by construction — it is about
+  variables that did not exist when the other declaration was checked — but its
+  **generalised** form (`∀w. w ∈ D → ⟦m⟧(w) ∈ ⟦B⟧(w)`) was concluded there,
+  under that declaration's own binders. This is the only half of the residue a
+  typing threaded down the reduction can reach, and reaching it means
+  *instantiation of a generalised fact*, not recall of a ground one.
+
+### What this says about stage 2's target signature
+
+The census's mechanism — `whnf(e, ⊢⟦e⟧∈⟦T⟧)`, a typing carried alongside the
+cursor and re-established by Leibniz at each step — is sound and cheap, but it
+**does not by itself pay the beta rule's debt**, and the reason is structural:
+`⟦(λx:A.b) a⟧ ∈ ⟦T⟧` says nothing about `⟦a⟧ ∈ ⟦A⟧`. Set-theoretic membership
+of an application is not a statement about the argument. The cursor's typing is
+transported correctly and consumed by nothing that owes a domain obligation.
+
+What the measurement says the 10 445 need instead is a **generalised** typing
+threaded through *delta*, not through beta: when `whnf` unfolds `c` to `v`, the
+typings inference concluded about `v`'s subterms under `v`'s own binders are
+available, and the reduction's own substitution is exactly the instantiation
+that turns them into the facts the later beta steps ask for — with `⟦u⟧ ∈ D`
+for each instantiated binder supplied by the *enclosing* beta step's own
+obligation, which is where the chaining lives. That is a different signature
+from the one §2 specifies, and it is the finding, not a plan.
+
+### Cost
+
+194.01 G → **194.39 G instructions (+0.20 %)**, ledger identical row for row.
+The `LamDecline` bumps are atomics; the cost is the 33 090 `ht_shape`/
+`ht_target` calls at the body cross-cut. `typed_subj` and the subject probe are
+`stepcount`-gated and cost nothing in the default build.

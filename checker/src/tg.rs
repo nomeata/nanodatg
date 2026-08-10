@@ -2378,6 +2378,18 @@ struct Shared {
     /// of the measurement and it is why the ledger splits by declaration.
     #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
     typed_at: HashMap<(Term, Term), (u32, bool)>,
+    /// The **subject-only** index of [`Self::typed_at`]: for every subject any
+    /// typing rule has concluded something about, the earliest declaration that
+    /// did so.
+    ///
+    /// `typed_at` is keyed on the *pair*, so its verdict "never concluded"
+    /// conflates two situations that call for opposite work: the checker never
+    /// held any typing for this term at all, and the checker held one at a
+    /// target that is definitionally equal to the one now being asked but
+    /// interprets to a different term. The first is a missing fact; the second
+    /// is a missing conversion. This index separates them.
+    #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+    typed_subj: HashMap<Term, u32>,
     /// Serial number of the next `TgBackend`, i.e. of the declaration-check
     /// about to start. Only ever compared for equality/order, so a wrap would
     /// be a mis-measurement and not a fault; `u32` is three orders of
@@ -2512,6 +2524,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             gen_ctor_nests: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             typed_at: HashMap::new(),
+            typed_subj: HashMap::new(),
             decl_seq: 0,
             false_anchor: None,
         }));
@@ -9755,20 +9768,30 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ) -> Option<(Thm, HtClause, Vec<Formula>)> {
         let site = self.prop_lam_sites.get(&e)?;
         let (dom, body, v) = (site.dom.clone(), site.body, site.var);
-        let (pkey, targs, unfold_b, b_at_v, fibre) = self.prop_fibre_at(ty, &dom, v)?;
+        let Some((pkey, targs, unfold_b, b_at_v, fibre)) = self.prop_fibre_at(ty, &dom, v) else {
+            note_lam_decline(LamDecline::PropTargetNotAPi);
+            return None
+        };
 
         // The guard the body is typed under, appended last so that
         // `guard_and_generalise_at` can peel it off again.
         let mut inner = assms.to_vec();
         inner.push(Formula::mem(Term::var(v), dom.clone()));
-        let (at_v, inner) = self.has_type_a(ctx, body, &fibre, &inner, depth + 1)?;
-        let (out, rest, inner) = self.prop_lam_close(
+        let Some((at_v, inner)) = self.has_type_a(ctx, body, &fibre, &inner, depth + 1) else {
+            note_lam_decline(LamDecline::PropBodyUntypeable);
+            return None
+        };
+        let Some((out, rest, inner)) = self.prop_lam_close(
             ctx, &at_v, &inner, body, v, &dom, &pkey, &targs, &unfold_b, &b_at_v, &fibre,
-        )?;
+        ) else {
+            note_lam_decline(LamDecline::PropClose);
+            return None
+        };
         // What is left after the discharge must be exactly what went in, plus
         // whatever the body acquired for an *enclosing* local.
         let want = drop_guard(&inner, assms.len())?;
         if rest != want {
+            note_lam_decline(LamDecline::Residue);
             return None
         }
         Some((out, HtClause::LamProp, rest))
@@ -9809,7 +9832,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if self.prop_lam_sites.contains_key(&e) {
             return self.has_type_lam_prop(ctx, e, ty, assms, depth)
         }
-        let site = self.lam_sites.get(&e)?;
+        let Some(site) = self.lam_sites.get(&e) else {
+            note_lam_decline(LamDecline::NoGraph);
+            return None
+        };
         let (key, holes, dom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
         let (body, v) = (site.body, site.var);
 
@@ -9820,23 +9846,51 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // and by far the commonest outcome for a typing obligation about a
         // lambda is that it declines here. The conditions are re-tested where
         // they are used, so this is a cost guard and nothing else.
-        let (head, targs) = self.parts.get(ty).cloned()?;
+        //
+        // The decline is attributed rather than silent — see [`LamDecline`].
+        // "The target is not a Π/→ over *this* domain" is three different
+        // situations with three different unblocks, and the ledger keeps them
+        // apart.
+        let Some((head, targs)) = self.parts.get(ty).cloned() else {
+            note_lam_decline(LamDecline::TargetOpaque);
+            return None
+        };
         let fs_shape = head == self.pre.fs_sym() && targs.len() == 2 && targs[0] == dom;
         if !fs_shape
             && !(targs.last() == Some(&dom) && self.shared.borrow().pi_by_dprod.contains_key(&head))
         {
+            note_lam_decline(if head == self.pre.fs_sym() && targs.len() == 2 {
+                LamDecline::TargetFsOtherDom
+            } else if self.shared.borrow().pi_by_dprod.contains_key(&head) {
+                LamDecline::TargetDprodOtherDom
+            } else {
+                LamDecline::TargetNotAFunction
+            });
             return None
         }
 
-        let info = self.lam_info(&key)?;
-        let t_def = info.graph.as_ref()?.t_def.clone();
+        let Some(info) = self.lam_info(&key) else {
+            note_lam_decline(LamDecline::NoSkeleton);
+            return None
+        };
+        let Some(t_def) = info.graph.as_ref().map(|g| g.t_def.clone()) else {
+            note_lam_decline(LamDecline::NoSkeleton);
+            return None
+        };
 
         // `t(h⃗,v)` unfolds to the interpretation of the body opened at `v`.
         let mut tinst = holes.clone();
         tinst.push(Term::var(v));
-        let unfold_t = derived::inst_all(&t_def, &tinst)?;
-        let (t_at_v, bt) = unfold_t.concl().as_eq()?;
+        let Some(unfold_t) = derived::inst_all(&t_def, &tinst) else {
+            note_lam_decline(LamDecline::SkeletonShape);
+            return None
+        };
+        let Some((t_at_v, bt)) = unfold_t.concl().as_eq() else {
+            note_lam_decline(LamDecline::SkeletonShape);
+            return None
+        };
         if bt != self.interp(ctx, body) {
+            note_lam_decline(LamDecline::SkeletonShape);
             return None
         }
 
@@ -9848,21 +9902,44 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // ── Non-dependent: a fixed codomain ──────────────────────────────────
         if fs_shape {
             let cod = targs[1].clone();
-            let (at_v, inner) = self.has_type_a(ctx, body, &cod, &inner, depth + 1)?;
-            let at_v = self.retarget_mem(&at_v, &inner, &unfold_t, &cod, None)?;
+            let Some((at_v, inner)) = self.has_type_a(ctx, body, &cod, &inner, depth + 1) else {
+                note_lam_decline(LamDecline::BodyUntypeable);
+                let (m, t) = (self.ht_shape(ctx, body), self.ht_target(&cod));
+                note_lam_body(m, t);
+                return None
+            };
+            let Some(at_v) = self.retarget_mem(&at_v, &inner, &unfold_t, &cod, None) else {
+                note_lam_decline(LamDecline::Retarget);
+                return None
+            };
             let concl = Formula::mem(t_at_v, cod.clone());
-            let (pointwise, rest) = self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)?;
+            let Some((pointwise, rest)) =
+                self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)
+            else {
+                note_lam_decline(LamDecline::Discharge);
+                return None
+            };
             let want = drop_guard(&inner, assms.len())?;
             if rest != want {
+                note_lam_decline(LamDecline::Residue);
                 return None
             }
             let hyp = conj_of(&rest);
-            let lem = self.lam_fs_thm(&key)?;
+            let Some(lem) = self.lam_fs_thm(&key) else {
+                note_lam_decline(LamDecline::Lemma);
+                return None
+            };
             let mut args = holes;
             args.push(dom);
             args.push(cod);
-            let inst = derived::inst_all(&lem, &args)?;
-            let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref())?;
+            let Some(inst) = derived::inst_all(&lem, &args) else {
+                note_lam_decline(LamDecline::Lemma);
+                return None
+            };
+            let Some(out) = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref()) else {
+                note_lam_decline(LamDecline::Lemma);
+                return None
+            };
             return Some((out, HtClause::LamFs, rest))
         }
 
@@ -9872,11 +9949,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         let qholes: Vec<Term> = targs[..targs.len() - 1].to_vec();
-        let b_def = pinfo.fibre.as_ref()?.b_def.clone();
+        let Some(b_def) = pinfo.fibre.as_ref().map(|f| f.b_def.clone()) else {
+            note_lam_decline(LamDecline::NoFibre);
+            return None
+        };
         let mut binst = qholes.clone();
         binst.push(Term::var(v));
-        let unfold_b = derived::inst_all(&b_def, &binst)?;
-        let (b_at_v, fibre) = unfold_b.concl().as_eq()?;
+        let Some(unfold_b) = derived::inst_all(&b_def, &binst) else {
+            note_lam_decline(LamDecline::NoFibre);
+            return None
+        };
+        let Some((b_at_v, fibre)) = unfold_b.concl().as_eq() else {
+            note_lam_decline(LamDecline::NoFibre);
+            return None
+        };
         // The fibre at the binder is a term the *kernel* built, so its shape is
         // not on record and the recursion could not take it apart. Rebuild it
         // from the skeleton and check the two agree.
@@ -9886,24 +9972,47 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         sub.push((self.x_canon, Term::var(v)));
         if self.reify(&pkey, &sub)? != fibre {
+            note_lam_decline(LamDecline::FibreMismatch);
             return None
         }
 
-        let (at_v, inner) = self.has_type_a(ctx, body, &fibre, &inner, depth + 1)?;
-        let at_v = self.retarget_mem(&at_v, &inner, &unfold_t, &fibre, Some(&unfold_b))?;
+        let Some((at_v, inner)) = self.has_type_a(ctx, body, &fibre, &inner, depth + 1) else {
+            note_lam_decline(LamDecline::BodyUntypeable);
+            let (m, t) = (self.ht_shape(ctx, body), self.ht_target(&fibre));
+            note_lam_body(m, t);
+            return None
+        };
+        let Some(at_v) = self.retarget_mem(&at_v, &inner, &unfold_t, &fibre, Some(&unfold_b)) else {
+            note_lam_decline(LamDecline::Retarget);
+            return None
+        };
         let concl = Formula::mem(t_at_v, b_at_v);
-        let (pointwise, rest) = self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)?;
+        let Some((pointwise, rest)) = self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)
+        else {
+            note_lam_decline(LamDecline::Discharge);
+            return None
+        };
         let want = drop_guard(&inner, assms.len())?;
         if rest != want {
+            note_lam_decline(LamDecline::Residue);
             return None
         }
         let hyp = conj_of(&rest);
-        let lem = self.lam_dprod_thm(&key, &pkey)?;
+        let Some(lem) = self.lam_dprod_thm(&key, &pkey) else {
+            note_lam_decline(LamDecline::Lemma);
+            return None
+        };
         let mut args = holes;
         args.extend(qholes);
         args.push(dom);
-        let inst = derived::inst_all(&lem, &args)?;
-        let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref())?;
+        let Some(inst) = derived::inst_all(&lem, &args) else {
+            note_lam_decline(LamDecline::Lemma);
+            return None
+        };
+        let Some(out) = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref()) else {
+            note_lam_decline(LamDecline::Lemma);
+            return None
+        };
         Some((out, HtClause::LamDProd, rest))
     }
 
@@ -10817,6 +10926,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         Some((s, false)) if s < here => Reach::EarlierCond,
                         Some(_) => Reach::HereCond,
                     });
+                    // **Splitting `Reach::Never`.** "No rule concluded this
+                    // pair" is not "no rule knew this term": ask the
+                    // subject-only index, and ask whether the subject is closed
+                    // — a closed subject some declaration typed at another
+                    // target is one *conversion* away, while an open one is a
+                    // substitution instance whose generalised form is what a
+                    // typing threaded down the reduction would carry.
+                    if seen.is_none() {
+                        let subj = self.shared.borrow().typed_subj.get(&ta).copied();
+                        let mut fv = Vec::new();
+                        ta.free_vars(&mut fv);
+                        note_subj_reach(match (subj, fv.is_empty()) {
+                            (Some(s), true) if s < here => SubjReach::ClosedEarlier,
+                            (Some(_), true) => SubjReach::ClosedHere,
+                            (Some(s), false) if s < here => SubjReach::OpenEarlier,
+                            (Some(_), false) => SubjReach::OpenHere,
+                            (None, true) => SubjReach::ClosedUnknown,
+                            (None, false) => SubjReach::OpenUnknown,
+                        });
+                    }
                 }
                 note_ht_raw(self.ht_shape(ctx, arg));
                 let t = self.ht_target(dom);
@@ -14364,6 +14493,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     if prev < seq {
                         TYPED_AT_RECONCLUDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
+                    self.shared.borrow_mut().typed_subj.entry(te.clone()).or_insert(seq);
                 }
                 TgTyping::Derived { thm, hyps }
             }
@@ -16167,6 +16297,127 @@ static ARG_MEM: [std::sync::atomic::AtomicU64; N_ARG_MEM] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_ARG_MEM];
 fn note_arg_mem(k: ArgMem) { ARG_MEM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// **Where [`TgBackend::has_type_lam`] declines** — the cause attribution for
+/// `HtMiss::Lam`, the largest single shape in the raw-hoist residue (10 538 of
+/// 20 328 on `init-prelude`).
+///
+/// The shape ledger says a lambda's typing rule did not apply; it does not say
+/// *why*, and the why decides the unblock. `HtMiss::Lam` is at least three
+/// populations: a target that is not a Π/→ at all (nothing about lambdas will
+/// help — the target needs interpreting, or converting), a target that *is* one
+/// but over a different domain (a conversion the rule does not carry, and
+/// exactly the shape a threaded typing could arrive already aligned in), and a
+/// body the recursion could not type (where the rule applied and the recursion
+/// is the thing that ran out). Reported like `raw hoists by cause`, and for the
+/// same reason: an aggregate that mixes unblocks cannot direct work.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum LamDecline {
+    /// §6.2 gave this lambda neither a function graph nor a proof-lambda site.
+    NoGraph,
+    /// The target term has no recorded head/argument decomposition — it is an
+    /// opaque symbol, not a `fs`/dprod application this rule can read.
+    TargetOpaque,
+    /// The target is a function space, but over a *different* domain than the
+    /// lambda binds. Definitional equality of the two domains is not enough:
+    /// the rule needs them to be the same term.
+    TargetFsOtherDom,
+    /// The target is a dependent product, but its base is not this lambda's
+    /// domain. As `TargetFsOtherDom`, one conversion away.
+    TargetDprodOtherDom,
+    /// The target is neither a function space nor a dependent product — a
+    /// lambda is being asked to lie in something that is not a function type.
+    TargetNotAFunction,
+    /// The lambda's skeleton or graph was never built.
+    NoSkeleton,
+    /// The skeleton is there but does not unfold to the interpretation of the
+    /// opened body — the two symbols the rule needs do not line up.
+    SkeletonShape,
+    /// The dependent target's fibre definition is missing or misshapen.
+    NoFibre,
+    /// The fibre at the binder is not what the Π skeleton reifies to.
+    FibreMismatch,
+    /// The rule applied and the *recursion* declined: the body has no typing at
+    /// the codomain (or fibre). This is the row a deeper typing story moves.
+    BodyUntypeable,
+    /// The body's typing could not be re-aimed at the graph's own symbols.
+    Retarget,
+    /// Discharging the binder's guard and generalising failed.
+    Discharge,
+    /// The discharge left assumptions other than the ones that went in.
+    Residue,
+    /// Instantiating or applying `lam_in_funspace_n` / `lam_in_dprod_n` failed.
+    Lemma,
+    /// Proof lambda: the target is not the conditional singleton `⟦∀x:A. β⟧`.
+    PropTargetNotAPi,
+    /// Proof lambda: the body has no typing at the fibre.
+    PropBodyUntypeable,
+    /// Proof lambda: closing the pointwise premise failed.
+    PropClose,
+}
+const N_LAM_DECLINE: usize = 17;
+static LAM_DECLINE: [std::sync::atomic::AtomicU64; N_LAM_DECLINE] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_LAM_DECLINE];
+fn note_lam_decline(k: LamDecline) {
+    LAM_DECLINE[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The cross-cut of [`LamDecline::BodyUntypeable`]: when the lambda rule *did*
+/// apply and the recursion is what ran out, what does the body look like, and
+/// what is it being typed at? This is the row that says which typing rule the
+/// residue actually wants.
+static LAM_BODY_MISS: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
+static LAM_BODY_TARGET: [std::sync::atomic::AtomicU64; N_HT_TARGETS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_TARGETS];
+fn note_lam_body(m: HtMiss, t: HtTarget) {
+    LAM_BODY_MISS[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LAM_BODY_TARGET[t as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl LamDecline {
+    const ALL: [LamDecline; N_LAM_DECLINE] = [
+        LamDecline::NoGraph,
+        LamDecline::TargetOpaque,
+        LamDecline::TargetFsOtherDom,
+        LamDecline::TargetDprodOtherDom,
+        LamDecline::TargetNotAFunction,
+        LamDecline::NoSkeleton,
+        LamDecline::SkeletonShape,
+        LamDecline::NoFibre,
+        LamDecline::FibreMismatch,
+        LamDecline::BodyUntypeable,
+        LamDecline::Retarget,
+        LamDecline::Discharge,
+        LamDecline::Residue,
+        LamDecline::Lemma,
+        LamDecline::PropTargetNotAPi,
+        LamDecline::PropBodyUntypeable,
+        LamDecline::PropClose,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            LamDecline::NoGraph => "the lambda has no graph and no proof-lambda site",
+            LamDecline::TargetOpaque => "the target has no readable head",
+            LamDecline::TargetFsOtherDom => "the target is a → over a different domain",
+            LamDecline::TargetDprodOtherDom => "the target is a Π over a different domain",
+            LamDecline::TargetNotAFunction => "the target is not a function type at all",
+            LamDecline::NoSkeleton => "the lambda's skeleton or graph was not built",
+            LamDecline::SkeletonShape => "the skeleton does not unfold to the opened body",
+            LamDecline::NoFibre => "the dependent target has no fibre definition",
+            LamDecline::FibreMismatch => "the fibre is not what the Π skeleton reifies to",
+            LamDecline::BodyUntypeable => "the rule applied; the BODY has no typing",
+            LamDecline::Retarget => "the body's typing could not be re-aimed at the graph",
+            LamDecline::Discharge => "discharging the binder's guard failed",
+            LamDecline::Residue => "the discharge left unexpected assumptions",
+            LamDecline::Lemma => "applying the lambda typing lemma failed",
+            LamDecline::PropTargetNotAPi => "proof λ: the target is not ⟦∀x:A. β⟧",
+            LamDecline::PropBodyUntypeable => "proof λ: the BODY has no typing",
+            LamDecline::PropClose => "proof λ: closing the pointwise premise failed",
+        }
+    }
+}
+
 /// **The reach measurement for [`ArgMem::RawNeverChecked`]** — the population
 /// the census sized at 18 656 and could only probe-sample.
 ///
@@ -16206,6 +16457,41 @@ static REACH: [std::sync::atomic::AtomicU64; N_REACH] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_REACH];
 #[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
 fn note_reach(k: Reach) { REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// **The split of [`Reach::Never`]** — see [`Shared::typed_subj`].
+///
+/// `Reach::Never` says no typing rule concluded *this pair*. That is the
+/// census's headline (18 622 of 18 656 on `init-prelude`) and it was read as
+/// "there is nothing to transport". The reading is only sound if the subject is
+/// also unknown; a subject some declaration *did* type, at a target that is
+/// definitionally equal but interprets apart, is a fact that exists and a
+/// conversion that is missing — a different unblock entirely. And a subject
+/// carrying free variables is a substitution instance of a term some
+/// declaration typed under its own binders, whose *generalised* form is exactly
+/// what a typing threaded down the reduction carries and instantiates.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum SubjReach {
+    /// Closed subject, typed at some other target in an earlier declaration.
+    ClosedEarlier,
+    /// Closed subject, typed at some other target in this declaration.
+    ClosedHere,
+    /// Open subject (free variables), typed at some other target earlier.
+    OpenEarlier,
+    /// Open subject, typed at some other target in this declaration.
+    OpenHere,
+    /// Closed subject no typing rule anywhere has ever spoken about.
+    ClosedUnknown,
+    /// Open subject no typing rule anywhere has ever spoken about.
+    OpenUnknown,
+}
+const N_SUBJ_REACH: usize = 6;
+static SUBJ_REACH: [std::sync::atomic::AtomicU64; N_SUBJ_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_SUBJ_REACH];
+#[cfg_attr(not(feature = "stepcount"), allow(dead_code))]
+fn note_subj_reach(k: SubjReach) {
+    SUBJ_REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// [`TgBackend::has_types`] recalls that fail the claim check at the read end.
 ///
@@ -16886,6 +17172,49 @@ fn ht_report() -> String {
             "      (the interpreted key does cross declarations: {} typings were re-concluded at a pair an earlier declaration already held)\n",
             TYPED_AT_RECONCLUDED.load(Relaxed),
         ));
+        let sr = |k: SubjReach| SUBJ_REACH[k as usize].load(Relaxed);
+        if sr(SubjReach::ClosedEarlier)
+            + sr(SubjReach::ClosedHere)
+            + sr(SubjReach::OpenEarlier)
+            + sr(SubjReach::OpenHere)
+            + sr(SubjReach::ClosedUnknown)
+            + sr(SubjReach::OpenUnknown)
+            > 0
+        {
+            s.push_str(&format!(
+                "      of those never concluded at this pair, the SUBJECT was typed at some other target: {} closed ({} earlier, {} here), {} open ({} earlier, {} here); unknown: {} closed, {} open\n",
+                sr(SubjReach::ClosedEarlier) + sr(SubjReach::ClosedHere),
+                sr(SubjReach::ClosedEarlier),
+                sr(SubjReach::ClosedHere),
+                sr(SubjReach::OpenEarlier) + sr(SubjReach::OpenHere),
+                sr(SubjReach::OpenEarlier),
+                sr(SubjReach::OpenHere),
+                sr(SubjReach::ClosedUnknown),
+                sr(SubjReach::OpenUnknown),
+            ));
+        }
+        let lam_total: u64 = LAM_DECLINE.iter().map(|c| c.load(Relaxed)).sum();
+        if lam_total > 0 {
+            s.push_str(&format!("    lambda typing declines, by cause ({lam_total}):\n"));
+            for k in LamDecline::ALL {
+                let n = LAM_DECLINE[k as usize].load(Relaxed);
+                if n > 0 {
+                    s.push_str(&format!("      {:<62} {n:>8}\n", k.label()));
+                }
+            }
+            for m in HtMiss::ALL {
+                let n = LAM_BODY_MISS[m as usize].load(Relaxed);
+                if n > 0 {
+                    s.push_str(&format!("        body was: {:<52} {n:>8}\n", m.name()));
+                }
+            }
+            for t in HtTarget::ALL {
+                let n = LAM_BODY_TARGET[t as usize].load(Relaxed);
+                if n > 0 {
+                    s.push_str(&format!("        body stated at: {:<46} {n:>8}\n", t.name()));
+                }
+            }
+        }
         let blind = PROBE_BLIND.load(Relaxed);
         if blind > 0 {
             s.push_str(&format!(
