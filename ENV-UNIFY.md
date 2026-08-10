@@ -612,6 +612,24 @@ checker's stage-1 scope wiring (THREADING-CENSUS §2) is what would turn the
 checker's 156 slots into a typing per def and the 7 into a population
 (§3.6); it is independent work, already sequenced first in PIVOT §5.
 
+**What routing does not buy, measured on `init-prelude`**: the routed
+`Split` run (`--mutual --nested --no-modelgen`, release, 16 GB cap) stopped
+after **22.34 T instructions inside mini's zone A**, at the recursor-type
+budget refusal on `ByteArray.IsValidUTF8` — the stop
+`NAT-REPRESENTATION.md` records — with the routed evidence axis never
+entered. Zone A runs upstream of the routing seam, over the whole file,
+because mini's `Environment` is grown by checking (§3.7): routing buys
+certificate sharing and the def-evidence escape, not acceptance reach, and
+`init-prelude` under `Split` waits on track A exactly as this section
+already says. The same run surfaced a latent verdict defect, fixed with it:
+since `233bbc1` neither budget site ever attached the `budget: ` prefix the
+run seam classifies a *decline* by, so a budget refusal printed `reject` —
+a true file in the population of false ones — and no committed fixture
+exhausted the budget, so nothing could go red. Both sites now leave through
+one funnel (`kernel.rs::budget_refusal`) and
+`mini/tests/budget.rs` + its generated fixture are the cell, red before
+the funnel and green after.
+
 ## 6. σ, and what this design assumes about it
 
 The syntactic environment has no σ dimension on either side (declarations

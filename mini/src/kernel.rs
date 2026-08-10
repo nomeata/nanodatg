@@ -513,9 +513,26 @@ pub const DEFEQ_MAX_DEPTH: u32 = 2_000;
 ///
 /// A string prefix rather than an error type because `kernel::add` returns
 /// `Result<(), String>` throughout and threading a second channel for one
-/// producer would be a wide change for one bit. The bit is produced in exactly
-/// two places and read in exactly one; all three name this constant.
+/// producer would be a wide change for one bit. The bit is produced only by
+/// [`budget_refusal`] — the funnel both budget sites leave through — and read
+/// in exactly one place; all three name this constant.
+///
+/// *(Corrected in place: from this constant's landing (`233bbc1`) until the
+/// routed `init-prelude` run surfaced it, **neither budget site attached the
+/// prefix** — the two `format!`s never interpolated it, so `run.rs`'s
+/// classification was dead code and a budget refusal printed `reject`. No
+/// test could fail on it because no fixture exhausted the budget;
+/// `mini/tests/budget.rs` and its generated fixture are that cell now, red
+/// before this funnel and green after.)*
 pub const BUDGET_DECLINE: &str = "budget: ";
+
+/// The one door a budget refusal leaves through: the message with the prefix
+/// [`crate::run`] classifies a *decline* by. Both bounded recursions call
+/// this; a site formatting its own message would reintroduce the silent
+/// reject this funnel exists to prevent.
+fn budget_refusal(detail: std::fmt::Arguments<'_>) -> String {
+    format!("{BUDGET_DECLINE}{detail}")
+}
 
 /// One telescope slot's worth of [`Checker::infer_type`] results.
 ///
@@ -933,9 +950,9 @@ impl<'e, 'i> Checker<'e, 'i> {
         self.whnf_depth += 1;
         if self.whnf_depth > DEFEQ_MAX_DEPTH {
             self.whnf_depth -= 1;
-            return Err(format!(
+            return Err(budget_refusal(format_args!(
                 "weak-head reduction recursed past {DEFEQ_MAX_DEPTH} levels while reducing {e};                  mini bounds this because the alternative is a stack overflow, which reports                  nothing"
-            ))
+            )))
         }
         let out = self.whnf_conv_inner(e, tm, why);
         self.whnf_depth -= 1;
@@ -3750,15 +3767,17 @@ impl<'e, 'i> Checker<'e, 'i> {
         // decision-only call hands in no endpoints and states nothing, so
         // counting it would drown the measurement in its own scaffolding.
         let asked = tm1.is_some() && tm2.is_some();
-        // **Bounded, and the bound is a rejection.** See [`DEFEQ_MAX_DEPTH`].
-        // Decremented before the `?` so that a rejection from below does not
-        // leave the counter raised for the rest of the run.
+        // **Bounded, and the bound is a decline** ([`BUDGET_DECLINE`]): the
+        // file may be perfectly good; it is mini that ran out of room. See
+        // [`DEFEQ_MAX_DEPTH`]. Decremented before the `?` so that a refusal
+        // from below does not leave the counter raised for the rest of the
+        // run.
         self.defeq_depth += 1;
         if self.defeq_depth > DEFEQ_MAX_DEPTH {
             self.defeq_depth -= 1;
-            return Err(format!(
+            return Err(budget_refusal(format_args!(
                 "definitional equality recursed past {DEFEQ_MAX_DEPTH} levels while checking                  {e1} =?= {e2}; mini bounds this because the alternative is a stack overflow,                  which reports nothing"
-            ))
+            )))
         }
         let attempt = self.def_eq_ev(e1, tm1, e2, tm2, lhs);
         self.defeq_depth -= 1;
