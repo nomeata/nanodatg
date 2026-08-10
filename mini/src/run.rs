@@ -368,7 +368,7 @@ pub fn check_file_with_interp(
         None => (Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip), None),
         Some(mode) => {
             let (led, rep) =
-                crate::route::run_routed(path, &ex.env, &ex.decls, &ex.schedule, &mut ip, mode);
+                crate::route::run_routed(&ex.env, &ex.decls, &ex.schedule, &mut ip, mode);
             (led, Some(rep))
         }
     };

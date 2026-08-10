@@ -350,7 +350,6 @@ fn via(e: &mut dyn GroupEngine, d: &Declaration) -> GroupReport { e.check_group(
 /// construction can adopt a def entry the checker published — within one
 /// walk of one file.
 pub(crate) fn run_routed(
-    path: &std::path::Path,
     env: &Environment,
     decls: &[Declaration],
     schedule: &HashMap<Name, Vec<Vec<u32>>>,
@@ -361,19 +360,20 @@ pub(crate) fn run_routed(
     let mut report = RouteReport::new(mode);
     Ledger::arm_labels(ip);
 
-    // The checker over the same export, same thread, same core. A parse
-    // failure is not a crash: the run degrades to mini for everything, and
-    // the report says so.
-    let parsed = nanoda_lib::routed::routed_config(path).to_export_file();
-    let ef = match parsed {
-        Ok((ef, _skipped_axioms)) => Some(ef),
-        Err(e) => {
-            report.checker_error = Some(e.to_string());
-            None
-        }
-    };
+    // **One parse** (the comprehensive-merge's first stage): the checker is
+    // driven over the very `ExportFile` mini's load installed as this
+    // thread's arena — one file, one arena, one `NameKey` identity. This is
+    // not only economy: under the `modelgen` filter the export mini checked
+    // exists only in memory, so the re-parse this replaced would have handed
+    // the two engines two genuinely different files. An absent installation
+    // is not a crash: the run degrades to mini for everything, and the
+    // report says so.
+    let ef = crate::arena::installed_export_file();
+    if ef.is_none() {
+        report.checker_error = Some("no export file installed on this thread".to_string());
+    }
     nanoda_lib::tg::install_shared_core(ip.core().clone());
-    let mut chk = ef.as_ref().map(|ef| CheckerEngine { rc: nanoda_lib::routed::RoutedChecker::new(ef) });
+    let mut chk = ef.map(|ef| CheckerEngine { rc: nanoda_lib::routed::RoutedChecker::new(ef) });
 
     let mut blocked = false;
     // Groups mini itself vouches for — walked without a decline. The stray

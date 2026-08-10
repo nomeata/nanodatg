@@ -40,9 +40,13 @@
 //! * **Spelling** — each entry records the constant's name as the writer
 //!   spells it, and both `publish` and `get` refuse (and count) a caller
 //!   whose spelling disagrees. The `NameKey` half of the key is an arena
-//!   index; the two engines today parse two `ExportFile`s of the same export,
-//!   so the indices agree only because the parse is deterministic. The
-//!   spelling check turns that assumption into a measured refusal
+//!   index. On a **routed** run the two engines read one `ExportFile` — the
+//!   one `mini`'s load installed (`mini::arena::installed_export_file`), so
+//!   the index is one identity and this guard is a tripwire against a second
+//!   parse creeping back in. The *sequential* seam tests
+//!   (`mini/tests/envshare_tg.rs`) still parse twice, and there the guard
+//!   carries its original weight: two deterministic parses agreeing is an
+//!   assumption, and the spelling check turns it into a measured refusal
 //!   (`alias`) instead of a silent mislabelling.
 //!
 //! Everything *semantic* — "is this defining equation about the body **I**

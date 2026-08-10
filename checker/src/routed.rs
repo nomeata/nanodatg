@@ -4,7 +4,6 @@
 //! # Interface
 //!
 //! ```text
-//! routed_config(export)                 -> Config      the routed run's config
 //! ef.routed_schedule()                  -> Arc<Instantiations>
 //! ef.check_declar_scheduled(d, &sched)                 one declaration, every σ
 //! RoutedChecker::new(&ef)               -> RoutedChecker
@@ -13,12 +12,16 @@
 //! ```
 //!
 //! The routed driver lives in `mini` (`mini/src/route.rs`), because `mini`
-//! already depends on this crate and not the other way around. What the
-//! driver needs from this side is exactly three things, and this module is
-//! all of them: the `Config` a routed run drives the checker with, the
-//! per-declaration analogue of [`ExportFile::check_all_declars`], and the
-//! **route-anchor grouping** — which export entries stand or fall with which
-//! declaration name.
+//! already depends on this crate and not the other way around. **The
+//! `ExportFile` is the caller's, and it is the one `mini`'s own load parsed
+//! and installed as its arena** (`mini::arena::installed_export_file`) — one
+//! parse, one arena, one `NameKey` identity across both engines; this module
+//! does not construct a `Config` or read the file, and must not grow the
+//! ability to, because a second parse is what made "the same declaration"
+//! two objects. What the driver needs from this side is exactly two things,
+//! and this module is both of them: the per-declaration analogue of
+//! [`ExportFile::check_all_declars`], and the **route-anchor grouping** —
+//! which export entries stand or fall with which declaration name.
 //!
 //! # The group is the routing unit, and the anchor names it
 //!
@@ -57,36 +60,7 @@ use std::sync::Arc;
 
 use crate::env::Declar;
 use crate::instantiations::Instantiations;
-use crate::util::{Config, ExportFile};
-
-/// The `Config` a routed run drives the checker with — the same shape the
-/// cross-engine seam test (`mini/tests/envshare_tg.rs`) has always used:
-/// every axiom admitted (mini's frontend has already declined the files whose
-/// *used* axioms are out of scope, see `mini::run`), both literal extensions
-/// on (the corpus uses them), no success banner. Built directly rather than
-/// through a JSON file because a routed run has no user-facing config of its
-/// own; the export path is the only variable.
-pub fn routed_config(export: &std::path::Path) -> Config {
-    Config {
-        export_file_path: Some(export.to_path_buf()),
-        use_stdin: false,
-        permitted_axioms: None,
-        unpermitted_axiom_hard_error: false,
-        // The routed evidence axis is single-threaded by construction — the
-        // shared `EnvCore` is `!Send` (ENV-UNIFY.md §3.4 item 4).
-        num_threads: 0,
-        nat_extension: true,
-        string_extension: true,
-        pp_declars: None,
-        unknown_pp_declar_hard_error: true,
-        pp_options: Default::default(),
-        pp_output_path: None,
-        pp_to_stdout: false,
-        print_success_message: false,
-        print_axioms: false,
-        unsafe_permit_all_axioms: true,
-    }
-}
+use crate::util::ExportFile;
 
 impl<'p> ExportFile<'p> {
     /// The instantiation schedule, computed and **published** once — the

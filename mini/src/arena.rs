@@ -88,6 +88,22 @@ thread_local! {
     /// A lazy initializer gives the same "an absent arena is an empty one"
     /// behaviour with no branch and no second access.
     static CTX: RefCell<TcCtx<'static, 'static>> = RefCell::new(mk_ctx(empty_export()).1);
+
+    /// The installed [`ExportFile`] itself — the same leaked object [`CTX`]
+    /// borrows — for the one consumer that needs the checker-side view of
+    /// this thread's parse: the routed driver (`crate::route`), which drives
+    /// the checker over *this* export file rather than parsing the file a
+    /// second time. One parse is what makes the joint `NameKey` an identity
+    /// rather than an agreement between two deterministic parses — and under
+    /// the `modelgen` filter it is also what keeps the two engines reading
+    /// the same *bytes*: the filtered export exists only in memory, so a
+    /// re-parse from the path would hand the checker a different file.
+    /// `None` only on a thread where nothing was ever installed; the lazy
+    /// empty arena [`CTX`] starts with is deliberately not surfaced here,
+    /// because "no export file" and "an empty one" are different answers to
+    /// the routed driver's question.
+    static EF: std::cell::Cell<Option<&'static ExportFile<'static>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Leak an export file and a scratch dag, and pair them into a context.
@@ -135,10 +151,15 @@ pub fn install(cfg: Config) -> Result<&'static ExportFile<'static>, Box<dyn std:
 pub fn install_export_file(ef: ExportFile<'static>) -> &'static ExportFile<'static> {
     let (ef, ctx) = mk_ctx(ef);
     CTX.with(|c| *c.borrow_mut() = ctx);
+    EF.with(|c| c.set(Some(ef)));
     // A pointer from the previous installation indexes a different dag.
     LEVELS.with(|m| m.borrow_mut().clear());
     ef
 }
+
+/// This thread's installed export file, or `None` if nothing was installed —
+/// see [`EF`] for who asks and why the empty fallback arena does not count.
+pub fn installed_export_file() -> Option<&'static ExportFile<'static>> { EF.with(|c| c.get()) }
 
 /// Read through the arena. **Private, and that is the whole safety argument.**
 ///
@@ -182,6 +203,8 @@ fn write<R>(f: impl FnOnce(&mut TcCtx<'static, 'static>) -> R) -> R {
 /// `run::check_file_deep_with` installs on a worker thread it spawns.)*
 pub fn install_empty_arena() {
     install_export_file(empty_export());
+    // An empty fallback arena is not an export file — see [`EF`].
+    EF.with(|c| c.set(None));
 }
 
 // ────────────────────────────────────────────────────────── accessors ──
