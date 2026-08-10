@@ -18046,7 +18046,7 @@ mod tests {
         let head = Term::apply(head_sym, vec![]);
 
         assert!(
-            nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &doms),
+            nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &doms, &[]),
             "the walk it was built over must be accepted"
         );
 
@@ -18062,13 +18062,13 @@ mod tests {
         // the distinction was found.)
         let deep_swap = vec![doms[0].clone(), doms[2].clone(), doms[1].clone()];
         assert!(
-            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &deep_swap),
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &deep_swap, &[]),
             "a walk over different domains must be declined below level 0 too"
         );
         // …and level 0 as well, which the head equation is what catches.
         let top_swap = vec![doms[1].clone(), doms[0].clone(), doms[2].clone()];
         assert!(
-            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &top_swap),
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &top_swap, &[]),
             "a walk over different domains must be declined at level 0"
         );
 
@@ -18078,7 +18078,7 @@ mod tests {
         // equation is unchanged and true here: only the spine differs.
         let swapped_vars = vec![vars[0], vars[2], vars[1]];
         assert!(
-            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &swapped_vars, &doms),
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &swapped_vars, &doms, &[]),
             "a walk over different variables must be declined"
         );
 
@@ -18090,7 +18090,7 @@ mod tests {
         let other = Term::apply(other_sym, vec![]);
         assert_ne!(other, head, "two `define_abbrev` calls must mint two symbols");
         assert!(
-            !nest_agrees(&vars, &doms, &other, &head_def, &lams, &vars, &doms),
+            !nest_agrees(&vars, &doms, &other, &head_def, &lams, &vars, &doms, &[]),
             "an equation about another symbol must be declined"
         );
     }
