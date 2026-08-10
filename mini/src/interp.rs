@@ -2740,11 +2740,26 @@ impl Interp {
     ///   path needs `pi_evidence` to branch on `l2 == 0` first.
     ///
     /// The premise association is the header's exactly:
-    /// `((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ fib(q⃗,A,srt(v))))`. The conclusion is
-    /// compared against [`Interp::sort_of`] at `imax ℓ₁ ℓ₂` rather than
-    /// trusted, which is what makes a level whose spelling does not line up —
-    /// `imax ℓ 3`, where Lean's own normalisation has already turned the
-    /// `ite0` into a `max` — a `None` here instead of a wrong theorem.
+    /// `((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ fib(q⃗,A,srt(v))))`.
+    ///
+    /// # The conclusion check is defensive, and **must not be deleted on the
+    /// strength of that**
+    ///
+    /// The last line compares the derived conclusion against
+    /// [`Interp::sort_of`] at `imax ℓ₁ ℓ₂` rather than trusting the
+    /// instantiation. **Measured, it never fires**: removing it leaves all 91
+    /// tutorial exports' `polyledger`/`polyblocked`/`polyev` rows
+    /// byte-identical, so nothing on the corpus reaches it.
+    ///
+    /// That is a reason to *label* it, not a reason to remove it, and this
+    /// paragraph exists because the green measurement is exactly what would
+    /// justify removing it to a reader who found only the measurement. What it
+    /// prevents is not a missing theorem but a **wrong** one: an instantiation
+    /// whose spelling drifts from `sort_of`'s hands back a true statement about
+    /// a *different* sort, which composes onwards and is discovered nowhere.
+    /// Every other guard on this route fails safe; this is the one that fails
+    /// silent, and a route whose whole claim is "the certificate says what the
+    /// interpretation means" cannot afford it. Keep it.
     #[allow(clippy::too_many_arguments)]
     pub fn pi_typing_of(
         &mut self,

@@ -594,9 +594,16 @@ mod tests {
     /// `Gap::StrLit` is not *waiting* on anything. Mini declines string
     /// literals as a matter of interpretation **scope**, not of unfinished
     /// threading (MINI-DESIGN.md §0's two axes), so no clause conversion can
-    /// cure it and this fixture cannot go red on progress a second time. The
-    /// pair is not well-typed and does not need to be — this route infers the
-    /// two halves independently and checks neither against the other.
+    /// cure it and this fixture cannot go red on progress a second time.
+    ///
+    /// **The axis is what makes it safe, not the distance.** Re-founding this
+    /// on the next dark thing — a constant at a parametric level, 109 sites
+    /// today — would have failed again at the very next slice. `DECISIONS.md`
+    /// 2026-08-10 is the rule: when a stays-broken fixture is cured, cross to
+    /// the *other* axis rather than moving further along the same one.
+    ///
+    /// The pair is not well-typed and does not need to be — this route infers
+    /// the two halves independently and checks neither against the other.
     #[test]
     fn a_missing_type_certificate_does_not_eat_the_values() {
         let env = Environment::empty();

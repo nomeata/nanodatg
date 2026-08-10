@@ -3264,3 +3264,53 @@ tell "all checks passed" from "all checks that ran passed". That is the one
 place in this set where SKIP-is-not-PASS stops at the process boundary, and it
 is recorded rather than changed because the fix is a policy choice about what a
 machine without a Lean toolchain should do, not a defect in a check.
+
+---
+
+## 2026-08-10 — Rebasing a fixture that asserted something stays broken: cross the *category*, do not just move further away
+
+**Chosen.** When a fixture has to be repaired because the thing it asserted
+would stay broken has been **cured**, re-found it on a gap in a **different
+category** of `MINI-DESIGN.md` §0's two axes — an *interpretation-scope* refusal
+where the cured one was *threading* debt, or the reverse. Not on a
+further-away gap of the same kind.
+
+**Rejected.** Re-pointing it at whatever is still dark today. The obvious
+repair, and it re-arms the same trap on a longer fuse.
+
+**Why.** `LEVELPOLY.md` §5.3's `Π` clause landed and
+`poly_run::tests::a_missing_type_certificate_does_not_eat_the_values` went red
+**on the cure**. The test is about slot alignment — that a declaration's type
+certificate and its value certificate come back in the slots they went out in —
+and it needed *some* type that does not interpret in order to exhibit the
+misalignment. It used `Sort u → Sort u`, because the `Π` clause wanted a
+numeral. So it was pinning `typesOk == 0` on precisely the clause whose whole
+purpose was to make that 1, and the tranche that succeeded was the tranche that
+broke it. **Second occurrence on this branch**; the first was the rung rules.
+
+The tempting repair is to pick the *next* uninterpretable thing — a constant at
+a parametric level, say, which is dark today at 109 sites. That fails again the
+moment `const_evidence` lands, which is the very next slice. Distance in the
+backlog is not safety; every item in the backlog is scheduled to be cured.
+
+What is safe is a gap on the **other axis**. `Gap::StrLit` is not waiting on
+anything: mini declines string literals as a matter of *interpretation scope*,
+a decision about what the project models, not as unfinished *threading*. No
+clause conversion can cure it, because no clause is what is missing. The
+fixture now uses one, and cannot go red on progress a third time.
+
+**The rule, stated for grep.** A fixture needs a negative to exhibit a positive.
+Choose the negative from a category the work in flight cannot reach:
+
+* curing **threading** debt → re-found on **scope** (`StrLit`, a non-standard
+  axiom, a declined `mutual`);
+* curing **scope** → re-found on a **library** gap or a deliberate `Bug`-class
+  reason;
+* never re-found on "the same kind of thing, further down the list".
+
+And say in the fixture's own header *which axis it chose and why that axis is
+unreachable from here* — `a_missing_type_certificate_does_not_eat_the_values`
+does. A fixture whose negative is undocumented is one someone will helpfully
+"modernise" onto the current frontier.
+
+**RISK:** none — this is a testing discipline, not a semantic rule.

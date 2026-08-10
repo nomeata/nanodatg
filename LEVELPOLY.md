@@ -832,13 +832,40 @@ THREADING-CENSUS §2).
          → ite0(v, cndd(q⃗,A), dprod(q⃗,A)) ∈ srt(imax(u,v)))
    ```
 
-   Two things about it make the de-scheduled arm **simpler than the scheduled
-   one**, which is not what the site count suggested. It is §1.4's `ite0`, so
-   the arm does not have to *decide* `l2 == 0` — the two clauses `pi_evidence`
-   splits on a numeral are merged inside the target term. And it takes its two
-   premises at `srt(u)` and `srt(v)` directly and raises the fibres pointwise
-   itself, so the de-scheduled arm has **no `raise_in_gamma`**: the scheduled
-   one's cumulativity lift to `max(n1,n2)` disappears into the theorem.
+   Three things about it make the de-scheduled arm **simpler than the
+   scheduled one**, which is not what the site count suggested. It is §1.4's
+   `ite0`, so the arm does not have to *decide* `l2 == 0` — the two clauses
+   `pi_evidence` splits on a numeral are merged inside the target term. It
+   takes its two premises at `srt(u)` and `srt(v)` directly and raises the
+   fibres pointwise itself, so the de-scheduled arm has **no
+   `raise_in_gamma`**: the scheduled one's cumulativity lift to `max(n1,n2)`
+   disappears into the theorem. And with no lift there is no
+   `Gap::SortTowerHeight` either — the eager `CUMUL_HEIGHT` table is not
+   consulted, so there is no height to run out of.
+
+   ##### This is the first place the code says the branch's thesis unprompted
+
+   Worth stating in exactly these terms, because it is the claim the whole
+   strand rests on and it has until now been an argument rather than a
+   measurement. The thesis is that interpreting levels as elements of ω is
+   **more direct than the schedule, not a costlier encoding of it** — that
+   monomorphisation was buying nothing that the theory did not already have.
+
+   A cheaper reading was always available: that the de-scheduled route is the
+   same content in heavier notation, paying in quantifiers for what σ got by
+   substitution. The `Π` clause refutes it. Standing side by side in one
+   function, over one corpus, the de-scheduled arm is **shorter than the
+   scheduled arm it replaces** — three constructions the scheduled path needs
+   (the clause decision, the double cumulativity lift, the tower-height guard)
+   are not simplified here, they are *absent*, because the theorem the ω
+   vocabulary can state does not need them. `pi_evidence` splits on a numeral
+   because it has a numeral, not because the `Π` rule wants one; given a level
+   it can talk about, the rule is one theorem.
+
+   The site census says the same thing from the other side: `pi_evidence`'s
+   `Gap::SymbolicLevel` goes **50 → 0 and disappears from the census
+   entirely**. Not reduced — absent. That is what a clause looks like when the
+   obstruction was the schedule rather than the mathematics.
 
    Every argument `pi_rules(env, r, i, ord, ut, s, ru, tower, dp, pair, cndd,
    cndd_ax)` takes is already in mini's hands: `r`/`i`/`ord`/`ut`/`s`/`ru` off

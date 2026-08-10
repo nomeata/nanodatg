@@ -705,10 +705,27 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// every conclusion the declaration produced**.
     ///
     /// The declaration-exit half of §5.2. Generalising the variables
-    /// afterwards (§5.3 step 5's `∀u⃗`) is the switchover's business and is not
-    /// done here: a theorem that is merely *closed* is already enough to be
-    /// `Sealed`, and quantifying it needs the store's key to be the generic
-    /// point, which is step 5.
+    /// afterwards (§5.3 step 5's `∀u⃗`) is not done *here*, because a theorem
+    /// that is merely **closed** is already enough to be `Sealed`, and this
+    /// function's job ends at closing. The quantifier belongs at the store,
+    /// where the key is the generic point — [`crate::interp::Interp`]'s poly
+    /// const store.
+    ///
+    /// # Where the line actually is, corrected
+    ///
+    /// This paragraph read *"generalising … is the switchover's business"*, and
+    /// that was wrong in a way that would have stopped the next seat at a
+    /// sentence rather than at an argument. **The switchover (§5.5) is the
+    /// deletion of the ground schedule**, and §5.5's "it cannot be partial" is
+    /// about *that deletion* and the counters whose meaning it changes — not
+    /// about every construction that happens to quantify over a level.
+    ///
+    /// Quantifying a stored typing is §5.3 **step 5**, it lives wholly on the
+    /// opt-in [`crate::poly_run`] route, it changes no scheduled row, and it
+    /// cannot half-land the switchover because it does not touch the schedule
+    /// at all. The checker's half of step 5 (`store_poly_typing`) is already
+    /// built and committed on this branch, which is the other half of the
+    /// evidence that this was never switchover work.
     ///
     /// # It takes a slice, and that is a correction the first caller forced
     ///
