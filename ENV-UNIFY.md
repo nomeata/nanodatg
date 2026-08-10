@@ -747,10 +747,22 @@ stage 6"):
   asked on **8** exports and `rec_nest` answers on **4** —
   `073_boolRecEqns` 2, `075_nRecReduction` 6, `076_listRecReduction` 5,
   `116_rtreeRecReduction` 1 — **14 successful ι derivations** that the
-  deletion turns into `Certifier::iota` admitting. A further 19 functions
-  (1,774 lines: `derive_iota_core`, the five `fire_*`, `gen_minor_typed`,
-  `nest_chain`, the `mem_along` family) keep compiling and stop being
-  reachable.
+  deletion turns into `Certifier::iota` admitting. With them, **10 functions
+  — ~1,782 lines, contiguous at `tg.rs:11052–12962`** — keep compiling and
+  stop being reachable: `derive_iota`, `derive_iota_core`, the four `fire_*`
+  (`enum`/`nat`/`general`/`list`), `nest_chain`, `gen_minor_typed`,
+  `mem_along` and `mem_along_c`. Every `nest_chain` and `mem_along*` call
+  site was checked to be inside one of those, so none of them is shared with
+  the general typing path.
+
+  *(An earlier draft of this box, and the commit that added it, said "19
+  functions (1,774 lines … the five `fire_*`)". Wrong on both counts —
+  there are four `fire_*` and ten functions — and the line total was close
+  enough to look verified. It came from a delegated census whose report
+  never reached the seat that wrote it down, and it is corrected here rather
+  than appended to. The findings around it are first-hand: the call graph,
+  the two `rec_nest` callers, the 14 ι derivations and the `Unique` counts
+  below were each measured in this worktree.)*
 
   That cost is real and it is not an `IndApparatus` duplicate:
   `IndApparatus` is mini's *declaration-side* construction, while what
