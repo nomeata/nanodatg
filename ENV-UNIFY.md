@@ -632,7 +632,28 @@ stage 6"):
   behind adopt-and-check (B4); lam/Π/cond sites — two each (the table
   above); undetermined-Π (`undet_syms`) — checker-only by construction
   (mini is ground-only); inductive carriers, nests and recursor packages —
-  two (`IndApparatus` vs `gen_inds`/`gen_recs`/`rec_nests`).
+  two (`IndApparatus` vs `gen_inds`/`gen_recs`/`rec_nests`), and the
+  checker-side pair splits into two subsystems with different fates
+  (measured entry counts over the 91 exports, temporary instrument at the
+  two entry points): the tg backend's inductive *interpretation*
+  (`walk_spec`/`rec_nest`/`gen_*_nest`, the straight `IndApparatus`
+  duplicate) is deletion-scope under "inductive handling comes from the
+  mini side"; nanoda's inductive *acceptance* (`checker/src/inductive.rs`,
+  1703 lines, + `quot.rs`, 275) is entered **3 times under `Split`** —
+  exactly the three fallback inductives, so it is the counted fallback's
+  substance, not dead weight — **0 under `ForceMini`**, **102 + 24 under
+  `ForceChecker`**, and never on a routed `init-prelude` (zone A
+  budget-declines upstream). Mini's zone A does full kernel acceptance on
+  inductives — `checkCtorParam`: universe bound then strict positivity
+  (`kernel.rs:4398`), recursor synthesis in `add_block` — with rejection
+  parity pinned by the `bad/` corpus and `check-mini-vs-nanoda`; what it
+  does *not* do is nanoda's mint-and-compare against the export's recursor
+  entries (§3.8's boundary, track A3). Deleting `inductive.rs` therefore
+  costs three things, priced for the owner's call: the fallback target for
+  inductives mini declines (052/113/114 would have no acceptance-side
+  cover), the `ForceChecker` comparison path and with it the differential
+  oracle for the declaration kind, and the only mint-and-compare validation
+  of export recursors until A3 lands.
 
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
