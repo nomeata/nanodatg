@@ -2447,6 +2447,14 @@ struct Shared {
     lp: Option<Rc<derived::levels::apparatus::LevelPoly>>,
 }
 
+/// How far [`TgBackend::rung_of_srt`] looks for a numeral rung.
+///
+/// Lean's own prelude never spells a closed universe above a handful, and the
+/// ground path's `CUMUL_HEIGHT` is 8; this is that bound with room. A level
+/// past it is left unbridged rather than guessed at, and the rule that wanted
+/// it reports a gap as before.
+const RUNG_SEARCH_MAX: usize = 16;
+
 /// Whether the level-quantification prototype is enabled for this process.
 fn levelpoly_enabled() -> bool {
     static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -2800,6 +2808,15 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// The value is an `Option` so a *failed* lookup is memoised too: the miss
     /// is the common case and re-deciding it per obligation is not free.
     ind_ty_mems: HashMap<(Term, Term), Option<Thm>>,
+    /// **The ground bridge, memoised per rung** — `⊢ srt(n̄) = Uₙ`
+    /// (`derived::levels::srt::Srt::rung_eq`, `LEVELPOLY.md` §1.2).
+    ///
+    /// Keyed by the rung index, not by the term, because it is a *closed*
+    /// derivation: it depends on nothing at the site. Under
+    /// [`unify_sort_enabled`] every `⟦Sort k⟧` in the program is `srt(k̄)`,
+    /// and the corpus uses a handful of distinct `k`, so this is a few
+    /// entries answering thousands of obligations.
+    rung_bridges: HashMap<usize, Option<Thm>>,
     /// The abbreviation symbol standing for each interpreted inductive or
     /// constructor, with its defining equation, keyed by the Lean name **and the
     /// universe levels it is used at**. Keeping the interpretation *injective on
@@ -3861,6 +3878,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             typeables: HashMap::new(),
             ind_mems: HashMap::new(),
             ind_ty_mems: HashMap::new(),
+            rung_bridges: HashMap::new(),
             ind_syms: HashMap::new(),
             ctor_rules: HashMap::new(),
             gen_ctor_bridges: HashMap::new(),
@@ -6615,6 +6633,86 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// it literally says `te ∈ ty` for the pair asked about. Recognising the
     /// head symbol would not do — that is the shape of bug this codebase has
     /// found five of.
+    /// **Is `ty` the unified spelling of a tower rung, and what is the rung?**
+    ///
+    /// Under [`unify_sort_enabled`], `⟦Sort k⟧` is `srt(k̄)` for every `k`,
+    /// including numerals — so every `derived` theorem stated over a rung
+    /// (`U₀`, `U(ω)`, `U(x)`) fails to match the obligation it is about. This
+    /// is the seam that repairs that, and it is one seam for all of them:
+    /// `LEVELPOLY.md` §1.2's bridge equation, applied at the guard.
+    ///
+    /// Returns `(Uₙ, ⊢ ty = Uₙ)`. `None` when `ty` is already a rung (the
+    /// ground path, and every flag-off run), when the switch is off, or when
+    /// `ty` is `srt` of something that is not a closed numeral — a genuinely
+    /// variable level has no rung and must not be given one.
+    ///
+    /// The search over `n` is a linear scan against
+    /// [`LevelPoly::srt_at`] at each numeral rather than a destructure of the
+    /// `ite0` application. That is deliberate: it compares against the term
+    /// the apparatus *builds*, so a change in how `srt` is spelled cannot make
+    /// this silently recognise the wrong thing. The bound is
+    /// [`RUNG_SEARCH_MAX`]; a level above it is left unbridged and counted,
+    /// never guessed at.
+    fn rung_of_srt(&mut self, ty: &Term) -> Option<(Term, Thm)> {
+        if !unify_sort_enabled() {
+            return None
+        }
+        let lp = self.lp()?;
+        let mut num = lp.zero();
+        let mut n = 0usize;
+        while n <= RUNG_SEARCH_MAX {
+            if lp.srt_at(num.clone()) == *ty {
+                let bridge = self.rung_bridge(&lp, n)?;
+                let (_, rung) = bridge.concl().as_eq()?;
+                return Some((rung.clone(), bridge))
+            }
+            num = lp.succ_of(num);
+            n += 1;
+        }
+        None
+    }
+
+    /// `⊢ srt(n̄) = Uₙ`, derived once per rung. See [`Shared`]'s note on
+    /// `rung_bridges` for why the key is the index.
+    fn rung_bridge(
+        &mut self,
+        lp: &derived::levels::apparatus::LevelPoly,
+        n: usize,
+    ) -> Option<Thm> {
+        if let Some(t) = self.rung_bridges.get(&n) {
+            return t.clone()
+        }
+        let lu = self.pre.u_sym;
+        let out = {
+            let mut env = self.env_mut();
+            lp.s.rung_eq(&mut env, &lp.r, &lp.ut, lu, n)
+        };
+        self.rung_bridges.insert(n, out.clone());
+        out
+    }
+
+    /// Carry `⊢ te ∈ rung` across the ground bridge to `⊢ te ∈ ty`.
+    ///
+    /// One Leibniz step against the reversed bridge, and the result is
+    /// **checked against the membership actually wanted** before it is handed
+    /// back — the single-exit guard every rule here ends on. A bridge is an
+    /// equation like any other; nothing about it is privileged.
+    fn transport_to_srt(
+        &mut self,
+        thm: &Thm,
+        te: &Term,
+        rung: &Term,
+        ty: &Term,
+        bridge: &Thm,
+    ) -> Option<Thm> {
+        let back = derived::eq_symm(&mut self.env_mut(), bridge)?;
+        let w = self.env_mut().fresh_var();
+        let leib =
+            Thm::eq_leibniz(rung.clone(), ty.clone(), w, Formula::mem(te.clone(), Term::var(w)));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, thm)?;
+        (*out.concl() == Formula::mem(te.clone(), ty.clone())).then_some(out)
+    }
+
     fn ind_ty_mem(&mut self, te: &Term, ty: &Term) -> Option<Thm> {
         if let Some(t) = self.ind_ty_mems.get(&(te.clone(), ty.clone())) {
             return t.clone()
@@ -6625,6 +6723,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     fn ind_ty_mem_uncached(&mut self, te: &Term, ty: &Term) -> Option<Thm> {
+        // With the vocabulary unified, `⟦Type 0⟧` is `srt(1̄)` and not the rung
+        // `U(ω)` this rule's base theorem is about. The ground bridge equates
+        // them, the rule runs against the rung as it always did, and the
+        // conclusion is carried back to the spelling the obligation used.
+        // `LEVELPOLY.md` §5.5: this is the first of the rules the unification
+        // blinds, and the largest.
+        if let Some((rung, bridge)) = self.rung_of_srt(ty) {
+            let inner = self.ind_ty_mem_uncached(te, &rung)?;
+            return self.transport_to_srt(&inner, te, &rung, ty, &bridge)
+        }
         if *ty != self.pre.u1() {
             return None
         }

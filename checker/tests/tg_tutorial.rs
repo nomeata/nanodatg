@@ -2615,6 +2615,60 @@ fn the_switchover_staging_switch_unifies_the_sort_vocabulary() {
     assert!(unified.contains("Tarski-Grothendieck kernel"), "no report:\n{unified}");
 }
 
+/// **The ground bridge restores the rung-shaped rules under the unified
+/// vocabulary** — `LEVELPOLY.md` §5.5, the first of the six dark rules.
+///
+/// With `⟦Sort ℓ⟧ = srt(ℓ̂)` at every level, `⟦Type 0⟧` is `srt(1̄)` and not
+/// the rung `U(ω)` that `IndTy`'s base theorem is about, so the rule went
+/// silently to zero — 888 firings on the staged prelude. `Srt::rung_eq`
+/// equates the two spellings and one Leibniz step carries the conclusion
+/// back.
+///
+/// `093_projRed` fires the rule **four** times, which is what makes this a
+/// test rather than a coincidence: the bridge is derived once per *rung* and
+/// replayed, so a fixture with one firing cannot tell a working memo from a
+/// bridge that happens to work the first time and is then cached wrong.
+///
+/// The claim is **equality between the two states, not a floor**. The bridge
+/// is only correct if the unified run answers exactly what the ground run
+/// answers — more would mean it is proving something the ground path does not,
+/// which is the direction a bad transport fails in. Gaps are pinned equal for
+/// the same reason.
+///
+/// Mutation run against this test (red, then reverted): making `rung_of_srt`
+/// return `None` always, which takes the unified run's `IndTy` to 0 and its
+/// gaps to 7 while leaving the staged run untouched — i.e. exactly the dark
+/// state this bridge exists to undo.
+#[test]
+fn the_ground_bridge_restores_indty_under_the_unified_vocabulary() {
+    let f = corpus().join("good/tutorial/093_projRed.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    const INDTY: &str = "by IndTy: an inductive type lies in its universe";
+    let staged = poly_report(&f, "1", false);
+    let unified = poly_report_unified(&f, "1", false);
+
+    let ground = rows_totalling(&staged, INDTY);
+    assert_eq!(
+        ground, 4,
+        "the fixture stopped firing IndTy four times, so it can no longer witness the \
+         bridge's memo across rungs:\n{staged}"
+    );
+    assert_eq!(
+        rows_totalling(&unified, INDTY),
+        ground,
+        "the unified vocabulary must answer exactly what the ground one does — a rung-shaped \
+         rule that fires a different number of times is a bridge that is not an equation:\n\
+         {unified}"
+    );
+    assert_eq!(
+        rows_totalling(&unified, "TOTAL gaps"),
+        rows_totalling(&staged, "TOTAL gaps"),
+        "the bridge closed the rule but moved the gap ledger:\n{unified}"
+    );
+}
+
 /// One run of `export` with the switchover's staging switch on.
 fn poly_report_unified(export: &Path, flag: &str, scheduled: bool) -> String {
     poly_report_env(export, flag, scheduled, true)
