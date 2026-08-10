@@ -2853,21 +2853,48 @@ fn the_conversion_trace_names_each_declaration_as_the_loop_reaches_it() {
 /// constEv=1  library-gap=6  waiting:axiom(Classical.choice)=4  waiting:axiom(propext)=2
 /// ```
 ///
-/// and the `propext` half is gone. `Classical.choice`'s four are pinned here
-/// **as a decline** and by name, for the reason the module header of
-/// `mini::axiom` gives: its codomain is `α : Sort u`, not a `Prop`, so the
-/// clause would have to hand back the term `ε(⟦α⟧)` and a theorem carrying the
-/// hypothesis `IsChoiceFn(f, ·)` — and `mini::ev::Sealed` refuses a
-/// hypothetical theorem while `mini::ledger` stores `ip.point()` for every
-/// inhabited axiom. That is an architecture question, not a missing lemma, and
-/// a change that closes it should fail here and be re-read.
+/// and the `propext` half is gone.
+///
+/// **`Classical.choice`'s four were pinned here as a decline, and two of them
+/// are now certified.** The paragraph that stood here said the obstruction was
+/// that "`mini::ev::Sealed` refuses a hypothetical theorem while `mini::ledger`
+/// stores `ip.point()` for every inhabited axiom", and instructed a change that
+/// closed it to fail this test and be re-read. It did, and this is the re-read.
+/// Both halves of that sentence are now wrong, and in different ways:
+///
+/// * `Sealed` refuses nothing here. `kernel::thm::henkin` mints `ε` as a 0-ary
+///   constant and `derived::choice::Epsilon`'s theorems are hypothesis-free
+///   sentences.
+/// * `ip.point()` is not a problem **at `u = 0`**, because at `u = 0` the
+///   codomain `α` *is* a `Prop` and §6.2 gives it the denotation `•` like every
+///   other proof. The obligation is `⊢ • ∈ ⟦α⟧`, which is `Nonempty`'s own
+///   class-(P) ladder plus one subset fact — and no `ε` at all.
+///
+/// # The split the four pairs turned out to have
+///
+/// They are not four σ of one declaration. They are **two σ each of two
+/// declarations** — `Classical.choice` itself and its use site `choiceUse`,
+/// at `u := 0` and `u := 1`. So the `u = 0` clause closes *two*:
+///
+/// ```text
+/// before  constEv=3  library-gap=4  waiting:axiom(Classical.choice)=4
+/// after   constEv=5  library-gap=2  waiting:axiom(Classical.choice)=2
+/// ```
+///
+/// What is left is genuinely the `ε` half: at `u ≥ 1` the codomain is not a
+/// `Prop`, the interpretation is `ε(⟦α⟧)` rather than `•`, and both
+/// `mini::axiom::inhabit` and `mini::ledger`'s store are still written for `•`.
+/// The remaining two are pinned by name below, and a change that closes *them*
+/// should fail here and be re-read in turn.
 ///
 /// # Two axioms, not one
 ///
 /// A fixture with `propext` alone would pass under a clause that inhabited
 /// *any* axiom whose type interpreted — the failure mode the module header
-/// calls "the name is not the evidence", one level up. `Classical.choice` sits
-/// beside it at the same two σ, and the clause must leave it alone.
+/// calls "the name is not the evidence", one level up. That argument survives
+/// the choice clause landing, and is now carried by
+/// [`an_axiom_named_classical_choice_that_does_not_return_its_binder_is_declined`]
+/// rather than by this test's silence.
 #[test]
 fn propext_is_inhabited_and_classical_choice_is_still_open() {
     let out = run("standard_axioms.ndjson");
@@ -2877,8 +2904,9 @@ fn propext_is_inhabited_and_classical_choice_is_still_open() {
     // report the same `constEv` for an entirely different reason.
     assert_eq!(e.get("pairs"), Some(&7), "the pair population changed:\n{out}");
     assert_eq!(e.get("typeEv"), Some(&7), "an axiom's type stopped interpreting:\n{out}");
-    // `propext` and `propextUse`, plus `trueIff` which never needed the axiom.
-    assert_eq!(e.get("constEv"), Some(&3), "the derived population changed:\n{out}");
+    // `propext` and `propextUse` and `trueIff`, plus `Classical.choice{u:=0}`
+    // and `choiceUse{u:=0}`.
+    assert_eq!(e.get("constEv"), Some(&5), "the derived population changed:\n{out}");
     let w = waiting(&out);
     assert_eq!(
         w.get("axiom(propext)"),
@@ -2887,10 +2915,53 @@ fn propext_is_inhabited_and_classical_choice_is_still_open() {
     );
     assert_eq!(
         w.get("axiom(Classical.choice)"),
-        Some(&4),
-        "Classical.choice's four pairs are the ε obstruction, pinned as a decline:\n{out}"
+        Some(&2),
+        "the `u ≥ 1` half is the ε obstruction and is still pinned as a decline:\n{out}"
     );
+    // **The remaining reason must still be the axiom's own axis.** A partial
+    // clause that relabelled its own decline — "the nest does not interpret to
+    // the point", say — would leave the same *count* on a different row, and
+    // the measurement this file exists for would have moved without anyone
+    // deciding to move it. `mini::axiom::inhabit` reads the bottom's `Ev`
+    // before it tests `tm` precisely so that this stays true.
     assert_eq!(w.len(), 1, "a second reason appeared beside the choice axiom:\n{out}");
+}
+
+/// **What the choice clause derived, not merely that it derived something.**
+/// The `u = 0` pair's typing must be a membership in the interpretation of
+/// `∀ {α : Prop}, Nonempty α → α`, so the premise's type former appears in it —
+/// a clause that certified the axiom against some other set would move
+/// `constEv` just the same.
+///
+/// The **`u = 1` pair must still be a gap**, in the same dump: the two σ are
+/// different derivations and the partial clause has to be visible as partial.
+///
+/// (The negative direction — an axiom that *is* named `Classical.choice` and
+/// does not return its own binder — is pinned at the clause itself, in
+/// `mini::axiom`'s unit tests, because reaching it through this pipeline would
+/// require a second fixture whose only difference the frontend would decline
+/// first. It is the analogue of `Quot.sound`'s, and it is the test the module
+/// header's soundness claim rests on.)
+#[test]
+fn the_choice_clause_certifies_sort_zero_and_leaves_sort_one_open() {
+    let lines = theorem_lines("standard_axioms.ndjson", "Classical.choice");
+    let typing: Vec<&String> = lines.iter().filter(|l| l.starts_with("typing ")).collect();
+    assert_eq!(typing.len(), 2, "Classical.choice has two pairs, u := 0 and u := 1: {lines:?}");
+
+    let derived: Vec<&&String> = typing.iter().filter(|l| !l.contains("waiting on")).collect();
+    let open: Vec<&&String> = typing.iter().filter(|l| l.contains("waiting on")).collect();
+    assert_eq!(derived.len(), 1, "exactly one of the two σ is certified: {typing:?}");
+    assert_eq!(open.len(), 1, "and exactly one is still open: {typing:?}");
+    assert!(
+        open[0].contains("axiom(Classical.choice)"),
+        "the open one must still be on the axiom's own axis: {}",
+        open[0]
+    );
+    assert!(
+        derived[0].contains("⟦Nonempty.{0}⟧"),
+        "the certified typing is not about its own declared type — no premise former in {}",
+        derived[0]
+    );
 }
 
 /// **The premise is read, not assumed.** `propext`'s clause takes its

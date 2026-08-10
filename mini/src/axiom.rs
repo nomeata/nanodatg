@@ -102,18 +102,24 @@
 //! that are not syntactically the same — and the only new thing is the equation
 //! itself, [`propext_eq`].
 //!
-//! # `Classical.choice` — why there is no clause, and what would be needed
+//! # `Classical.choice` — one clause, and it covers half the levels
 //!
 //! ```text
 //! Classical.choice.{u} : ∀ {α : Sort u}, Nonempty α → α
 //! ```
 //!
-//! **Its codomain is not a `Prop`**, and the "what a clause here must produce"
-//! section above is not a stylistic preference: `inhabit` requires the nest to
-//! interpret to `•`, and [`crate::ledger`] stores `ip.point()` as the term of
-//! every axiom this module inhabits. `⟦Classical.choice α h⟧` is `ε(⟦α⟧)`
-//! (§6.2), so both would have to change — `inhabit` to hand back a term, and
-//! the ledger to store it.
+//! **This is the one axiom whose clause is not the same derivation at every
+//! `σ`**, and the reason is the sentence the "what a clause here must produce"
+//! section opens with: only a proof-valued axiom can be inhabited this way. At
+//! `u = 0` the codomain `α` *is* a `Prop`, so `Classical.choice.{0}` is
+//! proof-valued and this module's existing frame fits it exactly. At `u ≥ 1` it
+//! is not, `⟦Classical.choice α h⟧` is `ε(⟦α⟧)` (§6.2) rather than `•`, and both
+//! `inhabit` and [`crate::ledger`]'s store still have to move.
+//!
+//! [`Clause::Choice`] therefore certifies `u = 0` and declines `u ≥ 1` **on the
+//! axiom's own axis** — it hands back `Gap::Axiom`, not a shape complaint, so a
+//! half-finished clause moves the count and never the reason. `inhabit` reads
+//! the bottom's `Ev` before it tests `tm` in order to keep that true.
 //!
 //! **That was described here as the smaller half of the problem, with the
 //! larger being that "`ε` is not a term of the kernel's language and cannot be
@@ -151,7 +157,7 @@
 //! `crate::ledger`, and it splits by level in a way worth writing down, because
 //! the two halves are unequal and only one of them needs `ε` at all.
 //!
-//! ### `σ = [0]` — four pairs' worth of two, and no `ε`
+//! ### `σ = [0]` — **done**, and it needed no `ε`
 //!
 //! At `u = 0` the type is `∀ {α : Prop}, Nonempty α → α`. The nest bottom's
 //! `ty` is `α : Sort 0`, so [`crate::kernel::Checker::lam_nest`] takes
@@ -160,9 +166,24 @@
 //! `term: ip.point()` is already right. The obligation is `⊢ • ∈ ⟦α⟧`, and that
 //! is not `elim_psi` but the class-(P) ladder: `TruncFields::steps[0]` needs
 //! `P₀ : β₀(α) ⊆ 1`, which at `u = 0` is [`crate::rec_prop::subset_of_unit`] at
-//! the `α` binder's `⟦α⟧ ∈ U₀` — the same closure [`propext_eq`] already writes
-//! below. `crate::proj_prop::trunc_typing`'s major-premise block is the
-//! template.
+//! the `α` binder's `⟦α⟧ ∈ U₀`. `crate::proj_prop::trunc_typing`'s
+//! major-premise block is the template and [`choice_point`] follows it step for
+//! step. **Nothing in `crate::ledger` changed.**
+//!
+//! The measurement, `mini/tests/fixtures/standard_axioms.lean`:
+//!
+//! ```text
+//! before  constEv=3  library-gap=4  waiting:axiom(Classical.choice)=4
+//! after   constEv=5  library-gap=2  waiting:axiom(Classical.choice)=2
+//! ```
+//!
+//! Two, not one, because the four pairs were never four σ of one declaration:
+//! they are `Classical.choice` and its use site `choiceUse`, at `u := 0` and
+//! `u := 1` each. Half the pairs of the standard axiom that this project's goal
+//! statement cannot excuse are closed by a derivation with no choice in it —
+//! which is the right answer and not a shortcut. At `u = 0`, `Nonempty α`
+//! *already is* the statement that `⟦α⟧` is the inhabited one of `U₀`'s two
+//! elements; there is nothing left to choose.
 //!
 //! ### `σ = [1]` and above — this is where `ε` is
 //!
@@ -228,6 +249,8 @@ pub enum Clause {
     QuotSound,
     /// `propext` — Extensionality inside `U₀`.
     PropExt,
+    /// `Classical.choice.{u}` — the class-(P) ladder at `u = 0`.
+    Choice,
 }
 
 impl Clause {
@@ -239,6 +262,9 @@ impl Clause {
             Clause::QuotSound => 5,
             // `a b h`. The codomain is the equation.
             Clause::PropExt => 3,
+            // `α h`. The codomain is `α` itself — the implicit binder, which is
+            // why this is the one clause whose codomain is a bare `bvar`.
+            Clause::Choice => 2,
         }
     }
 }
@@ -250,6 +276,9 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
         NameView::Anon if &*s == "propext" => Some(Clause::PropExt),
         NameView::Str(root, q) if root.is_anon() && &*q == "Quot" && &*s == "sound" => {
             Some(Clause::QuotSound)
+        }
+        NameView::Str(root, q) if root.is_anon() && &*q == "Classical" && &*s == "choice" => {
+            Some(Clause::Choice)
         }
         _ => None,
     }
@@ -287,11 +316,30 @@ pub fn inhabit(
     let depth = cl.depth();
     let cod = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad(SHAPE))?;
     let sigma = inst.to_vec();
+    let nm = *name;
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
-        Ok(nest_bottom(c, cl, &sigma, &lean_ty, &cod))
+        Ok(nest_bottom(c, cl, &nm, &sigma, &lean_ty, &cod))
     };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     let point = c.interp().ok_or(Gap::SymbolicLevel)?.point();
+    // **The bottom's own reason comes first.** This read used to sit *after* the
+    // `tm == point` test, and that was only harmless while every clause here
+    // produced a term on both paths. It does not survive a clause that declines
+    // at some `σ` and not others: [`Clause::Choice`] at `u ≥ 1` hands back a
+    // `Gap` and no term, `lam_evidence`'s value branch propagates the `None`
+    // upward, and the point test then fired first and relabelled a perfectly
+    // well-understood decline as "the nest does not interpret to the point" —
+    // turning a counted axis into a shape complaint about the clause's own
+    // deliberate refusal.
+    //
+    // Reordering weakens nothing. A `Gap` was going to be an `Err` either way;
+    // what changes is only *which* reason is reported, and the sub-result's own
+    // is the right one (`crate::ledger` §0.4). Both checks below still run in
+    // full on every path that produces a theorem.
+    let thm = match t.ev {
+        Ev::Proved(th) => th,
+        Ev::Gap(g) => return Err(g),
+    };
     // **The nest's `tm` must be `•` and its membership must be about `⟦ty[σ]⟧`.**
     // Both halves matter: a nest that interpreted to something other than the
     // point is not a proof, and a membership in some other set is a theorem
@@ -299,10 +347,6 @@ pub fn inhabit(
     if t.tm.as_ref() != Some(&point) {
         return Err(bad("axiom: the nest does not interpret to the point"))
     }
-    let thm = match t.ev {
-        Ev::Proved(th) => th,
-        Ev::Gap(g) => return Err(g),
-    };
     if *thm.concl() != Formula::mem(point, ty_tm.clone()) {
         return Err(bad("axiom: the nest is not about its own declared type"))
     }
@@ -315,7 +359,14 @@ pub fn inhabit(
 /// `lean_ty` is the whole declared type at σ, not only the codomain: a clause
 /// whose *premise* carries the information — [`Clause::PropExt`]'s does — reads
 /// it off the binder the export declared and not off a name this module chose.
-fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, inst: &[u32], lean_ty: &E, cod: &E) -> Typing {
+fn nest_bottom(
+    c: &mut Checker<'_, '_>,
+    cl: Clause,
+    name: &Name,
+    inst: &[u32],
+    lean_ty: &E,
+    cod: &E,
+) -> Typing {
     match cl {
         // `Eq Prop a b` from `a ↔ b`. The equation between the two `Prop`s is
         // [`propext_eq`]; everything after it is `Quot.sound`'s `u ≥ 1` path,
@@ -355,7 +406,193 @@ fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, inst: &[u32], lean_ty: &E, c
                 },
             }
         }
+        // `α` itself, from `Nonempty α`. **Only `u = 0` is here**; see the
+        // module header for why the two levels are different derivations and
+        // not one with a parameter.
+        //
+        // At `u = 0` the codomain is a `Prop`, so §6.2 gives it the denotation
+        // `•` like every other proof and the obligation is `⊢ • ∈ ⟦α⟧`. The
+        // bottom is therefore built directly rather than through
+        // [`crate::direct::eq_bottom`]: there is no application to decompose,
+        // the codomain being a bare `bvar`.
+        //
+        // At `u ≥ 1` the reason handed back is `Gap::Axiom` **and not a shape
+        // complaint**, deliberately: the row this leaves in the ledger is the
+        // one that was there before this clause existed, so a partial clause
+        // moves the *count* and never the axis. `inhabit` reads this before it
+        // tests `tm`, which is what makes that true.
+        Clause::Choice => {
+            let u = inst.first().copied().unwrap_or(0);
+            let ev = if u == 0 {
+                match choice_point(c, lean_ty, cod) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::missing(Gap::IndSpec(*name, CHOICE)),
+                }
+            } else {
+                Ev::missing(Gap::Axiom(*name))
+            };
+            let tm = match &ev {
+                Ev::Proved(_) => c.interp().map(|ip| ip.point()),
+                Ev::Gap(_) => None,
+            };
+            Typing { ty: *cod, tm, ev }
+        }
     }
+}
+
+const CHOICE: &str =
+    "axiom: the premise is not a one-field class-(P) truncation of the codomain binder";
+
+/// `⊢ • ∈ ⟦α⟧` for `Classical.choice.{0}` — the nest bottom at `u = 0`.
+///
+/// # Why `u = 0` needs no `ε` at all
+///
+/// `Nonempty α` is a **class-(P)** declaration with one field, of type `α`. Its
+/// ladder ([`derived::inductive::family::TruncFields`]) states, at field 0,
+///
+/// ```text
+/// ⊢ ∀α. ( • ∈ ‖Nonempty α‖ → (β₀(α) ⊆ 1 → • ∈ β₀(α)) )        [steps[0]]
+/// ```
+///
+/// and `β₀(α)` is `⟦α⟧`. At `u = 0` the side condition `β₀(α) ⊆ 1` is
+/// discharged from the `α` binder's own `⟦α⟧ ∈ U₀` by
+/// [`crate::rec_prop::subset_of_unit`] — so the whole obligation is the ladder
+/// plus one subset fact, and Carneiro's `ε` never appears. It cannot: at
+/// `u = 0` the choice being made is between the two elements of `U₀`, and
+/// `Nonempty α` at a `Prop` already *is* the statement that `⟦α⟧` is the
+/// non-empty one.
+///
+/// That is not an optimisation, it is why this half landed first: it exercises
+/// no new machinery and closes half the pairs.
+///
+/// # Nothing here is keyed on the name `Nonempty`
+///
+/// The premise's head constant is read off the **declared type** and its
+/// apparatus looked up at that key, exactly as [`propext_eq`] does. What makes
+/// this derivation `Classical.choice`'s rather than some other declaration's is
+/// checked at four places, none of them a name:
+///
+/// * the codomain must be `bvar 1` — **the axiom must return its own first
+///   binder**. An axiom called `Classical.choice` that returns something else
+///   gets no theorem, which is the analogue of
+///   `an_axiom_named_quot_sound_that_is_not_reflexivity_is_declined`;
+/// * the premise must have exactly one argument and it must be the outer
+///   binder, `bvar 0`, so a premise about some other type is refused;
+/// * the head constant must be in the **class-(P)** table — a truncation — with
+///   one parameter and exactly one constructor field. `Iff` (class (S), two
+///   fields) reaches this test and stops;
+/// * the ladder's `P₀` is compared against `TruncFields::subsets[0]` and the
+///   final membership against `⟦α⟧`, both rebuilt, so a ladder belonging to
+///   another declaration cannot be applied here.
+///
+/// # Why the major premise needs three moves and not one
+///
+/// The `h` binder's typing is stated at the **stored** type former applied to
+/// `⟦α⟧`; `TruncFields` states everything at `derived`'s own `‖·‖`. Getting
+/// between them is [`Interp::beta_spine`] down the stored nest, then
+/// `TruncTranslation::abbrev`, then — because `⟦h⟧` is a scope variable and not
+/// the point — `TruncCarrier::only_point`. That is
+/// [`crate::proj_prop`]'s `trunc_typing` sequence, and it is followed here
+/// step for step rather than re-derived, because the two are the same statement
+/// reached from a nest binder instead of from a projection's subject.
+fn choice_point(c: &mut Checker<'_, '_>, lean_ty: &E, cod: &E) -> Option<Thm> {
+    // ── the codomain is the first binder, and the premise is about it ───────
+    if !matches!(cod.view(), Expr::BVar(1)) {
+        return None
+    }
+    let mut cur = *lean_ty;
+    let mut prem = None;
+    for i in 0..Clause::Choice.depth() {
+        let Expr::Forall { ty, body } = cur.view() else { return None };
+        if i == 1 {
+            prem = Some(ty);
+        }
+        cur = body;
+    }
+    let (head, args) = crate::expr::get_app(&prem?);
+    let Expr::Const(ind, us) = head.view() else { return None };
+    if args.len() != 1 || !matches!(args[0].view(), Expr::BVar(0)) {
+        return None
+    }
+    let empty = std::collections::HashMap::new();
+    let inst: Vec<u32> = us.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<_>>()?;
+    let ConstantInfo::Inductive { num_params, .. } = c.environment().get(&ind)? else {
+        return None
+    };
+    if *num_params != 1 {
+        return None
+    }
+
+    // ── the class-(P) apparatus for it ──────────────────────────────────────
+    let key = (ind, inst.clone());
+    let tt = c.interp()?.ind_apparatus()?.truncs.get(&key).cloned()?;
+    let spec = tt.ind.spec.ctors.first()?;
+    if spec.args.len() != 1 || tt.ind.params.len() != 1 {
+        return None
+    }
+    let former = c.stored_term(&ind, &inst)?;
+    let fields = {
+        let (mut kenv, app, _) = c.interp()?.ind_parts()?;
+        app.trunc_fields(&mut kenv, &key, &tt)?
+    };
+    if fields.subsets.len() != 1 || fields.steps.len() != 1 {
+        return None
+    }
+
+    // ── the nest's two binders ──────────────────────────────────────────────
+    let (xs, mems) = c.binders(Clause::Choice.depth())?;
+    let (a, h) = (xs[0].clone(), xs[1].clone());
+    let ip = c.interp()?;
+    let point = ip.point();
+    // `u = 0` is read off the *evidence* and not only off `σ`: the binder's own
+    // membership must land in `U₀`, or `subset_of_unit` below is about a set
+    // this derivation has no fact for.
+    if *mems[0].concl() != Formula::mem(a.clone(), ip.sort(0)) {
+        return None
+    }
+
+    // ── `⊢ • ∈ ‖ind(⟦α⟧)‖`, the ladder's major premise ──────────────────────
+    let (carrier, spine_eq) = ip.beta_spine(&former, &xs[..1], &mems[..1])?;
+    let ab = derived::inst_all(&tt.abbrev, &xs[..1])?;
+    let (ab_l, ab_r) = ab.concl().as_eq()?;
+    if ab_l != carrier {
+        return None
+    }
+    let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab)?;
+    let in_t = ip.retarget_set(&mems[1], &norm)?;
+    let major = if h == point {
+        in_t
+    } else {
+        let only = derived::inst_all(&tt.tc.only_point, &xs[..1])
+            .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&h)))
+            .and_then(|t| Thm::mp(&t, &in_t))?;
+        let back = derived::eq_symm(&mut ip.env_mut(), &only)?;
+        ip.retarget_subject(&in_t, &back)?
+    };
+    if *major.concl() != Formula::mem(point.clone(), ab_r) {
+        return None
+    }
+
+    // ── `P₀ : β₀ ⊆ 1`, off the α binder's `∈ U₀` ────────────────────────────
+    let unfold = derived::inst_all(tt.field_abbrev.first()?.first()?, &xs[..1])?;
+    let sym_in_u0 = ip.retarget_subject(&mems[0], &unfold)?;
+    let sym = sym_in_u0.concl().as_mem()?.0.clone();
+    let p0 = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0)?;
+    let psub: Vec<(kernel::FreeVar, Term)> =
+        tt.ind.params.iter().copied().zip(xs[..1].iter().cloned()).collect();
+    if *p0.concl() != crate::rec_dep::subst_f(&fields.subsets[0], &psub) {
+        return None
+    }
+
+    // ── the ladder, and back onto `⟦α⟧` ─────────────────────────────────────
+    let hs = derived::inst_all(&fields.steps[0], &xs[..1])
+        .and_then(|t| Thm::mp(&t, &major))
+        .and_then(|t| Thm::mp(&t, &p0))?;
+    let hyps: Vec<Formula> =
+        fields.memberships.iter().map(|f| crate::rec_dep::subst_f(f, &psub)).collect();
+    let h_sym = derived::conj_proj(&hyps, 0).and_then(|pr| Thm::mp(&pr, &hs))?;
+    let out = ip.retarget_set(&h_sym, &unfold)?;
+    (*out.concl() == Formula::mem(point, a)).then_some(out)
 }
 
 const PROPEXT: &str = "axiom: the premise is not a two-field class-(S) biconditional over the two propositions";
@@ -584,6 +821,19 @@ mod tests {
         assert_eq!(clause_for(&Name::str(&nm("My"), "propext")), None, "My.propext is not propext");
         assert_eq!(clause_for(&Name::num(&nm("propext"), 0)), None, "propext.0 is not propext");
         assert_eq!(clause_for(&Name::str(&nm("propext"), "aux")), None);
+
+        // `Classical.choice` is two components and the *root* must be anonymous,
+        // exactly as `Quot.sound`'s is — a `Foo.Classical.choice` is somebody
+        // else's declaration and gets no clause.
+        assert_eq!(clause_for(&Name::str(&nm("Classical"), "choice")), Some(Clause::Choice));
+        assert_eq!(clause_for(&nm("Classical")), None, "the namespace is not the axiom");
+        assert_eq!(clause_for(&nm("choice")), None);
+        assert_eq!(
+            clause_for(&Name::str(&Name::str(&nm("Foo"), "Classical"), "choice")),
+            None,
+            "Foo.Classical.choice is not Classical.choice"
+        );
+        assert_eq!(clause_for(&Name::str(&nm("Classical"), "choice_spec")), None);
     }
 
     /// The two clauses do not share a depth, and each one's is the binder count
@@ -595,6 +845,7 @@ mod tests {
     fn each_clauses_depth_is_its_axioms_binder_count() {
         assert_eq!(Clause::QuotSound.depth(), 5, "α r a b h");
         assert_eq!(Clause::PropExt.depth(), 3, "a b h");
+        assert_eq!(Clause::Choice.depth(), 2, "α h");
     }
 
     /// An environment with `Eq` and one axiom called `Quot.sound` whose
@@ -687,6 +938,140 @@ mod tests {
             verdict(cod),
             Err(Gap::IndSpec(nm("Eq"), "ctor is not about its own codomain")),
             "a false axiom must be declined with a reason, never given a typing"
+        );
+    }
+
+    // ── Clause::Choice ──────────────────────────────────────────────────────
+
+    /// An environment with a class-(P) `Nonempty` and an axiom called
+    /// `Classical.choice` whose **codomain is the caller's** — so that the same
+    /// clause can be run at the law it is about and at a law it is not.
+    ///
+    /// This mirrors [`env_with_sound`] and exists for the same reason: the
+    /// negative direction cannot be reached through `mini/tests/designed.rs`,
+    /// because a fixture declaring a second, wrong `Classical.choice` is
+    /// declined by `crate::convert::is_standard_axiom` at the frontend and
+    /// would measure that decline instead of this one.
+    fn env_with_choice(cod: E) -> (Environment, Name) {
+        let u = Level::param(nm("u"));
+        let us: std::rc::Rc<[Level]> = vec![u].into();
+        let ne = nm("Nonempty");
+        let mut env = Environment::empty();
+        // `inductive Nonempty (α : Sort u) : Prop where | intro (val : α)`
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: ne,
+                lparams: vec![nm("u")],
+                num_params: 1,
+                ty: forall(sort(u), sort(Level::zero())),
+                ctors: vec![(
+                    Name::str(&ne, "intro"),
+                    forall(sort(u), forall(bvar(0), app(konst(ne, us.clone()), bvar(1)))),
+                )],
+            },
+        )
+        .expect("Nonempty is accepted");
+        // `axiom Classical.choice {α : Sort u} : Nonempty α → cod`
+        let name = Name::str(&nm("Classical"), "choice");
+        let ty = forall(sort(u), forall(app(konst(ne, us), bvar(0)), cod));
+        crate::kernel::add(&mut env, &Declaration::Axiom { name, lparams: vec![nm("u")], ty })
+            .expect("the axiom is accepted");
+        (env, name)
+    }
+
+    /// `⟦ty[0]⟧`, and the clause's verdict about it.
+    fn choice_verdict(cod: E) -> Result<(), Gap> {
+        let (env, name) = env_with_choice(cod);
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let ci = c.environment().get(&name).expect("declared").clone();
+        let lean_ty = ground::subst_ground(ci.ty(), ci.lparams(), &[0]);
+        let want = c
+            .infer_type(&lean_ty)
+            .expect("the type infers")
+            .tm
+            .expect("the type interprets");
+        inhabit(&mut c, Clause::Choice, &name, &[0], &want).map(|_| ())
+    }
+
+    /// **The law it is about.** At `u = 0` the codomain is the binder `α`, a
+    /// `Prop`, so the obligation is `⊢ • ∈ ⟦α⟧` and the class-(P) ladder
+    /// discharges it. This is the positive control: without it the negative
+    /// test below could pass because the clause never works at all.
+    #[test]
+    fn the_choice_law_at_sort_zero_is_certified() {
+        // The codomain is `α` — `bvar 1` under the two binders.
+        assert!(choice_verdict(bvar(1)).is_ok(), "Classical.choice at u = 0 must derive");
+    }
+
+    /// **The name is not the evidence.** An axiom called `Classical.choice`
+    /// with the right premise, the right depth and the right level, whose
+    /// codomain is `Nonempty α` rather than `α`, is declined — the clause
+    /// derives a membership in `⟦α⟧` and the declared type asks for one in
+    /// `⟦Nonempty α⟧`.
+    ///
+    /// The difference from the positive case above is **one `Expr`**, which is
+    /// what makes this a test of the codomain check rather than of the clause.
+    #[test]
+    fn an_axiom_named_classical_choice_that_does_not_return_its_binder_is_declined() {
+        let us: std::rc::Rc<[Level]> = vec![Level::param(nm("u"))].into();
+        let cod = app(konst(nm("Nonempty"), us), bvar(1));
+        assert_eq!(
+            choice_verdict(cod),
+            Err(Gap::IndSpec(Name::str(&nm("Classical"), "choice"), CHOICE)),
+            "a false axiom must be declined with a reason, never given a typing"
+        );
+    }
+
+    /// **The premise is read too.** An axiom of the right shape whose premise
+    /// is not about the codomain binder — `Nonempty` at a *second*, unrelated
+    /// binder — has no ladder that says anything about `⟦α⟧`, and is declined
+    /// at the `args[0] == bvar 0` test rather than producing a theorem about
+    /// the wrong parameter.
+    #[test]
+    fn a_premise_about_another_binder_is_declined() {
+        // Three binders is a different depth, so instead keep depth 2 and make
+        // the premise `Nonempty.{0} (Nonempty.{u} α)` — still one argument, and
+        // still a class-(P) truncation, but of the wrong thing. The outer copy
+        // is at level 0 because `Nonempty.{u} α : Prop`, and Lean's own kernel
+        // rejects the declaration otherwise — which is worth saying, because a
+        // fixture that does not typecheck tests nothing.
+        let u = Level::param(nm("u"));
+        let us: std::rc::Rc<[Level]> = vec![u].into();
+        let ne = nm("Nonempty");
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: ne,
+                lparams: vec![nm("u")],
+                num_params: 1,
+                ty: forall(sort(u), sort(Level::zero())),
+                ctors: vec![(
+                    Name::str(&ne, "intro"),
+                    forall(sort(u), forall(bvar(0), app(konst(ne, us.clone()), bvar(1)))),
+                )],
+            },
+        )
+        .expect("Nonempty is accepted");
+        let name = Name::str(&nm("Classical"), "choice");
+        let inner = app(konst(ne, us), bvar(0));
+        let zero: std::rc::Rc<[Level]> = vec![Level::zero()].into();
+        let ty = forall(sort(u), forall(app(konst(ne, zero), inner), bvar(1)));
+        crate::kernel::add(&mut env, &Declaration::Axiom { name, lparams: vec![nm("u")], ty })
+            .expect("the axiom is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let ci = c.environment().get(&name).expect("declared").clone();
+        let lean_ty = ground::subst_ground(ci.ty(), ci.lparams(), &[0]);
+        let want =
+            c.infer_type(&lean_ty).expect("the type infers").tm.expect("the type interprets");
+        assert_eq!(
+            inhabit(&mut c, Clause::Choice, &name, &[0], &want).map(|_| ()),
+            Err(Gap::IndSpec(name, CHOICE)),
+            "the premise must be the truncation of the codomain binder itself"
         );
     }
 }
