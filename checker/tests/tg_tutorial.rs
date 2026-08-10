@@ -1863,6 +1863,120 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     assert!(cond_nest <= 170, "{cond_nest} of them families of families, was 170");
 }
 
+/// **The `translated` row measures the goal's own population, and it may not
+/// narrow.**
+///
+/// The project's thrust is *"all declarations of prelude-init (except skipped
+/// non-standard axioms) checked, accepted and with their typing relation having
+/// a fully proven theorem in the environment."* Four different populations were
+/// all being called "declarations of `init-prelude`" (`MEASUREMENTS.md`, "the
+/// four denominators"), and the declaration-typing ledger asserted above counts
+/// the smallest of them: `Dt::Seen` is value-carrying pairs only — 2 891 of the
+/// goal's 3 859 — so a `Dt` ledger reading 2 891 / 2 891 would report the goal
+/// complete with **a quarter of it unmeasured** (413 declarations / 968 pairs:
+/// every inductive, constructor, recursor, `quot` constant and axiom).
+///
+/// # What each assertion is for
+///
+/// The ratchets are the ordinary kind. The two `assert_eq!`s are **not**
+/// ratchets and must not be turned into any: they are non-vacuity guards, and a
+/// ratchet on a vacuity guard is a vacuity guard that can be loosened.
+///
+/// * `reached + collapsed == scheduled`. `Dt::Seen` is a *walk* counter, so a
+///   run that reaches fewer declarations reports a smaller denominator and a
+///   better-looking ratio. This says the walk entered every pair the pre-pass
+///   scheduled. The `collapsed` term is real and not slack: `check_declar_all`
+///   checks an `Inductive` or `Quot` **once**, at the empty instantiation,
+///   however many σ the schedule lists — 104 absorbed pairs on `init-prelude`.
+///   Counting them separately is what leaves the identity able to fail for any
+///   *other* reason.
+/// * `eligible == Dt::Seen`. The pre-pass's static count of value-carrying
+///   scheduled pairs, against the walk's. Same guard, one level down.
+/// * `population >= 3859` — **the floor under the denominator**, and the
+///   assertion this test exists for. A change that narrows what is scheduled
+///   improves `sealed / population` for free; nothing else here catches it.
+///   3 859 is measured, not asserted from the file: 3 861 scheduled pairs less
+///   the 2 that `sorryAx` — `init-prelude`'s one non-standard axiom — occupies.
+/// * `sealed >= 26` and `distinct >= 17`, ratchets. They are different numbers
+///   and the difference is the point: 26 counts (declaration, σ) pairs and the
+///   goal's sentence asks about declarations. Perturbing `DEFAULT_LEVELS` from
+///   `[0,1]` to `[0,1,2]` moved the pair count 26 → 35 with 9 of the additions
+///   being extra σ of declarations already counted, which bounded the distinct
+///   count at ≤ 17 before it could be measured; measured, it is exactly 17.
+#[test]
+fn the_translated_row_measures_the_goals_population_and_may_not_narrow() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = report(&f);
+    let row = |label: &str| -> u64 {
+        assert!(
+            text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
+            "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
+        );
+        rows_totalling(&text, label)
+    };
+
+    let scheduled = row("scheduled (declaration, σ) pairs, all kinds");
+    let skipped = row("…skipped as non-standard axioms");
+    let population = row("POPULATION (scheduled − skipped)");
+    let reached = row("…pairs the walk entered");
+    let collapsed = row("…scheduled pairs absorbed by Inductive/Quot");
+    let eligible = row("…of the population, carrying a value");
+    let sealed = row("SEALED AND PUBLISHED");
+    let distinct = row("…distinct declarations behind them");
+    let seen = row("declarations with a value");
+
+    // The report prints its own bug-report line when either identity fails or
+    // the seal refuses, so a failure here should never be the first notice.
+    // Asserted anyway — a report nobody reads is not a guard — and scoped to
+    // this row's own three lines, so an unrelated ledger going red elsewhere
+    // fails its own test rather than this one.
+    for marker in [
+        "THE WALK DID NOT ENTER THE SCHEDULE",
+        "THE VALUE DENOMINATOR IS NOT THE SCHEDULE'S",
+        "SEAL REFUSALS AT THE DECLARATION-TYPING STORE",
+    ] {
+        assert!(
+            !text.contains(marker),
+            "the translated row is carrying a bug-report line:\n{}",
+            text.lines().filter(|l| l.contains(marker)).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    // Non-vacuity. Not ratchets — identities.
+    assert_eq!(
+        reached + collapsed,
+        scheduled,
+        "the walk did not enter the schedule: {reached} entered + {collapsed} absorbed ≠ {scheduled} scheduled"
+    );
+    assert_eq!(
+        eligible, seen,
+        "the pre-pass scheduled {eligible} value-carrying pairs but the walk saw {seen}"
+    );
+    assert_eq!(population, scheduled - skipped, "population is not scheduled − skipped");
+
+    // **The floor under the denominator.** Everything else in this file is a
+    // numerator; this is the one line that fails when the population shrinks.
+    assert!(
+        population >= 3859,
+        "the goal's population fell to {population}, was 3859 — a narrowed denominator is not progress"
+    );
+    // And the exclusion is exactly one declaration's worth of pairs. A skip
+    // that grew is a skip that stopped being `sorryAx`.
+    assert_eq!(skipped, 2, "the non-standard-axiom exclusion moved: {skipped} pairs, was 2 (sorryAx)");
+
+    // Ratchets.
+    assert!(sealed >= 26, "only {sealed} typing theorems sealed and published, was 26");
+    assert!(distinct >= 17, "only {distinct} distinct declarations proved, was 17");
+    // `sealed` counts pairs and `distinct` counts declarations, so this
+    // direction is a theorem about the two counters and holds however either
+    // moves. It fails if `distinct` is ever fed something other than the
+    // sealed pairs' own names.
+    assert!(distinct <= sealed, "{distinct} distinct declarations behind only {sealed} sealed pairs");
+}
+
 /// **Projection reduction is a rule, and inference feeds it** — and the two
 /// numbers that say so are not the same number.
 ///

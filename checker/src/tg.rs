@@ -9270,7 +9270,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             note_dt(Dt::Poly);
         }
         note_dt(Dt::Stored);
-        let Ok(out) = Sealed::new(out) else { return note_dt(Dt::Refused) };
+        let Ok(out) = Sealed::new(out) else {
+            TR_SEAL_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return note_dt(Dt::Refused)
+        };
         // Into the shared store's typing slot, on the entry whose carrier is
         // `ct` — which is the entry [`Self::const_abbrev`] just wrote or
         // adopted, so if the carrier was `mini`'s the typing lands beside
@@ -9284,6 +9287,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Some(out),
             None,
         );
+        // **After the seal and after the publish**, which is the whole point of
+        // this counter existing beside `Dt::Stored`. See [`Translated`].
+        let kind = ctx
+            .export_file
+            .declars
+            .get(&name)
+            .map(crate::instantiations::declar_kind)
+            .unwrap_or(usize::MAX);
+        Translated::sealed(kind, &sp);
     }
 
     /// `⟦c⟧ ∈ ty` — **a lookup**, in the store
@@ -16923,6 +16935,161 @@ static INST_AUDIT: [std::sync::atomic::AtomicU64; N_INST] =
 
 fn note_inst(a: InstAudit) { INST_AUDIT[a as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// **The `translated` row: how far along the project's stated goal is.**
+///
+/// The goal is *"all declarations of prelude-init (except skipped non-standard
+/// axioms) checked, accepted and with their typing relation having a fully
+/// proven theorem in the environment."* Every other ledger in this file counts
+/// a population it chose; this one counts the population the sentence names,
+/// and the reason it is a separate block rather than a `Dt` row is that the
+/// `Dt` rows are a breakdown of *value-carrying* pairs — 2 891 of 3 859 on
+/// `init-prelude`, so a `Dt` ledger reading 2 891 / 2 891 would declare victory
+/// with a quarter of the goal unmeasured.
+///
+/// # The denominator is fixed before the walk, and it may not shrink
+///
+/// `scheduled`, `skipped`, `population` and `eligible` all come from
+/// [`crate::instantiations`], computed before any declaration is checked.
+/// `Dt::Seen` is a *walk* counter — the first line of
+/// [`TgBackend::store_declar_typing`] — so a run that reaches fewer
+/// declarations reports a smaller denominator and a better-looking ratio. That
+/// is the eleventh instance of "reporting success having done nothing" waiting
+/// to happen, and the two identities below plus the CI floor
+/// `population >= 3859` are what make it fail red instead.
+///
+/// # `reached + collapsed == scheduled`
+///
+/// Not a ratchet, an identity, and it is the row's non-vacuity guard. The
+/// `collapsed` term is not slack: `ExportFile::check_declar_all` checks an
+/// `Inductive` or `Quot` **once**, at the empty instantiation, however many σ
+/// the schedule lists for it — deliberately, because neither goes through
+/// `with_tc_and_declar` and neither has anywhere to put a σ. So the walk enters
+/// fewer pairs than the schedule names, and the difference is counted and named
+/// rather than absorbed into slack. A run that dropped work for any *other*
+/// reason breaks the identity.
+///
+/// # `sealed` is counted after the seal *and* after the publish
+///
+/// `Dt::Stored` is bumped one line before `Sealed::new`; instrumented at 5 229
+/// seal calls with 0 refusals, so it is honest by luck rather than by
+/// construction. This counter is bumped after both, so a seal that starts
+/// refusing moves the numerator down instead of leaving it flattering.
+pub(crate) struct Translated;
+
+/// Pairs the walk entered, one bump per `check_declar_at`.
+static TR_REACHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Scheduled pairs a once-per-declaration kind (`Inductive`, `Quot`) absorbs.
+static TR_COLLAPSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Pairs whose typing theorem is sealed **and** published.
+static TR_SEALED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// `Sealed::new` refusals at the declaration-typing store — expected 0, and a
+/// bug report if not, in the spirit of `Admit::Whnf`.
+static TR_SEAL_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TR_SEALED_BY_KIND: [std::sync::atomic::AtomicU64; crate::instantiations::N_DECLAR_KINDS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; crate::instantiations::N_DECLAR_KINDS];
+/// The distinct declaration names behind `TR_SEALED` — `sealed` counts (decl,
+/// σ) pairs, and the goal's sentence asks about declarations. Measured on
+/// `init-prelude`: perturbing `DEFAULT_LEVELS` moved `Dt::Stored` 26 → 35 with
+/// 9 of the additions being extra σ of declarations already counted, so the two
+/// numbers differ by roughly half and only this field answers the sentence.
+static TR_DISTINCT: std::sync::Mutex<Option<std::collections::BTreeSet<String>>> =
+    std::sync::Mutex::new(None);
+
+impl Translated {
+    /// One `(declaration, σ)` pair entered by the walk.
+    pub(crate) fn reached() { TR_REACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+    /// `n` scheduled pairs a once-per-declaration kind absorbed.
+    pub(crate) fn collapsed(n: u64) {
+        TR_COLLAPSED.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn sealed(kind: usize, name: &str) {
+        TR_SEALED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(c) = TR_SEALED_BY_KIND.get(kind) {
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Ok(mut g) = TR_DISTINCT.lock() {
+            g.get_or_insert_with(Default::default).insert(name.to_owned());
+        }
+    }
+    fn distinct() -> u64 {
+        TR_DISTINCT.lock().ok().and_then(|g| g.as_ref().map(|s| s.len() as u64)).unwrap_or(0)
+    }
+}
+
+/// [`Translated`], rendered — or the empty string when no schedule was
+/// published, or when the walk never entered a pair.
+fn translated_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let Some(st) = crate::instantiations::published_stats() else { return String::new() };
+    let reached = TR_REACHED.load(Relaxed);
+    if reached == 0 {
+        return String::new()
+    }
+    let (collapsed, sealed) = (TR_COLLAPSED.load(Relaxed), TR_SEALED.load(Relaxed));
+    let (scheduled, skipped) = (st.pairs as u64, st.skipped_pairs as u64);
+    let population = scheduled.saturating_sub(skipped);
+    let distinct = Translated::distinct();
+    let pct = |n: u64, d: u64| if d == 0 { 0.0 } else { 100.0 * n as f64 / d as f64 };
+
+    // Every row ends with its count, so the report stays greppable by the same
+    // `rows_totalling` the rest of the ledger's tests use. The ratios go on a
+    // headline of their own rather than trailing the numbers they are about.
+    let mut s = String::from("  translated — the goal's own population, and how much of it is proved:\n");
+    s.push_str(&format!(
+        "    {:.2}% of the population proved; {:.2}% of the pairs that carry a value; {distinct} distinct declarations of {}\n",
+        pct(sealed, population),
+        pct(sealed, st.value_pairs as u64),
+        st.declars,
+    ));
+    let skipped_names = crate::instantiations::published_skipped();
+    let row = |s: &mut String, label: String, n: u64| {
+        s.push_str(&format!("    {label:<62} {n:>10}\n"));
+    };
+    row(&mut s, "scheduled (declaration, σ) pairs, all kinds".into(), scheduled);
+    row(
+        &mut s,
+        format!(
+            "…skipped as non-standard axioms{}",
+            if skipped_names.is_empty() { String::new() } else { format!(" ({})", skipped_names.join(", ")) },
+        ),
+        skipped,
+    );
+    row(&mut s, "POPULATION (scheduled − skipped)".into(), population);
+    row(&mut s, "…pairs the walk entered".into(), reached);
+    row(&mut s, "…scheduled pairs absorbed by Inductive/Quot (checked once)".into(), collapsed);
+    row(&mut s, "…of the population, carrying a value (eligible today)".into(), st.value_pairs as u64);
+    row(&mut s, "SEALED AND PUBLISHED ⊢ ⟦c⟧ ∈ ⟦T⟧".into(), sealed);
+    row(&mut s, "…distinct declarations behind them".into(), distinct);
+    for (i, k) in crate::instantiations::DECLAR_KINDS.iter().enumerate() {
+        let d = st.pairs_by_kind[i] as u64;
+        if d > 0 {
+            row(&mut s, format!("  sealed {k} (of {d} scheduled)"), TR_SEALED_BY_KIND[i].load(Relaxed));
+        }
+    }
+    // The two identities. Printed as a bug report when they fail, the way the
+    // `⟦False⟧` anchor's is, rather than left to the test alone: a report read
+    // without CI must still say when its own arithmetic does not close.
+    if reached + collapsed != scheduled {
+        s.push_str(&format!(
+            "    THE WALK DID NOT ENTER THE SCHEDULE (bug report): {reached} + {collapsed} ≠ {scheduled}\n"
+        ));
+    }
+    let seen = DT[Dt::Seen as usize].load(Relaxed);
+    if seen != st.value_pairs as u64 {
+        s.push_str(&format!(
+            "    THE VALUE DENOMINATOR IS NOT THE SCHEDULE'S (bug report): Dt::Seen {seen} ≠ {} scheduled\n",
+            st.value_pairs,
+        ));
+    }
+    let refused = TR_SEAL_REFUSED.load(Relaxed);
+    if refused > 0 {
+        s.push_str(&format!(
+            "    SEAL REFUSALS AT THE DECLARATION-TYPING STORE (bug report, expected 0): {refused}\n"
+        ));
+    }
+    s
+}
+
 /// The schedule and the audit against it, or the empty string when no schedule
 /// was published (the library's other entry points do not build one).
 fn inst_report() -> String {
@@ -17376,6 +17543,7 @@ pub fn global_report() -> String {
     s.push_str(&split_report());
     s.push_str(&gen_report());
     s.push_str(&inst_report());
+    s.push_str(&translated_report());
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
     }

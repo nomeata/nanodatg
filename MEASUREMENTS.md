@@ -6210,6 +6210,11 @@ seal never refuses. Instrumented: **5 229 `Sealed::new` calls on this file,
 For whoever lands #126. Not landed here: every field needs
 `checker/src/tg.rs`, which #125 holds.
 
+**Landed 2026-08-10 (task #126), with three corrections to this
+specification** — each measured, each noted at its field below. The row prints
+as its own block after `level instantiations`; the CI test is
+`the_translated_row_measures_the_goals_population_and_may_not_narrow`.
+
 **Name:** `translated`, printed as its own block, not inside the `Dt` table —
 the `Dt` rows are a breakdown of one population, and the point of this row is
 that the population is not the goal's.
@@ -6253,6 +6258,78 @@ assert!(distinct >= <first measurement>);// ratchet, may only rise
 scheduled improves `sealed / population` for free, and only a floor under the
 denominator catches it. The two `assert_eq!`s are deliberately not ratchets —
 a ratchet on a vacuity guard is a vacuity guard that can be loosened.
+
+### The row as landed, and the three places the specification was wrong
+
+```
+  translated — the goal's own population, and how much of it is proved:
+    0.67% of the population proved; 0.90% of the pairs that carry a value; 17 distinct declarations of 2059
+    scheduled (declaration, σ) pairs, all kinds                          3861
+    …skipped as non-standard axioms (sorryAx)                               2
+    POPULATION (scheduled − skipped)                                     3859
+    …pairs the walk entered                                              3757
+    …scheduled pairs absorbed by Inductive/Quot (checked once)            104
+    …of the population, carrying a value (eligible today)                2891
+    SEALED AND PUBLISHED ⊢ ⟦c⟧ ∈ ⟦T⟧                                       26
+    …distinct declarations behind them                                     17
+      sealed def (of 2687 scheduled)                                       26
+      sealed thm (of 194 scheduled)                                         0
+      sealed opaque (of 10 scheduled)                                       0
+      sealed axiom (of 4 scheduled)                                         0
+      sealed inductive (of 230 scheduled)                                   0
+      sealed ctor (of 261 scheduled)                                        0
+      sealed recursor (of 471 scheduled)                                    0
+      sealed quot (of 4 scheduled)                                          0
+```
+
+Every figure the specification predicted independently is reproduced to the
+digit — 3 861 scheduled, 2 891 value-carrying, 26 sealed, 2 059 declarations —
+which is the calibration that lets the three disagreements be read as findings
+rather than as wiring faults.
+
+1. **`reached == scheduled` is false, and the difference is 104.**
+   `ExportFile::check_declar_all` checks an `Inductive` or `Quot` **once**, at
+   the empty instantiation, however many σ the schedule lists for it — by
+   design, since neither goes through `with_tc_and_declar` and neither has
+   anywhere to put a σ. The walk therefore enters 3 757 of the 3 861 scheduled
+   pairs. The identity is kept, and kept able to fail, by naming the absorbed
+   pairs in a counter of their own: **`reached + collapsed == scheduled`**. Had
+   the specified identity been asserted as written it would have failed on the
+   first run and the natural repair — deriving `reached` from the schedule —
+   would have destroyed the guard.
+
+2. **`skipped` cannot be read off the parser's drop list, and must not be.**
+   Whether `sorryAx` reaches the schedule at all depends on `permitted_axioms`:
+   under `unsafe_permit_all_axioms` it is scheduled at 2 pairs, under Lean's
+   three it never reaches the pre-pass and `scheduled` is 3 859 already. A
+   denominator that moves with a config flag is not a denominator, so `skipped`
+   is computed **from the schedule**, as the scheduled pairs of any axiom that
+   is not one of Lean's three (the predicate is reimplemented in
+   `checker/src/instantiations.rs`; `checker` does not depend on `mini`). The
+   consequence is the one that matters: **`population` is 3 859 under either
+   config.**
+
+3. **`distinct` is 17 — the top of the bound, not the middle.** The
+   perturbation argument bounded it at ≥ 10 and ≤ 17. Measured, all 26 sealed
+   pairs belong to 17 distinct declarations, so 9 declarations contribute two σ
+   each and 8 contribute one. **17 of 2 058 is 0.83 %**, and that is the figure
+   the goal's sentence asks for.
+
+`eligible` and `Dt::Seen` agree at 2 891 without an adjustment, and the
+declaration-typing store's `Sealed::new` refused **0** times, so `sealed` and
+`Dt::Stored` agree at 26 — but they now agree for a reason: the new counter is
+bumped after the seal *and* after the publish, and a refusal both decrements
+the numerator and prints a bug-report line.
+
+Both non-vacuity guards were mutation-verified. Reporting `value_pairs` as
+`scheduled` (a narrowed population that reads as a better ratio — the exact
+failure the row exists to catch) fails on `population >= 3859`. Dropping the
+`collapsed` accounting fails on the identity, and fails *first* through the
+report's own bug-report line, which the test also asserts is absent — so a run
+read without CI still says when its arithmetic does not close.
+
+Cost: the pre-pass gains one pass over the demand map (2 059 entries) and the
+walk gains three atomics per pair; unmeasurable against 194 G instructions.
 
 ## Where the lambda typing rule actually declines, and what the raw hoists are about — 2026-08-10
 

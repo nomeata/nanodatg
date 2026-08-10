@@ -162,12 +162,71 @@ pub struct Stats {
     /// Seeds added for the literal-expansion constants, which the checker mints
     /// itself and which therefore appear in no expression in the file.
     pub extension_seeds: usize,
+    /// Scheduled pairs whose declaration **carries a value** — `def`, `thm`,
+    /// `opaque`. The static counterpart of the declaration-typing ledger's
+    /// `Dt::Seen`, computed here before any checking, so that a walk which
+    /// reaches fewer declarations cannot quietly shrink its own denominator.
+    pub value_pairs: usize,
+    /// Scheduled pairs whose declaration is an **axiom the goal's sentence
+    /// excludes** — an axiom that is not one of Lean's three standard ones.
+    ///
+    /// Counted from the schedule rather than from the parser's drop list on
+    /// purpose: whether a non-standard axiom reaches the schedule at all
+    /// depends on `permitted_axioms`, and a goal denominator that moves with a
+    /// config flag is not a denominator. Excluding it here makes `population`
+    /// the same number under `unsafe_permit_all_axioms` (where `sorryAx` *is*
+    /// scheduled, at 2 pairs) and under Lean's three (where it never reaches
+    /// the pre-pass).
+    pub skipped_pairs: usize,
+    /// Scheduled pairs, split over the eight [`Declar`] variants in the order
+    /// [`declar_kind`] assigns.
+    pub pairs_by_kind: [usize; N_DECLAR_KINDS],
+}
+
+/// The [`Declar`] variants, in report order.
+pub const N_DECLAR_KINDS: usize = 8;
+pub const DECLAR_KINDS: [&str; N_DECLAR_KINDS] =
+    ["def", "thm", "opaque", "axiom", "inductive", "ctor", "recursor", "quot"];
+
+/// Which of [`DECLAR_KINDS`] a declaration is.
+pub fn declar_kind(d: &Declar<'_>) -> usize {
+    match d {
+        Declar::Definition { .. } => 0,
+        Declar::Theorem { .. } => 1,
+        Declar::Opaque { .. } => 2,
+        Declar::Axiom { .. } => 3,
+        Declar::Inductive(..) => 4,
+        Declar::Constructor(..) => 5,
+        Declar::Recursor(..) => 6,
+        Declar::Quot { .. } => 7,
+    }
+}
+
+/// Lean's three standard axioms, tested on the name's own structure.
+///
+/// The same predicate as `mini::convert::is_standard_axiom`; `checker` does not
+/// depend on `mini`, and a string round-trip to share one would be a worse
+/// coupling than eight lines.
+fn is_standard_axiom<'t, 'p: 't>(ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>) -> bool {
+    use crate::name::Name;
+    let Name::Str(pre, s, _) = ctx.read_name(n) else { return false };
+    let s = ctx.read_string(s);
+    match ctx.read_name(pre) {
+        Name::Anon => &*s == "propext",
+        Name::Str(root, q, _) if matches!(ctx.read_name(root), Name::Anon) => {
+            let q = ctx.read_string(q);
+            matches!((q.as_ref(), s.as_ref()), ("Quot", "sound") | ("Classical", "choice"))
+        }
+        _ => false,
+    }
 }
 
 /// The schedule: which instantiations each declaration must be checked at.
 pub struct Instantiations {
     by_name: FxHashMap<NameKey, FxIndexSet<Inst>>,
     pub stats: Stats,
+    /// The declarations behind [`Stats::skipped_pairs`], spelled.
+    pub skipped_names: Vec<String>,
 }
 
 impl Instantiations {
@@ -207,6 +266,36 @@ pub(crate) fn was_predicted(key: NameKey, inst: &[u32]) -> Option<bool> {
 pub(crate) fn published_stats() -> Option<Stats> {
     let g = SCHEDULE.read().ok()?;
     Some(g.as_ref()?.stats)
+}
+
+/// The names behind [`Stats::skipped_pairs`], so the report can print them
+/// rather than a bare count. A skipped population that is not named is a
+/// population nobody can check.
+pub(crate) fn published_skipped() -> Vec<String> {
+    let Ok(g) = SCHEDULE.read() else { return Vec::new() };
+    g.as_ref().map(|i| i.skipped_names.clone()).unwrap_or_default()
+}
+
+/// A declaration's dotted name, written into `out`.
+fn spell_name<'t, 'p: 't>(ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>, out: &mut String) {
+    use crate::name::Name;
+    match ctx.read_name(n) {
+        Name::Anon => {}
+        Name::Str(pre, s, _) => {
+            if !matches!(ctx.read_name(pre), Name::Anon) {
+                spell_name(ctx, pre, out);
+                out.push('.');
+            }
+            out.push_str(ctx.read_string(s).as_ref());
+        }
+        Name::Num(pre, i, _) => {
+            if !matches!(ctx.read_name(pre), Name::Anon) {
+                spell_name(ctx, pre, out);
+                out.push('.');
+            }
+            out.push_str(&i.to_string());
+        }
+    }
 }
 
 /// Evaluate a **ground** level to the natural number it denotes, or `None` if a
@@ -497,7 +586,29 @@ fn compute_in<'t, 'p: 't>(ctx: &mut TcCtx<'t, 'p>) -> Instantiations {
     stats.rounds = stats.demand_rounds + close(ctx, &nodes, &index_of, &mut demanded, &mut frontier, &mut stats);
     stats.pairs = demanded.values().map(|s| s.len()).sum();
 
-    Instantiations { by_name: demanded, stats }
+    // ── The goal's denominator, computed here and only here. `translated`'s
+    // whole point is that the population it divides by is fixed before the
+    // walk starts, so that narrowing what the walk reaches cannot read as
+    // progress. See `MEASUREMENTS.md`, "the four denominators".
+    let mut skipped_names: Vec<String> = Vec::new();
+    for (k, insts) in demanded.iter() {
+        let Some(&idx) = index_of.get(k) else { continue };
+        let Some((name, d)) = ef.declars.get_index(idx) else { continue };
+        let n = insts.len();
+        stats.pairs_by_kind[declar_kind(d)] += n;
+        if matches!(d, Declar::Definition { .. } | Declar::Theorem { .. } | Declar::Opaque { .. }) {
+            stats.value_pairs += n;
+        }
+        if matches!(d, Declar::Axiom { .. }) && !is_standard_axiom(ctx, *name) {
+            stats.skipped_pairs += n;
+            let mut sp = String::new();
+            spell_name(ctx, *name, &mut sp);
+            skipped_names.push(sp);
+        }
+    }
+    skipped_names.sort();
+
+    Instantiations { by_name: demanded, stats, skipped_names }
 }
 
 /// Publish the schedule so the backend's audit can read it, and hand it back

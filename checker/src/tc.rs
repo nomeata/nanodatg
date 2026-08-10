@@ -304,17 +304,33 @@ impl<'p> ExportFile<'p> {
     /// using declaration's σ, and that is where the levels matter.
     fn check_declar_all(&self, d: &Declar<'p>, schedule: &crate::instantiations::Instantiations) {
         use Declar::*;
+        // The `translated` row's non-vacuity guard is the identity
+        // `reached + collapsed == scheduled`, and this function is the only
+        // place the two terms can be told apart: what the walk enters, and what
+        // the schedule named but a once-per-declaration kind absorbs. Counting
+        // the absorption here rather than inferring it later is what keeps the
+        // identity able to fail — see [`crate::tg::Translated`].
+        crate::tg::Translated::reached();
         if matches!(d, Inductive(..) | Quot { .. }) {
+            let listed = schedule.for_name(d.info().name).map_or(1, |s| s.len().max(1));
+            crate::tg::Translated::collapsed(listed as u64 - 1);
             return self.check_declar_at(d, &[])
         }
         match schedule.for_name(d.info().name) {
             // The schedule's default seeding gives every declaration at least
             // one instantiation, so this is the empty-schedule case only.
             None => self.check_declar_at(d, &[]),
-            Some(insts) =>
-                for sigma in insts.iter() {
+            Some(insts) => {
+                crate::tg::Translated::collapsed(0);
+                for (i, sigma) in insts.iter().enumerate() {
+                    // The first pair is the one already counted above; the rest
+                    // are counted as they are entered.
+                    if i > 0 {
+                        crate::tg::Translated::reached();
+                    }
                     self.check_declar_at(d, sigma)
-                },
+                }
+            }
         }
     }
 
