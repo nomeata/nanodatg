@@ -79,14 +79,25 @@ the identity.
 
 A **third construction is opt-in** (`--prim-models`, `Modelgen/Simple.lean`):
 a plain — non-mutual, non-nested — inductive is modelled as ordinary `def`s
-and `theorem`s over five primitive inductives, `Eq`, `PSigma`, `Nat`, `Acc`
-and `PULiftP`, each spliced at Lean's shape if the input lacks it. Same four
-interface names, no internal declarations at all, every ι theorem `Eq.refl`.
+and `theorem`s over **four** primitive inductives, `Eq`, `PSigma`, `Nat` and
+`PULiftP`, each spliced at Lean's shape if the input lacks it. Same four
+interface names.
 `False` is **not** a primitive — it is derived, Church-encoded, with its
 `Sort w` eliminator from `0 = 1` and a `Nat.rec` family. `PULiftP.{u}
 (p : Prop) : Sort u` is: it is the one basis type former that reaches a bare
 variable sort and can be *empty*, which is what makes `PEmpty` modellable and
-retires the `False`-Π pad that used to cost a `funext`. `MODELGEN.md` §8
+retires the `False`-Π pad that used to cost a `funext`. **`Acc` is not a
+primitive either.** It was, for one reason — it is the only
+subsingleton-recursive *large* eliminator, and that is a grant the kernel
+makes to a declaration and not to an emitted `def` — and that grant is now
+derived, by defining the recursion's **graph** as an impredicative `Prop` and
+extracting the value, packaged with its graph proof, using
+`Classical.choice` (`MODELGEN.md` §8.7). On that one arm the model carries
+eight **internal** declarations rather than none, and its ι theorem is
+*propositional* rather than `Eq.refl` — a `Classical.choice` application
+reduces to nothing, so a consumer must rewrite where the kernel would have
+reduced. Every other arm's ι is still `Eq.refl` and has no internals.
+`MODELGEN.md` §8
 carries the construction, its measured coverage (122 of `init-prelude`'s 125
 simple inductives; every decline with a printed reason), its cost (+26 %
 instructions there), and §8.6 the lean4lean cross-check on the one decline
@@ -122,7 +133,10 @@ convention survive other renaming passes, including `monomorph`'s. **The carrier
 The output also carries the construction itself — the block (`T._model.0 …
 T._model.{n-1}`, real members first then one mimic per nested occurrence, or
 `T._model.tag` and `T._model.aux` for the mutual construction), the `pack_i` /
-`unpack_i` isomorphism per mimic, both round trips, and `congrPack_i`. **These
+`unpack_i` isomorphism per mimic, both round trips, and `congrPack_i` — and,
+on `--prim-models`' graph arm, `T._model.ind` and the seven `graph…`
+declarations that define the recursion's graph and prove it total and
+single-valued. **These
 are internal.** They exist because the four above have to be *proved* from
 something, they are what differs between the two constructions, and **no
 consumer needs them.** They are named here only so that nobody wonders what
@@ -144,6 +158,15 @@ order.** It is about the constructor that rule is keyed by — `T.node` at the
 root, `List.cons` at a mimic — and the rule's right-hand side appears verbatim
 modulo the same rewriting. **So a consumer may line ι theorems up with rules by
 index, and check the key by name.**
+
+**What an ι theorem does *not* promise is that it holds by `Eq.refl`.** On
+`--prim-models`' graph arm it does not: the recursor's value is a
+`Classical.choice` application, which reduces to nothing, and the rule is
+proved from the graph's single-valuedness instead. A consumer that recomputes
+an ι rule by reduction rather than reading the theorem will be wrong there
+and only there. This has always been the contract — an ι rule is a *theorem*,
+not a conversion — but until that arm landed every one of them happened to be
+`Eq.refl`, so nothing had measured the difference.
 
 **3. Every level list is the export's own.** `T._model.rec_k`'s level parameters
 are those of the recursor it models, name for name and in order: the motive
@@ -184,13 +207,25 @@ declaration, and declines with `nested model name taken`.
 
 A nested or mutual model's proofs need `Eq`, the quotient, `Quot.sound` and
 `funext`. A `--prim-models` model needs `Eq` and whichever basis primitives it
-actually uses, and **no axiom at all** — the construction stopped needing
+actually uses, and on every arm but the graph one **no axiom at all** — the
+construction stopped needing
 `funext` when the `False`-Π pad was replaced by `PULiftP ⊤`, every element of
 which is definitionally the canonical one (`MODELGEN.md` §8.1 narrows what
 that does and does not mean: it is eta against a literal constructor
 application, not a collapse of two opaque inhabitants).
+
+**The graph arm is where axioms are spent, and the bill is per shape rather
+than per arm.** Its recursor costs `Classical.choice` — with `Nonempty`, the
+axiom's own domain, beside it; `Nonempty` is *not* a basis primitive, it is
+an ordinary inductive the Church route models — and its ι additionally costs
+`funext`, hence the quotient and `Quot.sound`, **only** where a recursive
+field sits under a binder. A recursive field that is a bare occurrence
+contributes none, so the degenerate shape `I : Prop | mk : I → I` spends
+`Classical.choice` and nothing else.
+
 If the input lacks anything a model needs it is **spliced
-in** — `funext` is *derived* from `Quot.sound`, never asserted as an axiom —
+in** — `funext` is *derived* from `Quot.sound`, never asserted as an axiom,
+and `Classical.choice` is asserted because in Lean it is an axiom too —
 and only when a model is actually being generated, so a file with nothing to
 model comes back byte-identical.
 
@@ -235,11 +270,17 @@ so: it comes from a sweep of what Lean's `inductive` command actually admits,
 and **every refusal path has a fixture**. Three shapes remain that *Lean
 itself* rejects, recorded with the error Lean gives. `--prim-models` is
 narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
-paths have fixtures too (`tests/prim_declines.lean`). What it declines today:
+paths have fixtures too (`tests/prim_declines.lean`, `tests/prim_graph.lean`).
+What it declines today:
 **branching** recursion (a constructor with two recursive fields, or one under
-a binder), indexed carriers at a **never-zero** sort, *recursive*
-subsingletons, indices or recursion at a maybe-zero sort, and one
-level-arithmetic gap. Indexed and recursive small-eliminating `Prop`s model,
+a binder), indexed carriers at a **never-zero** sort, indices or recursion at
+a maybe-zero sort, one
+level-arithmetic gap, and — on the graph arm — a constructor whose data
+fields are not *literally* the conclusion's indices, since inversion at an
+arbitrary index would then need the index's injectivity.
+The *recursive subsingleton* is no longer among them: it is the graph arm,
+and `tests/prim_graph.lean` holds six occupants including `Acc`'s own shape.
+Indexed and recursive small-eliminating `Prop`s model,
 the whole maybe-zero class models, *linear* recursion at a never-zero sort
 models (`List` and `Lean.Name`, by tuple towers, every ι `Eq.refl`), and so
 does the indexed subsingleton at **any** number of constructor fields

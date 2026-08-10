@@ -165,7 +165,7 @@ modelled — the exemption that makes the construction well-founded.
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
 declaration. `PULiftP` takes its place. -/
-def primBasis : List Name := [`Eq, `PSigma, `Nat, `Acc, `PULiftP]
+def primBasis : List Name := [`Eq, `PSigma, `Nat, `PULiftP]
 
 /-- **`PULiftP`**: `inductive PULiftP.{u} (p : Prop) : Sort u | up : p →
 PULiftP p` — the lift of a proposition to a **bare variable sort**.
@@ -273,8 +273,73 @@ def checkPSigma (env : Environment) : Except String Unit := do
   unless rv.levelParams.length == 3 do
     throw "PSigma.rec is not large-eliminating"
 
+/-- **Lean's `Nonempty`**, as `Init/Prelude.lean` declares it:
+`inductive Nonempty (α : Sort u) : Prop | intro (val : α) : Nonempty α`.
+
+**It is not a basis primitive** and it is not on [`Modelgen.primBasis`]'s list.
+It is here for one reason: `Classical.choice`'s *own domain* is `Nonempty`, so
+the graph arm ([`Modelgen.graphArm`]) cannot state totality without naming it.
+Unlike the five it does not need an exemption to keep the construction
+well-founded — it is a non-recursive, small-eliminating `Prop`, so where the
+input declares one the Church route models it like anything else, and the
+model is emitted beside it as usual. What a *spliced* `Nonempty` costs is one
+unmodelled inductive in that run's output, which is why the splice is reported
+like every other. -/
+def nonemptyDecl : Declaration :=
+  let lu := Level.param `u
+  let ty : Expr := .forallE `α (.sort lu) (.sort .zero) .default
+  let introTy : Expr := .forallE `α (.sort lu)
+    (.forallE `val (.bvar 0) (.app (.const `Nonempty [lu]) (.bvar 1)) .default) .implicit
+  .inductDecl [`u] 1
+    [{ name := `Nonempty, type := ty,
+       ctors := [{ name := `Nonempty.intro, type := introTy }] }] false
+
+def checkNonempty (env : Environment) : Except String Unit := do
+  let some (.inductInfo iv) := env.constants.find? `Nonempty | throw "it is not an inductive type"
+  unless iv.numParams == 1 && iv.numIndices == 0 && iv.ctors == [`Nonempty.intro]
+      && iv.levelParams.length == 1 do
+    throw "it is not a one-parameter, one-constructor lift with a single level parameter"
+  match iv.type with
+  | .forallE _ (.sort (.param _)) (.sort .zero) _ => pure ()
+  | _ => throw "it is not `Sort u → Prop`"
+
+/-- `Classical.choice`'s statement: `{α : Sort u} → Nonempty α → α`. One
+builder for both uses — the input's own is compared against it with `isDefEq`
+and a spliced one is declared at it, exactly as [`Modelgen.funextType`] serves
+`funext`. -/
+def choiceType (lu : Level) : Expr :=
+  .forallE `α (.sort lu)
+    (.forallE `h (.app (.const `Nonempty [lu]) (.bvar 0)) (.bvar 1) .default) .implicit
+
+def choiceDecl : Declaration :=
+  .axiomDecl { name := `Classical.choice, levelParams := [`u]
+               type := choiceType (.param `u), isUnsafe := false }
+
 def ensurePULiftP (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `PULiftP [`PULiftP, `PULiftP.up] puliftDecl checkPULiftP reserved
+def ensureNonempty (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
+  ensurePrim `Nonempty [`Nonempty, `Nonempty.intro] nonemptyDecl checkNonempty reserved
+
+/-- **`Classical.choice`, the one axiom the graph arm asserts.** The input's
+own where it declares one at Lean's statement; Lean's, spliced in, where it
+does not. `funext` is *derived* from `Quot.sound` rather than asserted and
+this one cannot be — it is an axiom in Lean too — so the asymmetry is the
+subject matter's and not a shortcut. The owner's ruling stands behind it:
+axiom-freedom is not a goal of this construction and the standard axioms may
+be used. -/
+def ensureChoice (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
+  match (← getEnv).constants.find? `Classical.choice with
+  | some ci =>
+    let [su] := ci.levelParams
+      | declineWith (.notLeans `Classical.choice
+          s!"it has {ci.levelParams.length} level parameters, where Lean's has 1")
+    unless ← isDefEq ci.type (choiceType (.param su)) do
+      declineWith (.notLeans `Classical.choice "its statement is not Lean's")
+    return #[]
+  | none =>
+    if reserved.contains `Classical.choice then declineWith (.nameTaken `Classical.choice)
+    addChecked choiceDecl
+    return #[choiceDecl]
 def ensureNat (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `Nat [`Nat, `Nat.zero, `Nat.succ] natDecl checkNat reserved
 def ensurePSigma (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
@@ -993,6 +1058,597 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
     mkLambdaFVars #[pv] (← pairArm tname np ni us selfAt pairAt motive cN minor ps
       (nf - 1) (b.instantiate1 el) (elems.push el) (ihs.push ih))
 
+/-! ## Arm G: the recursive subsingleton, by the **graph** of the recursion
+
+`INDUCTIVE-BASIS.md` §3.2's carrier, and the construction of
+`scripts/inductive-basis/AccFromChoice.lean` emitted for an arbitrary shape.
+This is the arm that takes **`Acc` out of the basis** rather than putting it
+to use.
+
+The shape: an inductive `Prop` with **one** constructor, each of whose fields
+is a proposition (possibly a recursive occurrence `∀ z⃗, T p⃗ e⃗`) or a piece of
+data that is *literally* one of the conclusion's indices. Lean's kernel grants
+that shape a `Sort v` motive by the subsingleton rule — a grant to a
+*declaration* that an emitted `def` does not inherit — and the carrier the
+Church route already emits eliminates only into `Prop`. So the large
+eliminator has to be built, and it is built by defining the recursion by its
+**graph**:
+
+```text
+Graph ι⃗ t val  := the least relation closed under "if the value at every
+                   recursive sub-argument is g, then the value at (mk f⃗) is
+                   step f⃗ g⃗", impredicatively encoded — so a Prop
+Graph.mk        : that closure rule, as a theorem (the graph is a fixed
+                   point, not merely a pre-fixed point)
+GraphInv        : inversion, with the constructor's **proof** fields
+                   universally quantified rather than existentially — any two
+                   are definitionally equal, so quantifying gives the caller's
+Graph.inv       : inversion holds, by folding at `Graph ∧ GraphInv`
+Graph.unique    : single-valuedness, by the free `Prop`-motive recursor
+Graph.exists    : totality, likewise, picking sub-values with Classical.choice
+rec_0 step t    := (Classical.choice (Graph.exists step t)).fst
+iota            : both sides are graph points and the graph is single-valued
+```
+
+**Do not** try `Classical.choice` at a bare `Nonempty (motive a t)` instead.
+That recursor typechecks and is provably *blind to its step function* — the
+two `Nonempty` proofs are definitionally equal — so its ι rule is not merely
+unproved but derives `False`. `AccFromChoice.lean` §4 compiles the refutation.
+
+**ι is propositional here, not `Eq.refl`** — the value is a `Classical.choice`
+application, which reduces to nothing — and this is the only arm of the three
+routes for which that is true. A consumer must rewrite with `iota_0_0` where
+the kernel would have reduced.
+
+**Two lines of the recipe are shape-sensitive**, and both are mechanical:
+[`Modelgen.congrChain`]'s n-ary congruence, one factor per recursive field,
+and [`Modelgen.funextUp`]'s chain, one `funext` per binder of a recursive
+field. `scripts/inductive-basis/AccArmShapes.lean` carries the recipe through
+the three shapes that settle them.
+
+**The axiom cost is per shape, not per arm.** `rec_0` is `Classical.choice`
+uniformly; ι adds `funext` — hence the quotient and `Quot.sound` — only when
+some recursive field has a binder, because that is the only thing
+[`Modelgen.funextUp`] is called for. A recursive field that is a bare
+occurrence contributes none, and the degenerate shape's ι costs no
+`Quot.sound` at all. -/
+
+/-- `∀ D : Prop, (A → B → D) → D` — Church conjunction, so the folds below
+need no `And` and the basis needs no sixth member for one. -/
+def andCOf (A B : Expr) : Expr :=
+  .forallE `D (.sort .zero)
+    (.forallE `k (.forallE `a A (.forallE `b B (.bvar 2) .default) .default)
+      (.bvar 1) .default) .default
+
+/-- `Eq α x z` from `Eq α x y` and `Eq α y z`, as one `Eq.rec` at a `Prop`
+motive — the companion of [`Modelgen.symmOf`], and built the same way so that
+nothing is added to the input that this module does not need to name. -/
+def transOf (eqi : EqInfo) (ℓ : Level) (α x y z h1 h2 : Expr) : GenM Expr :=
+  transportAlong eqi .zero ℓ α y z h2 h1 fun w => pure (eqi.mk' ℓ α x w)
+
+/-- Bind a vector of **independent** locals in one scope. Independent is the
+precondition and it is met at every call: the value functions `g⃗` depend only
+on the constructor's fields, and the graph hypotheses `hg⃗` only on those and
+on `g⃗`, which are bound first. -/
+partial def withLocalsD (tys : Array (Name × Expr)) (i : Nat) (acc : Array Expr)
+    (k : Array Expr → GenM Expr) : GenM Expr := do
+  if i == tys.size then k acc
+  else withLocalDeclD tys[i]!.1 tys[i]!.2 fun x => withLocalsD tys (i + 1) (acc.push x) k
+
+/-- **Walk the constructor's field telescope**, binding one variable per
+field — except that with `subst` set the *data* fields are **supplied** from
+`is` rather than bound, because in this shape a data field is literally one of
+the conclusion's indices.
+
+That substitution is what `GraphInv` is stated by: inversion at an arbitrary
+index `ι⃗` must conclude `val = step f⃗ g⃗`, whose right-hand side lands at the
+quantified fields' own index expressions, so those expressions have to *be*
+`ι⃗`. Quantifying the data fields instead would need the index's injectivity,
+which is exactly the case `AccFromChoice.lean` records as not uniform.
+
+`k` receives the full field vector, the ones actually bound, and the
+telescope's result type. -/
+partial def ctorFieldsAux (subst : Bool) (isData : Array Bool) (idxPos : Array Nat)
+    (is : Array Expr) (n i : Nat) (tele : Expr) (fs bound : Array Expr)
+    (k : Array Expr → Array Expr → Expr → GenM Expr) : GenM Expr := do
+  if n == 0 then return ← k fs bound tele
+  let .forallE x d b bi := tele | badShape "telescope shorter than its field count"
+  if subst && isData[i]! then
+    let a := is[idxPos[i]!]!
+    ctorFieldsAux subst isData idxPos is (n - 1) (i + 1) (b.instantiate1 a) (fs.push a) bound k
+  else
+    withLocalDecl x bi d fun xv =>
+      ctorFieldsAux subst isData idxPos is (n - 1) (i + 1) (b.instantiate1 xv)
+        (fs.push xv) (bound.push xv) k
+
+/-- **The `funext` chain, one per binder of a recursive field.** `pt` proves
+`ga z⃗ = gb z⃗` at the field's own binders `z⃗`; this closes them one at a time,
+innermost first, into `ga = gb`.
+
+At **zero** binders it is the identity and no `funext` is reached at all —
+which is why the degenerate shape's ι costs no `Quot.sound`, and why the
+`funext` is asked for lazily and only when some recursive field has a
+binder. -/
+partial def funextUp (fx? : Option Name) (zs : Array Expr) (k : Nat)
+    (ga gb pt : Expr) : GenM Expr := do
+  if k == 0 then return pt
+  let j := k - 1
+  let z := zs[j]!
+  let some fxN := fx?
+    | badShape "a recursive field under a binder needs funext and none was available"
+  let αz ← ityp z
+  let lu ← ilevel αz
+  let fa := mkAppN ga (zs.extract 0 j)
+  let fb := mkAppN gb (zs.extract 0 j)
+  let bty ← ityp (mkApp fa z)
+  let lv ← ilevel bty
+  let β ← mkLambdaFVars #[z] bty
+  let h ← mkLambdaFVars #[z] pt
+  funextUp fx? zs j ga gb (mkAppN (.const fxN [lu, lv]) #[αz, β, fa, fb, h])
+
+/-- **The n-ary congruence in the recursive fields**, as an `Eq.trans` chain
+with one `congrArg` per field:
+
+```text
+step f⃗ ga₁ ga₂ … = step f⃗ gb₁ ga₂ … = step f⃗ gb₁ gb₂ … = … = step f⃗ gb⃗
+```
+
+`AccFromChoice`'s single `congrArg (step x h)` is the `n = 1` case of this and
+is insufficient at two recursive fields; `AccArmShapes.lean` §2 is the shape
+that measures it. Each `congrArg` is one `Eq.rec`, inlined here for the same
+reason [`Modelgen.funextDecl`] inlines its own. -/
+def congrChain (eqi : EqInfo) (v : Level) (α : Expr) (mkStep : Array Expr → Expr)
+    (ga gb pfs : Array Expr) : GenM Expr := do
+  let n := ga.size
+  let mixed := fun (j : Nat) => (Array.range n).map fun m => if m < j then gb[m]! else ga[m]!
+  let base := mkStep ga
+  let mut acc := eqi.refl' v α base
+  for j in [0:n] do
+    let A ← ityp ga[j]!
+    let ℓA ← ilevel A
+    let famAt := fun (x : Expr) => mkStep ((mixed j).set! j x)
+    let factor ← transportAlong eqi .zero ℓA A ga[j]! gb[j]! pfs[j]!
+      (eqi.refl' v α (famAt ga[j]!)) fun z => pure (eqi.mk' v α (famAt ga[j]!) (famAt z))
+    acc ← transOf eqi v α base (mkStep (mixed j)) (mkStep (mixed (j + 1))) acc factor
+  return acc
+
+/-- Everything [`Modelgen.graphArm`] needs about the declaration it is
+modelling, settled before a single declaration is emitted so that a decline
+costs no splice. -/
+structure GraphCtx where
+  tname : Name
+  np : Nat
+  ni : Nat
+  nf : Nat
+  /-- The declaration's own levels, and the recursor's (`v` in front). -/
+  us : List Level
+  recLs : List Level
+  lparams : List Name
+  recLevels : List Name
+  /-- The motive universe. -/
+  v : Level
+  selfN : Name
+  ctorN0 : Name
+  recN : Name
+  indN : Name
+  grN : Name
+  grMkN : Name
+  grInvTN : Name
+  grInvN : Name
+  grUniqN : Name
+  grExN : Name
+  recGrN : Name
+  /-- The declaration's own type, and the model constructor's — **restored**,
+  so a recursive field's type is `T._model.self p⃗ e⃗`. -/
+  memberTy : Expr
+  ctorTy : Expr
+  /-- Per field: is it data (rather than a proof), and if so which index
+  position it *is*; and, for a recursive field, its binder count. -/
+  isData : Array Bool
+  idxPos : Array Nat
+  recNb : Array (Option Nat)
+  eqi : EqInfo
+  /-- The `funext` the `Graph.unique` congruence transports along, `none` when
+  no recursive field has a binder and none is reached. -/
+  fx? : Option Name
+  deriving Inhabited
+
+/-- **The graph arm**, emitting `graph`, `graph_mk`, `graph_inv_ty`,
+`graph_inv`, `graph_unique`, `graph_exists`, `rec_0` and `rec_graph`. The
+carrier, the constructor and the `Prop`-motive recursor `ind` are the Church
+route's own and are emitted by the caller; the ι theorem is the caller's too,
+because its *statement* is shared with every other arm and only its proof is
+this one's. -/
+def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
+  let np := c.np
+  let ni := c.ni
+  let nf := c.nf
+  -- the recursive slots, in field order
+  let rs := (Array.range nf).filter fun i => c.recNb[i]!.isSome
+  let nr := rs.size
+
+  -- **One scope for the whole arm**: the parameters, the motive and the step,
+  -- read off the recursor's own type rather than rebuilt. `rest` is what is
+  -- left of that type — `∀ ι⃗ (t : Self ι⃗), motive ι⃗ t` — and the two
+  -- declarations that need the full telescope continue it rather than
+  -- reopening.
+  forallBoundedTelescope recTy (some (np + 2)) fun bs rest => do
+    let mut out : Array Declaration := #[]
+    let ps := bs.extract 0 np
+    let motive := bs[np]!
+    let step := bs[np + 1]!
+    let pre := ps ++ #[motive, step]
+
+    let selfAt := fun (is : Array Expr) => mkAppN (.const c.selfN c.us) (ps ++ is)
+    let ctorAt := fun (fs : Array Expr) => mkAppN (.const c.ctorN0 c.us) (ps ++ fs)
+    let motAt := fun (is : Array Expr) (t : Expr) => mkAppN motive (is.push t)
+    let grAt := fun (is : Array Expr) (t val : Expr) =>
+      mkAppN (.const c.grN c.recLs) (pre ++ is ++ #[t, val])
+    let grInvAt := fun (is : Array Expr) (t val : Expr) =>
+      mkAppN (.const c.grInvTN c.recLs) (pre ++ is ++ #[t, val])
+    let idxTele ← instForall c.memberTy ps
+    let ctorTele ← instForall c.ctorTy ps
+
+    -- A recursive field's own binders, and the index vector it lands at. The
+    -- telescope is opened **bounded**: `forallTelescope` would whnf through
+    -- `T._model.self` and open the Church encoding's own Π as well.
+    let recAt := fun (f : Expr) (nb : Nat) (k : Array Expr → Array Expr → GenM Expr) => do
+      forallBoundedTelescope (← ityp f) (some nb) fun zs res => do
+        let args := res.getAppArgs
+        unless res.getAppFn.isConstOf c.selfN && args.size == np + ni do
+          badShape s!"a recursive field of {c.tname} does not land at {c.selfN}"
+        k zs (args.extract np args.size)
+
+    -- The constructor's field telescope. `is?` supplies the data fields.
+    let fields := fun (is? : Option (Array Expr))
+        (k : Array Expr → Array Expr → Expr → GenM Expr) =>
+      ctorFieldsAux is?.isSome c.isData c.idxPos (is?.getD #[]) nf 0 ctorTele #[] #[] k
+
+    -- The index vector a walked telescope ends at.
+    let idxOfRes := fun (res : Expr) => do
+      let args := res.getAppArgs
+      unless res.getAppFn.isConstOf c.selfN && args.size == np + ni do
+        badShape s!"{c.ctorN0}'s result is not {c.selfN} at {np} parameters and {ni} indices"
+      pure (args.extract np args.size)
+
+    -- `g_i : ∀ z⃗_i, motive e⃗_i (f_i z⃗_i)`, the value functions.
+    let gTysAt := fun (fs : Array Expr) => rs.mapM fun i => do
+      let t ← recAt fs[i]! c.recNb[i]!.get! fun zs ris =>
+        mkForallFVars zs (motAt ris (mkAppN fs[i]! zs))
+      pure (Name.mkSimple s!"g{i}", t)
+    -- `hg_i : ∀ z⃗_i, Graph e⃗_i (f_i z⃗_i) (g_i z⃗_i)`.
+    let hTysAt := fun (fs gs : Array Expr) => (Array.range nr).mapM fun j => do
+      let i := rs[j]!
+      let t ← recAt fs[i]! c.recNb[i]!.get! fun zs ris =>
+        mkForallFVars zs (grAt ris (mkAppN fs[i]! zs) (mkAppN gs[j]! zs))
+      pure (Name.mkSimple s!"hg{i}", t)
+
+    -- ── `Q`, and the graph's one closure rule at it ──
+    let qTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `s (selfAt is) fun s =>
+        withLocalDeclD `m (motAt is s) fun m =>
+          mkForallFVars (is ++ #[s, m]) (.sort .zero)
+    let qStepTy := fun (Q : Expr) =>
+      fields none fun fs bnd res => do
+        let e ← idxOfRes res
+        withLocalsD (← gTysAt fs) 0 #[] fun gs => do
+          let qTys ← (Array.range nr).mapM fun j => do
+            let i := rs[j]!
+            let t ← recAt fs[i]! c.recNb[i]!.get! fun zs ris =>
+              mkForallFVars zs (mkAppN Q (ris ++ #[mkAppN fs[i]! zs, mkAppN gs[j]! zs]))
+            pure (Name.mkSimple s!"q{i}", t)
+          withLocalsD qTys 0 #[] fun qs =>
+            mkForallFVars (bnd ++ gs ++ qs)
+              (mkAppN Q (e ++ #[ctorAt fs, mkAppN step (fs ++ gs)]))
+
+    -- ── `Graph` ──
+    let grTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `val (motAt is t) fun val =>
+          mkForallFVars (pre ++ is ++ #[t, val]) (.sort .zero)
+    let grVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `val (motAt is t) fun val =>
+          withLocalDeclD `Q qTy fun Q => do
+            let body ← mkForallFVars #[Q]
+              (.forallE `q (← qStepTy Q) (mkAppN Q (is ++ #[t, val])) .default)
+            mkLambdaFVars (pre ++ is ++ #[t, val]) body
+    let dGr := Declaration.defnDecl
+      { name := c.grN, levelParams := c.recLevels, type := grTy, value := grVal
+        hints := ← hintsFor grVal, safety := .safe }
+    addChecked dGr
+    out := out.push dGr
+
+    -- ── `Graph.mk` ──
+    let grMkTy ← fields none fun fs bnd res => do
+      let e ← idxOfRes res
+      withLocalsD (← gTysAt fs) 0 #[] fun gs => do
+        withLocalsD (← hTysAt fs gs) 0 #[] fun hs =>
+          mkForallFVars (pre ++ bnd ++ gs ++ hs)
+            (grAt e (ctorAt fs) (mkAppN step (fs ++ gs)))
+    let grMkVal ← fields none fun fs bnd _ => do
+      withLocalsD (← gTysAt fs) 0 #[] fun gs => do
+        withLocalsD (← hTysAt fs gs) 0 #[] fun hs =>
+          withLocalDeclD `Q qTy fun Q => do
+            withLocalDeclD `q (← qStepTy Q) fun q => do
+              let qargs ← (Array.range nr).mapM fun j => do
+                let i := rs[j]!
+                recAt fs[i]! c.recNb[i]!.get! fun zs _ =>
+                  mkLambdaFVars zs (mkAppN (mkAppN hs[j]! zs) #[Q, q])
+              mkLambdaFVars (pre ++ bnd ++ gs ++ hs)
+                (← mkLambdaFVars #[Q, q] (mkAppN q (fs ++ gs ++ qargs)))
+    let dGrMk := Declaration.thmDecl
+      { name := c.grMkN, levelParams := c.recLevels, type := grMkTy, value := grMkVal }
+    addChecked dGrMk
+    out := out.push dGrMk
+
+    -- ── `GraphInv` ──
+    -- The `k` argument's type, shared by the definition and by the two places
+    -- that build or consume an inhabitant of it.
+    let invArmTyAt := fun (is : Array Expr) (t val : Expr) (fs : Array Expr) (D : Expr) => do
+      withLocalsD (← gTysAt fs) 0 #[] fun gs => do
+        withLocalsD (← hTysAt fs gs) 0 #[] fun hs => do
+          let eq := c.eqi.mk' c.v (motAt is t) val (mkAppN step (fs ++ gs))
+          mkForallFVars (gs ++ hs) (.forallE `he eq D .default)
+    let grInvVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `val (motAt is t) fun val => do
+          let body ← fields (some is) fun fs bnd res => do
+            -- With the data fields supplied as the index variables the
+            -- constructor's own index expressions **are** `ι⃗`, and that is
+            -- what makes the equation below statable at an arbitrary index.
+            unless (← idxOfRes res) == is do
+              badShape s!"{c.tname}'s constructor does not present its indices as its \
+own data fields"
+            withLocalDeclD `D (.sort .zero) fun D => do
+              mkForallFVars (bnd ++ #[D])
+                (.forallE `k (← invArmTyAt is t val fs D) D .default)
+          mkLambdaFVars (pre ++ is ++ #[t, val]) body
+    let dGrInvT := Declaration.defnDecl
+      { name := c.grInvTN, levelParams := c.recLevels, type := grTy, value := grInvVal
+        hints := ← hintsFor grInvVal, safety := .safe }
+    addChecked dGrInvT
+    out := out.push dGrInvT
+
+    -- ── `Graph.inv` ──
+    -- Fold at `Graph ∧ GraphInv`: the graph alone is not closed enough to
+    -- rebuild the sub-values' graph facts. The `rfl` at the end is where
+    -- proof irrelevance does the work — the fold's own fields and the
+    -- inversion's quantified ones are two proofs of one proposition, so
+    -- `step f⃗ g⃗` and `step f'⃗ g⃗` are the same term.
+    let grInvThmTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `val (motAt is t) fun val =>
+          mkForallFVars (pre ++ is ++ #[t, val])
+            (.forallE `g (grAt is t val) (grInvAt is t val) .default)
+    let grInvThmVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `val (motAt is t) fun val =>
+          withLocalDeclD `g (grAt is t val) fun g => do
+            let qArg ← forallBoundedTelescope idxTele (some ni) fun is' _ =>
+              withLocalDeclD `s (selfAt is') fun s =>
+                withLocalDeclD `w (motAt is' s) fun w =>
+                  mkLambdaFVars (is' ++ #[s, w]) (andCOf (grAt is' s w) (grInvAt is' s w))
+            let qStepArg ← fields none fun fs bnd res => do
+              let e ← idxOfRes res
+              withLocalsD (← gTysAt fs) 0 #[] fun gs => do
+                let ihTys ← (Array.range nr).mapM fun j => do
+                  let i := rs[j]!
+                  let t' ← recAt fs[i]! c.recNb[i]!.get! fun zs ris =>
+                    mkForallFVars zs
+                      (andCOf (grAt ris (mkAppN fs[i]! zs) (mkAppN gs[j]! zs))
+                        (grInvAt ris (mkAppN fs[i]! zs) (mkAppN gs[j]! zs)))
+                  pure (Name.mkSimple s!"ih{i}", t')
+                withLocalsD ihTys 0 #[] fun ihs => do
+                  -- the left projection of each `AndC`, pointwise
+                  let hgs ← (Array.range nr).mapM fun j => do
+                    let i := rs[j]!
+                    recAt fs[i]! c.recNb[i]!.get! fun zs ris => do
+                      let gt := grAt ris (mkAppN fs[i]! zs) (mkAppN gs[j]! zs)
+                      let it := grInvAt ris (mkAppN fs[i]! zs) (mkAppN gs[j]! zs)
+                      let proj ← withLocalDeclD `a gt fun a =>
+                        withLocalDeclD `b it fun b => mkLambdaFVars #[a, b] a
+                      mkLambdaFVars zs (mkAppN (mkAppN ihs[j]! zs) #[gt, proj])
+                  let major := ctorAt fs
+                  let val' := mkAppN step (fs ++ gs)
+                  let aTerm := mkAppN (.const c.grMkN c.recLs) (pre ++ bnd ++ gs ++ hgs)
+                  let bTerm ← fields (some e) fun fs' bnd' _ => do
+                    withLocalDeclD `D (.sort .zero) fun D => do
+                      withLocalDeclD `k (← invArmTyAt e major val' fs' D) fun k' =>
+                        mkLambdaFVars (bnd' ++ #[D, k'])
+                          (mkAppN k' (gs ++ hgs ++
+                            #[c.eqi.refl' c.v (motAt e major) val']))
+                  let aT := grAt e major val'
+                  let bT := grInvAt e major val'
+                  let pair ← withLocalDeclD `D (.sort .zero) fun D =>
+                    withLocalDeclD `k (.forallE `a aT (.forallE `b bT D .default) .default)
+                      fun k' => mkLambdaFVars #[D, k'] (mkAppN k' #[aTerm, bTerm])
+                  mkLambdaFVars (bnd ++ gs ++ ihs) pair
+            let fin ← withLocalDeclD `a (grAt is t val) fun a =>
+              withLocalDeclD `b (grInvAt is t val) fun b => mkLambdaFVars #[a, b] b
+            mkLambdaFVars (pre ++ is ++ #[t, val, g])
+              (mkAppN g #[qArg, qStepArg, grInvAt is t val, fin])
+    let dGrInv := Declaration.thmDecl
+      { name := c.grInvN, levelParams := c.recLevels, type := grInvThmTy
+        value := grInvThmVal }
+    addChecked dGrInv
+    out := out.push dGrInv
+
+    -- ── `Graph.unique` ──
+    -- Single-valuedness, by the free `Prop`-motive recursor. This is the one
+    -- place `funext` enters, and only for a recursive field with binders.
+    let uniqTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `a (motAt is t) fun a =>
+          withLocalDeclD `b (motAt is t) fun b =>
+            mkForallFVars (pre ++ is ++ #[t, a, b])
+              (.forallE `ga (grAt is t a)
+                (.forallE `gb (grAt is t b) (c.eqi.mk' c.v (motAt is t) a b) .default)
+                .default)
+    let indMotUniq ← forallBoundedTelescope idxTele (some ni) fun is' _ =>
+      withLocalDeclD `t' (selfAt is') fun t' => do
+        let inner ← withLocalDeclD `a' (motAt is' t') fun a' =>
+          withLocalDeclD `b' (motAt is' t') fun b' =>
+            mkForallFVars #[a', b']
+              (.forallE `ga' (grAt is' t' a')
+                (.forallE `gb' (grAt is' t' b') (c.eqi.mk' c.v (motAt is' t') a' b')
+                  .default) .default)
+        mkLambdaFVars (is' ++ #[t']) inner
+    let uniqVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t =>
+        withLocalDeclD `a (motAt is t) fun a =>
+          withLocalDeclD `b (motAt is t) fun b =>
+            withLocalDeclD `ga (grAt is t a) fun ga =>
+              withLocalDeclD `gb (grAt is t b) fun gb => do
+                let minor ← fields none fun fs bnd res => do
+                  let e ← idxOfRes res
+                  let major := ctorAt fs
+                  let α := motAt e major
+                  let ihTys ← rs.mapM fun i => do
+                    let t' ← recAt fs[i]! c.recNb[i]!.get! fun zs ris =>
+                      mkForallFVars zs
+                        (mkAppN indMotUniq (ris ++ #[mkAppN fs[i]! zs])).headBeta
+                    pure (Name.mkSimple s!"ih{i}", t')
+                  withLocalsD ihTys 0 #[] fun ihs =>
+                    withLocalDeclD `x (motAt e major) fun x =>
+                      withLocalDeclD `y (motAt e major) fun y =>
+                        withLocalDeclD `gx (grAt e major x) fun gx =>
+                          withLocalDeclD `gy (grAt e major y) fun gy => do
+                            let goal := c.eqi.mk' c.v α x y
+                            -- the fields inversion quantifies are the **proof**
+                            -- ones; the data fields are the indices and are
+                            -- already fixed by the point `GraphInv` is at.
+                            let pf := (Array.range nf).filterMap fun i =>
+                              if c.isData[i]! then none else some fs[i]!
+                            let contA ←
+                              withLocalsD (← gTysAt fs) 0 #[] fun gA => do
+                                withLocalsD (← hTysAt fs gA) 0 #[] fun hA =>
+                                  withLocalDeclD `ea
+                                    (c.eqi.mk' c.v α x (mkAppN step (fs ++ gA))) fun eA => do
+                                    let contB ←
+                                      withLocalsD (← gTysAt fs) 0 #[] fun gB => do
+                                        withLocalsD (← hTysAt fs gB) 0 #[] fun hB =>
+                                          withLocalDeclD `eb
+                                            (c.eqi.mk' c.v α y (mkAppN step (fs ++ gB)))
+                                            fun eB => do
+                                            let pfs ← (Array.range nr).mapM fun j => do
+                                              let i := rs[j]!
+                                              recAt fs[i]! c.recNb[i]!.get! fun zs _ => do
+                                                let pt := mkAppN (mkAppN ihs[j]! zs)
+                                                  #[mkAppN gA[j]! zs, mkAppN gB[j]! zs,
+                                                    mkAppN hA[j]! zs, mkAppN hB[j]! zs]
+                                                funextUp c.fx? zs zs.size gA[j]! gB[j]! pt
+                                            let cong ← congrChain c.eqi c.v α
+                                              (fun gv => mkAppN step (fs ++ gv)) gA gB pfs
+                                            let sb ← symmOf c.eqi c.v α y
+                                              (mkAppN step (fs ++ gB)) eB
+                                            let t2 ← transOf c.eqi c.v α
+                                              (mkAppN step (fs ++ gA)) (mkAppN step (fs ++ gB))
+                                              y cong sb
+                                            let whole ← transOf c.eqi c.v α x
+                                              (mkAppN step (fs ++ gA)) y eA t2
+                                            mkLambdaFVars (gB ++ hB ++ #[eB]) whole
+                                    let invB := mkAppN (.const c.grInvN c.recLs)
+                                      (pre ++ e ++ #[major, y, gy])
+                                    mkLambdaFVars (gA ++ hA ++ #[eA])
+                                      (mkAppN invB (pf ++ #[goal, contB]))
+                            let invA := mkAppN (.const c.grInvN c.recLs)
+                              (pre ++ e ++ #[major, x, gx])
+                            mkLambdaFVars (bnd ++ ihs ++ #[x, y, gx, gy])
+                              (mkAppN invA (pf ++ #[goal, contA]))
+                mkLambdaFVars (pre ++ is ++ #[t, a, b, ga, gb])
+                  (mkAppN (mkAppN (.const c.indN c.us) (ps ++ #[indMotUniq, minor] ++ is ++ #[t]))
+                    #[a, b, ga, gb])
+    let dGrUniq := Declaration.thmDecl
+      { name := c.grUniqN, levelParams := c.recLevels, type := uniqTy, value := uniqVal }
+    addChecked dGrUniq
+    out := out.push dGrUniq
+
+    -- ── `Graph.exists` ──
+    -- Totality, again by the `Prop`-motive recursor. `Classical.choice` picks
+    -- the sub-values here, and single-valuedness above is what makes the
+    -- choice harmless. The `Nonempty` is of the **PSigma of value and graph
+    -- proof**, never of `motive ι⃗ t`: that is the whole difference from the
+    -- route `AccFromChoice.lean` §4 refutes.
+    let neAt := fun (is : Array Expr) (t : Expr) => do
+      let α := motAt is t
+      let β ← withLocalDeclD `val α fun val => mkLambdaFVars #[val] (grAt is t val)
+      let σ := psigmaT c.v .zero α β
+      let ℓσ := (mkLevelMax' (mkLevelMax' (.succ .zero) c.v) .zero).normalize
+      pure (mkAppN (.const `Nonempty [ℓσ]) #[σ], σ, α, β, ℓσ)
+    let grExTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t => do
+        let (ne, _, _, _, _) ← neAt is t
+        mkForallFVars (pre ++ is ++ #[t]) ne
+    let indMotEx ← forallBoundedTelescope idxTele (some ni) fun is' _ =>
+      withLocalDeclD `t' (selfAt is') fun t' => do
+        let (ne, _, _, _, _) ← neAt is' t'
+        mkLambdaFVars (is' ++ #[t']) ne
+    let grExVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
+      withLocalDeclD `t (selfAt is) fun t => do
+        let minor ← fields none fun fs bnd res => do
+          let e ← idxOfRes res
+          let ihTys ← rs.mapM fun i => do
+            let t' ← recAt fs[i]! c.recNb[i]!.get! fun zs ris => do
+              let (ne, _, _, _, _) ← neAt ris (mkAppN fs[i]! zs)
+              mkForallFVars zs ne
+            pure (Name.mkSimple s!"ih{i}", t')
+          withLocalsD ihTys 0 #[] fun ihs => do
+            let pick := fun (j : Nat) (snd : Bool) => do
+              let i := rs[j]!
+              recAt fs[i]! c.recNb[i]!.get! fun zs ris => do
+                let (_, σ, α, β, ℓσ) ← neAt ris (mkAppN fs[i]! zs)
+                let ch := mkAppN (.const `Classical.choice [ℓσ]) #[σ, mkAppN ihs[j]! zs]
+                mkLambdaFVars zs
+                  (if snd then psigmaSnd c.v .zero α β ch else psigmaFst c.v .zero α β ch)
+            let ghat ← (Array.range nr).mapM fun j => pick j false
+            let hhat ← (Array.range nr).mapM fun j => pick j true
+            let (_, σ0, α0, β0, ℓσ0) ← neAt e (ctorAt fs)
+            let value := mkAppN step (fs ++ ghat)
+            let proof := mkAppN (.const c.grMkN c.recLs) (pre ++ fs ++ ghat ++ hhat)
+            mkLambdaFVars (bnd ++ ihs)
+              (mkAppN (.const `Nonempty.intro [ℓσ0])
+                #[σ0, psigmaMk c.v .zero α0 β0 value proof])
+        mkLambdaFVars (pre ++ is ++ #[t])
+          (mkAppN (.const c.indN c.us) (ps ++ #[indMotEx, minor] ++ is ++ #[t]))
+    let dGrEx := Declaration.thmDecl
+      { name := c.grExN, levelParams := c.recLevels, type := grExTy, value := grExVal }
+    addChecked dGrEx
+    out := out.push dGrEx
+
+    -- ── the recursor, and the graph fact about it ──
+    let recVal ← forallBoundedTelescope rest (some (ni + 1)) fun bs2 _ => do
+      let is := bs2.extract 0 ni
+      let t := bs2[ni]!
+      let (_, σ, α, β, ℓσ) ← neAt is t
+      let ch := mkAppN (.const `Classical.choice [ℓσ])
+        #[σ, mkAppN (.const c.grExN c.recLs) (pre ++ is ++ #[t])]
+      mkLambdaFVars (pre ++ bs2) (psigmaFst c.v .zero α β ch)
+    let dRec := Declaration.defnDecl
+      { name := c.recN, levelParams := c.recLevels, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
+
+    let rgTy ← forallBoundedTelescope rest (some (ni + 1)) fun bs2 _ => do
+      let is := bs2.extract 0 ni
+      let t := bs2[ni]!
+      mkForallFVars (pre ++ bs2)
+        (grAt is t (mkAppN (.const c.recN c.recLs) (pre ++ bs2)))
+    let rgVal ← forallBoundedTelescope rest (some (ni + 1)) fun bs2 _ => do
+      let is := bs2.extract 0 ni
+      let t := bs2[ni]!
+      let (_, σ, α, β, ℓσ) ← neAt is t
+      let ch := mkAppN (.const `Classical.choice [ℓσ])
+        #[σ, mkAppN (.const c.grExN c.recLs) (pre ++ is ++ #[t])]
+      mkLambdaFVars (pre ++ bs2) (psigmaSnd c.v .zero α β ch)
+    let dRg := Declaration.thmDecl
+      { name := c.recGrN, levelParams := c.recLevels, type := rgTy, value := rgVal }
+    addChecked dRg
+    out := out.push dRg
+
+    return out
+
 /-! ## The model -/
 
 /-- One constructor's storage plan, settled by level arithmetic before
@@ -1052,6 +1708,15 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
   let ctorN := fun (j : Nat) => Name.str model s!"ctor_{j}"
   let recN := Name.str model "rec_0"
   let iotaN := fun (j : Nat) => Name.str model s!"iota_0_{j}"
+  let indN := Name.str model "ind"
+  -- Arm G's **internal** names, guarded exactly like the interface's — but
+  -- only when the arm is taken, so a file that declares `T._model.graph` of
+  -- its own costs nothing to a declaration this arm never sees.
+  let graphNames : List Name :=
+    [indN, Name.str model "graph", Name.str model "graph_mk",
+     Name.str model "graph_inv_ty", Name.str model "graph_inv",
+     Name.str model "graph_unique", Name.str model "graph_exists",
+     Name.str model "rec_graph"]
   let nc := exportCtors.size
 
   if primBasis.contains tname then
@@ -1135,24 +1800,57 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
         not threaded through the lift"
   | PrimRoute.prop =>
-    -- The subsingleton (large-eliminating) arm has no strong induction. Arm F
-    -- below is this shape's degenerate `r := ⊥` case (indexed, non-recursive);
-    -- the recursive case needs the **graph route** of
-    -- `scripts/inductive-basis/AccFromChoice.lean`, which is where the arm
-    -- stops today. That route is fully worked out and tactic-free: the carrier
-    -- and the `Prop`-motive recursor are already what the Church route and
-    -- [`Modelgen.pairArm`] emit, and what is missing is the large eliminator —
-    -- `Graph`, `Graph.mk`, `GraphInv`, `Graph.inv`, `Graph.unique`,
-    -- `Graph.exists`, `rec'`, `rec'_graph` and a **propositional** ι. Wiring it
-    -- takes `Acc` out of `primBasis` rather than putting it to use, and costs
-    -- `Classical.choice` on the recursor and `Quot.sound` on ι.
-    -- Do **not** try choice at a bare `Nonempty (motive a t)` instead: that
-    -- recursor is provably blind to its step function and its ι rule derives
-    -- `False`, compiled as a refutation in the same file.
-    if isRec && large then
-      badShape "a recursive subsingleton proposition (the graph route of \
-        scripts/inductive-basis/AccFromChoice.lean is not wired up)"
+    -- Every shape at `Sort 0` has an arm: the fold for small elimination, arm
+    -- F for the non-recursive subsingleton, and **arm G** — the graph route,
+    -- [`Modelgen.graphArm`] — for the recursive one, which is what took `Acc`
+    -- out of the basis. Nothing is declined here.
+    pure ()
 
+  -- ── arm G's shape, settled before anything is spliced ──
+  -- A recursive subsingleton's fields are proofs and data that is *literally*
+  -- one of the conclusion's indices. Which is which, and which index each data
+  -- field is, is what the graph arm's `GraphInv` is stated by; a data field the
+  -- index does not determine is `AccFromChoice.lean`'s one non-uniform case and
+  -- is declined here rather than mis-emitted.
+  let armG := (route matches PrimRoute.prop) && large && nc == 1 && isRec
+  let mut gIsData : Array Bool := #[]
+  let mut gIdxPos : Array Nat := #[]
+  let mut gRecNb : Array (Option Nat) := #[]
+  let mut gNf := 0
+  if armG then
+    for n in graphNames do taken n
+    let (a, b, cc) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+      let (cn, cty) := exportCtors[0]!
+      let tele ← instForall cty ps
+      let nfg := numForalls tele
+      let flds ← classifyCtor tname nfg tele
+      forallBoundedTelescope tele (some nfg) fun fs res => do
+        let args := res.getAppArgs
+        unless res.getAppFn.isConstOf tname && args.size == np + ni do
+          badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
+        let idx := args.extract np args.size
+        let mut isD : Array Bool := #[]
+        let mut pos : Array Nat := #[]
+        for i in [0:nfg] do
+          if (← ilevel (← ityp fs[i]!)).normalize.isZero then
+            isD := isD.push false
+            pos := pos.push 0
+          else
+            let mut at? : Option Nat := none
+            for k in [0:ni] do
+              if idx[k]! == fs[i]! then at? := some k
+            let some k := at?
+              | badShape s!"{cn} has a data field the graph route cannot recover: it is \
+not itself one of the conclusion's indices, so inversion would need the index's \
+injectivity (AccFromChoice.lean's one non-uniform case)"
+            isD := isD.push true
+            pos := pos.push k
+        for k in [0:ni] do
+          unless (Array.range nfg).any (fun i => isD[i]! && pos[i]! == k) do
+            badShape s!"{cn}'s index {k} is not one of its own data fields, so the \
+graph route's inversion cannot be stated at an arbitrary index"
+        return (isD, pos, flds.map (·.rec?))
+    gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
@@ -1602,6 +2300,22 @@ the subsingleton rule that minted {ern} does not hold of it"
     if lift?.isSome then
       for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
 
+    -- **Arm G's prelude, asked for before anything is emitted.** The graph
+    -- route pairs a value with its graph proof (`PSigma`) and extracts it with
+    -- `Classical.choice`, whose own domain is `Nonempty`; and `Graph.unique`
+    -- transports along a `funext` — but only when a recursive field has a
+    -- binder, because [`Modelgen.funextUp`] is the only caller and it is the
+    -- identity at none. That is the whole of why the axiom cost is per shape.
+    let mut gFx? : Option Name := none
+    if armG then
+      for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensureNonempty reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensureChoice reserved do out := out.push d; spliced := spliced ++ d.getNames
+      if (Array.range gNf).any (fun i => (gRecNb[i]!.getD 0) > 0) then
+        let (fxN, fxDecls) ← ensureFunext model eqi reserved
+        for d in fxDecls do out := out.push d; spliced := spliced ++ d.getNames
+        gFx? := some fxN
+
     -- The bare Church proposition at a parameter *and index* scope — what
     -- sits under the lift, and the carrier itself when there is none.
     let churchPropAt := fun (ps : Array Expr) (is : Array Expr) =>
@@ -1659,7 +2373,15 @@ the subsingleton rule that minted {ern} does not hold of it"
       for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
     let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
+    -- **One fold, two consumers.** Arm G's `ind` — the free `Prop`-motive
+    -- recursor the graph route folds at — *is* the strong-induction fold
+    -- below at `v := 0`, so the arm forces the small-elimination branches and
+    -- takes the result as `ind` instead of as `rec_0`. Building it a second
+    -- time by hand would be a second thing to keep in step.
+    let indTy :=
+      if armG then recTy.instantiateLevelParams [rv.levelParams[0]!] [.zero] else recTy
+    let large := large && !armG
+    let recVal ← forallBoundedTelescope indTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
@@ -1759,13 +2481,35 @@ the subsingleton rule that minted {ern} does not hold of it"
           es := es.push (mkAppN body #[ft, proj])
           curT := rest.instantiate1 es[i]!
         mkLambdaFVars bs (mkAppN minors[0]! es)
-    let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
-        hints := ← hintsFor recVal, safety := .safe }
-    addChecked dRec
-    out := out.push dRec
+    if armG then
+      -- ════ arm G: the recursive subsingleton, by the graph ════
+      -- The carrier and the constructor above are already the graph route's
+      -- own — `CAcc` and `CAcc.intro` cost no primitive whatsoever — and so is
+      -- the `Prop`-motive recursor just built. What is emitted here is the
+      -- large eliminator the kernel granted the *declaration* and an emitted
+      -- `def` does not inherit.
+      let dInd := Declaration.thmDecl
+        { name := indN, levelParams := lparams, type := indTy, value := recVal }
+      addChecked dInd
+      out := out.push dInd
+      let ctx : GraphCtx :=
+        { tname, np, ni, nf := gNf, us, recLs, lparams, recLevels := rv.levelParams, v
+          selfN, ctorN0 := ctorN 0, recN, indN
+          grN := Name.str model "graph", grMkN := Name.str model "graph_mk"
+          grInvTN := Name.str model "graph_inv_ty", grInvN := Name.str model "graph_inv"
+          grUniqN := Name.str model "graph_unique", grExN := Name.str model "graph_exists"
+          recGrN := Name.str model "rec_graph"
+          memberTy, ctorTy := restore tbl exportCtors[0]!.2
+          isData := gIsData, idxPos := gIdxPos, recNb := gRecNb, eqi, fx? := gFx? }
+      for d in ← graphArm ctx recTy do out := out.push d
+    else
+      let dRec := Declaration.defnDecl
+        { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+          hints := ← hintsFor recVal, safety := .safe }
+      addChecked dRec
+      out := out.push dRec
 
-  -- ── the ι rules, every one `Eq.refl` ──
+  -- ── the ι rules ──
   let recTy := restore tbl rv.type
   let mut iotas : Array (Nat × Name × Name) := #[]
   unless rv.rules.length == nc do
@@ -1793,10 +2537,33 @@ the subsingleton rule that minted {ern} does not hold of it"
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
+        -- **Every ι theorem is `Eq.refl` except arm G's.** There the value is
+        -- a `Classical.choice` application, which reduces to nothing, so the
+        -- rule is proved instead: both sides are graph points at this
+        -- constructor and the graph is single-valued. The *statement* is the
+        -- shared one above either way, which is what keeps the oracle's
+        -- syntactic comparison honest across the arms.
+        let proof ←
+          if !armG then pure (eqi.refl' v α lhs) else do
+            let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
+            let atSlot := fun (nm : Name) => rsI.mapM fun i => do
+              let fty ← ityp fields[i]!
+              forallBoundedTelescope fty (some (gRecNb[i]!.getD 0)) fun zs r2 => do
+                let a2 := r2.getAppArgs
+                mkLambdaFVars zs (mkAppN (.const nm recLs)
+                  (pre ++ a2.extract np a2.size ++ #[mkAppN fields[i]! zs]))
+            let ghat ← atSlot recN
+            let hhat ← atSlot (Name.str model "rec_graph")
+            let gv := mkAppN (.const (Name.str model "rec_graph") recLs)
+              (pre ++ isj ++ #[major])
+            let gw := mkAppN (.const (Name.str model "graph_mk") recLs)
+              (pre ++ fields ++ ghat ++ hhat)
+            pure (mkAppN (.const (Name.str model "graph_unique") recLs)
+              (pre ++ isj ++ #[major, lhs, rhs, gv, gw]))
         return Declaration.thmDecl
           { name := iotaN j, levelParams := rv.levelParams
             type := ← mkForallFVars tel (eqi.mk' v α lhs rhs)
-            value := ← mkLambdaFVars tel (eqi.refl' v α lhs) }
+            value := ← mkLambdaFVars tel proof }
     addChecked d
     out := out.push d
     iotas := iotas.push (0, cn, iotaN j)

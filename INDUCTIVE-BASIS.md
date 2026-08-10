@@ -37,9 +37,20 @@ and extracting the value, packaged with its graph proof, using
 `rfl`). The same file compiles the refutation of the naive route, so the
 packaging is not a stylistic choice. This project's owner has ruled the
 standard axioms freely available, which makes **four** the operative number
-for the design. It is not yet the number for the tool: `modelgen` has not
-wired the arm, so `Modelgen.primBasis` is still five and the recursive
-subsingleton still declines.
+for the design — **and it is now the number for the tool as well**:
+`Modelgen.primBasis` is `[Eq, PSigma, Nat, PULiftP]`, the graph route is
+`Modelgen.graphArm`, and the recursive subsingleton models. `modelgen/tests/
+prim_graph.lean` carries six occupants of the arm, `Acc`'s own shape among
+them, each kernel-accepted with its recursor and ι statements compared
+against the ones Lean minted.
+
+The arm names two constants that are **not** basis primitives and are spliced
+when the input lacks them: `Nonempty`, because it is `Classical.choice`'s own
+domain, and `Classical.choice` itself. `Nonempty` does not join the basis: it
+is a non-recursive, small-eliminating `Prop`, so the Church route models it
+like anything else and it needs no exemption to keep the construction
+well-founded. What it does mean is that a consumer of an arm-G model checks
+one ordinary inductive declaration and one axiom beyond the four.
 
 Four findings reshape the question as posed, all **compiled**:
 
@@ -436,12 +447,21 @@ stated as such.
   sidestepped: the graph is not a truncation of the value, it is a
   *relation* to it.
 
-  **What this does and does not settle.** It settles the basis question: a
-  checker willing to carry `Classical.choice` needs **four**, `{Eq, PSigma,
-  Nat, PULiftP}`. It does **not** yet settle `modelgen`, where the arm is not
-  wired — `Acc` remains in `Modelgen.primBasis` and the recursive
-  subsingleton still declines. Until the arm lands, the tool's basis is five
-  and this entry is a statement about derivability, not about the generator.
+  **What this settles, and what the tool now measures.** It settles the basis
+  question: a checker willing to carry `Classical.choice` needs **four**,
+  `{Eq, PSigma, Nat, PULiftP}`. It also settles `modelgen`: the arm is wired
+  (`Modelgen.graphArm`), `Acc` is out of `Modelgen.primBasis`, and the
+  recursive subsingleton models. The generator's measurements agree with the
+  file's, shape for shape — `rec_0` costs `Classical.choice` uniformly and ι
+  costs `funext` (hence the quotient and `Quot.sound`) **only** where a
+  recursive field has a binder, which `modelgen/tests/prim_graph.lean`'s `G1`
+  pins by splicing neither. Two things ride along that this entry did not
+  price: `Nonempty`, `Classical.choice`'s own domain, which is not a
+  primitive (it self-models by the Church route) but is a declaration a
+  consumer must check; and a shape restriction the derivation's §6 already
+  named — the constructor's data fields must *be* the conclusion's indices,
+  so an index that is a constant, or one built from a proof field, declines.
+  `Inf.below` and `prim_graph.lean`'s `BadC` are that boundary, measured.
 * **`Eq` — necessary in practice; the missing term is named.** What cannot
   be built from the others is large transport,
   `∀ α (a b : α), CEq a b → ∀ C : α → Sort w, C a → C b` with `CEq` the
@@ -480,8 +500,12 @@ declines `Classical.choice`*. With choice the eliminator is derived — the
 graph route, compiled — so the honest verdict is a **basis of four plus an
 axiom**, `{Eq, PSigma, Nat, PULiftP}` + `Classical.choice`, against a basis
 of five and no axiom. This project's owner has ruled the standard axioms
-freely available, which makes four the operative number for the *design*;
-`modelgen` still ships five because the arm is not wired.
+freely available, which makes four the operative number for the *design*,
+and `modelgen` now ships four: the arm is wired (`Modelgen.graphArm`), `Acc`
+is out of `Modelgen.primBasis`, and `Acc`'s own shape is one of the arm's
+measured occupants. The axiom's `Nonempty` rides along as an ordinary
+declaration — spliced when the input lacks one, modelled by the Church route
+when it does not — and is not a sixth primitive.
 
 ## 5. The level story, in one place
 

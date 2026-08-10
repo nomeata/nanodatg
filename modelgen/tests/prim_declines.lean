@@ -13,13 +13,22 @@
      one predecessor, so this needs the W/path construction (plan B).
    * `Binder` — a recursive occurrence **under a binder**, which is the
      infinitely-branching case and the same boundary from the other side.
-   * `Inf` — **recursive proposition**: the Church induction derivation is
-     not implemented.
+   * `Inf.below` — the `below` Lean mints for the recursive proposition
+     beside it. It is a recursive subsingleton too and reaches **arm G**, and
+     is refused there: its index is `Inf.mk a` rather than one of the
+     constructor's own data fields, so the graph route's inversion cannot be
+     stated at an arbitrary index. `prim_graph.lean`'s `BadC` is the same
+     refusal reached deliberately rather than by accident.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
    * `BoxF` — a field whose level keeps an `imax` even boxed: the imax
      sits on a *domain* of the field's own telescope, where wrapping the
      codomain does not reach.
+
+   `Inf` itself — `inductive Inf : Prop | mk : Inf → Inf` — is **no longer a
+   refusal**: it is the degenerate shape of arm G, the graph route, and models
+   with no `funext` at all because its recursive field has no binders.
+   `prim_graph.lean` carries that arm's positives.
 
    The three variable-sort shapes this file used to carry — an empty
    carrier, a two-constructor carrier and a carrier whose constructor has a

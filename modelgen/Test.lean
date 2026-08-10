@@ -376,7 +376,27 @@ the `False`-Π singleton, and the `PULiftP` carrier's eta is a recursor call.
 `PU`'s count dropping 7 → 4 and `UL`'s 5 → 4 is that, measured.
 `prim_declines` pins every refusal path and its printed reason; `P` inside it
 is the control that says the guard is not refusing everything. `Eq` declines
-as basis in both, because both declare it. -/
+as basis in all four, because all four declare it.
+
+`prim_graph` is **arm G** — the recursive subsingleton by the graph of its own
+recursion, the arm that took `Acc` out of the basis. Its counts are the twelve
+declarations of the construction (`self`, `ctor_0`, `ind`, the six graph
+declarations, `rec_0`, `rec_graph`, `iota_0_0`) plus whatever that shape
+splices, and **the split between the shapes is the axiom table**: `G1` has no
+binder on its recursive field, so it reaches no `funext` and its 15 are the
+twelve plus `PSigma`, `Nonempty` and `Classical.choice`; `G4`, the next shape
+with a binder, pays the quotient, `Quot.sound` and a derived `funext` and is
+15 as well; `Ac`, `G2` and `G3` are 13, the twelve plus their own `funext`.
+A version that asked for `funext` per *arm* rather than per *shape* would make
+`G1` 16 and is red here.
+`prim_graph_pre` is the same arm on an input that declares `PSigma`,
+`Nonempty` and `Classical.choice` itself: nothing of those is spliced, and
+`Nonempty`'s own model beside them is what says it is not a basis primitive.
+`Inf` in `prim_declines` was a refusal until this arm landed and is now a
+model; `Inf.below` is not, and neither are the other `.below` declarations
+Lean mints for these shapes — their index is `T.mk a` rather than one of the
+constructor's own data fields, so inversion cannot be stated at an arbitrary
+index. `BadC` is the same refusal reached deliberately. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
       [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
@@ -386,14 +406,29 @@ def expectedPrim : List Row :=
        ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
       [ ("Eq", "prim model shape: a basis primitive")])
-  , ("prim_declines", [("P", 9), ("Idx", 4)],
+  , ("prim_declines", [("P", 9), ("Idx", 4), ("Inf", 14)],
       [ ("Eq", "prim model shape: a basis primitive")
-      , ("Inf", "prim model shape: a recursive subsingleton proposition")
       , ("Branch", "prim model shape: Branch.node has two recursive fields")
       , ("MixI", "prim model shape: MixI.mk has an index-variable field")
-      , ("Inf.below", "prim model shape: a recursive subsingleton proposition")
+      , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
       , ("Binder", "prim model shape: Binder.lim has a recursive field that is not")
       , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")])
+  , ("prim_graph",
+      [("G1", 15), ("G4", 15), ("Ac", 13), ("N", 8), ("G3", 13), ("G2", 13),
+       ("G5", 13)],
+      [ ("Eq", "prim model shape: a basis primitive")
+      , ("G4.below", "prim model shape: G4.below.mk's index 1 is not one of its own")
+      , ("BadC", "prim model shape: BadC.mk's index 0 is not one of its own")
+      , ("BadC.below", "prim model shape: BadC.below.mk's index 0 is not one of its own")
+      , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")
+      , ("G3.below", "prim model shape: G3.below.mk's index 1 is not one of its own")
+      , ("G1.below", "prim model shape: G1.below.mk's index 0 is not one of its own")
+      , ("G5.below", "prim model shape: G5.below.mk's index 3 is not one of its own")
+      , ("G2.below", "prim model shape: G2.below.mk's index 1 is not one of its own")])
+  , ("prim_graph_pre", [("Ac", 13), ("Nonempty", 4)],
+      [ ("PSigma", "prim model shape: a basis primitive")
+      , ("Eq", "prim model shape: a basis primitive")
+      , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
   ]
 
 structure TAcc where

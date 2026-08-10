@@ -2400,31 +2400,38 @@ certifies: `nested_iota_arm` at 63 pairs / 63 `constEv` / 63 `typeEv`, waiting
 empty, `gapped` 0. Those are the numbers the recogniser has to reproduce, and
 they are pinned in `mini/tests/nested.rs` today.
 
-# 8. The third construction: models from five primitives (`--prim-models`)
+# 8. The third construction: models from four primitives (`--prim-models`)
 
 **Off by default, behind `--prim-models`.** Where §1's constructions remove
 *nesting* and *mutuality*, this one removes the inductive declaration itself:
-a plain — non-mutual, non-nested, non-indexed, non-recursive — inductive's
-carrier, constructors, recursor and ι rules come out as ordinary `def`s and
-`theorem`s over a fixed basis of primitive inductives,
+a plain — non-mutual, non-nested — inductive's carrier, constructors,
+recursor and ι rules come out as ordinary `def`s and `theorem`s over a fixed
+basis of primitive inductives,
 
-    Eq   False   PSigma   Nat   Acc
+    Eq   PSigma   Nat   PULiftP
 
 each spliced into the output at Lean's own shape if the input lacks it,
 exactly as §1.5 splices `Eq` and the quotient. The interface is §1's four
-names unchanged — `T._model.self`, `ctor_j`, `rec_0`, `iota_0_j` — and there
-are **no internal declarations at all**: every helper the construction needs
-is an inline subterm, so a model is exactly `2 + 2c` declarations for `c`
-constructors, plus whichever basis members had to be spliced — and, for the
-models whose proofs transport (§8.1's `False`-Π pads and the singleton
-route), §1.5's quotient-and-`funext` splice.
+names unchanged — `T._model.self`, `ctor_j`, `rec_0`, `iota_0_j`.
+
+**On every arm but one there are no internal declarations at all**: every
+helper the construction needs is an inline subterm, so a model is exactly
+`2 + 2c` declarations for `c` constructors, plus whichever basis members had
+to be spliced. The exception is §8.7's graph arm — the recursive
+subsingleton, the arm that took `Acc` out of the basis — which cannot inline
+its recursion's *graph*, and emits eight internal declarations beside the
+four. They are internal in the contract's sense (`modelgen/README.md`, "what
+the contract does not say"): no consumer reads them.
 
 The commission named the basis `{Eq, False, Sigma, Acc, Nat}` and asked for
 it to be verified rather than inherited. **The basis it ended at is
-`{Eq, PSigma, Nat, Acc, PULiftP}`** — `INDUCTIVE-BASIS.md` is the derivation,
-and the two changes are that `False` is derived rather than primitive (Church
-`∀ p : Prop, p`, with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`
-family) and that `PULiftP.{u} (p : Prop) : Sort u` joins. Lean's *elaborator*
+`{Eq, PSigma, Nat, PULiftP}`** — `INDUCTIVE-BASIS.md` is the derivation,
+and the three changes are that `False` is derived rather than primitive
+(Church `∀ p : Prop, p`, with the `Sort w` eliminator from `0 = 1` plus a
+`Nat.rec` family), that `PULiftP.{u} (p : Prop) : Sort u` joins, and that
+**`Acc` left** — the one grant it was in the basis for, subsingleton-recursive
+large elimination, is derived by §8.7's graph route at the cost of
+`Classical.choice`. Lean's *elaborator*
 refuses `PULiftP`; Lean's *kernel* takes it and grants it large elimination by
 the subsingleton rule, and `addDeclCore` is the kernel — core crosses the same
 line twice itself, for `PUnit` and `PEmpty`
@@ -2573,6 +2580,16 @@ recursive field *followed* by a non-recursive one.
 plus, on the composed side, `Lean.Syntax._model.0._model.aux` — indexed at a
 never-zero sort, thesis §5.2's skeleton-plus-`good` (§8.3).
 
+**Arm G (§8.7) does not appear in this table, and that is the honest result
+rather than an omission.** `init-prelude` declares no recursive subsingleton
+— no `Acc`, and no `below` beside one — so the arm that took `Acc` out of the
+basis has nothing to model here. Coverage before it landed was 122 of 125 and
+after it is 122 of 125, with the same three declines. What did change here is
+one row that is no longer printed: `Acc` used to decline as a basis primitive
+on any input that declared it, and now models. The arm is measured against
+`modelgen/tests/prim_graph.lean` and `prim_graph_pre.lean` instead, and the
+corpus says nothing about it either way.
+
 **What moved, and why.** The previous tranche modelled 115 and declined 10.
 Four of those ten are now models:
 
@@ -2626,9 +2643,14 @@ between two opaque inhabitants, which the construction never needs). That
 retired both axioms and two spliced declarations
 (`PUnit`'s model went from 7 declarations to 4, `PULift`'s from 5 to 4).
 
-Filtering the output again with the flag on declines 131 times at the name
-guard and returns the file byte-identical — idempotence, §1.5's mechanism
-unchanged.
+Filtering the output again with the flag on declines **131 times** — 125 of
+them at the name guard (123 `prim model name taken`, one nested, one mutual)
+and 6 at a shape: the four basis primitives, which are all present on the
+second pass because the first spliced two of them, plus `Lean.ParserDescr`
+and the composed `aux`. The file comes back byte-identical — idempotence,
+§1.5's mechanism unchanged. (This line used to read "declines 131 times at
+the name guard", which was the right total against the wrong reason for six
+of them.)
 
 ### Fixtures and mutations
 
@@ -2774,16 +2796,16 @@ and `Lean.Name` model, `recSlotOf` declines the two shapes the tower cannot
 express by name, and `prim_declines.lean`'s `Branch` and `Binder` hold both
 refusal paths open.
 
-Three classes remain declined, each with a compiled prototype naming the
-construction: **branching** recursion at a never-zero sort (above); an
-indexed **subsingleton**
-(`HEq` — the packed-index-equation model, `PropArms.lean`'s `HEq'`, one
-`Eq.rec` at a `PSigma`-packed index telescope, ι by `rfl`, resting on
-`PSigma` structure eta); and a recursive subsingleton — `AccPhi.lean`
-compiles that one over a primitive `Acc`, and also refutes and repairs the
-thesis's own `accφ` reduction at thesis.txt:1838.
+Of the three classes that were declined here, two are constructions now: the
+indexed **subsingleton** is arm F (the packed-index-equation model,
+`PropArms.lean`'s `HEq'`, one `Eq.rec` at a `PSigma`-packed index telescope,
+ι by `rfl`, resting on `PSigma` structure eta), and the **recursive**
+subsingleton is §8.7's arm G. What remains is **branching** recursion at a
+never-zero sort (above). `AccPhi.lean` compiled the recursive subsingleton
+over a primitive `Acc`, and also refutes and repairs the thesis's own `accφ`
+reduction at thesis.txt:1838; the arm that shipped does not use it.
 
-**`Acc` no longer has to be primitive for it.**
+**`Acc` no longer has to be primitive for it, and no longer is.**
 `scripts/inductive-basis/AccFromChoice.lean` derives `Acc.rec`'s exact type
 over no inductive primitive at all, by defining the recursion's **graph** as
 an impredicative `Prop`, proving it total and single-valued by the free
@@ -2796,11 +2818,11 @@ recursor and both adequacy directions spend none. The naive route — choice
 at a bare `Nonempty (motive a t)` — is compiled *as a refutation* in the same
 file: the value is provably blind to the step function, so its ι rule derives
 `False`, and that path must not be re-attempted. So the basis is **four plus
-choice** as a design (`INDUCTIVE-BASIS.md` §4), and five in this tool until
-the arm is wired; `Acc` is still `Modelgen.primBasis`'s fourth member and the
-recursive subsingleton still declines.
+choice** as a design (`INDUCTIVE-BASIS.md` §4) **and four in this tool**:
+`Modelgen.primBasis` is `[Eq, PSigma, Nat, PULiftP]` and the recursive
+subsingleton models. §8.7 is the arm.
 
-**And the recipe is uniform, which is what makes wiring it mechanical rather
+**And the recipe was uniform, which is what made wiring it mechanical rather
 than exploratory.** Two compiled shapes are not enough to conclude that a
 generator can emit this for an *arbitrary* recursive subsingleton, so
 `scripts/inductive-basis/AccArmShapes.lean` carries the same nine steps
@@ -2824,14 +2846,18 @@ in any shape, so `rec'` is `[Classical.choice]` uniformly and only ι ever
 pays. The shapes also *discriminate*: swapping the two recursive fields of
 the two-field shape, and swapping the two non-recursive proof fields that
 straddle the recursion in the three-field shape, are each a type error — so
-a field-order bug in the eventual arm would be caught, which it would not be
-against fields of equal type or fields on only one side.
+a field-order bug in the arm would be caught, which it would not be
+against fields of equal type or fields on only one side. Both predictions
+held: the arm's own mutations (§8.7) are red at exactly those shapes.
 
-What remains not uniform is unchanged: constructor arguments that are *data*
+What remains not uniform: constructor arguments that are *data*
 occurring inside the conclusion's index *expression* where the index does not
-determine them. Lean's subsingleton rule admits only variables there, and a
-variable is recovered by inversion, so the gap is not reachable from this
-class. The
+determine them. This was recorded here as "not reachable from this class,
+because Lean's subsingleton rule admits only variables there" — and **that
+was wrong**, as the arm's own boundary measured. The rule admits any argument
+that *occurs* in the result type, so `mk : BadC 0 → BadC 0` and the `below`
+Lean mints beside a recursive `Prop` (whose index is `T.mk a`) are both
+large-eliminating and both out of reach; §8.7 declines them by name. The
 variable-sort carriers, the bare-parameter pad, the `imax`-leveled field and
 the indexed and recursive `Prop`s are constructions now, not gaps; the
 `imax`-on-a-domain field is a *level-incompleteness* decline and §8.6
@@ -2845,8 +2871,16 @@ agree to 0.1 % are reported:
 
 | | instructions | output bytes |
 |---|---|---|
-| `modelgen` (layers 1+2) | 2.567 × 10⁹ | 3,857,568 |
-| `modelgen --prim-models` | 3.230 × 10⁹ | 4,779,318 |
+| `modelgen` (layers 1+2) | 2.565 × 10⁹ | 3,857,568 |
+| `modelgen --prim-models` | 3.228 × 10⁹ | 4,779,318 |
+
+**Arm G (§8.7) did not move this**, and it should not have: `init-prelude`
+declares no recursive subsingleton — no `Acc`, and no `below` beside one — so
+nothing there reaches the arm. Four runs at 3.227–3.229 × 10⁹, spread 0.06 %,
+against 3.226 × 10⁹ before it landed; none discarded. The only change on the
+measured path is that `primBasis` is one name shorter. The arm's cost is
+therefore **unmeasured on a corpus** and only its fixtures exercise it, which
+is worth saying rather than implying that "no change" means "cheap".
 
 **+25.8 % instructions and +23.9 % output bytes for 123 models** (122 input
 inductives and one composed tag) — about 5.4 × 10⁶ instructions per model.
@@ -3019,3 +3053,292 @@ on, and that one prune closes it on everything measured.
   build` (150 jobs, clean) and the re-proved soundness lemma are the whole of
   the sanity check; nothing exercised the patched checker over a large real
   corpus. This is the weakest link in §8.6 and it is not hidden.
+
+## 8.7 Arm G: the recursive subsingleton, by the graph — and `Acc` leaves the basis
+
+The class: an inductive `Prop` with **one** constructor, each of whose fields
+is a proposition — possibly a recursive occurrence `∀ z⃗, T p⃗ e⃗` — or a piece
+of data that occurs in the conclusion. Lean's kernel grants that shape a
+`Sort v` motive by the subsingleton rule, and that grant is made to the
+*declaration*: the Church carrier §8.1 already emits eliminates only into
+`Prop`, so the large eliminator has to be **built**. `Acc` was in the basis
+for exactly this, and this arm is what took it out. `Modelgen.primBasis` is
+now `[Eq, PSigma, Nat, PULiftP]`.
+
+### What is emitted
+
+The carrier and the constructor are the Church route's own — they cost no
+primitive at all — and so is `T._model.ind`, the free `Prop`-motive recursor,
+which is *literally* the strong-induction fold of §8.1 at `v := 0`: the arm
+forces the small-elimination branch and takes the result as `ind` instead of
+as `rec_0`, so there is one fold in the source and not two to keep in step.
+On top of that, seven declarations define the recursion by its **graph**:
+
+```text
+T._model.graph          Graph ι⃗ t val — the least relation closed under
+                        "if the value at every recursive sub-argument is g,
+                        then the value at (mk f⃗) is step f⃗ g⃗", encoded
+                        impredicatively, so a Prop
+T._model.graph_mk       that closure rule, as a theorem: the graph is a fixed
+                        point and not merely a pre-fixed point, which is what
+                        makes ι's right-hand side a graph point
+T._model.graph_inv_ty   inversion, with the constructor's proof fields
+                        universally quantified rather than existentially
+T._model.graph_inv      inversion holds, by folding at `Graph ∧ GraphInv`
+T._model.graph_unique   single-valuedness, by `ind`
+T._model.graph_exists   totality, by `ind`, picking sub-values with choice
+T._model.rec_graph      the graph fact about `rec_0`
+```
+
+and then `rec_0 … t := (Classical.choice (graph_exists … t)).fst` and
+`iota_0_0` from `graph_unique`. Twelve declarations in all, four of them the
+interface and eight internal. `scripts/inductive-basis/AccFromChoice.lean`
+is the derivation and `AccArmShapes.lean` the uniformity argument; §8.4 has
+both.
+
+**Universal quantification over the proof fields is the clause that
+generalises.** Inversion cannot produce the fields the constructor was
+applied to — it has no existential to open — so `GraphInv` quantifies them
+and the caller supplies its own. Any two are definitionally equal (they are
+proofs of one proposition), so `step f⃗ g⃗` and `step f'⃗ g⃗` are the same term
+and the `rfl` at the bottom of `Graph.inv` typechecks. Nothing in the arm
+transports along a proof.
+
+**Do not choose at `Nonempty (motive a t)`.** It typechecks, it is total, it
+is universe-correct, and it is *wrong*: the two `Nonempty` proofs are
+definitionally equal, so the value cannot see the step function, and the
+resulting ι rule derives `False`. That is compiled as a refutation in
+`AccFromChoice.lean` §4 (`naive_value_indep` is `rfl`). Pairing the value
+*with its graph proof* is the whole of the difference.
+
+### ι is propositional here, and only here
+
+The recursor's value is a `Classical.choice` application, which reduces to
+nothing, so `iota_0_0` is proved rather than being `Eq.refl`: both sides are
+graph points at the constructor and the graph is single-valued. The
+*statement* is the shared one — §4's oracle rebuilds it from the installed
+recursor's own rule and compares it syntactically, exactly as for every other
+arm — so nothing about the contract moves. What moves is that a consumer
+recomputing an ι rule *by reduction* rather than reading the theorem is wrong
+on this arm. `modelgen/README.md` says so where a consumer will read it.
+
+### The axioms, per shape
+
+| | `rec_0` | `iota_0_0` |
+|---|---|---|
+| a recursive field **with** binders (`Acc`'s own shape, `G2`, `G3`, `G4`, `G5`) | `Classical.choice` | `Classical.choice`, `funext` (so the quotient and `Quot.sound`) |
+| a recursive field with **no** binders (`G1`, `Inf`) | `Classical.choice` | `Classical.choice` |
+
+`funext` is reached from exactly one place — `Graph.unique`'s congruence, to
+equate two recursive-argument *functions* pointwise — and
+[`Modelgen.funextUp`] runs it once per binder, so at zero binders it is the
+identity and nothing is asked for. Totality never needs it in any shape. The
+splice is lazy, so this is visible in the report rather than inferred:
+`prim_graph.lean`'s `G1` splices `PSigma`, `Nonempty` and `Classical.choice`
+and **not** the quotient, and `G4` — the next shape, which does have a
+binder — splices the quotient, `Quot.sound` and a derived `funext`. The
+counts in `Test.lean` pin it: `G1` is 15 declarations and would be 16 under a
+per-arm `funext`.
+
+**`Nonempty` is not a sixth primitive.** It is named because it is
+`Classical.choice`'s own domain and there is no way to state the axiom
+without it. It is not on `primBasis`, needs no exemption to keep the
+construction well-founded, and self-models: it is a non-recursive,
+small-eliminating `Prop`, and `prim_graph_pre.lean` emits its model beside
+the declaration. What it does cost a consumer is one ordinary inductive
+declaration and one axiom beyond the four.
+
+### The boundary, and a correction to §8.4
+
+The arm needs the constructor's **data fields to be the conclusion's indices,
+one for one**. `GraphInv ι⃗ t val` concludes `val = step f'⃗ g⃗`, whose
+right-hand side lands at the quantified fields' own index expressions; for
+that equation to be statable at an arbitrary `ι⃗`, those expressions have to
+*be* `ι⃗`. So the arm declines an index that is a constant, or one built from
+a field rather than being one.
+
+§8.4 recorded this class as "not reachable, because Lean's subsingleton rule
+admits only variables there". **That was wrong**, and the arm's own fixtures
+are what measured it: the rule admits any argument that *occurs* in the
+result type, so
+
+* `BadC : N → Prop | mk : BadC N.z → BadC N.z` — index a constant — is
+  large-eliminating and declines, and
+* the `below` Lean mints beside every recursive `Prop` (`Inf.below`,
+  `G1.below`, `Ac.below`, …) is a recursive subsingleton whose index is
+  `T.mk a` — a proof field inside an index expression — and declines too.
+
+Both are in the fixtures with their printed reason. A data field that occurs
+*inside* an index expression without being it — `mk : (x : Nat) → BadD x →
+BadD (x+1)` — never reaches the arm at all: Lean gives that one a `Prop`
+motive, so it is small-eliminating and takes the strong-induction fold.
+Asked of the kernel, not reasoned about.
+
+### Fixtures and mutations
+
+`modelgen/tests/prim_graph.lean` is the arm's positives — `G1` (no
+parameters, no indices, a recursive field with no binders), `Ac` (`Acc`'s own
+shape, universe-polymorphic, one data field that is the index, a recursive
+field under two binders), `G2` (**two** recursive fields at *different*
+domains), `G3` (a proof field on **both sides** of the recursive one), `G4`
+(the `accφ` shape, where the relation itself depends on an earlier proof
+field) and `G5` (**three** indices, the data fields mapping onto them by a
+permutation) — plus `BadC` for the refusal. `prim_graph_pre.lean` is the same
+arm on an input carrying `PSigma`, `Nonempty` and `Classical.choice` itself.
+`Inf`, which `prim_declines.lean` carried as a refusal until this arm landed,
+is now a model there.
+
+Six mutations, each red, and the **green** column is what the shapes were
+chosen for:
+
+| mutation | red | **green**, and why that is right |
+|---|---|---|
+| `Graph.unique`'s congruence truncated to one factor | `G2` | every one-recursive-field shape — with one factor the chain *is* the whole congruence |
+| the `funext` chain run once instead of per binder | `Ac`, `G2`, `G3`, `G4`, `G5` | `G1` — no binder, so the chain is the identity either way |
+| the recursive fields' equations used in reverse order in the congruence | `G2` | every one-recursive-field shape — reversing a singleton is a no-op |
+| the proof fields handed to `GraphInv` in reverse | `G2`, `G3`, `G4` | `Ac`, `G1`, `G5` — exactly one proof field, so reversing is a no-op |
+| arm G's ι falling back to `Eq.refl` | every arm-G shape (`Inf`, `Ac`, `G1`–`G5`) | — this is the compiled `#guard_msgs (error)` of `AccFromChoice.lean` reproduced in the generator |
+| the data-field ↦ index map replaced by the identity | **`G5` only** | `Ac`, `G2`, `G3`, `G4` — one index, so the map is the identity already; `G1` has none |
+
+The last is the two-atoms lesson at its sharpest: five of the six shapes
+cannot see the bug, because with a single index every field↦index map is the
+identity. `G5` exists for that row and for nothing else, and it needs
+**three** indices rather than two — with two, a wrong map is a transposition
+and half the shapes still typecheck.
+
+Two notes on how the red/green columns were read, because the first reading
+was wrong and the correction is the kind that hides. **A decline moves the
+splice**, so comparing "declaration count per model" across a mutation
+reports shapes that did not break: when `G1` declines, the `PSigma` it was
+splicing falls to the next model that needs it and that model's count
+changes. The columns above are from a name-only comparison for that reason —
+`N`, the `Type`-route control, appeared to break under the ι mutation and
+does not. And the second reading is that the arm-G shapes are the *only*
+models any of these six touch: no mutation of this arm moved `P`, `Idx`, `N`
+or any of `prim_shapes`, which is what says the arm is additive.
+
+## 8.8 Does W subsume this arm? No — W is built on it. And what `derived/` already has
+
+Two questions were put to this tranche, and both deserve an answer *before*
+anybody writes a W arm, because the answers move where that arm starts.
+
+### Arm G is W's prerequisite, not a special case of it
+
+The worry was that arms are being written that a general W construction will
+subsume. It is the right worry — but it does not reach this one, and the
+reason is structural rather than a judgement call. **W's well-foundedness is
+`Acc.rec` on the immediate-subtree relation.** A W arm at the type target
+needs that eliminator; `Acc` is no longer a primitive; and arm G is what
+produces it. Deleting arm G in favour of W would leave W with nothing to
+recurse on. That is also why the order was `Acc` first: not sequencing
+preference, dependency.
+
+Two further points, and the first is a **correction to the brief that
+commissioned this**, which named "arm G, the tuple tower" as one thing and
+described it as claiming "definitional ι and no axioms". Those are two
+different arms with opposite properties:
+
+| | carrier's sort | ι | axioms | subsumed by W? |
+|---|---|---|---|---|
+| the **tuple tower** (`recSlotOf`, §8.4) — linear recursion | never-zero | `Eq.refl` | none | **plausibly yes, in coverage** — linear recursion is W at one-place branching. The trade is real and measurable: W would replace a definitional ι with a propositional one and add `Classical.choice`. |
+| **arm G** (§8.7) — recursive subsingleton | `Sort 0`, large-eliminating | *propositional* | `Classical.choice`, and `funext` per binder | **no** — see above, and below |
+
+So the deletion test the brief describes — "keep it only on a measured
+difference, and axiom-freedom is not that difference" — applies to the tuple
+tower, where it bites, and not to arm G, where the arm is load-bearing for
+the thing that would replace it.
+
+The second point is independent evidence, and it comes from our own set-side
+translation: **`derived/` is W-based for class (T) and abandons W for class
+(S)** — the subsingleton — which is exactly arm G's class.
+`derived/src/inductive/family/le.rs:1` states it: "Class (S) — §5.3's
+subsingleton eliminators, as `acc` at a Separation". A construction that
+already went general on the set side still keeps a separate arm here. That is
+not proof that no W-shaped construction could serve, but it is the strongest
+prior available and it was paid for.
+
+### `derived/src/inductive/` — read before designing W, and read carefully
+
+The suggestion that we already have the full translation, "just phrased in
+terms of sets rather than types", is **substantially right and wrong in three
+specifics**. It was verified against the code rather than inherited; the
+citations are to the master checkout.
+
+**Right.** There is a large, mostly-general inductive translation:
+`derived/src/inductive.rs` plus 23 modules and a 22-module `family/` subtree.
+It consumes a `DeclSpec` (`spec.rs:241–243`: `params`, `ctors` in declaration
+order, and `spec.rs:242` verbatim — "The empty list is `Empty`") and produces
+carrier, constructors, recursor and ι. The class-(T) carrier really is a W:
+`machine.rs:43` imports `crate::wtype::Wtype`, `machine.rs:74–76` holds it,
+and `carrier.rs:18–21` gives the decomposition in four lines — per-constructor
+Σ-telescopes over the non-recursive fields summed into the tag `A`, a `rec₊`
+dispatch on the tag's injections for the fibre `B`, `carrier := W(A, B, u)`.
+The recursor packs Lean's `n` minors into **one** step set by Replacement
+(`step.rs:14–24`) and keys ι on the tag (`recursor.rs:26–37`, `iota.rs:3–7`),
+in Lean's declared field order via `Slot` (`spec.rs:161`). Indexed families
+are exactly skeleton-plus-`good`: erase the indices, translate, recurse a
+second time over the same skeleton at `𝒫(Idx(p⃗))`, then carve by Separation
+(`family.rs:6–19`). **All of that transfers**, and it is the plan the W
+tranche should re-target rather than reinvent — including its decline list,
+which is a coverage map somebody already paid for (`spec.rs:110–121` nesting
+and mutual unrepresentable; `family/spec.rs:57–65` an index mentioning a
+recursive field; `family/le_index.rs:69–80` a recursive class-(S) declaration
+at `ni ≥ 1`, "no witness anywhere"; `distinct.rs:53–77` injectivity at a
+function-typed recursive argument, a named gap).
+
+**Wrong in three specifics**, each of which would have mis-set the W arm's
+expectations:
+
+* **"Sets have no analogue of universe levels."** They do, pervasively.
+  `derived/src/inductive/family/universe.rs:1` states `ind(p⃗,x⃗) ∈ Uₙ` "at any
+  rung of the tower", `universe.rs:48–50` reads the rung off the resultant
+  sort (`⟦Sort ℓ⟧ = U_ℓ`), and the (S)/(P)/(T) trichotomy is itself keyed on
+  the resultant level (`INDEXED-DESIGN.md:86–92`). What has no set analogue is
+  narrower and worth stating precisely: a Lean carrier must land in a
+  *specific* `Sort`, so `PULiftP`, the pads and the `imax` field boxing exist
+  to hit a level exactly. Levels are not absent from `derived/`; *level
+  arithmetic on the carrier's own sort* is.
+* **"Sets use well-founded recursion over `∈`."** They do not. The reduction
+  principle is W-induction: `W` is the intersection of all closed subsets of a
+  bound (`wtype.rs:1–11`, `wtype.rs:69`) and the recursor is
+  totality-by-union-of-attempts over that (`wrec_total.rs:1–12`), which needs
+  a *set* bound rather than rank or transfinite recursion (`rec_acc.rs:19–25`).
+  The only well-founded recursion in the subtree is class (S)'s `acc(A_φ, R)`,
+  over the declaration's own edge relation and not over `∈`
+  (`family/le.rs:23–37`). The `Acc.rec`/`Classical.choice` dependency at the
+  type target is therefore *not* the counterpart of an `∈`-recursion on the
+  set side; it is new, and §8.7 is where it is paid for.
+* **"One general translation procedure."** General *within* a class; across
+  classes it is per-class dispatch with four or five mutually exclusive entry
+  points (`carrier.rs:226`, `recursor.rs:168`, `dep.rs:205`, `family.rs:169`,
+  `family/le.rs:210`, `family/trunc.rs`), plus `empty_decl.rs` for `n = 0`.
+  A W arm here should expect the same shape, and a plan that promises one
+  entry point is promising something the set side did not achieve either.
+
+Confirmed as stated: ι is **propositional throughout** `derived/` — every one
+is a kernel `Thm` under hypotheses (`recursor.rs:34–37`, `iota.rs:3–7`,
+`dep.rs:29–33`), and nothing anywhere is definitional. So definitional ι is a
+real gain the type target can have and the set target cannot, which is
+precisely the currency the tuple-tower deletion test has to be settled in.
+
+### The building blocks, so nobody re-asks
+
+These are not special cases awaiting generalisation. They are orthogonal to
+recursion, or they are what a W arm would be built out of:
+
+* **`PULiftP`, the pads (`dsingAt`/`unitAt`) and the `imax` field boxing** —
+  level arithmetic. Every one of them exists to put a carrier or a field at an
+  exact `Sort`, which is a problem W does not have and does not solve.
+* **the Church routes** (`Sort 0` and maybe-zero) — impredicative `Prop`.
+  Cheaper than W at the type target, with no set counterpart at all, and they
+  supply arm G's own carrier and `ind`.
+* **`Nat`-tagged `PSigma` chains** for a non-recursive declaration — the base
+  case. W would technically cover it; modelling `Bool` as a W-type is not an
+  improvement.
+* **arm F**, the packed index equation — plain W does not carry indexed
+  families; those need the skeleton-and-`good` carve, and arm F is that carve
+  at `r := ⊥`.
+
+**If a W arm grows the generator rather than shrinking it, that is the signal
+to stop and say so** — which is the standing instruction, recorded here so the
+next reader does not have to be told twice.
