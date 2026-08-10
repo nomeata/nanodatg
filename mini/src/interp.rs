@@ -178,6 +178,24 @@ pub struct Interp {
     pub(crate) acc: Option<Rc<crate::acc::AccClause>>,
     /// Why it could not be built, if it could not.
     pub(crate) acc_failed: bool,
+    /// `derived::choice::choice_app` over this `Interp`'s pairing, built on
+    /// **its own** first use: it is the pair bridge plus `app_of_pair` plus a
+    /// dozen combinator steps, and only `Classical.choice` at `u ≥ 1` wants it.
+    /// See [`crate::choice_clause`].
+    pub(crate) choice: Option<Rc<crate::choice_clause::ChoiceClause>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) choice_failed: bool,
+    /// **Carneiro's `ε`, one per rung** — [`Interp::epsilon`].
+    ///
+    /// Identity and not a memo, and this is the field where that distinction
+    /// bites hardest in the crate: `derived::choice::Epsilon::on` mints a
+    /// *fresh* 0-ary constant per call and no theorem relates two of them, so
+    /// re-minting would give every use site its own choice function — every
+    /// theorem still true, no two about the same `ε`, and nothing downstream
+    /// able to tell. §6.2 fixes **one**; this map is what makes that true here.
+    pub(crate) epsilons: HashMap<u32, Rc<derived::choice::Epsilon>>,
+    /// Rungs at which the mint declined, so a second attempt is not made.
+    pub(crate) epsilons_failed: std::collections::HashSet<u32>,
     /// [`derived::rec_acc`], over the `Acc` clause's own carrier — built on
     /// **its** own first use, since only `Acc.rec` at a *value* motive wants it
     /// and the whole of the attempts/union/totality development is behind it.
@@ -1482,6 +1500,10 @@ impl Interp {
             direct_failed: false,
             acc: None,
             acc_failed: false,
+            choice: None,
+            choice_failed: false,
+            epsilons: HashMap::new(),
+            epsilons_failed: std::collections::HashSet::new(),
             rec_acc: None,
             rec_acc_failed: false,
             rec_acc_elims: HashMap::new(),

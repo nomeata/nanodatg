@@ -110,16 +110,21 @@
 //!
 //! **This is the one axiom whose clause is not the same derivation at every
 //! `σ`**, and the reason is the sentence the "what a clause here must produce"
-//! section opens with: only a proof-valued axiom can be inhabited this way. At
-//! `u = 0` the codomain `α` *is* a `Prop`, so `Classical.choice.{0}` is
-//! proof-valued and this module's existing frame fits it exactly. At `u ≥ 1` it
-//! is not, `⟦Classical.choice α h⟧` is `ε(⟦α⟧)` (§6.2) rather than `•`, and both
-//! `inhabit` and [`crate::ledger`]'s store still have to move.
+//! section used to open with: *only a proof-valued axiom can be inhabited this
+//! way*. At `u = 0` the codomain `α` *is* a `Prop`, so `Classical.choice.{0}` is
+//! proof-valued and this module's frame fitted it with nothing moved. At
+//! `u ≥ 1` it is not: `⟦Classical.choice α h⟧` is `ε(⟦α⟧)` (§6.2), not `•`.
 //!
-//! [`Clause::Choice`] therefore certifies `u = 0` and declines `u ≥ 1` **on the
-//! axiom's own axis** — it hands back `Gap::Axiom`, not a shape complaint, so a
-//! half-finished clause moves the count and never the reason. `inhabit` reads
-//! the bottom's `Ev` before it tests `tm` in order to keep that true.
+//! **That restriction is now lifted, and it was never a soundness property.**
+//! [`inhabit`] returns `(Term, Thm)` and checks that the membership is about the
+//! term the nest interpreted to; [`crate::ledger`] stores that term. The old
+//! pair of checks — "`tm` is `•`", "the conclusion is `• ∈ ⟦ty[σ]⟧`" — got the
+//! same guarantee by pinning both sides to one constant, which worked only while
+//! there was one constant to pin them to. The header's rule is therefore now:
+//!
+//! > A clause must produce a **term and its membership in `⟦ty[σ]⟧`**. For a
+//! > proof-valued axiom that term is `•` and nothing changed; for
+//! > `Classical.choice` at `u ≥ 1` it is `ε(⟦α⟧)`.
 //!
 //! **That was described here as the smaller half of the problem, with the
 //! larger being that "`ε` is not a term of the kernel's language and cannot be
@@ -185,23 +190,40 @@
 //! *already is* the statement that `⟦α⟧` is the inhabited one of `U₀`'s two
 //! elements; there is nothing left to choose.
 //!
-//! ### `σ = [1]` and above — this is where `ε` is
+//! ### `σ = [1]` and above — **done**, and this is where `ε` is
 //!
 //! `P₀` is false for a data field above `Prop`, so the ladder is unusable and
-//! the fact needed is `TruncFields::elim_psi`,
-//! `⊢ ∀α. (• ∈ ‖Nonempty α‖ → ∃y. y ∈ β₀(α))` — which is exactly the
-//! `∃w. w ∈ x` antecedent of [`derived::choice::Epsilon::chooses`]. The other
-//! antecedent, `⟦α⟧ ∈ Uᵤ`, *is* the `α` binder's own membership, because
-//! [`Interp::sort`] is `prelude.tower.u(u)`. So the bottom is `ε_u` at `⟦α⟧`,
-//! one `Epsilon` per rung.
+//! the fact needed is the rung above it,
+//! [`TruncFields::elim_psi`](derived::inductive::family::TruncFields::elim_psi),
+//! `⊢ ∀α. (• ∈ ‖Nonempty α‖ → ∃y. y ∈ β₀(α))` — *some* element exists, with
+//! nothing said about which, which is exactly the shape a choice function is
+//! for and exactly the `∃w. w ∈ x` antecedent of
+//! [`derived::choice::Epsilon::chooses`]. The other antecedent, `⟦α⟧ ∈ Uᵤ`, *is*
+//! the `α` binder's own membership, because [`Interp::sort`] is
+//! `prelude.tower.u(u)` and nothing has to be moved onto it. See
+//! [`choice_epsilon`], and [`crate::choice_clause`] for the per-rung `ε`.
 //!
-//! Three things then have to move, none of them in `kernel/` or `derived/`:
-//! [`inhabit`] must hand back a `Term` beside the `Thm` (its `t.tm == point`
-//! check becomes "the nest interprets, and the membership is about *that*
-//! term", which is strictly stronger); `crate::ledger` must store that term
-//! instead of `ip.point()`; and `lam_evidence`'s **non-`Prop`** branch fires
-//! from an axiom nest for the first time, which is the one part of this with no
-//! precedent to copy.
+//! Three things moved, none of them in `kernel/` or `derived/`: [`inhabit`]
+//! hands back a `Term` beside the `Thm`; `crate::ledger` stores it; and
+//! `lam_evidence`'s **non-`Prop`** branch fires from an axiom nest for the first
+//! time. That last had no precedent to copy and turned out to need nothing new —
+//! it is the branch every `def` already goes through, and an axiom nest is a
+//! `lam_nest` like any other once its bottom denotes a value.
+//!
+//! What did bite, and is worth the line because it will bite the next clause
+//! too: a nest binder's typing **carries hypotheses**. `crate::scope` is mini's
+//! one `Thm::assume` module and `⟦α⟧ ∈ Uᵤ` arrives as an assumption discharged
+//! by `lam_evidence` as the nest closes. A `hyps().is_empty()` guard on those
+//! premises — which reads like prudence — declined every call.
+//!
+//! ```text
+//! before Clause::Choice   constEv=3  library-gap=4  waiting:axiom(Classical.choice)=4
+//! after u = 0             constEv=5  library-gap=2  waiting:axiom(Classical.choice)=2
+//! after u ≥ 1             constEv=7  no library-gap, no waiting rows
+//! ```
+//!
+//! `constEv == pairs` on that fixture: every pair is certified, so there is no
+//! reason row left for a later change to hide behind.
 //!
 //! `mini/tests/fixtures/standard_axioms.lean` keeps all four pairs measurable
 //! meanwhile, and it is still measuring 4: **the kernel rule and its
@@ -286,19 +308,37 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
 
 const SHAPE: &str = "axiom: the declared type is not this clause's";
 
-/// `⊢ • ∈ ⟦ty[σ]⟧` for one axiom at one `σ`, or the reason it could not be
-/// derived.
+/// `(⟦c.{σ}⟧, ⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧)` for one axiom at one `σ`, or the reason it
+/// could not be derived.
 ///
 /// `ty_tm` is the type's interpretation the ledger already has in hand; the
 /// conclusion is checked against it, so a nest that closed over some *other*
 /// reading of the declared type cannot be handed back.
+///
+/// # It used to return the theorem alone, and require the term to be `•`
+///
+/// **The invariant did not weaken when the term came back; it moved and got
+/// stronger.** The old pair of checks was "`t.tm` is `•`" and "the conclusion is
+/// `• ∈ ⟦ty[σ]⟧`", and the ledger then stored `ip.point()` from its own side —
+/// so the term in the store and the term the theorem was about agreed because
+/// *both* were separately pinned to the same constant. The new single check is
+/// "the conclusion is `tm ∈ ⟦ty[σ]⟧`" for the nest's own `tm`, **and the ledger
+/// stores that same `tm`**. That implies the old conjunction whenever `tm` is
+/// `•`, and it is the property the store actually needs: a membership and a
+/// denotation that are about the same thing.
+///
+/// The point requirement had to go because it was never about soundness — it
+/// was the "only a proof-valued axiom can be inhabited here" restriction wearing
+/// a check. [`Clause::Choice`] at `u ≥ 1` is the first axiom whose codomain is
+/// not a `Prop`: `⟦Classical.choice α h⟧` is `ε(⟦α⟧)` (§6.2), and there is
+/// nothing wrong with that except that this function used to forbid it.
 pub fn inhabit(
     c: &mut Checker<'_, '_>,
     cl: Clause,
     name: &Name,
     inst: &[u32],
     ty_tm: &kernel::Term,
-) -> Result<Thm, Gap> {
+) -> Result<(Term, Thm), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(*name, w);
     let miss = || Gap::NoInterpretation(*name, inst.to_vec());
     // The declared type, from the environment rather than from the ledger's
@@ -321,7 +361,6 @@ pub fn inhabit(
         Ok(nest_bottom(c, cl, &nm, &sigma, &lean_ty, &cod))
     };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    let point = c.interp().ok_or(Gap::SymbolicLevel)?.point();
     // **The bottom's own reason comes first.** This read used to sit *after* the
     // `tm == point` test, and that was only harmless while every clause here
     // produced a term on both paths. It does not survive a clause that declines
@@ -340,17 +379,18 @@ pub fn inhabit(
         Ev::Proved(th) => th,
         Ev::Gap(g) => return Err(g),
     };
-    // **The nest's `tm` must be `•` and its membership must be about `⟦ty[σ]⟧`.**
-    // Both halves matter: a nest that interpreted to something other than the
-    // point is not a proof, and a membership in some other set is a theorem
-    // about a term the ledger is not going to store.
-    if t.tm.as_ref() != Some(&point) {
-        return Err(bad("axiom: the nest does not interpret to the point"))
-    }
-    if *thm.concl() != Formula::mem(point, ty_tm.clone()) {
+    // **The nest must interpret, and its membership must be about the term it
+    // interpreted to, in `⟦ty[σ]⟧`.** One check where there were two, and it is
+    // the conjunction of them plus the thing they were standing in for: the
+    // ledger stores `tm` and the theorem beside it, so a membership about some
+    // *other* term is a store entry whose denotation and whose typing are about
+    // different objects — which is the failure the old point check bought by
+    // accident, by pinning both sides to one constant.
+    let tm = t.tm.ok_or_else(|| bad("axiom: the nest does not interpret"))?;
+    if *thm.concl() != Formula::mem(tm.clone(), ty_tm.clone()) {
         return Err(bad("axiom: the nest is not about its own declared type"))
     }
-    Ok(thm)
+    Ok((tm, thm))
 }
 
 /// The bottom of one axiom's nest — the denoting term and its membership in the
@@ -423,19 +463,19 @@ fn nest_bottom(
         // tests `tm`, which is what makes that true.
         Clause::Choice => {
             let u = inst.first().copied().unwrap_or(0);
-            let ev = if u == 0 {
-                match choice_point(c, lean_ty, cod) {
-                    Some(t) => Ev::Proved(t),
-                    None => Ev::missing(Gap::IndSpec(*name, CHOICE)),
-                }
+            let built = if u == 0 {
+                choice_point(c, lean_ty, cod).map(|t| (c.interp().map(|ip| ip.point()), t))
             } else {
-                Ev::missing(Gap::Axiom(*name))
+                choice_epsilon(c, u, lean_ty, cod).map(|(tm, t)| (Some(tm), t))
             };
-            let tm = match &ev {
-                Ev::Proved(_) => c.interp().map(|ip| ip.point()),
-                Ev::Gap(_) => None,
-            };
-            Typing { ty: *cod, tm, ev }
+            match built {
+                Some((tm, t)) => Typing { ty: *cod, tm, ev: Ev::Proved(t) },
+                None => Typing {
+                    ty: *cod,
+                    tm: None,
+                    ev: Ev::missing(Gap::IndSpec(*name, CHOICE)),
+                },
+            }
         }
     }
 }
@@ -496,103 +536,219 @@ const CHOICE: &str =
 /// step for step rather than re-derived, because the two are the same statement
 /// reached from a nest binder instead of from a projection's subject.
 fn choice_point(c: &mut Checker<'_, '_>, lean_ty: &E, cod: &E) -> Option<Thm> {
-    // ── the codomain is the first binder, and the premise is about it ───────
-    if !matches!(cod.view(), Expr::BVar(1)) {
-        return None
-    }
-    let mut cur = *lean_ty;
-    let mut prem = None;
-    for i in 0..Clause::Choice.depth() {
-        let Expr::Forall { ty, body } = cur.view() else { return None };
-        if i == 1 {
-            prem = Some(ty);
-        }
-        cur = body;
-    }
-    let (head, args) = crate::expr::get_app(&prem?);
-    let Expr::Const(ind, us) = head.view() else { return None };
-    if args.len() != 1 || !matches!(args[0].view(), Expr::BVar(0)) {
-        return None
-    }
-    let empty = std::collections::HashMap::new();
-    let inst: Vec<u32> = us.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<_>>()?;
-    let ConstantInfo::Inductive { num_params, .. } = c.environment().get(&ind)? else {
-        return None
-    };
-    if *num_params != 1 {
-        return None
-    }
-
-    // ── the class-(P) apparatus for it ──────────────────────────────────────
-    let key = (ind, inst.clone());
-    let tt = c.interp()?.ind_apparatus()?.truncs.get(&key).cloned()?;
-    let spec = tt.ind.spec.ctors.first()?;
-    if spec.args.len() != 1 || tt.ind.params.len() != 1 {
-        return None
-    }
-    let former = c.stored_term(&ind, &inst)?;
-    let fields = {
-        let (mut kenv, app, _) = c.interp()?.ind_parts()?;
-        app.trunc_fields(&mut kenv, &key, &tt)?
-    };
-    if fields.subsets.len() != 1 || fields.steps.len() != 1 {
-        return None
-    }
-
-    // ── the nest's two binders ──────────────────────────────────────────────
-    let (xs, mems) = c.binders(Clause::Choice.depth())?;
-    let (a, h) = (xs[0].clone(), xs[1].clone());
+    let p = ChoiceParts::read(c, lean_ty, cod)?;
     let ip = c.interp()?;
     let point = ip.point();
     // `u = 0` is read off the *evidence* and not only off `σ`: the binder's own
     // membership must land in `U₀`, or `subset_of_unit` below is about a set
     // this derivation has no fact for.
-    if *mems[0].concl() != Formula::mem(a.clone(), ip.sort(0)) {
-        return None
-    }
-
-    // ── `⊢ • ∈ ‖ind(⟦α⟧)‖`, the ladder's major premise ──────────────────────
-    let (carrier, spine_eq) = ip.beta_spine(&former, &xs[..1], &mems[..1])?;
-    let ab = derived::inst_all(&tt.abbrev, &xs[..1])?;
-    let (ab_l, ab_r) = ab.concl().as_eq()?;
-    if ab_l != carrier {
-        return None
-    }
-    let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab)?;
-    let in_t = ip.retarget_set(&mems[1], &norm)?;
-    let major = if h == point {
-        in_t
-    } else {
-        let only = derived::inst_all(&tt.tc.only_point, &xs[..1])
-            .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&h)))
-            .and_then(|t| Thm::mp(&t, &in_t))?;
-        let back = derived::eq_symm(&mut ip.env_mut(), &only)?;
-        ip.retarget_subject(&in_t, &back)?
-    };
-    if *major.concl() != Formula::mem(point.clone(), ab_r) {
+    if *p.a_mem.concl() != Formula::mem(p.a.clone(), ip.sort(0)) {
         return None
     }
 
     // ── `P₀ : β₀ ⊆ 1`, off the α binder's `∈ U₀` ────────────────────────────
-    let unfold = derived::inst_all(tt.field_abbrev.first()?.first()?, &xs[..1])?;
-    let sym_in_u0 = ip.retarget_subject(&mems[0], &unfold)?;
+    let sym_in_u0 = ip.retarget_subject(&p.a_mem, &p.unfold)?;
     let sym = sym_in_u0.concl().as_mem()?.0.clone();
     let p0 = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0)?;
-    let psub: Vec<(kernel::FreeVar, Term)> =
-        tt.ind.params.iter().copied().zip(xs[..1].iter().cloned()).collect();
-    if *p0.concl() != crate::rec_dep::subst_f(&fields.subsets[0], &psub) {
+    if *p0.concl() != crate::rec_dep::subst_f(&p.fields.subsets[0], &p.psub) {
         return None
     }
 
     // ── the ladder, and back onto `⟦α⟧` ─────────────────────────────────────
-    let hs = derived::inst_all(&fields.steps[0], &xs[..1])
-        .and_then(|t| Thm::mp(&t, &major))
+    let hs = derived::inst_all(&p.fields.steps[0], std::slice::from_ref(&p.a))
+        .and_then(|t| Thm::mp(&t, &p.major))
         .and_then(|t| Thm::mp(&t, &p0))?;
     let hyps: Vec<Formula> =
-        fields.memberships.iter().map(|f| crate::rec_dep::subst_f(f, &psub)).collect();
+        p.fields.memberships.iter().map(|f| crate::rec_dep::subst_f(f, &p.psub)).collect();
     let h_sym = derived::conj_proj(&hyps, 0).and_then(|pr| Thm::mp(&pr, &hs))?;
-    let out = ip.retarget_set(&h_sym, &unfold)?;
-    (*out.concl() == Formula::mem(point, a)).then_some(out)
+    let out = ip.retarget_set(&h_sym, &p.unfold)?;
+    (*out.concl() == Formula::mem(point, p.a)).then_some(out)
+}
+
+/// `(app(εᵤ, ⟦α⟧), ⊢ app(εᵤ, ⟦α⟧) ∈ ⟦α⟧)` — the nest bottom at `u ≥ 1`.
+///
+/// # This is the only place in the system that spends choice
+///
+/// Everything up to the last two lines is [`choice_point`]'s reading of the
+/// declared type and its class-(P) major premise, shared verbatim through
+/// [`ChoiceParts`]. What differs is one step, and it is the step §6.2 is about.
+///
+/// At `u ≥ 1` the ladder is unusable: `P₀` is `β₀(α) ⊆ 1`, which for a **data**
+/// field is simply false, so `TruncFields::steps[0]` has an antecedent nothing
+/// can discharge. What survives the loss of `P₀` is the rung above it,
+/// [`derived::inductive::family::TruncFields::elim_psi`]:
+///
+/// ```text
+/// ⊢ ∀α. ( • ∈ ‖Nonempty α‖ → ∃y. y ∈ β₀(α) )
+/// ```
+///
+/// *Some* element exists, with nothing said about which — which is exactly the
+/// shape a choice function is for, and exactly the antecedent
+/// [`derived::choice::Epsilon::chooses`] wants. The other antecedent, `⟦α⟧ ∈ Uᵤ`,
+/// is the `α` binder's own typing, because [`Interp::sort`] is
+/// `prelude.tower.u(u)` and nothing has to be moved onto it.
+///
+/// # Why the term comes back and `•` does not
+///
+/// `Classical.choice.{u}` at `u ≥ 1` is **not proof-valued**: its codomain is
+/// `α : Sort u`. §6.2 gives it `⟦choice α h⟧ = ε(⟦α⟧)`, so the nest bottom
+/// denotes a genuine set element and `crate::kernel`'s `lam_evidence` takes its
+/// *value* branch at both binders — the first time an axiom nest has done so.
+/// [`inhabit`] hands the term back and `crate::ledger` stores it; the invariant
+/// that replaced "the term is `•`" is that the membership is about the term the
+/// nest actually interpreted to.
+fn choice_epsilon(
+    c: &mut Checker<'_, '_>,
+    u: u32,
+    lean_ty: &E,
+    cod: &E,
+) -> Option<(Term, Thm)> {
+    let p = ChoiceParts::read(c, lean_ty, cod)?;
+    let ip = c.interp()?;
+
+    // ── `⊢ ∃w. w ∈ ⟦α⟧`, from the carrier's inversion ───────────────────────
+    //
+    // `elim_psi` states it at the field *symbol* `β₀(⟦α⟧)`; `chooses_at` wants
+    // it at `⟦α⟧`. `unfold` is the equation between them, and the move under
+    // the existential is one Leibniz generalised and lifted by `exists_mono`
+    // rather than a second `retarget_set`, because the membership is bound.
+    let psi = derived::inst_all(p.fields.elim_psi.as_ref()?, std::slice::from_ref(&p.a))
+        .and_then(|t| Thm::mp(&t, &p.major))?;
+    let (b0, alpha) = p.unfold.concl().as_eq()?;
+    if alpha != p.a {
+        return None
+    }
+    let (w, s) = {
+        let mut e = ip.env_mut();
+        (e.fresh_var(), e.fresh_var())
+    };
+    let step = Thm::mp(
+        &Thm::eq_leibniz(b0, alpha, s, Formula::mem(Term::var(w), Term::var(s))),
+        &p.unfold,
+    )?;
+    // `gen_checked`, not `gen`: R6′ forbids the panicking wrapper in `mini/`,
+    // and the side condition is real here rather than nominal — `step` is built
+    // from `unfold`, and a `Γ` on it mentioning `w` would be a decline rather
+    // than an abort. (It has none today; `field_abbrev` is a closed equation.)
+    let ne = Thm::mp(&derived::exists_mono(w, &Thm::gen_checked(w, &step)?)?, &psi)?;
+
+    // ── and `ε` picks one ───────────────────────────────────────────────────
+    let (a, a_mem) = (p.a.clone(), p.a_mem.clone());
+    c.interp()?.chooses_at(u, &a, &a_mem, &ne)
+}
+
+/// The half of the `Classical.choice` bottom that does not depend on `u`: the
+/// declared type read and checked, the class-(P) apparatus, and
+/// `⊢ • ∈ ‖ind(⟦α⟧)‖`.
+///
+/// Shared by [`choice_point`] and [`choice_epsilon`] rather than written twice.
+/// That is not only economy: **every one of the four "the name is not the
+/// evidence" checks lives here**, so the `u ≥ 1` arm cannot come to rest on a
+/// weaker reading of the declared type than the `u = 0` arm does, and a test of
+/// one arm's refusal is a test of both.
+struct ChoiceParts {
+    /// `⟦α⟧`, the outer binder.
+    a: Term,
+    /// `⊢ ⟦α⟧ ∈ ⟦Sort u⟧`.
+    a_mem: Thm,
+    /// `⊢ • ∈ ‖ind(⟦α⟧)‖`, the ladder's and `elim_psi`'s major premise.
+    major: Thm,
+    /// `⊢ β₀(⟦α⟧) = ⟦α⟧`.
+    unfold: Thm,
+    fields: std::rc::Rc<derived::inductive::family::TruncFields>,
+    psub: Vec<(kernel::FreeVar, Term)>,
+}
+
+impl ChoiceParts {
+    /// # Why the major premise needs three moves and not one
+    ///
+    /// The `h` binder's typing is stated at the **stored** type former applied
+    /// to `⟦α⟧`; `TruncFields` states everything at `derived`'s own `‖·‖`.
+    /// Getting between them is [`Interp::beta_spine`] down the stored nest, then
+    /// `TruncTranslation::abbrev`, then — because `⟦h⟧` is a scope variable and
+    /// not the point — `TruncCarrier::only_point`. That is
+    /// [`crate::proj_prop`]'s `trunc_typing` sequence, and it is followed here
+    /// step for step rather than re-derived, because the two are the same
+    /// statement reached from a nest binder instead of from a projection's
+    /// subject.
+    fn read(c: &mut Checker<'_, '_>, lean_ty: &E, cod: &E) -> Option<ChoiceParts> {
+        // ── the codomain is the first binder, and the premise is about it ───
+        if !matches!(cod.view(), Expr::BVar(1)) {
+            return None
+        }
+        let mut cur = *lean_ty;
+        let mut prem = None;
+        for i in 0..Clause::Choice.depth() {
+            let Expr::Forall { ty, body } = cur.view() else { return None };
+            if i == 1 {
+                prem = Some(ty);
+            }
+            cur = body;
+        }
+        let (head, args) = crate::expr::get_app(&prem?);
+        let Expr::Const(ind, us) = head.view() else { return None };
+        if args.len() != 1 || !matches!(args[0].view(), Expr::BVar(0)) {
+            return None
+        }
+        let empty = std::collections::HashMap::new();
+        let inst: Vec<u32> =
+            us.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<_>>()?;
+        let ConstantInfo::Inductive { num_params, .. } = c.environment().get(&ind)? else {
+            return None
+        };
+        if *num_params != 1 {
+            return None
+        }
+
+        // ── the class-(P) apparatus for it ──────────────────────────────────
+        let key = (ind, inst.clone());
+        let tt = c.interp()?.ind_apparatus()?.truncs.get(&key).cloned()?;
+        let spec = tt.ind.spec.ctors.first()?;
+        if spec.args.len() != 1 || tt.ind.params.len() != 1 {
+            return None
+        }
+        let former = c.stored_term(&ind, &inst)?;
+        let fields = {
+            let (mut kenv, app, _) = c.interp()?.ind_parts()?;
+            app.trunc_fields(&mut kenv, &key, &tt)?
+        };
+        if fields.subsets.len() != 1 || fields.steps.len() != 1 {
+            return None
+        }
+
+        // ── the nest's two binders ──────────────────────────────────────────
+        let (xs, mems) = c.binders(Clause::Choice.depth())?;
+        let (a, h) = (xs[0].clone(), xs[1].clone());
+        let ip = c.interp()?;
+        let point = ip.point();
+
+        // ── `⊢ • ∈ ‖ind(⟦α⟧)‖` ──────────────────────────────────────────────
+        let (carrier, spine_eq) = ip.beta_spine(&former, &xs[..1], &mems[..1])?;
+        let ab = derived::inst_all(&tt.abbrev, &xs[..1])?;
+        let (ab_l, ab_r) = ab.concl().as_eq()?;
+        if ab_l != carrier {
+            return None
+        }
+        let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab)?;
+        let in_t = ip.retarget_set(&mems[1], &norm)?;
+        let major = if h == point {
+            in_t
+        } else {
+            let only = derived::inst_all(&tt.tc.only_point, &xs[..1])
+                .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&h)))
+                .and_then(|t| Thm::mp(&t, &in_t))?;
+            let back = derived::eq_symm(&mut ip.env_mut(), &only)?;
+            ip.retarget_subject(&in_t, &back)?
+        };
+        if *major.concl() != Formula::mem(point, ab_r) {
+            return None
+        }
+
+        let unfold = derived::inst_all(tt.field_abbrev.first()?.first()?, &xs[..1])?;
+        let psub: Vec<(kernel::FreeVar, Term)> =
+            tt.ind.params.iter().copied().zip(xs[..1].iter().cloned()).collect();
+        Some(ChoiceParts { a, a_mem: mems[0].clone(), major, unfold, fields, psub })
+    }
 }
 
 const PROPEXT: &str = "axiom: the premise is not a two-field class-(S) biconditional over the two propositions";

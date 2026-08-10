@@ -896,12 +896,27 @@ impl Ledger {
                 // only once the type has interpreted, so that a clause can
                 // never stand in front of the reason above. See
                 // [`crate::axiom`].
-                let axiom_ev: Option<Result<crate::ev::Sealed, Gap>> = match (d, &ty_tm) {
+                // **The clause hands back its own term now, not only the
+                // theorem.** It used to return the `Thm` alone and this walk
+                // supplied `ip.point()` from its own side — which was right
+                // exactly while every inhabitable axiom was proof-valued.
+                // `Classical.choice.{u}` at `u ≥ 1` is not: §6.2 gives it
+                // `ε(⟦α⟧)`. `crate::axiom::inhabit` checks that the membership
+                // is about the term it returns, so the pair below is a
+                // denotation and a typing about the same object — which is what
+                // the old arrangement got by pinning both sides to one constant.
+                type AxiomEv = Option<Result<(kernel::Term, crate::ev::Sealed), Gap>>;
+                let axiom_ev: AxiomEv = match (d, &ty_tm) {
                     (Declaration::Axiom { .. }, Some(want)) => crate::axiom::clause_for(name)
                         .map(|cl| {
                             let mut c = Checker::threaded(env, ip);
-                            crate::axiom::inhabit(&mut c, cl, name, sigma, want)
-                                .and_then(|t| crate::ev::Sealed::new(t).map_err(|_| Gap::Skeleton))
+                            crate::axiom::inhabit(&mut c, cl, name, sigma, want).and_then(
+                                |(tm, t)| {
+                                    crate::ev::Sealed::new(t)
+                                        .map(|s| (tm, s))
+                                        .map_err(|_| Gap::Skeleton)
+                                },
+                            )
                         }),
                     _ => None,
                 };
@@ -965,17 +980,22 @@ impl Ledger {
                             defeq: None,
                         },
                     },
-                    // **An inhabited axiom denotes `•`, not an opaque symbol.**
-                    // A clause at insertion point 3 produced `⊢ • ∈ ⟦ty[σ]⟧`,
-                    // so the term it is about is the one that goes in the
-                    // store; handing back the opaque symbol beside the theorem
-                    // would put a membership and a denotation in the store that
-                    // are not about the same thing.
-                    None if matches!(axiom_ev, Some(Ok(_))) => ConstInterp {
-                        term: ip.point(),
-                        typing: axiom_ev.clone().expect("matched Some(Ok)"),
-                        defeq: None,
-                    },
+                    // **An inhabited axiom denotes what its clause says it
+                    // denotes, not an opaque symbol.** A clause at insertion
+                    // point 3 produced `⊢ t ∈ ⟦ty[σ]⟧` together with `t`, so
+                    // `t` is what goes in the store; handing back the opaque
+                    // symbol beside the theorem would put a membership and a
+                    // denotation in the store that are not about the same thing.
+                    //
+                    // This arm read `term: ip.point()` and derived the same
+                    // guarantee from `inhabit` requiring the point. It reads the
+                    // clause's own term now, because `Classical.choice` at
+                    // `u ≥ 1` denotes `ε(⟦α⟧)`. Nothing weakened: the pairing is
+                    // now checked in one place instead of agreeing in two.
+                    None if matches!(axiom_ev, Some(Ok(_))) => {
+                        let (tm, s) = axiom_ev.clone().expect("matched Some(Ok)").expect("Ok");
+                        ConstInterp { term: tm, typing: Ok(s), defeq: None }
+                    }
                     // A fresh opaque symbol is a pure signature extension: it
                     // is conservative on its own, but that it *denotes an
                     // inhabitant* of anything is exactly what is not derivable.

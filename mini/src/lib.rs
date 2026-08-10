@@ -65,6 +65,7 @@ pub mod arena;
 pub mod axiom;
 pub mod blocker;
 pub mod census;
+pub mod choice_clause;
 pub mod class_p_ix;
 pub mod class_s;
 pub mod class_s_ix;
