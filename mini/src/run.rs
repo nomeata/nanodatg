@@ -6,6 +6,15 @@
 //! call. It reproduces `Main.lean`'s `runKernel` in its strict (non-`--liberal`)
 //! mode: declarations in file order, the first rejection ends the run.
 //!
+//! **The pipeline is: parse, schedule, drop the unused axioms, then one
+//! per-declaration loop.** Each declaration is checked by zone A's kernel,
+//! interpreted, and added to the environment before the next is looked at;
+//! there is no whole-file acceptance pass and no whole-file interpretation pass.
+//! [`crate::decl_pass`] is the loop body and carries the argument for each of
+//! the orderings that had to be answered to fuse them, and
+//! [`Outcome::prefix`] is what the fusion buys: on a mid-file stop, everything
+//! before the stop is certified.
+//!
 //! The three outcomes are kept apart because MINI-DESIGN.md §0's two axes
 //! demand it: [`Verdict::Accepted`] and [`Verdict::Rejected`] are the
 //! *acceptance* axis, which must agree with mini-lean and with nanoda, and
@@ -43,8 +52,6 @@
 use crate::census::Census;
 use crate::ledger::Ledger;
 use crate::convert::{self, Facts};
-use crate::env::Environment;
-use crate::kernel;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +130,16 @@ pub struct Outcome {
     /// cause. `None` when the file was declined or rejected: a gap ledger for
     /// a file mini did not accept would mix the two axes.
     pub ledger: Option<Ledger>,
+    /// **How far the evidence pass got before the run stopped** — see
+    /// [`crate::decl_pass::Prefix`].
+    ///
+    /// Present on *every* outcome, including a rejected one, and that is the
+    /// whole point: the pipeline is one per-declaration loop now, so a file
+    /// that stops at declaration `k` has certified everything before `k`. It is
+    /// three counters and not a ledger, so a rejected file still owes nothing
+    /// on the certification axis and [`Outcome::uncertified`] still answers
+    /// clean for it.
+    pub prefix: crate::decl_pass::Prefix,
     /// The stored-context dump, when [`Options::dump`] asked for one.
     ///
     /// A `String`, and rendered inside the worker, for the reason
@@ -211,6 +228,7 @@ pub fn check_file_with_interp(
                     census: Census::default(),
                     elim_audit: Vec::new(),
                     ledger: None,
+                    prefix: crate::decl_pass::Prefix::default(),
                     dump: None,
                     route: None,
                 },
@@ -225,79 +243,18 @@ pub fn check_file_with_interp(
     // as the declarations stream past: an axiom unused at the point of
     // declaration may be used four hundred declarations later.
     // [`crate::unused_axiom`] states what "refers to" covers and why an unused
-    // one may be ignored.
+    // one may be ignored. It reads the declaration list and no environment, so
+    // it belongs ahead of the loop.
     let axioms = crate::unused_axiom::classify(&loaded.decls, |n| !convert::is_standard_axiom(n));
-    let mut env = Environment::empty();
-    let mut accepted = 0usize;
-    for decl in &loaded.decls {
-        if let Err(msg) = kernel::add(&mut env, decl) {
-            // **A budget refusal is a decline.** See
-            // [`crate::kernel::BUDGET_DECLINE`]: `reject` says the file is
-            // ill-typed and `decline` says mini does not handle it, and
-            // running out of recursion budget is the second. Classified here
-            // because this is the one place a kernel-pass error becomes a
-            // verdict.
-            if msg.starts_with(crate::kernel::BUDGET_DECLINE) {
-                return (
-                    Outcome {
-                        verdict: Verdict::Declined {
-                            reason: format!("{} while checking {}", msg, decl.name()),
-                        },
-                        facts: loaded.facts,
-                        census,
-                        elim_audit: Vec::new(),
-                        ledger: None,
-                        dump: None,
-                        route: None,
-                    },
-                    ip,
-                )
-            }
-            return (
-                Outcome {
-                    verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
-                    facts: loaded.facts,
-                    census,
-                    elim_audit: Vec::new(),
-                    ledger: None,
-                    dump: None,
-                    route: None,
-                },
-                ip,
-            )
-        }
-        accepted += 1;
-    }
-    // **A user-declared axiom something in the file uses takes the file out of
-    // scope.** Its inhabitation is not derivable in principle, so a run that
-    // stops at the first missing derivation would stop there for ever;
-    // `convert::is_standard_axiom` is where the line is drawn and why.
+    // **An unused one is ignored**, and the drop happens *before* the loop, so
+    // the declaration is never added and never interpreted.
     //
-    // *After* the kernel pass, not before, and the position is load-bearing:
-    // four `bad/tutorial` fixtures declare a helper axiom ahead of the
-    // ill-typed declaration they are about, and declining at the parser would
-    // have turned four rejections into declines — a weaker claim, made
-    // silently, on the axis that is supposed to be exact.
-    if let Some(n) = axioms.used.first() {
-        return (
-            Outcome {
-                verdict: Verdict::Declined { reason: format!("non-standard axiom: {n}") },
-                facts: loaded.facts,
-                census,
-                elim_audit: Vec::new(),
-                ledger: None,
-                dump: None,
-                route: None,
-            },
-            ip,
-        )
-    }
-    // **An unused one is ignored**, and the drop happens here — after the
-    // kernel, before the interpretation pass — so that both halves are true at
-    // once: its *type* is still checked, so a file declaring `axiom bad : (fun
-    // x => x)` goes on being rejected exactly as mini-lean rejects it, and
-    // nothing downstream ever sees the declaration, so it is not translated and
-    // schedules no pair. `crate::unused_axiom` is the rule and the argument.
+    // It used to be dropped after the kernel pass so that its *type* was still
+    // checked, and a file declaring `axiom bad : (fun x => x)` and referring to
+    // it nowhere was rejected for it. **The owner waived that property
+    // explicitly** — "yes, it will not complain about the type of a dropped
+    // axiom; that's not a concern" — and it is the one behaviour this
+    // restructure gives up.
     //
     // The list is carried to [`Ledger::ignored_axioms`] below rather than
     // discarded: `#64`'s lesson is that a declaration with no scheduled pair is
@@ -310,69 +267,85 @@ pub fn check_file_with_interp(
             |d| !matches!(d, crate::env::Declaration::Axiom { name, .. } if drop.contains(name)),
         );
     }
-    // The interpretation pass runs only on a file mini accepted: MINI-DESIGN
-    // §0's two axes, kept apart.
+    // **A user-declared axiom something in the file *uses* takes the file out
+    // of scope.** Its inhabitation is not derivable in principle, so a run that
+    // stops at the first missing derivation would stop there for ever;
+    // `convert::is_standard_axiom` is where the line is drawn and why.
+    //
+    // That decline is issued *after* the loop, and the position is
+    // load-bearing: four `bad/tutorial` fixtures (044, 047, 050, 054) declare a
+    // helper axiom ahead of the ill-typed declaration they are about, and
+    // declining first would turn four rejections into declines — a weaker
+    // claim, made silently, on the axis that is supposed to be exact. So the
+    // file is checked to the end and *then* declined; the evidence half is
+    // switched off for it, which is what it always was on this path.
+    let declining = !axioms.used.is_empty();
     crate::blocker::arm(opts.block);
     let mut ip = ip;
     // Names for the dump have to be switched on *before* the pass, because the
     // registry is written as each constant is stored. Not by arming: arming
     // also stops at the first blocker, which would dump one pair.
     ip.set_labels_on(opts.dump.is_some());
-    // **Step 6 of the mutual arc, and it is a substitution rather than an
-    // install.** Every `mutual … end` block mini can encode is replaced, right
-    // here, by an enumeration, one indexed inductive and a list of ordinary
-    // definitions and theorems over it — under the block's *own* names. The
-    // pass below then interprets those, and `⟦T.{σ}⟧`, `⟦T.ctor.{σ}⟧`,
-    // `⟦T.rec.{σ}⟧` and the rule theorems land in the store at exactly the keys
-    // every later use site reads. There is nothing to copy afterwards.
-    //
-    // A block the encoder declines stays as it was and `fill_declaration`
-    // records its reason. `mini/src/mutual_aux.rs` is the whole of it, and that
-    // module never names a `Term` or a `Thm`.
-    //
-    // **Step 3 of the nested arc runs first, and it is a *recognition* rather
-    // than a substitution or an insertion.** A nested declaration's primitives
-    // stay exactly where they are — the file's own theorems are checked by the ι
-    // rules they carry — and its *model* is already in the file, put there by
-    // the `modelgen` filter (`MODELGEN.md` §1), so all that is built here is the
-    // side table saying which model constant carries `⟦T⟧`, `⟦T.ctorᵢ⟧` and
-    // `⟦T.rec_k⟧`, and the σ those constants have to be interpreted at.
-    // `mini/src/nested_splice.rs` says why the table cannot be a name rule.
-    //
-    // Before `expand` and not after: the model contains a `mutual … end` block
-    // of its own, and the σ this pass propagates onto its members have to be in
-    // the schedule `expand` reads.
-    let sp = crate::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
-    facts.nested_models = sp.modelled;
-    facts.nested_seen = sp.seen;
-    // The tables go on the apparatus, which means building it — so only when
-    // there is something to put there. A file with no nested declaration must
-    // not acquire an apparatus it would otherwise never have had.
-    if !sp.nested.is_empty() {
-        if let Some(app) = ip.ind_apparatus() {
-            app.model_of = sp.model_of;
-            app.model_iota = sp.model_iota;
-            app.nested = sp.nested;
+    // **The routing seam** (ENV-UNIFY.md §5 track D), chosen once and then
+    // stepped once per declaration. Unrouted, each step is the walk it has
+    // always been. Routed, `crate::route`'s interleaved driver takes it: same
+    // declarations, same schedule, same `Interp` — each group walked by the
+    // engine the policy picks, the checker driven over the same core in the
+    // same walk. One loop, a policy choice inside it.
+    let mut driver = crate::route::Driver::new(&mut ip, opts.route);
+    let mut pass = crate::decl_pass::Pass::new(&loaded.decls, &loaded.schedule, !declining);
+    let mut stopped: Option<Verdict> = None;
+    for decl in &loaded.decls {
+        match pass.step(decl, &mut ip, &mut driver) {
+            crate::decl_pass::Step::Continue => {}
+            crate::decl_pass::Step::Rejected { name, msg } => {
+                stopped = Some(Verdict::Rejected { name, msg });
+                break
+            }
+            crate::decl_pass::Step::Declined { reason } => {
+                stopped = Some(Verdict::Declined { reason });
+                break
+            }
         }
     }
-    let ex = crate::mutual_aux::expand(&env, &loaded.decls, &sp.schedule);
-    facts.mutual_blocks = ex.blocks;
-    facts.mutual_encoded = ex.encoded;
-    facts.mutual_rules = ex.rules;
-    // **The routing seam** (ENV-UNIFY.md §5 track D). Unrouted, the evidence
-    // pass is the one call it has always been. Routed, `crate::route`'s
-    // interleaved driver replaces it: same declarations, same schedule, same
-    // `Interp` — each group walked by the engine the policy picks, the
-    // checker driven over the same core in the same walk.
-    let (mut led, route_report) = match opts.route {
-        None => (Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip), None),
-        Some(mode) => {
-            let (led, rep) =
-                crate::route::run_routed(&ex.env, &ex.decls, &ex.schedule, &mut ip, mode);
-            (led, Some(rep))
-        }
-    };
+    if stopped.is_none() {
+        pass.end(&mut ip, &mut driver);
+    }
     crate::blocker::arm(false);
+    let prefix = pass.prefix();
+    facts.nested_models = pass.nested_models;
+    facts.nested_seen = pass.nested_seen;
+    facts.mutual_blocks = pass.mutual_blocks();
+    facts.mutual_encoded = pass.mutual_encoded();
+    facts.mutual_rules = pass.mutual_rules();
+    // **The stop wins over the used-axiom decline**, and the loop ran to the
+    // declaration that caused it. The certified prefix is on the outcome; the
+    // ledger is not, for MINI-DESIGN.md §0's reason.
+    let stopped = stopped.or_else(|| {
+        axioms.used.first().map(|n| Verdict::Declined { reason: format!("non-standard axiom: {n}") })
+    });
+    if let Some(verdict) = stopped {
+        // No route report either, and for the ledger's reason: every row on it
+        // — who got what, the fallbacks, the strays — is a statement about a
+        // completed evidence pass over a file mini accepted.
+        drop(driver);
+        return (
+            Outcome {
+                verdict,
+                facts,
+                census,
+                elim_audit: Vec::new(),
+                ledger: None,
+                prefix,
+                dump: None,
+                route: None,
+            },
+            ip,
+        )
+    }
+    let (blocked, accepted) = (pass.blocked, pass.accepted);
+    let route_report = driver.finish(&mut ip, &mut pass.led, blocked);
+    let crate::decl_pass::Pass { env, xenv, xdecls, schedule, mut led, .. } = pass;
     // **After the pass, not before**, and the order is a consequence of
     // [`crate::ledger::Ledger::run`] filling the store from the schedule.
     // `elim_audit` infers the types of a declaration's constructor fields, so
@@ -382,17 +355,15 @@ pub fn check_file_with_interp(
     // them. Two exports showed it: `Bool` at `071`/`072` and `True` at `090`
     // were interpreted by the audit rather than by their own declaration. It
     // reads and does not mint now, which is what an oracle should do.
+    let _ = &xenv;
     let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
-    let dump = opts
-        .dump
-        .as_ref()
-        .map(|f| crate::dump::render(&mut ip, &ex.decls, &ex.schedule, f));
-    // The same reason as the path below: `Ledger::run` is a function of the
+    let dump = opts.dump.as_ref().map(|f| crate::dump::render(&mut ip, &xdecls, &schedule, f));
+    // The same reason as the path below: the walk is a function of the
     // declarations it was handed, and the ignored ones are precisely the ones
     // it was *not* handed. Recording them on the ledger is what keeps the skip
     // visible; the ledger never inferred it.
     led.ignored_axioms = ignored_axioms;
-    // `Ledger::run` never learns the path; filling it here keeps the ledger a
+    // The walk never learns the path; filling it here keeps the ledger a
     // function of the declarations alone.
     if let Some(b) = led.first_blocker.as_mut() {
         b.export = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -404,6 +375,7 @@ pub fn check_file_with_interp(
             census,
             elim_audit,
             ledger: Some(led),
+            prefix,
             dump,
             route: route_report,
         },

@@ -71,6 +71,7 @@ pub mod class_s_ix;
 pub mod conv;
 pub mod convert;
 pub mod ctor_ix;
+pub mod decl_pass;
 pub mod direct;
 pub mod dump;
 pub mod env;

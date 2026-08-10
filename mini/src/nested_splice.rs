@@ -304,26 +304,148 @@ pub fn recognise(
     decls: &[Declaration],
     schedule: &HashMap<Name, Vec<Vec<u32>>>,
 ) -> Recognised {
-    let mut out = Recognised {
-        schedule: schedule.clone(),
-        model_of: HashMap::new(),
-        model_iota: HashMap::new(),
-        nested: HashMap::new(),
-        seen: 0,
-        modelled: 0,
-    };
-    // Which declaration in the list settles each name, by position. Read to
-    // check that the model is *behind* the declaration it models — see the
-    // header, and [`Missing::Later`].
-    let pos = positions(env, decls);
-    // What the file's own declarations name, and at which ground σ. The
-    // pre-pass's schedule is the other half; a recursor is keyed at the union,
-    // for the reason the header gives.
-    let applied = applied_at(decls, schedule);
+    let mut sched = schedule.clone();
+    let mut r = Recogniser::new(decls, schedule);
+    // The whole-file form observes every declaration first, so `pos` is what
+    // one `positions(env, decls)` sweep gave. The incremental form observes
+    // each declaration as it arrives, which is the same map restricted to the
+    // prefix — and [`settled`] cannot tell the two apart, because a name at a
+    // position `≥ i` and a name at no position are both [`Missing::Later`].
     for (i, d) in decls.iter().enumerate() {
-        let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else { continue };
-        let types =
-            vec![IndType { name: *name, ty: *ty, ctors: ctors.clone() }];
+        r.observe(env, i, d);
+    }
+    for (i, d) in decls.iter().enumerate() {
+        r.step(env, i, d, &mut sched);
+    }
+    for v in sched.values_mut() {
+        v.sort();
+        v.dedup();
+    }
+    Recognised {
+        schedule: sched,
+        model_of: r.model_of,
+        model_iota: r.model_iota,
+        nested: r.nested,
+        seen: r.seen,
+        modelled: r.modelled,
+    }
+}
+
+/// Add σ to a name's schedule entry, and leave the entry **sorted and
+/// deduplicated**.
+///
+/// The whole-file passes used to normalise the schedule in one sweep at the
+/// end, before anything read it. A per-declaration pipeline reads it as it goes
+/// — `Ledger::walk_decl` iterates a name's σ in the order they sit in the list
+/// — so normalisation happens at every write instead. `crate::decl_pass`
+/// normalises the pre-pass's own entries once, before the loop, for the same
+/// reason: the end-of-file sweep used to cover those too.
+pub(crate) fn add_sigmas(
+    schedule: &mut HashMap<Name, Vec<Vec<u32>>>,
+    n: Name,
+    sigmas: impl IntoIterator<Item = Vec<u32>>,
+) {
+    let e = schedule.entry(n).or_default();
+    e.extend(sigmas);
+    e.sort();
+    e.dedup();
+}
+
+/// [`recognise`], one declaration at a time.
+///
+/// The invariant, and it is what makes the fused pipeline legal: **`step` reads
+/// only the environment through the declaration it is handed.** A nested
+/// declaration's model is emitted *before* it — that is `modelgen`'s emission
+/// order (`modelgen/Modelgen/Driver.lean`: "the model … generated **before** the
+/// declaration is added … nothing in the model mentions `T`") and it is also
+/// what [`settled`] has always *required*, since a model at or after its own
+/// declaration is [`Missing::Later`]. So everything [`shape`] looks up is either
+/// the declaration itself, something the kernel minted for it, or a model
+/// constant strictly earlier in the file.
+pub struct Recogniser {
+    /// [`Recognised::model_of`], filled as the declarations go past.
+    pub model_of: HashMap<ModelKey, Name>,
+    /// [`Recognised::model_iota`].
+    pub model_iota: HashMap<(ModelKey, Name), Name>,
+    /// [`Recognised::nested`].
+    pub nested: HashMap<Name, NestedRecord>,
+    pub seen: usize,
+    pub modelled: usize,
+    pos: HashMap<Name, usize>,
+    applied: HashMap<Name, Vec<Vec<u32>>>,
+}
+
+impl Recogniser {
+    /// The parse-only half: the declaration positions and the σ the file's own
+    /// declarations apply each constant at. Neither reads an environment.
+    pub fn new(decls: &[Declaration], schedule: &HashMap<Name, Vec<Vec<u32>>>) -> Recogniser {
+        let mut pos: HashMap<Name, usize> = HashMap::new();
+        for (i, d) in decls.iter().enumerate() {
+            pos.insert(d.name(), i);
+            if let Declaration::Mutual { types, .. } = d {
+                for t in types {
+                    pos.insert(t.name, i);
+                }
+            }
+        }
+        Recogniser {
+            model_of: HashMap::new(),
+            model_iota: HashMap::new(),
+            nested: HashMap::new(),
+            seen: 0,
+            modelled: 0,
+            pos,
+            // What the file's own declarations name, and at which ground σ. The
+            // pre-pass's schedule is the other half; a recursor is keyed at the
+            // union, for the reason the header gives.
+            applied: applied_at(decls, schedule),
+        }
+    }
+
+    /// **Record what the environment now says each declaration owns** — an
+    /// inductive's constructors and its recursors, `Quot`'s family.
+    ///
+    /// Read off `env.owners` rather than predicted from the declaration, for
+    /// [`export_recs`]'s reason: a nested declaration owns `T.rec_1` and
+    /// `T.rec_2`, and how many it owns is the specialisation's answer and not
+    /// the declaration's.
+    ///
+    /// Asked only of the declarations that own anything, which is what keeps
+    /// the scan off the hot path: an axiom or a definition owns nothing, so the
+    /// owner index is walked once per inductive rather than once per
+    /// declaration. `i` is unused — a name's position is its **owner's**, and
+    /// the owner is already in `pos` — and is taken so the call site reads as
+    /// the loop body it is.
+    pub fn observe(&mut self, env: &Environment, i: usize, d: &Declaration) {
+        let _ = i;
+        if !matches!(
+            d,
+            Declaration::Inductive { .. } | Declaration::Mutual { .. } | Declaration::Quot
+        ) {
+            return
+        }
+        let owned: Vec<(Name, usize)> = env
+            .owners
+            .iter()
+            .filter_map(|(n, o)| Some((*n, *self.pos.get(o)?)))
+            .collect();
+        for (n, j) in owned {
+            self.pos.insert(n, j);
+        }
+    }
+
+    /// One declaration: is it nested, and does the export carry a model for it?
+    /// `env` is zone A's environment through `d`; `schedule` is the run's, and
+    /// the σ each model constant needs are added to it here.
+    pub fn step(
+        &mut self,
+        env: &Environment,
+        i: usize,
+        d: &Declaration,
+        schedule: &mut HashMap<Name, Vec<Vec<u32>>>,
+    ) {
+        let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d else { return };
+        let types = vec![IndType { name: *name, ty: *ty, ctors: ctors.clone() }];
         // **`nested::plan` answers "is this nested", and nothing else does.**
         // Not the export's `is_nested` flag, which `convert::load` has already
         // consumed at the parser gate, and not a name: the question here is
@@ -334,22 +456,36 @@ pub fn recognise(
             // `Ok(None)` is an ordinary declaration. `Err` is a nested one the
             // specialiser cannot express — the file would not have been
             // accepted, so it cannot arise here.
-            _ => continue,
+            _ => return,
         }
-        out.seen += 1;
-        match shape(env, name, ctors, &pos, i) {
+        self.seen += 1;
+        match shape(env, name, ctors, &self.pos, i) {
             Ok(m) => {
-                out.modelled += 1;
-                out.key(env, name, &m, &applied);
+                self.modelled += 1;
+                self.key(env, name, &m, schedule);
             }
-            Err(why) => out.decline(env, name, ctors, why),
+            Err(why) => self.decline(env, name, ctors, why),
         }
     }
-    for v in out.schedule.values_mut() {
-        v.sort();
-        v.dedup();
+
+    /// Has anything been recognised or declined? The tables go on the
+    /// interpretation apparatus, and a file with no nested declaration must not
+    /// acquire an apparatus it would otherwise never have had.
+    pub fn any(&self) -> bool { !self.nested.is_empty() }
+
+    /// Put the keying on the interpretation apparatus.
+    ///
+    /// Called after every recognised declaration rather than once at the end,
+    /// because [`crate::ledger::fill_declaration`] reads `nested[T]` at `T`'s
+    /// own position to learn which constants `T`'s model is responsible for.
+    /// The tables are the accumulated ones each time: a nested declaration's
+    /// entries never change after it has been keyed, so re-publishing is
+    /// idempotent on everything already there.
+    pub fn publish(&self, app: &mut crate::interp::IndApparatus) {
+        app.model_of = self.model_of.clone();
+        app.model_iota = self.model_iota.clone();
+        app.nested = self.nested.clone();
     }
-    out
 }
 
 /// A recognised model: the export constant beside the model constant that
@@ -372,21 +508,21 @@ struct Model {
     iotas: Vec<(Name, Name, Name)>,
 }
 
-impl Recognised {
+impl Recogniser {
     /// Fill the tables for one recognised model, and propagate its σ.
     fn key(
         &mut self,
         env: &Environment,
         name: &Name,
         m: &Model,
-        applied: &HashMap<Name, Vec<Vec<u32>>>,
+        schedule: &mut HashMap<Name, Vec<Vec<u32>>>,
     ) {
         let mut constants: Vec<Name> = Vec::new();
         // The type former and the constructors have no universe parameters of
         // their own, so `σ = []` is the whole population.
         for (export, model) in &m.mono {
             self.model_of.insert((*export, Vec::new()), *model);
-            self.demand(model, &[Vec::new()]);
+            demand(schedule, model, &[Vec::new()]);
             constants.push(*export);
         }
         // **A recursor is keyed at every σ the run will ask for it at**, and
@@ -398,8 +534,8 @@ impl Recognised {
         // already-scheduled declaration reaches for.
         let mut sigmas_of: HashMap<Name, Vec<Vec<u32>>> = HashMap::new();
         for (export, model) in &m.recs {
-            let mut sigmas: Vec<Vec<u32>> = self.schedule.get(export).cloned().unwrap_or_default();
-            for s in applied.get(export).into_iter().flatten() {
+            let mut sigmas: Vec<Vec<u32>> = schedule.get(export).cloned().unwrap_or_default();
+            for s in self.applied.get(export).into_iter().flatten() {
                 if !sigmas.contains(s) {
                     sigmas.push(s.clone());
                 }
@@ -407,7 +543,7 @@ impl Recognised {
             for s in &sigmas {
                 self.model_of.insert((*export, s.clone()), *model);
             }
-            self.demand(model, &sigmas);
+            demand(schedule, model, &sigmas);
             sigmas_of.insert(*export, sigmas);
             constants.push(*export);
         }
@@ -419,26 +555,10 @@ impl Recognised {
             for s in sigmas {
                 self.model_iota.insert(((*export, s.clone()), *ctor), *thm);
             }
-            self.demand(thm, sigmas);
+            demand(schedule, thm, sigmas);
         }
         let _ = env;
         self.nested.insert(*name, NestedRecord { why: None, constants });
-    }
-
-    /// Add σ to a model constant's schedule entry. **Never a default**: a
-    /// constant reached with an empty σ list keeps whatever the pre-pass gave
-    /// it, and a σ that is not propagated is a σ the keying above did not
-    /// record either, so the two cannot disagree.
-    fn demand(&mut self, n: &Name, sigmas: &[Vec<u32>]) {
-        if sigmas.is_empty() {
-            return
-        }
-        let e = self.schedule.entry(*n).or_default();
-        for s in sigmas {
-            if !e.contains(s) {
-                e.push(s.clone());
-            }
-        }
     }
 
     /// Record a nested declaration with no model: the shape that stopped it,
@@ -450,6 +570,17 @@ impl Recognised {
         self.nested
             .insert(*name, NestedRecord { why: Some(why.label()), constants });
     }
+}
+
+/// Add σ to a model constant's schedule entry. **Never a default**: a constant
+/// reached with an empty σ list keeps whatever the pre-pass gave it, and a σ
+/// that is not propagated is a σ the keying above did not record either, so the
+/// two cannot disagree.
+fn demand(schedule: &mut HashMap<Name, Vec<Vec<u32>>>, n: &Name, sigmas: &[Vec<u32>]) {
+    if sigmas.is_empty() {
+        return
+    }
+    add_sigmas(schedule, *n, sigmas.iter().cloned());
 }
 
 /// **Every recursor the export declares for `T`, in member order** — `T.rec`,
@@ -761,24 +892,9 @@ fn consts_at(e: &E, map: &HashMap<Name, u32>, out: &mut Vec<(Name, Vec<u32>)>) {
     }
 }
 
-/// Which position in the declaration list each name is settled by: a
-/// declaration's own name, and — for an inductive or a block — every
-/// constructor and recursor the environment says it owns.
-fn positions(env: &Environment, decls: &[Declaration]) -> HashMap<Name, usize> {
-    let mut owner_pos: HashMap<Name, usize> = HashMap::new();
-    for (i, d) in decls.iter().enumerate() {
-        owner_pos.insert(d.name(), i);
-        if let Declaration::Mutual { types, .. } = d {
-            for t in types {
-                owner_pos.insert(t.name, i);
-            }
-        }
-    }
-    let mut out = owner_pos.clone();
-    for (n, o) in &env.owners {
-        if let Some(i) = owner_pos.get(o) {
-            out.insert(*n, *i);
-        }
-    }
-    out
-}
+// Which position in the declaration list each name is settled by — a
+// declaration's own name, and every constructor and recursor the environment
+// says it owns — is [`Recogniser::pos`], built by [`Recogniser::new`] and
+// [`Recogniser::observe`]. It used to be one `positions(env, decls)` sweep over
+// a finished environment; there is no finished environment to sweep now.
+

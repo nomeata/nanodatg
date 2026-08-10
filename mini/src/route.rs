@@ -335,110 +335,173 @@ impl RouteReport {
 /// through it.
 fn via(e: &mut dyn GroupEngine, d: &Declaration) -> GroupReport { e.check_group(d) }
 
-/// **The interleaved driver** — [`crate::run::check_file_with_interp`]'s
-/// evidence pass when `Options::route` is set, replacing the single
-/// [`Ledger::run`] call. Declarations in file order, each group handed to
-/// the engine the policy picks, both engines over the caller's one
-/// [`nanoda_lib::tg::EnvCore`] — which this function installs as the
-/// checker's per-thread core, so it must run on a thread where no
-/// `TgBackend` has been built yet (one routed file per thread; `run.rs`'s
-/// deep-thread wrapper and the tests both give it that).
+/// **The evidence pass, one declaration at a time** —
+/// [`crate::decl_pass::Pass`]'s other half.
+///
+/// [`Driver::Plain`] is the historical mini-only walk, [`Driver::Routed`] the
+/// interleaved routed one. They are the *same loop* with a policy choice
+/// inside: `run.rs` builds one of these before the per-declaration loop and
+/// calls [`Driver::step`] once per declaration either way. There is no second
+/// driver beside the first.
 ///
 /// Interleaving, not two passes, is what makes crossings observable in both
 /// directions: a checker-routed definition can adopt the inductive
 /// interpretation mini published two declarations earlier, and a mini-routed
 /// construction can adopt a def entry the checker published — within one
 /// walk of one file.
-pub(crate) fn run_routed(
-    env: &Environment,
-    decls: &[Declaration],
-    schedule: &HashMap<Name, Vec<Vec<u32>>>,
-    ip: &mut Interp,
+pub(crate) enum Driver {
+    Plain,
+    Routed(Box<Routed>),
+}
+
+/// [`Driver::Routed`]'s state: the checker engine, the report, and the
+/// coverage set the stray sweep reads.
+pub(crate) struct Routed {
     mode: Mode,
-) -> (Ledger, RouteReport) {
-    let mut led = Ledger::default();
-    let mut report = RouteReport::new(mode);
-    Ledger::arm_labels(ip);
+    chk: Option<CheckerEngine<'static, 'static>>,
+    report: RouteReport,
+    /// Groups mini itself vouches for — walked without a decline. The stray
+    /// sweep exempts exactly these and the anchors the checker claimed, so a
+    /// fallback that failed to actually reach the checker leaves its group
+    /// unexempted and the sweep both checks and *names* it. Coverage is
+    /// earned, never inferred from the routing decision.
+    covered_by_mini: HashSet<String>,
+}
 
-    // **One parse** (the comprehensive-merge's first stage): the checker is
-    // driven over the very `ExportFile` mini's load installed as this
-    // thread's arena — one file, one arena, one `NameKey` identity. This is
-    // not only economy: under the `modelgen` filter the export mini checked
-    // exists only in memory, so the re-parse this replaced would have handed
-    // the two engines two genuinely different files. An absent installation
-    // is not a crash: the run degrades to mini for everything, and the
-    // report says so.
-    let ef = crate::arena::installed_export_file();
-    if ef.is_none() {
-        report.checker_error = Some("no export file installed on this thread".to_string());
+impl Driver {
+    /// Build the driver the run's options ask for, before the loop.
+    ///
+    /// A routed run installs the caller's core as the checker's per-thread
+    /// core, so it must run on a thread where no `TgBackend` has been built
+    /// yet (one routed file per thread; `run.rs`'s deep-thread wrapper and
+    /// the tests both give it that).
+    pub(crate) fn new(ip: &mut Interp, mode: Option<Mode>) -> Driver {
+        // The armed-blocker labels, before any walk — [`Ledger::run`]'s first
+        // statement, and the routed driver's, hoisted to the one place both
+        // paths now start from.
+        Ledger::arm_labels(ip);
+        let Some(mode) = mode else { return Driver::Plain };
+        let mut report = RouteReport::new(mode);
+        // **One parse** (the comprehensive-merge's first stage): the checker is
+        // driven over the very `ExportFile` mini's load installed as this
+        // thread's arena — one file, one arena, one `NameKey` identity. This is
+        // not only economy: under the `modelgen` filter the export mini checked
+        // exists only in memory, so the re-parse this replaced would have handed
+        // the two engines two genuinely different files. An absent installation
+        // is not a crash: the run degrades to mini for everything, and the
+        // report says so.
+        let ef = crate::arena::installed_export_file();
+        if ef.is_none() {
+            report.checker_error = Some("no export file installed on this thread".to_string());
+        }
+        nanoda_lib::tg::install_shared_core(ip.core().clone());
+        let chk = ef.map(|ef| CheckerEngine { rc: nanoda_lib::routed::RoutedChecker::new(ef) });
+        Driver::Routed(Box::new(Routed { mode, chk, report, covered_by_mini: HashSet::new() }))
     }
-    nanoda_lib::tg::install_shared_core(ip.core().clone());
-    let mut chk = ef.map(|ef| CheckerEngine { rc: nanoda_lib::routed::RoutedChecker::new(ef) });
 
-    let mut blocked = false;
-    // Groups mini itself vouches for — walked without a decline. The stray
-    // sweep exempts exactly these and the anchors the checker claimed, so a
-    // fallback that failed to actually reach the checker leaves its group
-    // unexempted and the sweep both checks and *names* it. Coverage is
-    // earned, never inferred from the routing decision.
-    let mut covered_by_mini: HashSet<String> = HashSet::new();
-    {
-        let mut mini_eng = MiniEngine { env, schedule, ip: &mut *ip, led: &mut led };
-        for d in decls {
-            let pick = if chk.is_none() { Pick::Mini } else { mode.pick(d) };
-            match pick {
-                Pick::Mini => {
-                    report.to_mini += 1;
-                    let rep = via(&mut mini_eng, d);
-                    if rep.blocked {
-                        blocked = true;
-                        break
-                    }
-                    if rep.declined.is_empty() {
-                        covered_by_mini.extend(group_names(d).iter().map(|n| n.to_string()));
+    /// One declaration group. Returns `true` when the armed blocker stopped
+    /// the evidence pass — [`Ledger::run`]'s early return, as a flag.
+    pub(crate) fn step(
+        &mut self,
+        env: &Environment,
+        schedule: &HashMap<Name, Vec<Vec<u32>>>,
+        ip: &mut Interp,
+        led: &mut Ledger,
+        d: &Declaration,
+    ) -> bool {
+        match self {
+            Driver::Plain => led.walk_decl(env, d, schedule, ip),
+            Driver::Routed(r) => r.step(env, schedule, ip, led, d),
+        }
+    }
+
+    /// The end of the walk. `blocked` is the armed blocker's flag: a blocked
+    /// run's counters are partial by design and [`Ledger::finish`] is not
+    /// called, exactly as [`Ledger::run`]'s early return left them.
+    pub(crate) fn finish(
+        self,
+        ip: &mut Interp,
+        led: &mut Ledger,
+        blocked: bool,
+    ) -> Option<RouteReport> {
+        match self {
+            Driver::Plain => {
+                if !blocked {
+                    led.finish(ip);
+                }
+                None
+            }
+            Driver::Routed(r) => Some(r.finish(ip, led, blocked)),
+        }
+    }
+}
+
+impl Routed {
+    fn step(
+        &mut self,
+        env: &Environment,
+        schedule: &HashMap<Name, Vec<Vec<u32>>>,
+        ip: &mut Interp,
+        led: &mut Ledger,
+        d: &Declaration,
+    ) -> bool {
+        let pick = if self.chk.is_none() { Pick::Mini } else { self.mode.pick(d) };
+        let mut mini_eng = MiniEngine { env, schedule, ip, led };
+        match pick {
+            Pick::Mini => {
+                self.report.to_mini += 1;
+                let rep = via(&mut mini_eng, d);
+                if rep.blocked {
+                    return true
+                }
+                if rep.declined.is_empty() {
+                    self.covered_by_mini.extend(group_names(d).iter().map(|n| n.to_string()));
+                } else {
+                    // The counted fallback: mini refused, the checker takes
+                    // the group — never silently.
+                    let name = d.name().to_string();
+                    let why = rep.declined.join(", ");
+                    let taken = self.chk.as_mut().is_some_and(|c| {
+                        !via(c, d).declined.contains(&"no-export-group".to_string())
+                    });
+                    if taken {
+                        self.report.fallbacks_to_checker.push((name, why));
                     } else {
-                        // The counted fallback: mini refused, the checker
-                        // takes the group — never silently.
-                        let name = d.name().to_string();
-                        let why = rep.declined.join(", ");
-                        let taken = chk
-                            .as_mut()
-                            .is_some_and(|c| !via(c, d).declined.contains(&"no-export-group".to_string()));
-                        if taken {
-                            report.fallbacks_to_checker.push((name, why));
-                        } else {
-                            report.declines_unfallen.push((name, why));
-                        }
+                        self.report.declines_unfallen.push((name, why));
                     }
                 }
-                Pick::Checker => {
-                    report.to_checker += 1;
-                    let c = chk.as_mut().expect("pick() returns Checker only when the checker parsed");
-                    let rep = via(c, d);
-                    if !rep.declined.is_empty() {
-                        // No export-side group for this name: an
-                        // encoder-generated declaration. Mini owns it.
-                        report.fallbacks_to_mini.push(d.name().to_string());
-                        let mrep = via(&mut mini_eng, d);
-                        if mrep.blocked {
-                            blocked = true;
-                            break
-                        }
+            }
+            Pick::Checker => {
+                self.report.to_checker += 1;
+                let c =
+                    self.chk.as_mut().expect("pick() returns Checker only when the checker parsed");
+                let rep = via(c, d);
+                if !rep.declined.is_empty() {
+                    // No export-side group for this name: an
+                    // encoder-generated declaration. Mini owns it.
+                    self.report.fallbacks_to_mini.push(d.name().to_string());
+                    if via(&mut mini_eng, d).blocked {
+                        return true
                     }
                 }
             }
         }
+        false
     }
-    if !blocked {
-        led.finish(ip);
-        // The stray sweep: export groups neither engine vouches for — an
-        // anchor the checker never claimed whose name mini never covered
-        // (the natural population: a dropped unused axiom, `run.rs`'s retain).
-        if let Some(c) = chk.as_mut() {
-            report.strays = c.rc.check_strays(&covered_by_mini);
+
+    fn finish(mut self, ip: &mut Interp, led: &mut Ledger, blocked: bool) -> RouteReport {
+        if !blocked {
+            led.finish(ip);
+            // The stray sweep: export groups neither engine vouches for — an
+            // anchor the checker never claimed whose name mini never covered
+            // (the natural population: a dropped unused axiom, the pass's
+            // pre-loop drop of the file's unused non-standard axioms).
+            if let Some(c) = self.chk.as_mut() {
+                self.report.strays = c.rc.check_strays(&self.covered_by_mini);
+            }
         }
+        self.report.cross = ip.core().consts().borrow().report();
+        self.report.tg = nanoda_lib::tg::global_report();
+        self.report
     }
-    report.cross = ip.core().consts().borrow().report();
-    report.tg = nanoda_lib::tg::global_report();
-    (led, report)
 }

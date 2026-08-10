@@ -177,6 +177,10 @@ fn main() {
         }
     }
     if verbose {
+        // **The certified prefix, on every verdict** — including a rejection,
+        // which is the whole reason the number exists. `mini/src/decl_pass.rs`
+        // says what it counts and why it is not a ledger.
+        println!("{}", out.prefix.row());
         // Machine-readable, one key=value per tab, for `mini/tests/tutorial.rs`.
         let f = &out.facts;
         println!(

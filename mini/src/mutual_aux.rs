@@ -6,16 +6,31 @@
 //!
 //! ```text
 //! mutual_aux::encode(env, &Declaration::Mutual { .. }) -> Result<Encoding, Reason>
+//! mutual_aux::rule_theorems(aenv, cenv, &Encoding::plan) -> Vec<Declaration>
+//! mutual_aux::Expander                one declaration at a time
+//! mutual_aux::expand(env, decls, schedule)   the same, over a whole file
 //! ```
 //!
 //! [`Encoding::decls`] is a list of ordinary [`Declaration`]s in dependency
 //! order — a tag inductive `Tag`, one indexed inductive `Aux`, one `def` per
-//! member, one `def` per constructor, a packed motive, one `def` per recursor,
-//! and one `theorem` per recursor rule proved by reflexivity.
-//! [`Encoding::env`] is a temporary environment in which all of them have been
-//! checked. Nothing else happens here: the caller feeds the list to the
-//! ordinary evidence-producing pipeline, and what comes back is a TG term and a
-//! typing proof for every constant of the block, under the block's own names.
+//! member, one `def` per constructor, a packed motive, and one `def` per
+//! recursor. [`Encoding::env`] is a temporary environment in which all of them
+//! have been checked. Nothing else happens here: the caller feeds the list to
+//! the ordinary evidence-producing pipeline, and what comes back is a TG term
+//! and a typing proof for every constant of the block, under the block's own
+//! names.
+//!
+//! **The rule theorems are not in that list, and the separation is a
+//! consequence of where they are emitted.** [`expand`] has always appended them
+//! after the whole file, because their statements mention an `Eq` the block does
+//! not and the exporter routinely declares it *after* the block — see that
+//! function's header for the measurement. Once the pipeline became one
+//! per-declaration loop (`crate::decl_pass`) the environment at the block's own
+//! position no longer contains that `Eq` either, so the theorems cannot be
+//! *stated* there. [`encode`] therefore stops at the recursors and hands back a
+//! [`RulePlan`]; [`rule_theorems`] states and checks them later, against an
+//! environment that has the file's `Eq`. Emitting and stating now happen at the
+//! same place, which is the one they were always emitted at.
 //!
 //! # The black box, and why it is a property of this file
 //!
@@ -161,7 +176,8 @@ impl Reason {
 /// The encoding of one block.
 pub struct Encoding {
     /// Every generated declaration, in dependency order and already checked
-    /// into [`Encoding::env`].
+    /// into [`Encoding::env`]. **The rule theorems are not among them** — see
+    /// the module header and [`rule_theorems`].
     pub decls: Vec<Declaration>,
     /// A temporary environment: the caller's, with the block's own constants
     /// removed and the encoding added in their place.
@@ -170,9 +186,35 @@ pub struct Encoding {
     pub tag: Name,
     /// The auxiliary carrier.
     pub aux: Name,
-    /// How many recursor rules were stated as theorems. Zero when the
-    /// environment has no `Eq`.
-    pub rules: usize,
+    /// What [`rule_theorems`] needs to state this block's recursor rules once
+    /// the file's `Eq` is in scope.
+    pub plan: RulePlan,
+}
+
+/// Everything [`rule_theorems`] needs about one encoded block, carried from
+/// [`encode`] to the end of the file.
+///
+/// Every field is read off the block or off zone A's recursor for it, at
+/// [`encode`] time, and none of it is a certificate or a term of the evidence
+/// layer — the module's black box (`ci/check-mutual-blackbox.sh`) is unchanged
+/// by carrying it.
+pub struct RulePlan {
+    /// The block's members, cloned: their names, types and constructors.
+    types: Vec<crate::env::IndType>,
+    /// Parameters, members, and minors of the whole block.
+    np: usize,
+    n: usize,
+    nc: usize,
+    /// Each member's own index-telescope length.
+    nis: Vec<usize>,
+    /// The block's own level parameters, as a level list.
+    us: Rc<[Level]>,
+    /// Zone A's recursor's level list — the motive's first when it eliminates
+    /// large, then the block's.
+    us2: Rc<[Level]>,
+    lp2: Vec<Name>,
+    /// The motive universe, `Level::zero()` when the recursor is small.
+    v: Level,
 }
 
 impl Encoding {
@@ -659,8 +701,72 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
         )?;
     }
 
-    // 7. The rule theorems, when there is an `Eq` to state them with.
-    let mut rules = 0usize;
+    // 7. The rule theorems are **not** stated here — see the module header and
+    //    [`rule_theorems`]. What is built here is everything about the block
+    //    that `encode` knows and the end of the file does not.
+    Ok(Encoding {
+        decls,
+        env: tmp,
+        tag,
+        aux,
+        plan: RulePlan {
+            types: types.clone(),
+            np,
+            n,
+            nc,
+            nis,
+            us,
+            us2,
+            lp2,
+            v,
+        },
+    })
+}
+
+/// **Step 7: one encoded block's recursor rules, as theorems proved by
+/// reflexivity.**
+///
+/// Two environments, and they are genuinely different objects:
+///
+/// * `aenv` is **zone A's** — the acceptance environment, where each `Tᵢ.rec`
+///   is the [`ConstantInfo::Recursor`] the kernel minted. Its declared type and
+///   its rules are what each theorem *states*.
+/// * `cenv` is the **evidence pass's** — the same environment with this block's
+///   constants replaced by [`encode`]'s definitions. Each theorem is checked
+///   into it, so `Eq.refl` typechecks exactly when the definitional unfolding
+///   of `Tᵢ.rec` really does reduce on the constructor.
+///
+/// `cenv` must also carry the file's `Eq`, which is why this is called at the
+/// end of the file rather than at the block: [`equality`] returns `None`
+/// otherwise and the block gets no rule theorems, as it always has for a
+/// `prelude` export that never mentions equality.
+///
+/// The theorems come back checked into a copy of `cenv`, and **all or none**:
+/// a block whose rules cannot all be stated gets none, rather than a prefix.
+/// That is the closest thing to [`encode`]'s old behaviour — where a failure
+/// here abandoned the whole encoding — that is available once the encoding is
+/// already in the caller's environment, and it keeps [`Expanded::rules`] a
+/// count of blocks fully ruled rather than of theorems that happened to fit.
+pub fn rule_theorems(
+    aenv: &Environment,
+    cenv: &Environment,
+    plan: &RulePlan,
+) -> (Vec<Declaration>, Environment) {
+    match rules_of(aenv, cenv, plan) {
+        Ok(out) => out,
+        Err(_) => (Vec::new(), cenv.clone()),
+    }
+}
+
+fn rules_of(
+    env: &Environment,
+    cenv: &Environment,
+    plan: &RulePlan,
+) -> Result<(Vec<Declaration>, Environment), Reason> {
+    let RulePlan { types, np, n, nc, nis, us, us2, lp2, v } = plan;
+    let (np, n, nc, v) = (*np, *n, *nc, *v);
+    let mut tmp = cenv.clone();
+    let mut decls: Vec<Declaration> = Vec::new();
     if let Some((eq, eq_refl)) = equality(&tmp) {
         for (i, t) in types.iter().enumerate() {
             let rec_name = Name::str(&t.name, "rec");
@@ -724,12 +830,10 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                         kind: DefKind::Theorem,
                     },
                 )?;
-                rules += 1;
             }
         }
     }
-
-    Ok(Encoding { decls, env: tmp, tag, aux, rules })
+    Ok((decls, tmp))
 }
 
 
@@ -931,80 +1035,175 @@ pub struct Expanded {
 /// by nothing, so no declaration can depend on it, and everything it depends on
 /// — the encoding's own definitions and the file's `Eq` — is declared before
 /// the end of the list.
+///
+/// # One declaration at a time
+///
+/// [`Expander`] is this function's loop body, exposed so that
+/// [`crate::decl_pass`] can run it *as* the file is checked rather than over a
+/// finished environment. This function is the same thing over a whole file, and
+/// `mini/tests/mutual.rs` pins that the two agree: it is the reference the
+/// incremental form is differentially tested against.
 pub fn expand(
     env: &Environment,
     decls: &[Declaration],
     schedule: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
 ) -> Expanded {
-    let mut out = Expanded {
-        env: env.clone(),
-        decls: Vec::with_capacity(decls.len()),
-        schedule: schedule.clone(),
-        blocks: 0,
-        encoded: 0,
-        rules: 0,
-    };
-    // The rule theorems of every block, held back until the whole file has been
-    // emitted. See the header: their statements mention an `Eq` the block does
-    // not, and the exporter puts it wherever the *file* needed it.
-    let mut rules: Vec<Declaration> = Vec::new();
+    let mut xenv = env.clone();
+    let mut sched = schedule.clone();
+    let mut x = Expander::new();
     for d in decls {
+        x.step(env, &mut xenv, &mut sched, d);
+    }
+    x.append_rules(env, &mut xenv, &mut sched);
+    Expanded {
+        env: xenv,
+        decls: x.decls,
+        schedule: sched,
+        blocks: x.blocks,
+        encoded: x.encoded,
+        rules: x.rules,
+    }
+}
+
+/// One encoded block, waiting for the file's `Eq`. See [`rule_theorems`].
+struct Pending {
+    plan: RulePlan,
+    /// `(member, the σ the *caller's* schedule gave that member's recursor)`,
+    /// snapshotted at the block. Read from the caller's schedule and not from
+    /// [`Expander::schedule`], which [`demand`] has since widened: the rule
+    /// theorems are seeded at the recursor's exported σ, as they always were.
+    rec_sigmas: Vec<(Name, Vec<Vec<u32>>)>,
+}
+
+/// [`expand`], one declaration at a time.
+///
+/// The invariant, and it is what makes the fused pipeline legal: **`step` reads
+/// only the environment through the declaration it is handed**. [`encode`] looks
+/// up each member's recursor, which `kernel::add` of that very block minted, and
+/// nothing later. The one thing it used to read from later in the file — the
+/// `Eq` its rule theorems are stated with — is now [`finish`](Expander::finish)'s.
+#[derive(Default)]
+pub struct Expander {
+    /// The declaration list the evidence pass walks, blocks expanded in place.
+    pub decls: Vec<Declaration>,
+    pub blocks: usize,
+    pub encoded: usize,
+    pub rules: usize,
+    pending: Vec<Pending>,
+}
+
+impl Expander {
+    pub fn new() -> Expander { Expander::default() }
+
+    /// One declaration.
+    ///
+    /// * `aenv` is **zone A's** environment through `d` — the one
+    ///   `kernel::add` has just accepted `d` into.
+    /// * `xenv` is the **evidence pass's**, which each encoding is written
+    ///   over.
+    /// * `schedule` is the run's, which the encoding's own σ demand is added
+    ///   to.
+    ///
+    /// Returns the declarations the evidence pass should walk for `d`: `d`
+    /// itself, or the encoding that replaces it.
+    pub fn step(
+        &mut self,
+        aenv: &Environment,
+        xenv: &mut Environment,
+        schedule: &mut std::collections::HashMap<Name, Vec<Vec<u32>>>,
+        d: &Declaration,
+    ) -> &[Declaration] {
+        let from = self.decls.len();
+        self.step_at(aenv, xenv, schedule, d);
+        &self.decls[from..]
+    }
+
+    fn step_at(
+        &mut self,
+        aenv: &Environment,
+        xenv: &mut Environment,
+        schedule: &mut std::collections::HashMap<Name, Vec<Vec<u32>>>,
+        d: &Declaration,
+    ) {
         let Declaration::Mutual { types, .. } = d else {
-            out.decls.push(d.clone());
-            continue
+            self.decls.push(d.clone());
+            return
         };
-        out.blocks += 1;
-        let Ok(enc) = encode(env, d) else {
-            out.decls.push(d.clone());
-            continue
+        self.blocks += 1;
+        let Ok(enc) = encode(aenv, d) else {
+            self.decls.push(d.clone());
+            return
         };
-        out.encoded += 1;
-        out.rules += enc.rules;
-        // A rule theorem is used by nothing, so the fixpoint below cannot reach
-        // it; it is seeded at the σ of the recursor it is about.
-        let mut seeds = schedule.clone();
-        for t in types {
-            let Some(ss) = schedule.get(&Name::str(&t.name, "rec")) else { continue };
-            for g in &enc.decls {
-                let n = g.name();
-                if is_rule_of(&n, &t.name) {
-                    seeds.entry(n).or_insert_with(|| ss.clone());
-                    out.schedule.entry(n).or_default().extend(ss.iter().cloned());
-                }
-            }
-        }
+        self.encoded += 1;
+        // **Snapshotted before `demand`, which widens `Tᵢ.rec`'s own entry.**
+        // A rule theorem is seeded at the σ the *export's* pre-pass gave the
+        // recursor, which is what the whole-file expansion seeded it at.
+        let rec_sigmas: Vec<(Name, Vec<Vec<u32>>)> = types
+            .iter()
+            .filter_map(|t| Some((t.name, schedule.get(&Name::str(&t.name, "rec"))?.clone())))
+            .collect();
+        // The σ the encoding's own constants need. The rule theorems are not
+        // among the names this follows — `demand` follows only what the
+        // encoding *declares* — and they never were: the old seeding of their
+        // names was dropped by `demand`'s own `mine` filter and only ever
+        // reached the schedule directly, which is where
+        // [`Expander::append_rules`] puts it now.
+        let seeds = schedule.clone();
         for (n, ss) in demand(&enc, &seeds) {
-            out.schedule.entry(n).or_default().extend(ss);
+            crate::nested_splice::add_sigmas(schedule, n, ss);
         }
         // **Only what this encoding declares.** See `Encoding::declares`.
         for k in enc.declares() {
             if let Some(v) = enc.env.consts.get(&k) {
-                out.env.consts.insert(k, v.clone());
+                xenv.consts.insert(k, v.clone());
             }
             match enc.env.owners.get(&k) {
                 Some(o) => {
-                    out.env.owners.insert(k, *o);
+                    xenv.owners.insert(k, *o);
                 }
                 None => {
-                    out.env.owners.remove(&k);
+                    xenv.owners.remove(&k);
                 }
             }
         }
-        for g in enc.decls {
-            let n = g.name();
-            if types.iter().any(|t| is_rule_of(&n, &t.name)) {
-                rules.push(g);
-            } else {
-                out.decls.push(g);
+        self.decls.extend(enc.decls);
+        self.pending.push(Pending { rec_sigmas, plan: enc.plan });
+    }
+
+    /// **The end of the file**: every encoded block's rule theorems, stated
+    /// against an environment that now has the file's `Eq`, appended in block
+    /// order. See [`rule_theorems`] and this module's header.
+    ///
+    /// Returns the appended declarations, so a caller walking the file as it
+    /// goes can walk these too.
+    pub fn append_rules(
+        &mut self,
+        aenv: &Environment,
+        xenv: &mut Environment,
+        schedule: &mut std::collections::HashMap<Name, Vec<Vec<u32>>>,
+    ) -> &[Declaration] {
+        let from = self.decls.len();
+        let pending = std::mem::take(&mut self.pending);
+        for p in pending {
+            let (rules, env) = rule_theorems(aenv, xenv, &p.plan);
+            *xenv = env;
+            self.rules += rules.len();
+            // A rule theorem is used by nothing, so [`demand`]'s fixpoint
+            // cannot reach it; it is seeded at the σ of the recursor it is
+            // about, which is what it was seeded at when the whole file was
+            // expanded before the pass.
+            for g in &rules {
+                let n = g.name();
+                for (t, ss) in &p.rec_sigmas {
+                    if is_rule_of(&n, t) {
+                        crate::nested_splice::add_sigmas(schedule, n, ss.iter().cloned());
+                    }
+                }
             }
+            self.decls.extend(rules);
         }
+        &self.decls[from..]
     }
-    out.decls.append(&mut rules);
-    for v in out.schedule.values_mut() {
-        v.sort();
-        v.dedup();
-    }
-    out
 }
 
 /// Is `n` one of `t`'s recursor-rule theorems? The name is built here, so it is
