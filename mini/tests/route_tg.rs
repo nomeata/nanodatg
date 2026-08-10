@@ -195,6 +195,28 @@ fn an_unrouted_export_group_is_swept_and_named_a_stray() {
     assert!(rep.fallbacks_to_checker.is_empty(), "{}", rep.row());
 }
 
+/// **A checker-routed declaration is checked at every scheduled σ, not just
+/// one.** `017_levelComp4` is a *single* level-polymorphic definition the
+/// pre-pass schedules at **two** instantiations (`scheduledPairs=2` on
+/// `declars=1`), routed to the checker under `Split`; each σ is a distinct
+/// joint key, so one declaration yields **2 entries / 4 slots**. Added
+/// against a measured green mutation: `check_declar_scheduled` taking only
+/// the first scheduled σ ran the whole suite green, because every other
+/// pinned file's declarations carry one σ each — one name at two σs is what
+/// a per-name collapse cannot fake.
+#[test]
+fn a_checker_routed_declaration_is_checked_at_every_scheduled_instantiation() {
+    let export = corpus().join("good/tutorial/017_levelComp4.ndjson");
+    if skip_guard::absent(&export) {
+        return
+    }
+    let out = routed(&export, Mode::Split);
+    let rep = out.route.as_ref().expect("route report");
+    assert_eq!((rep.to_mini, rep.to_checker), (0, 1), "{}", rep.row());
+    assert_eq!(cross_field(&out, "checkerEntries"), 2, "a scheduled σ was skipped:\n{}", rep.cross);
+    assert_eq!(cross_field(&out, "checkerSlots"), 4, "{}", rep.cross);
+}
+
 /// **`ForceMini` reproduces the unrouted evidence run.** Same file, one
 /// unrouted and one force-mini walk, and the whole evidence ledger must
 /// agree row for row — the factoring of `Ledger::run`'s loop body into
