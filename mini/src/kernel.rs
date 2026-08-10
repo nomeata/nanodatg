@@ -578,6 +578,17 @@ struct Frame {
 struct Th<'i> {
     ip: &'i mut Interp,
     scopes: Scopes,
+    /// **The declaration's universe parameters as ω-variables**, empty on the
+    /// scheduled path (`LEVELPOLY.md` §5.3 step 1).
+    ///
+    /// Empty is not a degenerate case, it is the σ-scheduled one: under a
+    /// ground instantiation every level has already been substituted to a
+    /// numeral, so there is no parameter left standing and nothing to look up.
+    /// [`Checker::poly`] is the constructor that fills it.
+    levels: crate::interp::LevelVars,
+    /// The `uᵢ ∈ ω` assumptions [`Checker::poly`] opened, outermost first, for
+    /// [`Checker::discharge_levels`] to close innermost-first.
+    level_tokens: Vec<crate::scope::AssumeToken>,
     /// One entry per `lenv` slot, outermost first: the scope's depth, or
     /// `None` when the domain could not be interpreted and so no kernel
     /// variable stands for the binder. A `bvar` pointing at such a slot has no
@@ -610,12 +621,100 @@ impl<'e, 'i> Checker<'e, 'i> {
                 scopes: Scopes::new(),
                 slots: Vec::new(),
                 tokens: Vec::new(),
+                levels: crate::interp::LevelVars::new(),
+                level_tokens: Vec::new(),
             }),
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
             defeq_depth: 0,
             whnf_depth: 0,
         }
+    }
+
+    /// **The evidence-carrying pass at a declaration's own universe
+    /// parameters** — the de-scheduled counterpart of [`Checker::threaded`],
+    /// `LEVELPOLY.md` §5.3 step 1.
+    ///
+    /// # What this is for
+    ///
+    /// Mini has exactly two zones and they are distinguished by *this
+    /// choice*: [`Checker::new`] is the declaration-shape zone — acceptance
+    /// only, `th: None`, no interpretation at all — and [`Checker::threaded`]
+    /// is the evidence pass *at one ground instantiation*. Every one of the
+    /// hundred-odd `Gap::SymbolicLevel` sites in this crate reads
+    /// `c.interp().ok_or(Gap::SymbolicLevel)?` or `let Some(th) = self.th`:
+    /// they are not each a level assumption to be converted, they are
+    /// consumers of the one absent thing, and this constructor is what
+    /// supplies it. Given a thread, they stop firing without being edited.
+    ///
+    /// Each universe parameter becomes a kernel free variable under an
+    /// assumption `uᵢ ∈ ω` ([`Scopes::assume`], §5.2 — no new mechanism was
+    /// needed, exactly as predicted), and every theorem derived on this route
+    /// carries those hypotheses until [`Checker::discharge_levels`] closes
+    /// them. Nothing may be `Sealed` before that, and the funnel enforces it.
+    ///
+    /// # The apparatus is built here, and that is deliberate
+    ///
+    /// [`derived::levels::apparatus::level_poly`] **declares symbols off the
+    /// shared `Env`**, so where it runs decides the numbering of every symbol
+    /// minted afterwards. Building it inside the first judgement that happened
+    /// to want it would make the numbering depend on which declarations a run
+    /// visited, and the byte-identity gate this strand lands against would
+    /// start reporting noise as regression. So it is forced *here*, at route
+    /// entry, before any judgement — and [`Interp::levels`] is idempotent, so
+    /// a route that constructs one of these per declaration still builds it
+    /// exactly once, at the first. `None` if it cannot be built at all.
+    ///
+    /// The scheduled path never reaches this and therefore never builds it;
+    /// `interp.rs`'s own tests pin that.
+    pub fn poly(
+        env: &'e Environment,
+        ip: &'i mut Interp,
+        uparams: &[crate::expr::Name],
+    ) -> Option<Self> {
+        let lp = ip.levels()?;
+        let omega = lp.omega();
+        let mut scopes = Scopes::new();
+        let mut levels = crate::interp::LevelVars::new();
+        let mut level_tokens = Vec::new();
+        for u in uparams {
+            let tm = Term::var(ip.fresh_var());
+            let (tok, in_omega) = scopes.assume(kernel::Formula::mem(tm.clone(), omega.clone()));
+            level_tokens.push(tok);
+            levels.insert(*u, crate::interp::LevelVar { tm, in_omega });
+        }
+        Some(Checker {
+            env,
+            lenv: Vec::new(),
+            th: Some(Th { ip, scopes, slots: Vec::new(), tokens: Vec::new(), levels, level_tokens }),
+            wt_memo: HashMap::new(),
+            frames: vec![Frame::default()],
+            defeq_depth: 0,
+            whnf_depth: 0,
+        })
+    }
+
+    /// The declaration's universe parameters as ω-variables — empty on the
+    /// scheduled path, where every level is already a numeral.
+    pub fn level_vars(&self) -> crate::interp::LevelVars {
+        self.th.as_ref().map(|th| th.levels.clone()).unwrap_or_default()
+    }
+
+    /// Discharge the `uᵢ ∈ ω` assumptions [`Checker::poly`] opened, innermost
+    /// first: from `{u⃗ ∈ ω} ⊢ ψ` to `⊢ u₁ ∈ ω → … → uₖ ∈ ω → ψ`.
+    ///
+    /// The declaration-exit half of §5.2. Generalising the variables
+    /// afterwards (§5.3 step 5's `∀u⃗`) is the switchover's business and is not
+    /// done here: a theorem that is merely *closed* is already enough to be
+    /// `Sealed`, and quantifying it needs the store's key to be the generic
+    /// point, which is step 5.
+    pub fn discharge_levels(&mut self, thm: &Thm) -> Thm {
+        let Some(th) = self.th.as_mut() else { return thm.clone() };
+        let mut out = thm.clone();
+        while let Some(tok) = th.level_tokens.pop() {
+            out = th.scopes.discharge_assumption(tok, &out);
+        }
+        out
     }
 
     /// `⟦bvar i⟧`, or `None` when the binder's domain had no interpretation.
@@ -2333,6 +2432,23 @@ impl<'e, 'i> Checker<'e, 'i> {
                             None => Ev::missing(Gap::SortTowerHeight),
                         };
                         (Some(tm), ev)
+                    }
+                    // **The de-scheduled arm** (`LEVELPOLY.md` §5.3 step 1).
+                    // Unreachable on the σ-scheduled path — a level there has
+                    // been substituted to a numeral, so the arm above always
+                    // fires — and reachable from [`Checker::poly`], where the
+                    // level is the declaration's own parameter. `⟦Sort ℓ⟧` is
+                    // `srt(ℓ̂)` and its typing is `Srt::sort_in_sort` at that
+                    // rung, carrying the `uᵢ ∈ ω` hypotheses it was opened
+                    // under.
+                    (None, Some(th)) if !th.levels.is_empty() => {
+                        let vars = th.levels.clone();
+                        let tm = th.ip.sort_of(u, &vars);
+                        let ev = match th.ip.sort_typing_of(u, &vars) {
+                            Some(t) => Ev::Proved(t),
+                            None => Ev::missing(Gap::SymbolicLevel),
+                        };
+                        (tm, ev)
                     }
                     _ => (None, Ev::missing(Gap::SymbolicLevel)),
                 };
@@ -5929,5 +6045,119 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(c.body_clause(&e).unwrap(), first);
         }
+    }
+
+    // ─────────────────── the de-scheduled route (LEVELPOLY §5.3 step 1) ──
+
+    /// **The one absent thing, supplied.** `Checker::new` has no `Interp` at
+    /// all — which is what every `Gap::SymbolicLevel` site in this crate is
+    /// reporting — and `Checker::poly` has one *at the declaration's own
+    /// universe parameters*, where the schedule has none either.
+    ///
+    /// Three parameters, and `Sort v` is asked for rather than `Sort u`, so a
+    /// constructor that bound the wrong variable or always the first is
+    /// visible; two would pass under both mutations.
+    #[test]
+    fn zone_a_has_no_interpretation_and_the_poly_route_has_one() {
+        let env = env();
+        let us: Vec<Name> = ["u", "v", "w"].iter().map(|n| Name::simple(n)).collect();
+        let sv = sort(Level::param(us[1]));
+
+        // The shape zone: no term, no evidence, and the gap says why.
+        {
+            let mut c = Checker::new(&env);
+            let t = c.infer_type(&sv).expect("acceptance still works");
+            assert!(t.tm.is_none(), "zone A interprets nothing");
+            assert_eq!(t.ev.gap(), Some(&Gap::SymbolicLevel));
+        }
+
+        // The de-scheduled route: `⟦Sort v⟧ = srt(v̂)`, with a certificate.
+        let mut ip = Interp::new();
+        let mut c = Checker::poly(&env, &mut ip, &us).expect("the ω-vocabulary builds");
+        let vars = c.level_vars();
+        assert_eq!(vars.len(), 3, "one ω-variable per parameter");
+        let t = c.infer_type(&sv).expect("infer Sort v");
+        let thm = t.ev.thm().expect("Sort v is certified at a variable rung").clone();
+        let closed = c.discharge_levels(&thm);
+        drop(c);
+
+        let want_tm = ip.sort_of(&Level::param(us[1]), &vars).expect("srt(v̂)");
+        assert_eq!(t.tm.as_ref(), Some(&want_tm), "⟦Sort v⟧ is srt of v̂, not of u̇ or ŵ");
+        // …and it is the *second* variable's rung, not the first or the third.
+        for i in [0usize, 2] {
+            let other = ip.sort_of(&Level::param(us[i]), &vars).unwrap();
+            assert_ne!(want_tm, other, "⟦Sort v⟧ collapsed onto parameter {}", i);
+        }
+        // The certificate is `srt(v̂) ∈ srt(succ v̂)`, under exactly `v ∈ ω`.
+        let succ_v = ip.sort_of(&Level::param(us[1]).succ(), &vars).unwrap();
+        assert_eq!(*thm.concl(), kernel::Formula::mem(want_tm, succ_v));
+        assert_eq!(thm.hyps().len(), 1, "only the parameter it mentions is assumed");
+        // Discharged, it is closed — which is what `Sealed` will demand.
+        assert!(closed.hyps().is_empty(), "discharge_levels closes every assumption");
+    }
+
+    /// **A numeral inside a polymorphic declaration is still the ground rung.**
+    ///
+    /// `Sort 0` occurring in `def f.{u} : Sort u → Prop` must interpret to `U₀`
+    /// term for term, not to `srt(0̄)`: the store, `derived`'s rung theorems and
+    /// every certificate already in the ledger are stated over `Uₙ`, and a
+    /// declaration that spelled its own `Prop` the other way would fail to
+    /// compose with all of them across the bridge.
+    ///
+    /// **Where the invariant actually lives, measured rather than assumed.**
+    /// The `(None, …)` pattern below reads as though it were the guard, and it
+    /// is not: three separate mutations that let the de-scheduled arm take
+    /// numerals — widening it to `(_, …)`, reordering the arms, and guarding
+    /// the ground arm on `levels.is_empty()` — are all *green*, because
+    /// `Interp::sort_of` and `Interp::sort_typing_of` each answer a numeral
+    /// with the ground spelling themselves. The pattern is defensive
+    /// redundancy; the single source is `interp.rs`. This test pins the
+    /// property end to end through the checker, which is the level a future
+    /// clause conversion will actually break it at.
+    #[test]
+    fn a_numeral_on_the_poly_route_is_still_the_ground_rung() {
+        let env = env();
+        let us: Vec<Name> = ["u", "v", "w"].iter().map(|n| Name::simple(n)).collect();
+        let mut ip = Interp::new();
+        let mut c = Checker::poly(&env, &mut ip, &us).expect("the ω-vocabulary builds");
+        let mut got = Vec::new();
+        for n in 0..4u32 {
+            let t = c.infer_type(&sort(crate::ground::numeral(n))).expect("infer");
+            got.push((t.tm.clone(), t.ev.thm().cloned()));
+        }
+        drop(c);
+        for (n, (tm, thm)) in got.into_iter().enumerate() {
+            let n = n as u32;
+            assert_eq!(tm, Some(ip.sort(n)), "⟦Sort {n}⟧ under u,v,w must be the ground rung");
+            let thm = thm.unwrap_or_else(|| panic!("⟦Sort {n}⟧ lost its certificate"));
+            assert!(thm.hyps().is_empty(), "a numeral assumes nothing about u, v or w");
+            // …and it is *not* the ω-spelling, which is the mutation this pins.
+            assert_ne!(tm, ip.srt_numeral(n), "⟦Sort {n}⟧ took the srt spelling");
+        }
+    }
+
+    /// **The scheduled path is not disturbed by any of it.** `threaded` has no
+    /// ω-variables, so the de-scheduled arm of the `Sort` clause cannot fire,
+    /// and a ground rung is the term it has always been.
+    #[test]
+    fn the_scheduled_route_keeps_the_ground_rung_and_no_omega_variables() {
+        let env = env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        assert!(c.level_vars().is_empty(), "a ground instantiation has no parameter standing");
+        let mut got = Vec::new();
+        for n in 0..4u32 {
+            let t = c.infer_type(&sort(crate::ground::numeral(n))).expect("infer");
+            got.push((t.tm.clone(), t.ev.thm().is_some()));
+        }
+        drop(c);
+        for (n, (tm, proved)) in got.into_iter().enumerate() {
+            assert_eq!(tm, Some(ip.sort(n as u32)), "⟦Sort {n}⟧ moved");
+            assert!(proved, "⟦Sort {n}⟧ lost its certificate");
+        }
+        assert!(
+            ip.levels_built().is_none(),
+            "the scheduled path must never build the apparatus — symbol numbering depends on it"
+        );
     }
 }

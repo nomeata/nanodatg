@@ -632,7 +632,7 @@ turned every row's cost from an estimate into a measurement.
 | `interp_sort`'s `_` arm (`tg.rs:4128`) | `Max`/`IMax`/`Param` fall to an opaque `sort(t)` with no facts | `srt(ℓ̂)` (§1.2) with the §1.3 fact kit — **built** (the wedge), now over per-name free variables |
 | `Clause::{Prop,Type,Undet}` dispatch (`tg.rs:10449 clause_after`, `tc.rs:1059 infer_pi`) | reads the level shape after σ; `Undet` = axiom-free symbol + `TyGap::PiUndet` | `Undet` becomes the `ite0` clause (§1.4); 12 residual `PiUndet` sites under σ, **2407 without it** (§5.4 blocker 1) |
 | const/ind/ctor tables keyed `(name, interpreted levels)` (`Shared::*`, `TgBackend::{ind_syms, ctor_rules, …}`, mini's `ConstKey`) | one entry per ground instantiation | one entry per *declaration*, keyed by canonical level *expressions*; ground keys become the numeral instances. **Mini's half is built** — `ConstKey` is `(Name, Vec<Level>)`, canonicalised by `ground::key_levels` (§5.3 step-2 status) |
-| mini `ground::eval` → `Gap::SymbolicLevel` (~40 mint sites), `Interp::sort(n: u32)`, `CUMUL_HEIGHT = 8` | a symbolic level is a sanctioned dead end; the tower is consulted at a `usize` | the dead end becomes the entry point; `srt(ℓ̂)` has no height limit (`CUMUL_HEIGHT` retires — the internal ladder is ω-long) |
+| mini `Checker::new` (`th: None`) → `Gap::SymbolicLevel` (132 production sites, 112 of them reading `c.interp().ok_or(…)`), `Interp::sort(n: u32)`, `CUMUL_HEIGHT = 8` | a symbolic level is a sanctioned dead end, so the declaration-shape zone has no `Interp` at all; the tower is consulted at a `usize` | **`Checker::poly`** — the dead end becomes the entry point, and the sites stop firing without being edited; `srt(ℓ̂)` has no height limit (`CUMUL_HEIGHT` retires — the internal ladder is ω-long) |
 | `zoneb`'s `provably_nonzero` / eliminator trichotomy | already **per-declaration, not per-σ** — the module doc insists on it | unchanged: this is the one part of the pipeline that is already level-polymorphic in spirit |
 
 ### 5.2 The hypothesis mechanism already exists
@@ -690,12 +690,38 @@ THREADING-CENSUS §2).
    one line: `.sort(` is 28 production sites, not 69, because that table
    counted fixtures; and the 132 production `Gap::SymbolicLevel` sites are not
    132 conversions but **112 consumers of one absent thing** — `Checker::new`
-   sets `th: None`, so the declaration-shape zone has no `Interp` at all. The
-   next slice is therefore a `Checker` constructor that opens a declaration's
-   `LevelVars` under `Scopes::assume` and threads an `Interp` through zone A,
-   after which the gap sites stop firing without being edited and the work
-   becomes making the §6.2 clauses succeed at `srt(ℓ̂)` — `zoneb.rs` and
-   `kernel.rs` first, at 23 and 21 sites.
+   sets `th: None`, so the declaration-shape zone has no `Interp` at all.
+
+   **`Checker::poly` is that thing, and it is built.** `mini/src/kernel.rs`
+   now has a third constructor beside `new` (acceptance only) and `threaded`
+   ("the evidence-carrying pass, at one ground instantiation"): the
+   evidence-carrying pass **at a declaration's own universe parameters**. It
+   mints one kernel free variable per parameter, assumes `uᵢ ∈ ω` through
+   `Scopes::assume`, and carries the resulting `LevelVars` on the thread;
+   `Checker::discharge_levels` closes them innermost-first at declaration exit.
+   §5.2's prediction that neither crate needs a new mechanism for this is
+   confirmed — nothing was added to `scope.rs`, and `ci/check-mini-scope.sh`
+   still finds `Thm::assume` spelled only there.
+
+   The first §6.2 clause is converted with it. `infer_type`'s `Expr::Sort` arm
+   gains a de-scheduled case: `⟦Sort ℓ⟧ = srt(ℓ̂)` with `Srt::sort_in_sort` at
+   that rung as its certificate, carrying exactly the `uᵢ ∈ ω` hypotheses of
+   the parameters `ℓ` mentions. **This is the first evidence mini has ever
+   produced at a variable rung**, and it is the first place `CUMUL_HEIGHT`
+   stops being the only answer: `sort_typing` is `None` above the tower's built
+   height of 8, and `sort_in_sort` has no height at all. Pinned at `u + 12`.
+
+   *The apparatus build point is pinned, deliberately.* `level_poly` declares
+   symbols off the shared `Env`, so where it runs decides the numbering of
+   every symbol minted afterwards; building it inside the first judgement that
+   wanted it would make numbering depend on which declarations a run visited
+   and turn the byte-identity gate into noise. It is forced in `Checker::poly`
+   itself, at route entry, before any judgement, and `Interp::levels` is
+   idempotent so a per-declaration route still builds it exactly once.
+
+   What is left is the rest of the §6.2 clauses at `srt(ℓ̂)` — derivation work
+   in `zoneb.rs` (23 sites) and `kernel.rs` (21) first — and a caller that
+   drives `Checker::poly` over a whole file. Nothing calls it in anger yet.
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
@@ -1583,11 +1609,13 @@ the ledger rows byte-identical.
 store**") remain the three named consumers, and each states its σ-dependence in
 its own header.
 
-**Steps 1 and 2 are built** — see §5.3's step-1 and step-2 statuses. Step 1's
-vocabulary exists in `interp.rs` and nothing consumes it yet; what remains of it
-is a `Checker` constructor that threads an `Interp` through zone A, and then the
-§6.2 clauses at `srt(ℓ̂)` module by module — `zoneb.rs` and `kernel.rs` first —
-each landing at byte-identical ledger rows.
+**Steps 1 and 2 are built** — see §5.3's step-1 and step-2 statuses. The
+vocabulary exists in `interp.rs`, `Checker::poly` threads an `Interp` through
+zone A at a declaration's own parameters, and the `Sort` clause is converted:
+mini certifies `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧` at a variable rung, above the tower's
+built height. What remains is the other §6.2 clauses at `srt(ℓ̂)` module by
+module — `zoneb.rs` (23) and `kernel.rs` (21) first — and a caller that drives
+the route over a whole file, each landing at byte-identical ledger rows.
 
 ## 6. What is deliberately not claimed
 

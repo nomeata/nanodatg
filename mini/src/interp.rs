@@ -1889,6 +1889,31 @@ impl Interp {
         Some(self.levels()?.srt_at(t))
     }
 
+    /// **`⊢ ⟦Sort ℓ⟧ ∈ ⟦Sort (ℓ+1)⟧` at any level** — [`Interp::sort_typing`]
+    /// where the level is a numeral, `Srt::sort_in_sort` where it is not.
+    ///
+    /// The quantified half is one instantiation and one `mp`:
+    /// `⊢ ∀n. (n ∈ ω → srt(n) ∈ srt(succ n))` at `ℓ̂`, its premise discharged
+    /// by [`Interp::level_in_omega`] — so the conclusion carries exactly the
+    /// `uᵢ ∈ ω` hypotheses of the parameters `ℓ` mentions, and no others.
+    ///
+    /// **This is where the eager `CUMUL_HEIGHT` table stops being the only
+    /// answer.** `sort_typing` is `None` above the tower's built height;
+    /// `sort_in_sort` has no height at all, because the ladder it speaks about
+    /// is ω-long. The numeral branch is kept unchanged all the same, so no
+    /// scheduled certificate moves.
+    pub fn sort_typing_of(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        if let Some(n) = crate::ground::as_numeral(l) {
+            return self.sort_typing(n)
+        }
+        let t = self.level_term(l, vars)?;
+        let mem = self.level_in_omega(l, vars)?;
+        let lp = self.levels()?;
+        let out = Thm::mp(&derived::inst_all(&lp.s.sort_in_sort, std::slice::from_ref(&t))?, &mem)?;
+        let want = Formula::mem(lp.srt_at(t.clone()), lp.srt_at(lp.succ_of(t)));
+        (*out.concl() == want).then_some(out)
+    }
+
     /// **The ground bridge: `⊢ srt(n̄) = ⟦Sort n⟧`.**
     ///
     /// `derived::levels::srt::Srt::rung_eq`, checked against *this* module's
@@ -3887,6 +3912,46 @@ mod tests {
             let wanted: std::collections::BTreeSet<String> =
                 want_hyps.iter().map(|n| format!("{:?}", hyp(n))).collect();
             assert_eq!(got, wanted, "{l} carries the wrong assumptions");
+        }
+    }
+
+    /// `sort_typing_of` is `sort_typing` at a numeral — the same theorem, not
+    /// merely an equivalent one — and `Srt::sort_in_sort` above the tower's
+    /// built height, where `sort_typing` has nothing to say at all.
+    ///
+    /// The second half is the point: `CUMUL_HEIGHT` is 8 and the internal
+    /// ladder is ω-long, so the quantified route answers where the eager table
+    /// runs out. It is asserted at a rung well past the table.
+    #[test]
+    fn the_sort_typing_agrees_at_a_numeral_and_outlives_the_tower_at_a_parameter() {
+        let mut ip = Interp::new();
+        let vars = LevelVars::new();
+        for n in 0..6u32 {
+            let l = crate::ground::numeral(n);
+            assert_eq!(
+                ip.sort_typing_of(&l, &vars).map(|t| t.concl().clone()),
+                ip.sort_typing(n).map(|t| t.concl().clone()),
+                "Sort {n}'s typing must be the one it always had"
+            );
+        }
+        assert!(ip.levels_built().is_none(), "the numeral branch builds no apparatus");
+
+        let (lp, vars) = omega_vars(&mut ip);
+        let u = p("u");
+        let big = { // `u + 12`, far above CUMUL_HEIGHT
+            let mut l = u;
+            for _ in 0..12 { l = l.succ() }
+            l
+        };
+        for l in [u, big] {
+            let th = ip.sort_typing_of(&l, &vars).unwrap_or_else(|| panic!("⊢ ⟦Sort {l}⟧ ∈ …"));
+            let t = ip.level_term(&l, &vars).unwrap();
+            assert_eq!(
+                *th.concl(),
+                Formula::mem(lp.srt_at(t.clone()), lp.srt_at(lp.succ_of(t))),
+                "{l}: sort-in-sort at its own rung"
+            );
+            assert_eq!(th.hyps().len(), 1, "{l} mentions one parameter");
         }
     }
 
