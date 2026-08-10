@@ -3307,6 +3307,14 @@ enum Decline {
     /// `define_abbrev` refuses); this counts it distinctly rather than letting
     /// it fall into a generic failure.
     RecFieldDep,
+    /// A field's type mentions an ω-vocabulary **level variable**, and the
+    /// `βⱼ` abbreviation cannot name it: `βᵢ` has arity `np + i` by the
+    /// [`derived::inductive::DeclSpec`] well-formedness contract, so
+    /// `define_abbrev`'s free-variable guard refuses the body. This is
+    /// `LEVELPOLY.md` §5.4 blocker 2b — the machine-contract extension — and
+    /// counting it under [`Decline::RecFieldDep`] mislabelled 76 staged rows
+    /// until it got its own reason.
+    LevelVar,
     /// The walk did not find the shape it expected: a missing binder, a
     /// codomain that is not the declaration at its own parameters, a
     /// constructor index out of range, a level arity mismatch.
@@ -3338,7 +3346,7 @@ enum Decline {
     TPolicy,
 }
 
-const N_DECLINE: usize = 15;
+const N_DECLINE: usize = 16;
 
 impl Decline {
     const fn name(self) -> &'static str {
@@ -3352,6 +3360,7 @@ impl Decline {
             Decline::FunRecArg => "…declined: function-typed recursive argument",
             Decline::SelfMention => "…declined: field type mentions the declaration",
             Decline::RecFieldDep => "…declined: field type depends on a recursive field",
+            Decline::LevelVar => "…declined: field type at a variable level (βⱼ awaits the ω-prefix)",
             Decline::Shape => "…declined: arity/shape mismatch",
             Decline::Reentrant => "…declined: re-entrant",
             Decline::Machinery => "…declined: W-type machinery unavailable",
@@ -3370,6 +3379,7 @@ impl Decline {
         Decline::FunRecArg,
         Decline::SelfMention,
         Decline::RecFieldDep,
+        Decline::LevelVar,
         Decline::Shape,
         Decline::Reentrant,
         Decline::Machinery,
@@ -7271,8 +7281,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                                 .and_then(|bs| bs.get(beta_bodies.len()))
                                 .cloned()
                                 .ok_or(Decline::Shape)?,
+                            // The explicit recursive-field check above has
+                            // already fired, so a refusal here is the
+                            // free-variable guard: a level variable the
+                            // `np + i` arity contract cannot name.
                             None => derived::define_abbrev(&mut self.env_mut(), &xs, &body_t)
-                                .ok_or(Decline::RecFieldDep)?,
+                                .ok_or(Decline::LevelVar)?,
                         };
                         field_doms.push(FieldDom::Plain(body_t.clone(), sym, beta_ax));
                         beta_bodies.push(body_t);
