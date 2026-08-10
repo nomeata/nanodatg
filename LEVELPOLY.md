@@ -16,16 +16,22 @@ as a set function of a variable rung (the recursion theorem at `G := U(·)`),
 and the centrepiece — Π-formation at `imax` with the Prop/Type split as an
 if-then-else **inside the target term**, exactly the conditional the owner
 predicted — is one theorem at fully variable levels whose two branches
-provably compute to the correct ground facts. A prototype seam in the `tg`
-backend (§4) interprets and certifies variable-level sorts end to end behind
-a flag, at +0.24% instructions, with today's suites green in both flag
-states.
+provably compute to the correct ground facts. A seam in the `tg` backend
+(§4) interprets and certifies variable-level sorts behind a flag, and the
+undetermined-`Π` clause it was built for now answers **1466 of 2407**
+obligations in the schedule-deleted state with real conditional certificates
+(§5.4 blocker 1). Flag off is bit-identical; both flag states have their
+gate results recorded in §4.2.
 
 What separates this branch from a shipping variant is engineering volume in
 `checker/`/`mini/` — the ground-σ assumption is load-bearing in the
 translation layer's keying and clause dispatch — and that volume is mapped in
 §5, with what was prototyped named as prototyped and what is unmeasured named
-as unmeasured. Nothing in it is blocked on mathematics.
+as unmeasured. Nothing in it is blocked on mathematics. §5.5 states the
+switchover as a checkable condition; **one of its three clauses is settled
+and two are not**, and the remaining distance has been re-attributed by
+measurement from blocker 1 (which will not close it) to blockers 2c and 3
+(which must).
 
 Two claims in the commissioning brief are **refuted** by the tree as it stands,
 and both make the design *easier* than briefed:
@@ -740,11 +746,7 @@ at this branch's head:
     §4.2's +20 — no-evidence rows trade into carried-premise rows and the
     escape ledger's over-report). The recursor rows did **not** move at
     this coverage (ι computed 43, `T-policy 2/3` 600, `no curried` 399
-    unchanged) — the brief's "blocker 1 closes 2c's residue too" is not yet
-    confirmed at 304/2407 wired and not yet refuted; note the `T-policy`
-    row's only decline site is the level-independent no-nullary-constructor
-    gate (`gen_rec_bottom`), which blocker 1's machinery cannot move —
-    what could move is `no curried`/ι.
+    unchanged).
   * **The 2103, decomposed — measured, not guessed.** A counter per refusal
     reason now sits at both ends of the clause (`PiPoly`, reported as *the
     wired Undet-Π clause, by outcome*), and its typing rows are a **partition
@@ -789,7 +791,9 @@ at this branch's head:
     canonical representative while the rule is instantiated at the site's raw
     arms. That is §1.5's kit, at the width the corpus demands — and the same
     bridge blocker 3 needs, so it is on the switchover's critical path rather
-    than beside it. It closes **1515 of 2103 (72 %)** if it lands complete.
+    than beside it. It was predicted to close **1515 of 2103 (72 %)** if it
+    landed complete; it landed at the width below and closed **1162 (55 %)**,
+    the shortfall being the two `≤` arms the slice does not build.
   * **The level bridge — built, and it closes 1162 of the 2103.** The two
     algebraic rows are gone, replaced by one honest row.
 
@@ -872,6 +876,35 @@ at this branch's head:
     corpus that is a small number of distinct pairs against 1466 sites. This
     is a measurement-shaped guess and is written here as one; it has not been
     tried.
+  * **"Blocker 1 closes 2c's residue too" is refuted, at 5× the coverage.**
+    The commissioning brief carried this coupling; at 304/2407 wired it was
+    neither confirmed nor refuted, and the honest reading was that it stayed
+    open. It is now decided. With the bridge landed the clause answers
+    **1466 of 2407** — 4.8× the sites, 61 % of the population — and every
+    recursor row on the staged prelude is **byte-identical** to what it read
+    at 304:
+
+    | row | at 304 wired | at 1466 wired |
+    |---|---:|---:|
+    | ι sites the general rule computed | 43 | 43 |
+    | …declined (recursor): T-policy 2/3 | 600 | 600 |
+    | iota: this recursor has no curried interpretation | 399 | 399 |
+    | iota: the major premise is not a constructor | 184 | 184 |
+    | declarations translated | 315 | 315 |
+    | constant typings stored / uses answered | 10 / 117 | 10 / 117 |
+
+    Not one of them moved. A coupling that survives a 4.8× change in the
+    coupled quantity with zero response is not a coupling, and the earlier
+    hedge (`what could move is no curried`/ι) is withdrawn: **`no curried`
+    does not move either.** The `T-policy` row's own decline site was already
+    verified in code to be the level-independent no-nullary-constructor gate
+    (`gen_rec_bottom`), which blocker 1's machinery cannot reach; the rest of
+    2c has to be built on its own terms. The three tg-suite rows that go red
+    under the deletion — `fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10),
+    `hit ≥ 1308` (reads 117) — are therefore **untouched by blocker 1's
+    completion**, and blocker 1 closing entirely would still leave all three
+    red. That is the switchover's real remaining distance, and it is blocker
+    2c's and blocker 3's, not blocker 1's.
   * **The instrument's own fixture.** `118_accRecReduction` staged populates
     three outcome rows at once (2 fired, 9 not wired, 1 bridge refused), so
     the partition is pinned there against the independent gap ledger and
@@ -983,10 +1016,60 @@ at this branch's head:
   (declaration, σ)-shaped end to end, and none of §5.3 steps 1–2 is built.
 
 The tg-suite rows that would go red under the deletion today are exactly the
-blockers' rows: `fired ≥ 80` (reads 37), `stored ≥ 26` (reads 10),
+blockers' rows: `fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10),
 `hit ≥ 1308` (reads 117), and the per-file zero-gap pins on polymorphic
 tutorial declarations. Those are coverage losses, not honest-conditional
 re-baselines, and they are why the schedule is still in the tree.
+
+### 5.5 The switchover, and the distance to it — stated as a condition, not a date
+
+The switchover is one commit: unify `interp_sort` on `srt(·)` at *every*
+level, numerals included; retire the ground special case; delete
+`instantiations.rs` (511 lines), `tc.rs`'s schedule driver (~45), `util.rs`'s
+σ-plumbing (~80) and `tg.rs`'s σ-reads (~90); de-schedule mini
+(`ground.rs`'s 141 lines, `ledger.rs`'s per-σ pair walk, `zoneb`'s
+pre-ensure, `dump.rs`'s enumeration); and re-take every ratchet on the far
+side. **It cannot be a ratchet** and it cannot be partial: §1.6's cross-level
+payoff needs the schedule gone, and blocker 3 dissolves only when there is
+one vocabulary rather than two.
+
+Three things have to be true when that commit lands, and exactly one of them
+is now settled.
+
+1. **Blockers 1–2 closed.** *Not met, and blocker 1's completion will not
+   meet it.* This tranche established that at 1466/2407 — 4.8× the previous
+   coverage — every recursor row is byte-identical, so `fired`, `stored` and
+   `hit` are blocker 2c's and blocker 3's to move and nobody else's. That is
+   the single most useful thing the measurement bought: the remaining
+   distance is now attributed to the right blocker instead of being hoped
+   onto this one.
+2. **The counter correspondence, stated.** *Designed, not written.* `pairs`
+   and `constEv` are σ-denominated and lose their referent; `decls`/`declEv`
+   are their defined replacements (§4.5). The rule is rename-with-explanation,
+   never silent re-basing — and this tranche is the precedent for how that
+   reads in practice: `TNotImax` and `TGuardDrift` were retired into
+   `TBridge` with both old names recorded at the new row, because a re-based
+   counter with no explanation is indistinguishable from a hidden regression.
+3. **The ι gate at zero or re-decomposed with its new cause.** *Its cause has
+   moved and is now known.* `the_general_iota_rule_computes_on_the_prelude`
+   is still red flag-on, but the +26/+6 it trips on is no longer §4.2's old
+   "+18 certificate copies": the largest single row is the **+10 congruence
+   split between wired and opaque Undet `Π`s** (§4.2's table). That row is
+   an artefact of the two interpretations coexisting, and the switchover —
+   which makes every Undet `Π` wired — is what removes it rather than
+   something to be fixed beforehand. Deferring it remains right; surviving
+   the switchover as an accepted red would not be.
+
+**Acceptance invariance holds and was re-checked here.** Exit 0 and the same
+declarations in all three states at this head, as it must be: σ selects which
+set a `Π` is interpreted as, never whether a declaration is accepted
+(`TcCtx::sigma`). Flag off is bit-identical — 113 test binaries green,
+init-prelude at the untouched 15542 gaps / 2257 escapes.
+
+**Mini is untouched by this tranche** and remains blocker 4 in full: its
+evidence pipeline is `(declaration, σ)`-shaped end to end and none of §5.3
+steps 1–2 is built. Nothing here changed that, and nothing here made it
+easier.
 
 ## 6. What is deliberately not claimed
 
