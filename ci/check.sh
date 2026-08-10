@@ -222,10 +222,14 @@ step "tests (stepcount)"         cargo test -p nanoda_lib --features stepcount
 # must not change what the checker accepts.
 step "tests (tg backend)"        cargo test -p nanoda_lib --features tg
 # Both engines over one shared `EnvCore` in one process — the environment-
-# unification seam (ENV-UNIFY.md §3.3). `mini/tests/envshare_tg.rs` needs the
-# checker's backend compiled in, hence the feature; the ungated half of the
-# suite (`mini/tests/envshare.rs`) already ran in the plain step above.
-step "tests (cross-engine core)" cargo test -p mini --features tg --test envshare_tg
+# unification seam (ENV-UNIFY.md §3.3) and the routed driver over it
+# (ENV-UNIFY.md §5 track D). `mini/tests/envshare_tg.rs` and
+# `mini/tests/route_tg.rs` need the checker's backend compiled in, hence the
+# feature; the ungated half of the seam (`mini/tests/envshare.rs`) already
+# ran in the plain step above. Both test files are named here because a
+# `cfg(feature)` suite a step does not select is not skipped but *absent* —
+# the defect this script's own comments document.
+step "tests (cross-engine core)" cargo test -p mini --features tg --test envshare_tg --test route_tg
 
 echo
 if (( ${#skipped[@]} )); then
