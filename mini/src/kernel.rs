@@ -231,6 +231,29 @@ pub struct Typing {
     pub ev: Ev,
 }
 
+/// **The generic point of a declaration's constant, still open** — what
+/// [`Checker::poly_const_open`] hands back and [`crate::poly_run`] finishes.
+///
+/// "Open" is the whole content of the type: [`PolyOpen::typing`] carries the
+/// declaration's `uᵢ ∈ ω` as live hypotheses and is not a theorem anyone may
+/// store, seal, or generalise until [`Checker::discharge_levels`] has closed
+/// them. Handing back a struct rather than a stored entry is what keeps that
+/// step from being skipped — there is nothing here a caller can put in the
+/// store without going past the discharge first.
+#[derive(Debug, Clone)]
+pub struct PolyOpen {
+    /// `f̂`, of arity `|lparams|`.
+    pub sym: kernel::FnSym,
+    /// The level variables, **in `lparams` order** — the abstraction prefix,
+    /// and so the argument order every use site must supply `ℓ̂⃗` in.
+    pub vars: Vec<FreeVar>,
+    /// `⊢ ∀u⃗. f̂(u⃗) = ⟦val⟧`. **Closed already** — see
+    /// [`Checker::poly_const_open`] on why this one does not join the batch.
+    pub defeq: Thm,
+    /// `{u⃗ ∈ ω} ⊢ f̂(u⃗) ∈ ⟦T⟧`, when the value had a certificate at all.
+    pub typing: Option<Thm>,
+}
+
 /// **Which clause of Carneiro §6.2 an expression falls under.**
 ///
 /// §6.2 splits three constructors two ways:
@@ -678,10 +701,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         let mut levels = crate::interp::LevelVars::new();
         let mut level_tokens = Vec::new();
         for u in uparams {
-            let tm = Term::var(ip.fresh_var());
+            let v = ip.fresh_var();
+            let tm = Term::var(v);
             let (tok, in_omega) = scopes.assume(kernel::Formula::mem(tm.clone(), omega.clone()));
             level_tokens.push(tok);
-            levels.insert(*u, crate::interp::LevelVar { tm, in_omega });
+            levels.insert(*u, crate::interp::LevelVar { v, tm, in_omega });
         }
         Some(Checker {
             env,
@@ -767,6 +791,71 @@ impl<'e, 'i> Checker<'e, 'i> {
     pub fn discharge_levels_one(&mut self, thm: &Thm) -> Thm {
         let mut out = self.discharge_levels(std::slice::from_ref(thm));
         out.pop().expect("one in, one out")
+    }
+
+    /// **The constant's own conclusion, built while the `uᵢ ∈ ω` are still
+    /// open** — `LEVELPOLY.md` §5.3 step 5, mini's half, first of three steps.
+    ///
+    /// Mints `f̂` of arity `|uparams|` as an abbreviation for `⟦val⟧` at the
+    /// generic point, and carries the value's typing back along the defining
+    /// equation:
+    ///
+    /// ```text
+    /// {u⃗ ∈ ω} ⊢ ⟦val⟧ ∈ ⟦T⟧      ↦      {u⃗ ∈ ω} ⊢ f̂(u⃗) ∈ ⟦T⟧
+    /// ```
+    ///
+    /// # The order is forced, and this is the step that forces it
+    ///
+    /// `LEVELPOLY.md` §5.3's three obstacles, in the order they bite.
+    /// [`Thm::gen`] is banned in `mini/src` (R6′ I3) and `derived::gen_all` is
+    /// equally exposed to the side condition, so the `∀u⃗` is closed by
+    /// [`crate::rec_dep::gen_all_checked`] — which **refuses** to bind a
+    /// variable free in a live hypothesis. `u⃗ ∈ ω` is exactly such a
+    /// hypothesis until [`Checker::discharge_levels`] closes it. So the
+    /// sequence is *retarget* (here), *batch-discharge* (the caller, in one
+    /// call with `⟦ty⟧`'s and `⟦val⟧`'s conclusions — the third conclusion
+    /// that function's slice form was widened for), then *generalise*
+    /// ([`crate::poly_run`]). Doing it in any other order is either a refusal
+    /// or a variable captured out from under a live assumption.
+    ///
+    /// # What comes back, and what the caller still owes
+    ///
+    /// The `defeq` is already `⊢ ∀u⃗. f̂(u⃗) = ⟦val⟧` and has **no hypotheses**
+    /// — `define_abbrev` is a definitional extension and assumes nothing — so
+    /// it is storable as it stands and must *not* join the discharge batch.
+    /// Only `typing` is open. `None` for `typing` where the value had no
+    /// certificate is not a failure of this function: the abbreviation is
+    /// still wanted, because a use site that gets `⟦c.{ℓ⃗}⟧` as a *term* moves
+    /// `valuesOk` even where it cannot move `valueEv`.
+    ///
+    /// Declines outright — `None` — when there is no thread, when the prefix
+    /// does not cover the body (`define_abbrev`'s own guard: a `⟦val⟧` with a
+    /// free variable that is not a level variable is a leak, and a leak must
+    /// not be sealed into the signature), or when a step's conclusion is not
+    /// the one claimed.
+    pub fn poly_const_open(
+        &mut self,
+        uparams: &[crate::expr::Name],
+        val_tm: &Term,
+        val_mem: Option<&Thm>,
+    ) -> Option<PolyOpen> {
+        let levels = self.level_vars();
+        // In `uparams` order, not the map's: the prefix decides the argument
+        // order at every use site, and a `HashMap`'s iteration order differs
+        // between runs.
+        let vars: Vec<FreeVar> =
+            uparams.iter().map(|u| levels.get(u).map(|lv| lv.v)).collect::<Option<_>>()?;
+        let th = self.th.as_mut()?;
+        let (sym, defeq) = th.ip.poly_abbrev(&vars, val_tm)?;
+        let typing = val_mem.and_then(|m| {
+            // `⊢ f̂(u⃗) = ⟦val⟧` at the generic point — the equation the
+            // subject is carried back along. Re-opened from `defeq` rather
+            // than re-derived, so the two cannot describe different symbols.
+            let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+            let opened = derived::inst_all(&defeq, &args)?;
+            th.ip.retarget_subject(m, &opened)
+        });
+        Some(PolyOpen { sym, vars, defeq, typing })
     }
 
     /// `⟦bvar i⟧`, or `None` when the binder's domain had no interpretation.
@@ -3593,8 +3682,81 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
     }
 
+    /// **A use of the generic point** — `LEVELPOLY.md` §5.3 step 5, mini's
+    /// half, third of three steps and the one that spends what the other two
+    /// stored.
+    ///
+    /// `⟦c.{ℓ⃗}⟧ = f̂(ℓ̂₁,…,ℓ̂ₖ)` and its typing by instantiating the stored
+    /// `∀u⃗` at `ℓ̂⃗`, each `uᵢ ∈ ω` antecedent discharged by
+    /// [`crate::interp::Interp::level_in_omega`]. `None` — *fall through to
+    /// the ground store*, not a gap — when this constant has no generic point,
+    /// which is every constant on the σ-scheduled route because nothing but
+    /// [`crate::poly_run`] ever writes there.
+    ///
+    /// # Two levels of failure, and they are different answers
+    ///
+    /// A missing *store entry* is `None` and the caller's existing path runs
+    /// unchanged. A present entry whose instantiation will not go through is
+    /// `Some((None, gap))` — the constant **is** interpreted at the generic
+    /// point and the use site is what could not reach it, which is a different
+    /// fact from "this constant has no interpretation" and must not be filed
+    /// as one.
+    ///
+    /// # The arity guard is not a formality
+    ///
+    /// `f̂` is `k`-ary and [`derived::inst_all`] happily instantiates a
+    /// `∀`-nest *short*: a use at `k-1` levels would produce a theorem still
+    /// quantified in `uₖ`, whose conclusion is not a membership at all, and
+    /// the caller would file it as evidence.
+    ///
+    /// **Deleting it is a green mutation, and it is reported rather than
+    /// dropped.** Measured: `cargo test -p mini` is 212/212 with the guard
+    /// removed, because Lean's own elaborator makes the lengths agree and no
+    /// fixture builds a short application. It stays for the reason
+    /// `pi_typing_of`'s conclusion check stays — what it prevents is a
+    /// *described-but-wrong* theorem handed onward as evidence, not a missing
+    /// one, and that is the failure mode this route cannot afford to make
+    /// silently. The other guard in this function, the arity's own store
+    /// entry, is exercised by every test that hits the store.
+    fn poly_const_evidence(
+        &mut self,
+        name: &Name,
+        ls: &[Level],
+    ) -> Option<(Option<Term>, Ev)> {
+        let vars = self.level_vars();
+        let th = self.th.as_mut()?;
+        let p = th.ip.get_poly_const(name)?.clone();
+        if p.arity != ls.len() {
+            return None
+        }
+        let Some(args) =
+            ls.iter().map(|l| th.ip.level_term(l, &vars)).collect::<Option<Vec<Term>>>()
+        else {
+            // A parameter with no ω-variable standing for it. The entry is
+            // there and the *use site* is unthreaded, which is exactly what
+            // `Gap::SymbolicLevel` has always meant.
+            return Some((None, Ev::missing(Gap::SymbolicLevel)))
+        };
+        let tm = th.ip.mk(p.sym, args);
+        let ev = match &p.typing {
+            Ok(s) => match th.ip.poly_instantiate(s.thm(), ls, &vars) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::missing(Gap::ConvCompose("poly-const-inst")),
+            },
+            Err(g) => Ev::missing(g.clone()),
+        };
+        Some((Some(tm), ev))
+    }
+
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
+        // The generic point first. Inert on the σ-scheduled route **by
+        // construction rather than by test**: only `crate::poly_run` writes
+        // that store, so the lookup is a miss on every run Gate A measures and
+        // no scheduled certificate can move.
+        if let Some(hit) = self.poly_const_evidence(name, ls) {
+            return hit
+        }
         let Some(inst) =
             ls.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
         else {

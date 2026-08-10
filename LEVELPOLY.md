@@ -783,6 +783,15 @@ THREADING-CENSUS §2).
    at their declarations' own universe parameters with no σ anywhere, which is
    still the strongest thing this branch can say.
 
+   **The inference the next tranche drew from that paragraph was wrong, and it
+   is corrected here rather than below, because this is where it is drawn.**
+   "The const clause is what moves the file count" is true and it sized the
+   move at 89. The const clause landed and moved it to **20**, because the
+   sentence above is only half the constraint: `PolyLedger::is_clean` also
+   refuses to excuse `zoneB`, and **64 of the 89 files contain an `inductive`,
+   `mutual` or `Quot`**. The reachable ceiling for every zone-A clause put
+   together is 25 files. See the step-5 status below.
+
    The other is `typesOk` 76 against `typeEv` 68. Before the `Π` clause those
    two were equal — every type that interpreted also certified — and they are
    not any more: **8 types now interpret without a certificate**, reported as
@@ -951,10 +960,12 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 18 as of this tranche.
+   # de-scheduled route certifies end to end. 20 as of the const clause, of a
+   # ceiling of 25 — `is_clean` refuses to excuse `zoneB` and 64 of the 89
+   # files have one.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 18 × 0, 71 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 20 × 0, 69 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1023,13 +1034,11 @@ carry *value* premises (87 a family of families, 30 a membership), never a
 level one. The store's input population is empty for a reason upstream of
 levels; §5.4 blocker 2c has the rates.
 
-**Step-5 status (2026-08-10, mini side): specified, not built — and it is the
-whole of what remains.** After the `Π` clause, `const_evidence` at a parametric
-level is **109 of the 128 residual `Gap::SymbolicLevel`**, and it is the only
-thing standing between the de-scheduled route and a per-file verdict: the
-per-declaration counters moved a long way with the `Π` clause and the exit
-distribution did not move at all (18/71/2), because every unclean export
-contains a constant reference.
+**Step-5 status (2026-08-10, mini side): built.** `const_evidence` at a
+parametric level was **109 of the 128 residual `Gap::SymbolicLevel`** after the
+`Π` clause. That site is now **109 → 0 and gone from the census entirely** —
+the second clause on this branch to disappear rather than shrink, and for the
+same reason the `Π` clause did.
 
 *Keyed by name at the generic point, not by the level vector.* The obvious
 design — widen the lookup to `ground::key_levels(ls)` and let the existing
@@ -1038,7 +1047,8 @@ already paid for finding out.** `key_levels` canonicalises by `simplify()` but
 does not rename parameters positionally, so `(d1,[param u])` and
 `(d1,[param v])` are different keys and a use under a different parameter name
 misses; the checker's own step-5 fixture pins exactly that miss. Mini's half
-therefore keys the poly store by `Name` alone and holds
+therefore keys the poly store (`Interp::poly_consts`, `interp::PolyConst`) by
+`Name` alone and holds
 
 ```text
 f̂  of arity k = |lparams|,   ⟦c.{ℓ⃗}⟧ = f̂(ℓ̂₁,…,ℓ̂ₖ)
@@ -1047,37 +1057,147 @@ f̂  of arity k = |lparams|,   ⟦c.{ℓ⃗}⟧ = f̂(ℓ̂₁,…,ℓ̂ₖ)
 
 A use at `c.{ℓ⃗}` instantiates the `∀` at `ℓ̂⃗` and discharges each antecedent
 with `Interp::level_in_omega`. The parameter *name* never enters the key, so
-the checker's hole is sidestepped rather than inherited.
+the checker's hole is sidestepped rather than inherited, and
+`a_use_under_a_different_parameter_name_hits_the_generic_point` is the fixture
+that says so on this side.
 
-*Three obstacles found in reconnaissance, recorded so they are not rediscovered:*
+*The three obstacles found in reconnaissance were all real and all as
+described.* Recorded with what the build did about each:
 
 1. **`Thm::gen` is banned in `mini/src`** (R6′ I3, `ci/check-mini-scope.sh`),
-   and `derived::gen_all` is equally exposed to the side condition — the
-   script's own header says so, and names three past sites that got it wrong.
-   The route is `rec_dep::gen_all_checked`, which refuses to bind a variable
-   free in a live hypothesis. It is safe here *only after* the discharge, which
-   fixes the order below.
-2. **The order is: retarget, batch-discharge, then generalise.** The constant's
-   typing must be built while the `uᵢ ∈ ω` are still open, so it has to join
-   `⟦ty⟧`'s and `⟦val⟧`'s conclusions in the **same**
-   `Checker::discharge_levels` batch — which is the third conclusion that
-   function's slice form was widened for. Generalising happens after, on the
-   closed theorem, where `gen_all_checked` can succeed.
-3. **`LevelVar` records the variable's *term*, not its `FreeVar`**, and both
-   `define_abbrev` and `gen_all_checked` need the variable. `kernel::Term`
-   exposes no `as_var`, so `LevelVar` gains the `FreeVar` beside the term —
-   `Checker::poly` already has it at the mint and simply drops it today.
+   and `derived::gen_all` is equally exposed to the side condition.
+   `rec_dep::gen_all_checked` is the route, and it refuses to bind a variable
+   free in a live hypothesis — so it is safe only *after* the discharge, which
+   fixes the order below. `poly_run` calls it there and nowhere else.
+2. **The order is: retarget, batch-discharge, then generalise.** Built as
+   three functions in that order — `Checker::poly_const_open` (the
+   abbreviation and the subject retarget, under `{u⃗ ∈ ω}`), the existing
+   `Checker::discharge_levels` (the constant's typing joins `⟦ty⟧`'s and
+   `⟦val⟧`'s as the **third** conclusion the slice form was widened for,
+   arriving exactly where this section predicted), then `gen_all_checked` and
+   `Sealed::new` in `poly_run`.
+3. **`LevelVar` records the variable's *term*, not its `FreeVar`.**
+   `LevelVar::v` is now beside `LevelVar::tm`; `Checker::poly` had it at the
+   mint and dropped it.
 
-*And one thing to measure rather than assume.* `T̂(ℓ̂⃗)` is the stored type
-interpretation with `ℓ̂` substituted, while a fresh `⟦T[ℓ⃗/u⃗]⟧` interprets the
-*already-substituted* level. These agree when `level_term` commutes with Lean's
-level substitution, and Lean's substitution **normalises** (`imax u 0` at
-`u:=1` becomes `1`, where the term side is `ite0(0̄,∅,1̄∪0̄)` — provably equal,
-not syntactically). So a *ground* use of a poly constant needs the §1.2 bridge,
-exactly as step 5's own text says ("ground demands become `ax_inst`s … plus the
-bridge equations"). Build the clean case, compare the conclusion rather than
-trusting it, and report the residue — the discipline that has now worked twice
-on this branch.
+*And the one thing to measure rather than assume — measured.* `T̂(ℓ̂⃗)` is the
+stored type interpretation with `ℓ̂` substituted, while a fresh `⟦T[ℓ⃗/u⃗]⟧`
+interprets the *already-substituted* level, and Lean's substitution
+**normalises** where the term side does not. **The residue is real, it is
+smaller than the prediction, and it is on a different axis than expected.**
+
+At a ground use the instantiation itself is unconditional and *does* deliver a
+typing — `a_ground_use_of_a_polymorphic_constant_interprets_and_certifies`
+pins that `d.{0}` of `def d.{u} : Sort (u+1) := Sort u` interprets and
+certifies with `open=0`. What does not close is the **declared-type retarget**
+one step later: the instantiation concludes at `srt(succ ∅)` and a fresh
+`⟦Sort 1⟧` at the use site is `U₁`, because `Interp::sort_of`'s numeral branch
+is deliberately term-for-term `Interp::sort`. The two are `Interp::rung_bridge`
+apart. So the cost lands on the *store's* column and not on `valueEv`: on that
+two-declaration fixture `valueEv=2` and `constEv=1`, reason `classifier`. It is
+**not** `imax` normalisation that bites — that case did not arise — it is the
+two spellings of a numeral rung, which is §1.2 and is retired by the switchover
+(§5.5) rather than by a clause here.
+
+**And over the corpus that bucket is empty, which took a second correction to
+see.** The store's 69 missing typings were first reported as `classifier=29`,
+and that was a *fallback* rather than a measurement: the code read the value's
+own gap and fell back to `Gap::Classifier` where the value had a certificate
+and only the retarget had failed — exactly the §0.4 defect of reporting a
+stand-in instead of the sub-result's own reason. Carrying the retarget's own
+`Ev` through instead, the 29 resolve to **`not-decomposable` 19 and
+`no-endpoint` 10** — the *conversion certificate* between the inferred and the
+declared type's interpretations, not the rung spelling — and `classifier` falls
+to **0**. So the bridge is real, demonstrated on a fixture, and **not on this
+corpus's critical path**: the poly constants that reach the store are used at
+parametric levels. A guessed reason had made a scheduled item look like a live
+cost, which is the cheapest kind of wrong measurement to make and the hardest
+to notice.
+
+**A reason in a store is not a leaf, and that is the transferable part.**
+`const_evidence` hands the stored gap straight back at every *use* of the
+constant, so the guess did not stay in the store's own column: fixing it moved
+**26 entries out of `polyev classifier` as well**, at declarations that never
+called the retarget. A wrong reason written into a store is a wrong reason at
+every reference to it, and neither histogram could have shown that on its own —
+it took forcing the fallback back on to see the two move together.
+
+#### The measurement, over all 91 tutorial exports
+
+Third column of the same table, taken the same way:
+
+| | caller only | + the `Π` clause | **+ the const clause** |
+|---|---|---|---|
+| declarations attempted (`def`/`axiom`) | 147 | 147 | 147 |
+| zone B skipped (`inductive`/`mutual`/`Quot`) | 108 | 108 | 108 |
+| `⟦ty⟧` produced | 56 | 76 | **102** |
+| `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | 56 | 68 | **74** |
+| `⟦val⟧` produced | 83 / 146 | 89 / 146 | **111** / 146 |
+| `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 | 65 | 65 |
+| generic points **stored** | — | — | **111** |
+| `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)` sealed | — | — | **42** |
+| **escaped assumptions (`open`)** | **0** | **0** | **0** |
+| whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 | **20 of 89** |
+
+`valueEv` is the one column that did not move, and it did not move *by
+construction*: it counts the value's typing at the type inference assigned it,
+and the retarget to the declared type this tranche added is used only for the
+store — a ratchet column must not move by having been redefined. What the
+retarget bought shows up in `constEv` instead. Two of the 26 types that newly
+interpret take their whole file clean.
+
+**New debt the clause surfaced rather than created, named so the next tranche
+does not read the +26 without it**, the same courtesy the `Π` clause's eight
+`no-endpoint` got. `polyev` gains **21 `no-endpoint` and 7 `not-decomposable`**
+where it loses 14 `symbolic-level` and the `no-interp(·)` rows. Those are
+conversion certificates: declarations that used to stop at `const_evidence`
+now get past it and stop where the *conversion* between the inferred and the
+declared type has no evidence. That is why `valueEv` is flat rather than up,
+it is the next thing to look at on this route, and it is a *reason* and not a
+regression — `polyev`'s total fell, 158 to 153.
+
+#### The site census, and the verdict it delivers
+
+| site | after `Π` | **after the const clause** |
+|---|---|---|
+| `const_evidence`'s `ls → Vec<u32>` | 109 | **0, absent** |
+| the *fall-through* to the ground store | — | 68 |
+| `poly_const_evidence`'s unthreaded use | — | 3 |
+| `miss_reason` | 16 | **0, absent** |
+| `scope_typing`'s empty slot | 3 | 3 (moved line) |
+
+The 68 is the whole story and it is **not** a level-polymorphism residue.
+Instrumented to name every constant that falls through, the population is
+`Quot` (1907), `Prod` (883), `Eq` (789), `RBTree` (723), `Quot.mk`, `List`,
+`Acc`, `Bool.rec`, `List.cons`, … — **every single one an inductive type, one
+of its constructors, or its recursor**, and not one a zone-A `def` or `axiom`.
+The const clause is *finished* for the population this route walks; what
+remains at that site is the zone-B skip, which is a different clause group.
+
+#### The per-file verdict, and the ceiling nobody had measured
+
+18 → **20 of 89**, and the reason it is not larger is worth stating precisely,
+because the sizing that says "every unclean export contains a constant
+reference, so the const clause is what moves the file count" is true and still
+misleading.
+
+`PolyLedger::is_clean` refuses to excuse `zoneB`, correctly. **64 of the 89
+files that reach this route contain at least one `inductive`, `mutual` or
+`Quot`.** No clause outside zone B can make them clean, whatever it does to
+their `def`s. The reachable ceiling for every zone-A clause put together is
+therefore **25 files**, not 89 — and after this tranche **20 of those 25 are
+clean**. `006_betaReduction` and `007_betaReduction2` are the two this clause
+finished. The remaining five are `008_forallSortWhnf`, `015_levelParams`,
+`027_peano1`, `028_peano2` and `029_peano3`, and none of them is blocked on a
+constant reference any more: their rows are `classifier` (the retarget above)
+and, on the peano trio, five `symbolic-level` in a `Sort`-elimination shape.
+`027`–`029` now interpret **every** value they attempt (7/7, 8/8, 10/10) and
+owe only certificates.
+
+So the honest reading of the strand's verdict line: **zone A is nearly done
+per-file and the per-file number is now a zone-B measurement.** Putting zone B
+on the de-scheduled route is the next clause group and it is where the other 64
+files are.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

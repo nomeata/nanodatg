@@ -47,21 +47,43 @@
 //! symbols differently from a file with one `def` in front, and the poly rows
 //! of the two would not be comparable.
 //!
+//! # The store, and what it made of the census
+//!
+//! Every zone-A declaration whose value interprets gets a **generic point**
+//! written to [`Interp`]'s poly store: an abbreviation `f̂` of arity
+//! `|lparams|` with `⟦c.{ℓ⃗}⟧ = f̂(ℓ̂⃗)`, and `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)`
+//! where the value's certificate reached the declared type. §5.3 step 5, in
+//! three steps that must happen in this order and do: `poly_const_open` while
+//! the level hypotheses are live, [`Checker::discharge_levels`] over all three
+//! conclusions at once, then `gen_all_checked` on the closed theorem.
+//!
+//! This header used to say *"nothing is stored"* and size the remainder at 84
+//! (later 109) `const_evidence` sites. That site is **0 and absent** from the
+//! census now. What replaced it is a *fall-through*: 68 constant references
+//! whose name has no generic point — and instrumented to name them, every one
+//! is an inductive type, a constructor or a recursor (`Quot`, `Prod`, `Eq`,
+//! `RBTree`, `List`, `Acc`, `Bool.rec`). Not one is a zone-A `def` or `axiom`.
+//!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
-//! * **Nothing is stored.** `⟦c.{u⃗}⟧` is not minted and the interpretation
-//!   store is not filled, so every *reference* to a constant this pass has
-//!   already walked past still finds nothing. That is §5.3 step 5's business —
-//!   the store's key has to be the generic point — and it is why
-//!   `polyblocked` is expected to be dominated by constant references — and
-//!   measured, it is: 84 of the 138 residual `Gap::SymbolicLevel` over the
-//!   tutorial corpus are `const_evidence`'s. That is **not** wholly an
-//!   artifact of the absent store, though: `const_evidence` reads the level
-//!   vector as `Vec<u32>` and would miss at a parametric level whatever the
-//!   store contained. See the header of [`PolyLedger::sites`].
 //! * **Zone B is not on this route.** `inductive`, `mutual` and `Quot` are
 //!   counted in [`PolyLedger::zone_b`] and skipped. Their clauses are
 //!   `zoneb.rs`'s 23 `Gap::SymbolicLevel` sites and are a later clause group.
+//!   Since the const clause landed this is the *whole* of what the census
+//!   shows, and — because [`PolyLedger::is_clean`] refuses to excuse
+//!   `zone_b` — it is also what caps the per-file verdict at 25 of the 89
+//!   tutorial files: 64 of them contain a zone-B declaration.
+//! * **A ground use of a poly constant pays the §1.2 bridge — and does not
+//!   yet cost anything here.** The instantiation is unconditional and derives
+//!   a true typing, but at the ω spelling `srt(n̄)` where the use site's own
+//!   `⟦Sort n⟧` is `Uₙ`; the two are `Interp::rung_bridge` apart, so the
+//!   declared-type retarget declines and the cost lands on
+//!   [`PolyLedger::const_ev_ok`].
+//!   `a_ground_use_of_a_polymorphic_constant_interprets_and_certifies`
+//!   exhibits it — `constEv=1` of 2, reason `classifier`. **Over the tutorial
+//!   corpus that bucket is empty**: the poly constants that reach the store
+//!   are used at parametric levels, so the bridge is real, demonstrated, and
+//!   not on the critical path. Retired by the switchover (§5.5) all the same.
 //!
 //! Both are counted rather than silently passed over, because a pass that
 //! reports `declars=N` while having attempted a third of them is the shape of
@@ -70,7 +92,7 @@
 use std::collections::BTreeMap;
 
 use crate::env::{Declaration, Environment};
-use crate::ev::Gap;
+use crate::ev::{Gap, Sealed};
 use crate::interp::Interp;
 use crate::kernel::{Checker, Typing};
 use crate::ledger::Ledger;
@@ -100,7 +122,30 @@ pub struct PolyLedger {
     /// Declarations whose `⟦val⟧` was produced.
     pub values_ok: usize,
     /// Declarations whose `⊢ ⟦val⟧ ∈ ⟦valTy⟧` was derived **and closed**.
+    ///
+    /// At the type *inference* assigned the value, which is not the declared
+    /// type. That is the meaning this column's Gate B baseline was taken at
+    /// and it is deliberately unchanged by the generic-point tranche — the
+    /// retarget to the declared type happens for [`PolyLedger::const_ev_ok`]
+    /// and only there, so a ratchet column cannot move by having been
+    /// redefined.
     pub value_ev_ok: usize,
+    /// **Generic points minted** — `⟦c⟧ = f̂(u⃗)` written to the poly store,
+    /// with or without a typing. `LEVELPOLY.md` §5.3 step 5.
+    ///
+    /// Counted apart from [`PolyLedger::const_ev_ok`] for MINI-DESIGN.md §0's
+    /// reason: an interpretation and a certificate are two axes, and a
+    /// constant whose term is in the store still unblocks a use site's
+    /// `valuesOk` where it cannot unblock its `valueEv`.
+    ///
+    /// Counts generic points **minted**, which is the same number as generic
+    /// points *inserted* on any one file — a name appears once — and differs
+    /// only when one [`Interp`] is driven over the same declarations twice,
+    /// where [`Interp::put_poly_const`] is first-writer-wins.
+    pub stored: usize,
+    /// Generic points whose `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)` was derived,
+    /// generalised **and sealed**.
+    pub const_ev_ok: usize,
     /// **Certificates that reached declaration exit still carrying a
     /// hypothesis**, after [`Checker::discharge_levels`].
     ///
@@ -121,12 +166,20 @@ pub struct PolyLedger {
     /// step 1 lists the remaining §6.2 clauses by *`Gap::SymbolicLevel` site
     /// count* — `zoneb.rs` at 23, `kernel.rs` at 21 — and a site count is not a
     /// work estimate; the branch has already had three sizings corrected for
-    /// exactly that reason. This is what the clauses cost when a real file is
-    /// run through them.
+    /// exactly that reason, and a fourth here: this histogram is what said the
+    /// const clause's 109 sites were one clause, and it is what said the 68
+    /// that replaced them are zone B rather than more of the same. This is
+    /// what the clauses cost when a real file is run through them.
     pub blocked: BTreeMap<String, usize>,
     /// Why a certificate was absent where the interpretation was present — the
     /// evidence axis, kept in its own histogram for MINI-DESIGN.md §0's reason.
     pub ev_blocked: BTreeMap<String, usize>,
+    /// Why a **generic point's** typing was absent where the abbreviation was
+    /// minted. Its own histogram, and not folded into
+    /// [`PolyLedger::ev_blocked`], because the two answer different questions:
+    /// that one is "why does this declaration have no certificate", this one is
+    /// "why will every *later* use of this constant have none".
+    pub const_blocked: BTreeMap<String, usize>,
     /// **Where the reported gap was minted**, `file:line`, when
     /// `MINI_POLY_SITES` asked — empty otherwise.
     ///
@@ -136,14 +189,20 @@ pub struct PolyLedger {
     /// the single string `symbolic-level`, and on the first run of this route
     /// that one bucket was **90% of every blocked interpretation**. That number
     /// sizes the remaining work and says nothing about *which* work: under a
-    /// [`Checker::poly`] thread the two sites that can still mint it are
-    /// `pi_evidence`, which wants `as_numeral(l1)`/`as_numeral(l2)` and is
+    /// [`Checker::poly`] thread the two sites that could mint it were
+    /// `pi_evidence`, which wanted `as_numeral(l1)`/`as_numeral(l2)` and was
     /// **derivation** (`derived::levels::{pi_rules, ite0, leq}`), and
-    /// `const_evidence`, which wants the whole level vector as numerals and is
-    /// **the store's key** (§5.3 step 5). Those are different jobs with
+    /// `const_evidence`, which wanted the whole level vector as numerals and
+    /// was **the store's key** (§5.3 step 5). Those are different jobs with
     /// different owners, and a bucket that merges them is `MINI-DESIGN.md`
     /// §0.4's "keyed on a name instead of a cause" in the one place the branch
     /// most needs the cause.
+    ///
+    /// **Both are gone from the census, and this row is what showed it.** Each
+    /// went to zero and *disappeared* rather than shrinking — the shape a
+    /// clause takes when the obstruction was the schedule rather than the
+    /// mathematics. What the row reports now is the fall-through to the ground
+    /// store, and it is a zone-B population; the module header names it.
     ///
     /// The trail [`crate::blocker`] already keeps is exactly the missing
     /// information, and its oldest entry is the origin rather than a
@@ -165,6 +224,21 @@ impl PolyLedger {
     /// reach owes them; counting the route clean on the strength of having
     /// skipped them is the "SKIP is not PASS" defect with a ledger column as
     /// the vehicle.
+    ///
+    /// That conjunct is also what caps this route's *per-file* verdict, and
+    /// the cap is worth stating because a reader will otherwise size the
+    /// remaining work against 91. Measured over the tutorial corpus: **64 of
+    /// the 89 files that reach this route at all contain at least one
+    /// `inductive`, `mutual` or `Quot`**, so no clause outside zone B can make
+    /// them clean. The reachable ceiling for every zone-A clause put together
+    /// is 25 files, and that is a fact about the route's coverage rather than
+    /// about the clauses.
+    ///
+    /// **[`PolyLedger::const_ev_ok`] is deliberately not a conjunct.** It
+    /// counts what a *later* declaration will be able to do, not what this
+    /// file owes; a file whose last declaration is an uncertifiable `def`
+    /// nobody references is clean, and folding the store's coverage in here
+    /// would call it dirty for an obligation that has no consumer.
     pub fn is_clean(&self) -> bool {
         self.apparatus
             && self.zone_b == 0
@@ -183,7 +257,7 @@ impl PolyLedger {
     /// `MINI_POLY_SITES` asked for one.
     pub fn rows(&self) -> Vec<String> {
         let mut head = format!(
-            "polyledger\tdeclars={}\tzoneB={}\ttypesOk={}\ttypeEv={}\tvaluesOk={}/{}\tvalueEv={}\topen={}",
+            "polyledger\tdeclars={}\tzoneB={}\ttypesOk={}\ttypeEv={}\tvaluesOk={}/{}\tvalueEv={}\tstored={}\tconstEv={}\topen={}",
             self.declarations,
             self.zone_b,
             self.types_ok,
@@ -191,6 +265,8 @@ impl PolyLedger {
             self.values_ok,
             self.values_attempted,
             self.value_ev_ok,
+            self.stored,
+            self.const_ev_ok,
             self.open,
         );
         // Named on the row and not merely implied by a zero, because "the
@@ -204,8 +280,12 @@ impl PolyLedger {
             }
             s
         };
-        let mut rows =
-            vec![head, hist("polyblocked", &self.blocked), hist("polyev", &self.ev_blocked)];
+        let mut rows = vec![
+            head,
+            hist("polyblocked", &self.blocked),
+            hist("polyev", &self.ev_blocked),
+            hist("polyconstev", &self.const_blocked),
+        ];
         // Only when it was asked for: a bare `polysites` row on every run would
         // read as "no site was recorded" rather than "nobody asked".
         if !self.sites.is_empty() {
@@ -258,9 +338,11 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
         if sites {
             crate::blocker::enter_pair();
         }
-        let (lparams, ty, val) = match d {
-            Declaration::Axiom { lparams, ty, .. } => (lparams, ty, None),
-            Declaration::Def { lparams, ty, value, .. } => (lparams, ty, Some(value)),
+        let (name, lparams, ty, val) = match d {
+            Declaration::Axiom { name, lparams, ty, .. } => (name, lparams, ty, None),
+            Declaration::Def { name, lparams, ty, value, .. } => {
+                (name, lparams, ty, Some(value))
+            }
             Declaration::Quot | Declaration::Inductive { .. } | Declaration::Mutual { .. } => {
                 led.zone_b += 1;
                 continue
@@ -278,14 +360,58 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
         let ty_t = c.infer_type(ty);
         let val_t = val.map(|v| c.infer_type(v));
 
+        // ── The generic point (§5.3 step 5), minted while `u⃗ ∈ ω` are open ──
+        //
+        // `⟦c⟧` is an **abbreviation** for `⟦val⟧` abstracted over the
+        // declaration's level variables, and its typing is the value's typing
+        // carried back along that defining equation — the ground pipeline's
+        // last step (`Ledger::run`, §8) at a variable rung, with `f̂(u⃗)` where
+        // that one has a 0-ary constant.
+        //
+        // **Retargeted to the *declared* type first.** The value's own
+        // certificate is at the type inference assigned it, and a use site
+        // asks about the declared one; a store filled at the inferred type
+        // would answer a question nobody asks. This is `Ledger::run`'s
+        // `retarget_to` on the de-scheduled route, and it is used **only** for
+        // the store: `valueEv` below still counts `val_t.ev`, so Gate B's
+        // ratchet column keeps the meaning its baseline was taken at.
+        let ty_tm = ty_t.as_ref().ok().and_then(|t| t.tm.clone());
+        // The whole [`crate::ev::Ev`] and not just its theorem: when the
+        // retarget declines, **its** reason is the one the store owes (§0.4 —
+        // a missing typing carries the reason of the sub-result that stopped
+        // it, never a stand-in). This read `.thm().cloned()` and the store
+        // then reported `Gap::Classifier` by fallback, which is a guess.
+        //
+        // **The guess did not stay inside the store's own column**, and that
+        // is the part worth naming: `Checker::poly_const_evidence` hands the
+        // stored gap straight back to every later *use* of the constant, so a
+        // wrong reason here is a wrong reason at every reference to it. Fixing
+        // it moved 26 entries out of `polyev classifier` as well as 29 out of
+        // `polyconstev classifier`, and those 26 were never this function's
+        // to report. A reason in a store is not a leaf.
+        let store_ev = match (val_t.as_ref().and_then(|t| t.as_ref().ok()), &ty_tm) {
+            (Some(tv), Some(want)) => Some(c.retarget_to(tv, ty, want.clone())),
+            _ => None,
+        };
+        let store_mem = store_ev.as_ref().and_then(|e| e.thm().cloned());
+        let opened = val_t
+            .as_ref()
+            .and_then(|t| t.as_ref().ok())
+            .and_then(|t| t.tm.clone())
+            .and_then(|v| c.poly_const_open(lparams, &v, store_mem.as_ref()));
+
         // **Closed together, in one call, before anything is read back.**
-        // The two conclusions stand over the same `uᵢ`, so they are discharged
+        // The conclusions stand over the same `uᵢ`, so they are discharged
         // against the same assumptions in one pass; `Checker::discharge_levels`
-        // says why the singular form could not do this.
-        let raw: Vec<_> = [ty_t.as_ref().ok(), val_t.as_ref().and_then(|t| t.as_ref().ok())]
-            .iter()
-            .map(|t| t.and_then(|t: &Typing| t.ev.thm().cloned()))
-            .collect();
+        // says why the singular form could not do this. The constant's own
+        // typing is the **third** conclusion that function's slice form was
+        // widened for, and it arrives exactly where §5.3 predicted it would.
+        let raw: Vec<_> = [
+            ty_t.as_ref().ok().and_then(|t: &Typing| t.ev.thm().cloned()),
+            val_t.as_ref().and_then(|t| t.as_ref().ok()).and_then(|t: &Typing| t.ev.thm().cloned()),
+            opened.as_ref().and_then(|o| o.typing.clone()),
+        ]
+        .to_vec();
         let present: Vec<_> = raw.iter().flatten().cloned().collect();
         let mut closed = c.discharge_levels(&present).into_iter();
         drop(c);
@@ -342,6 +468,61 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
                 PolyLedger::note(&mut led.ev_blocked, g.as_ref());
             }
         }
+
+        // ── …and generalised, third and last (§5.3 step 5, obstacle 1) ──
+        //
+        // Only now. `crate::rec_dep::gen_all_checked` refuses to bind a
+        // variable that is free in a live hypothesis, and `uᵢ ∈ ω` is exactly
+        // such a hypothesis until the discharge above turned it into an
+        // antecedent. That refusal is the reason the order is retarget →
+        // batch-discharge → generalise and not any other, and it is a refusal
+        // rather than a caveat: `Thm::gen` is banned in `mini/src` (R6′ I3)
+        // precisely so the side condition cannot be waived by accident.
+        let Some(o) = opened else { continue };
+        led.stored += 1;
+        let typing = match &closed[2] {
+            Some(t) => match crate::rec_dep::gen_all_checked(&o.vars, t) {
+                // `Sealed` is the funnel, and it is what makes `open` an
+                // *assertion* here rather than an observation: a theorem that
+                // reached this point still carrying a hypothesis is refused
+                // the store instead of being written to it.
+                Some(g) => match Sealed::new(g) {
+                    Ok(s) => {
+                        led.const_ev_ok += 1;
+                        Ok(s)
+                    }
+                    Err(_) => {
+                        led.open += 1;
+                        Err(Gap::Skeleton)
+                    }
+                },
+                None => Err(Gap::Skeleton),
+            },
+            // The retarget's own reason first, the value's behind it, and
+            // `Classifier` only where neither exists — which is the store
+            // having nothing to say about a value that had a certificate, and
+            // cannot arise from the branch above.
+            None => Err(store_ev
+                .as_ref()
+                .and_then(|e| e.gap().cloned())
+                .or_else(|| val_t.as_ref().ok().and_then(|t| t.ev.gap().cloned()))
+                .unwrap_or(Gap::Classifier)),
+        };
+        if let Err(g) = &typing {
+            PolyLedger::note(&mut led.const_blocked, Some(g));
+        }
+        ip.put_poly_const(
+            *name,
+            crate::interp::PolyConst {
+                sym: o.sym,
+                arity: lparams.len(),
+                typing,
+                // Unconditional by construction — a definitional extension
+                // assumes nothing — so it is sealed here rather than
+                // discharged. See `Checker::poly_const_open`.
+                defeq: Sealed::new(o.defeq).ok(),
+            },
+        );
     }
     if sites {
         crate::blocker::arm(was_armed);
@@ -352,10 +533,26 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::DefKind;
-    use crate::expr::{E, Level, Name, forall, sort};
+    use crate::env::{ConstantInfo, DefKind};
+    use crate::expr::{E, Level, Name, forall, konst, sort};
 
     fn n(s: &str) -> Name { Name::simple(s) }
+
+    /// The `Environment` the declarations describe — what a *reference* to one
+    /// of them needs, and what `run` alone does not build.
+    fn env_of(ds: &[Declaration]) -> Environment {
+        let mut env = Environment::empty();
+        for d in ds {
+            if let Declaration::Def { name, lparams, ty, value, .. } = d {
+                env.insert_new(
+                    *name,
+                    ConstantInfo::Def { lparams: lparams.clone(), ty: *ty, value: *value },
+                )
+                .expect("a fresh name per declaration");
+            }
+        }
+        env
+    }
 
     /// A `def` whose type is `Sort u` and whose value is `Sort v`, at whatever
     /// parameters are asked for.
@@ -628,6 +825,176 @@ mod tests {
             "`inference-error` is unmintable on this route: {:?}",
             led.ev_blocked
         );
+    }
+
+    /// **A use under a *different parameter name* hits** — the miss the
+    /// generic point exists to sidestep, `LEVELPOLY.md` §5.3 step 5.
+    ///
+    /// This is the axis and nothing else. The obvious design keys the store by
+    /// the widened [`crate::interp::ConstKey`] and looks a use up at
+    /// `ground::key_levels(ls)`; `key_levels` canonicalises by `simplify()` but
+    /// does **not** rename parameters positionally, so `(d,[param u])` and
+    /// `(d,[param v])` are two keys and this file — where `d` is declared over
+    /// `u` and used over `v` — misses. The *checker's* own step-5 fixture pins
+    /// exactly that miss on its side. Keyed by [`Name`] alone the parameter's
+    /// name never enters the key at all, so there is nothing to disagree.
+    ///
+    /// Renaming `v` to `u` in `e` must keep this green: a fixture that only
+    /// passes at one spelling is testing the spelling.
+    #[test]
+    fn a_use_under_a_different_parameter_name_hits_the_generic_point() {
+        let (u, v) = (Level::param(n("u")), Level::param(n("v")));
+        let d = def("d", &["u"], sort(u.succ()), sort(u));
+        let e = def("e", &["v"], sort(v.succ()), konst(n("d"), [v].into()));
+        let ds = [d, e];
+        let env = env_of(&ds);
+        let mut ip = Interp::new();
+        let led = run(&env, &ds, &mut ip);
+        assert_eq!(led.stored, 2, "both declarations mint a generic point: {:?}", led.rows());
+        assert_eq!(
+            led.const_ev_ok, 2,
+            "the use at `v` of a constant declared over `u`: {:?}",
+            led.rows()
+        );
+        assert!(led.is_clean(), "{:?}", led.rows());
+    }
+
+    /// **The generic point is instantiated positionally, and a permutation is
+    /// what shows it.**
+    ///
+    /// Three parameters, used in a rotated order — `d.{c,a,b}` — because two
+    /// cannot distinguish a transposition from an identity and one cannot
+    /// distinguish anything. The assertion is on the **conclusion**, not on a
+    /// counter: `f̂`'s arguments and the set the membership is about must both
+    /// be at the *use site's* levels in the *use site's* order. A store that
+    /// handed back the theorem at the wrong permutation would still be a
+    /// theorem, still `Proved`, and still counted — which is precisely the
+    /// silent failure `pi_typing_of`'s conclusion check exists for, one clause
+    /// over.
+    #[test]
+    fn the_generic_point_is_instantiated_positionally_at_three_parameters() {
+        let (u, v, w) = (Level::param(n("u")), Level::param(n("v")), Level::param(n("w")));
+        let big = Level::max(u, Level::max(v, w));
+        let d = def("d", &["u", "v", "w"], sort(big.succ()), sort(big));
+        let ds = [d];
+        let env = env_of(&ds);
+        let mut ip = Interp::new();
+        let led = run(&env, &ds, &mut ip);
+        assert_eq!(led.const_ev_ok, 1, "{:?}", led.rows());
+        let sym = ip.get_poly_const(&n("d")).expect("stored").sym;
+
+        // The use site: a fresh declaration over `a,b,c`, referring to
+        // `d.{c,a,b}`. Its type is therefore `Sort ((max c (max a b))+1)`.
+        let (a, b, c) = (Level::param(n("a")), Level::param(n("b")), Level::param(n("c")));
+        let mut ck = Checker::poly(&env, &mut ip, &[n("a"), n("b"), n("c")]).expect("poly");
+        let t = ck.infer_type(&konst(n("d"), [c, a, b].into())).expect("infer");
+        let vars = ck.level_vars();
+        drop(ck);
+
+        let args: Vec<_> =
+            [c, a, b].iter().map(|l| ip.level_term(l, &vars).expect("ℓ̂")).collect();
+        let want_tm = ip.mk(sym, args);
+        let want_set =
+            ip.sort_of(&Level::max(c, Level::max(a, b)).succ(), &vars).expect("⟦Sort ·⟧");
+        assert_eq!(t.tm, Some(want_tm.clone()), "⟦d.{{c,a,b}}⟧ is f̂ at the rotated levels");
+        assert_eq!(
+            t.ev.thm().map(|t| t.concl().clone()),
+            Some(kernel::Formula::mem(want_tm, want_set)),
+            "the instantiated typing is about the rotated levels, in that order"
+        );
+    }
+
+    /// **A generic point with no certificate still interprets.** The two axes
+    /// are separate (MINI-DESIGN.md §0) and the store keeps them separate: a
+    /// `def` whose value has no typing still gets its abbreviation, so a later
+    /// reference to it has a *term* and moves `valuesOk` where it cannot move
+    /// `valueEv`.
+    ///
+    /// `d`'s value is an application of a bound variable, which interprets and
+    /// has no certificate on this route. Were the store to refuse the whole
+    /// entry on a missing typing, `e` below would report `no-interp(d)` — the
+    /// reason the ground path reserves for a constant that *denotes nothing*.
+    #[test]
+    fn a_generic_point_is_stored_without_a_typing_and_still_names_a_term() {
+        let u = Level::param(n("u"));
+        // `def d.{u} : Sort u → Sort u := fun (x : Sort u) => x`
+        let d = def(
+            "d",
+            &["u"],
+            forall(sort(u), sort(u)),
+            crate::expr::lam(sort(u), crate::expr::bvar(0)),
+        );
+        let e = def("e", &["u"], forall(sort(u), sort(u)), konst(n("d"), [u].into()));
+        let ds = [d, e];
+        let env = env_of(&ds);
+        let mut ip = Interp::new();
+        let led = run(&env, &ds, &mut ip);
+        assert_eq!(led.stored, 2, "an entry per declaration: {:?}", led.rows());
+        assert!(
+            ip.get_poly_const(&n("d")).is_some(),
+            "the abbreviation is stored whatever the typing did"
+        );
+        // The term axis reached `e` — which is the whole claim.
+        assert_eq!(led.values_ok, 2, "⟦d.{{u}}⟧ names a term at the use site: {:?}", led.rows());
+        assert!(
+            !led.blocked.contains_key("no-interp(d)"),
+            "a stored constant is never `no-interp`: {:?}",
+            led.blocked
+        );
+    }
+
+    /// **A ground use of a polymorphic constant, and what the §1.2 bridge
+    /// costs** — the one thing `LEVELPOLY.md` §5.3 step 5 said to *measure*
+    /// rather than assume.
+    ///
+    /// `d.{0}` instantiates the generic point at `∅`, so its typing is about
+    /// `srt(succ ∅)`. A fresh `⟦Sort 1⟧` at the use site is `U₁`
+    /// ([`Interp::sort`]), because [`Interp::sort_of`]'s numeral branch is
+    /// deliberately term-for-term the ground one. The two are **provably
+    /// equal and not the same term** — [`Interp::rung_bridge`] is the
+    /// equation — so the instantiation delivers a true typing at the ω
+    /// spelling and the declared-type retarget, which compares terms, does
+    /// not close.
+    ///
+    /// What is asserted here is what the clause **does**: the constant
+    /// interprets at a ground use and its typing is derived. The spelling
+    /// residue is a measurement and lives in `LEVELPOLY.md` §5.3, not in an
+    /// assertion — a fixture that pinned `const_ev_ok == 0` would be pinning
+    /// the bridge's absence, and the bridge is scheduled to be built.
+    #[test]
+    fn a_ground_use_of_a_polymorphic_constant_interprets_and_certifies() {
+        let u = Level::param(n("u"));
+        let d = def("d", &["u"], sort(u.succ()), sort(u));
+        let e = def("e", &[], sort(Level::zero().succ().succ()), konst(n("d"), [Level::zero()].into()));
+        let ds = [d, e];
+        let env = env_of(&ds);
+        let mut ip = Interp::new();
+        let led = run(&env, &ds, &mut ip);
+        assert_eq!(led.values_ok, 2, "⟦d.{{0}}⟧ is a term: {:?}", led.rows());
+        assert_eq!(
+            led.value_ev_ok, 2,
+            "…and the instantiation at `∅` really derives a typing: {:?}",
+            led.rows()
+        );
+        assert_eq!(led.open, 0, "a closed level vector discharges unconditionally");
+    }
+
+    /// **Nothing is stored on the σ-scheduled route**, which is what makes
+    /// `const_evidence`'s new first lookup inert there by construction rather
+    /// than by measurement — and so what makes Gate A's byte-identity a
+    /// property of the code instead of a property of the corpus.
+    #[test]
+    fn the_scheduled_route_writes_no_generic_point() {
+        let u = Level::param(n("u"));
+        let d = def("d", &["u"], sort(u.succ()), sort(u));
+        let ds = [d];
+        let env = env_of(&ds);
+        let mut ip = Interp::new();
+        let mut sched = std::collections::HashMap::new();
+        sched.insert(n("d"), vec![vec![0u32]]);
+        let _ = Ledger::run(&env, &ds, &sched, &mut ip);
+        assert_eq!(ip.poly_const_count(), 0, "the scheduled route filled the poly store");
+        assert!(ip.const_count() > 0, "…while filling the one it owns");
     }
 
     /// The row is wire-safe in the same sense `Ledger`'s is: one `key=value`

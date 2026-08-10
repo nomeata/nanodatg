@@ -88,6 +88,16 @@ use crate::expr::{Level, LevelView, Name};
 /// assumption honest.
 #[derive(Debug, Clone)]
 pub struct LevelVar {
+    /// **The kernel free variable itself**, beside its term.
+    ///
+    /// Redundant with [`LevelVar::tm`] only for a reader: `kernel::Term`
+    /// exposes no `as_var`, so a consumer holding the term alone cannot get
+    /// the variable back. Both of step 5's binders need it —
+    /// [`derived::define_abbrev`] takes the abstraction prefix as `&[FreeVar]`
+    /// and [`crate::rec_dep::gen_all_checked`] takes the variables to close —
+    /// and [`crate::kernel::Checker::poly`] has it at the mint. It used to
+    /// drop it. (`LEVELPOLY.md` §5.3 step 5, obstacle 3.)
+    pub v: FreeVar,
     /// `û`, a kernel free variable's term.
     pub tm: Term,
     /// `⊢ u ∈ ω`, under whatever hypotheses opened it.
@@ -168,6 +178,56 @@ pub struct ConstInterp {
     pub defeq: Option<Sealed>,
 }
 
+/// **What the store holds for a constant at its own universe parameters** —
+/// `LEVELPOLY.md` §5.3 step 5, mini's half.
+///
+/// # Why this is not a [`ConstKey`] entry
+///
+/// The obvious design is to let [`ConstKey`]'s widened level vector carry
+/// parametric levels and look the use site up at `ground::key_levels(ls)`. It
+/// does not work, and the *checker* has already paid for finding out:
+/// `key_levels` canonicalises by [`crate::expr::Level::simplify`] but does not
+/// rename parameters positionally, so `(d,[param u])` and `(d,[param v])` are
+/// two keys and a use under a different parameter name misses. The checker's
+/// own step-5 fixture pins exactly that miss.
+///
+/// So the poly store is keyed by [`Name`] **alone** and holds the *generic
+/// point*: one symbol `f̂` of arity `|lparams|` and one quantified theorem over
+/// its arguments. The parameter's name never enters the key, so the hole is
+/// sidestepped rather than inherited.
+///
+/// # It is filled only by [`crate::poly_run`]
+///
+/// Which is what makes consulting it first in
+/// `Checker::const_evidence` inert on the σ-scheduled route: that route never
+/// writes here, so the lookup is a miss by construction and Gate A's
+/// byte-identity does not depend on a test to hold.
+#[derive(Debug, Clone)]
+pub struct PolyConst {
+    /// `f̂`, of arity [`PolyConst::arity`]. `⟦c.{ℓ⃗}⟧ = f̂(ℓ̂₁,…,ℓ̂ₖ)`.
+    pub sym: FnSym,
+    /// `k = |lparams|`. A use whose level vector is a different length is not
+    /// this constant and falls through rather than being instantiated short.
+    pub arity: usize,
+    /// `⊢ ∀u⃗. (u₁∈ω → … → uₖ∈ω → f̂(u⃗) ∈ T̂(u⃗))`, or why it is missing.
+    ///
+    /// The antecedents are in `lparams` order, which is the order
+    /// [`crate::kernel::Checker::discharge_levels`] closes them in and the
+    /// order [`Interp::poly_instantiate`] discharges them in.
+    pub typing: Result<Sealed, Gap>,
+    /// `⊢ ∀u⃗. f̂(u⃗) = ⟦val⟧` — the defining axiom of the abbreviation, δ's
+    /// certificate at the generic point.
+    ///
+    /// **Stored ahead of its consumer, deliberately.** Nothing reads it yet:
+    /// `Checker::delta_evidence` is still on the ground store's `defeq`, and
+    /// the poly route does not reach δ. It is kept because the alternative is
+    /// worse than a dead field — the equation cannot be *re-derived* later,
+    /// only re-minted, and `derived::define_abbrev` mints a **second symbol**
+    /// every time it is called. A store entry without its equation would leave
+    /// the next tranche with two symbols both claiming to be `⟦c⟧`.
+    pub defeq: Option<Sealed>,
+}
+
 /// The interpretation's state: one kernel `Env`, the ambient signature, the
 /// term registry the skeleton decomposition needs, and the stores.
 pub struct Interp {
@@ -189,6 +249,10 @@ pub struct Interp {
     /// `max(l1, l2)` before it applies.
     cumul: Cumul,
     consts: HashMap<ConstKey, ConstInterp>,
+    /// **The generic-point store**, keyed by [`Name`] alone — see
+    /// [`PolyConst`] for why the key is not a [`ConstKey`]. Written only by
+    /// [`crate::poly_run`].
+    poly_consts: HashMap<Name, PolyConst>,
     /// The graph machinery per lambda body **shape**. Identity, not a cache:
     /// see [`Interp::lam_site`].
     lams: HashMap<Term, LamSite>,
@@ -1564,6 +1628,7 @@ impl Interp {
             x_canon,
             cumul,
             consts: HashMap::new(),
+            poly_consts: HashMap::new(),
             lams: HashMap::new(),
             fibres: HashMap::new(),
             conds: HashMap::new(),
@@ -3335,6 +3400,85 @@ impl Interp {
         self.mk(sym, vec![])
     }
 
+    /// **A `k`-ary abbreviation over the declaration's level variables** — the
+    /// generic point of `LEVELPOLY.md` §1.6's `f̂(u⃗)`, and [`Interp::abbrev`]
+    /// with a non-empty prefix.
+    ///
+    /// Hands back `f̂` and `⊢ ∀u⃗. f̂(u⃗) = body`, the latter checked at the
+    /// generic point rather than trusted. The prefix is *exactly* the
+    /// declaration's
+    /// `lparams`, in order, and that is load-bearing twice over: it is the
+    /// order [`Interp::poly_instantiate`] supplies arguments in, and
+    /// [`derived::define_abbrev`] refuses a body with a free variable outside
+    /// the prefix — so a body that mentions anything but the level variables
+    /// (a leaked skeleton variable, an unclosed binder) is a decline here
+    /// rather than a symbol with the wrong arity.
+    ///
+    /// A prefix that *over*-covers is accepted, and that is wanted: a
+    /// declaration may not mention every parameter it declares, and `f̂` must
+    /// still take one argument per parameter or the use site cannot supply
+    /// `ℓ̂⃗` positionally.
+    pub fn poly_abbrev(&mut self, vs: &[FreeVar], body: &Term) -> Option<(FnSym, Thm)> {
+        let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), vs, body)?;
+        let args: Vec<Term> = vs.iter().map(|v| Term::var(*v)).collect();
+        let t = self.mk(sym, args.clone());
+        // Read the generic point back out of the axiom rather than trusting
+        // the prefix: `inst_all` at the variables themselves re-opens exactly
+        // what `define_abbrev` closed, so a disagreement is a decline and
+        // never a described-but-false equation.
+        let opened = derived::inst_all(&ax, &args)?;
+        (*opened.concl() == Formula::eq(t, body.clone())).then_some((sym, ax))
+    }
+
+    /// **A use of the generic point at `ℓ⃗`** — `⊢ f̂(ℓ̂⃗) ∈ T̂(ℓ̂⃗)` from
+    /// `⊢ ∀u⃗. (u₁∈ω → … → uₖ∈ω → f̂(u⃗) ∈ T̂(u⃗))`.
+    ///
+    /// One [`derived::inst_all`] at `ℓ̂⃗` and one [`Thm::mp`] per antecedent,
+    /// each discharged by [`Interp::level_in_omega`]. The conclusion therefore
+    /// carries exactly the `uᵢ ∈ ω` hypotheses of the parameters the *use
+    /// site's* levels mention, and a **closed** level vector discharges
+    /// unconditionally — which is why a ground use of a poly constant costs
+    /// nothing beyond the instantiation.
+    ///
+    /// # What this deliberately does not check
+    ///
+    /// That `T̂(ℓ̂⃗)` is the same term as a fresh `⟦T[ℓ⃗/u⃗]⟧`. It is **not**, in
+    /// general: Lean's level substitution normalises where the term side does
+    /// not (`imax u 0` at `u:=1` is `1` on Lean's side and `ite0(0̄,∅,1̄∪0̄)` on
+    /// this one — provably equal, not syntactically), and a numeral rung is
+    /// spelled `Uₙ` by [`Interp::sort`] where the generic point spells it
+    /// `srt(n̄)`. Both are §1.2 bridge equations. A caller that needs the two
+    /// to agree must transport across [`Interp::rung_bridge`]; a caller that
+    /// merely wants *a* typing of `⟦c.{ℓ⃗}⟧` gets a true one here, and a
+    /// downstream mismatch is a counted decline rather than a wrong theorem.
+    ///
+    /// # Which failure the kernel catches, and which it does not
+    ///
+    /// A **mis-ordered antecedent** cannot get past this: [`Thm::mp`] requires
+    /// the implication's antecedent to be literally the minor premise's
+    /// conclusion, so discharging `u₂ ∈ ω` against `ℓ̂₁ ∈ ω` is a `None`. A
+    /// **mis-ordered instantiation** can: the result is a perfectly true
+    /// theorem about the wrong permutation of the levels, `Proved`, and
+    /// counted. That is the one silent failure on this path, and
+    /// `the_generic_point_is_instantiated_positionally_at_three_parameters` is
+    /// the only fixture that catches it — asserted on the conclusion, at three
+    /// parameters, because two cannot distinguish a transposition.
+    pub fn poly_instantiate(
+        &mut self,
+        thm: &Thm,
+        ls: &[Level],
+        vars: &LevelVars,
+    ) -> Option<Thm> {
+        let args: Vec<Term> =
+            ls.iter().map(|l| self.level_term(l, vars)).collect::<Option<_>>()?;
+        let mut cur = derived::inst_all(thm, &args)?;
+        for l in ls {
+            let m = self.level_in_omega(l, vars)?;
+            cur = Thm::mp(&cur, &m)?;
+        }
+        Some(cur)
+    }
+
     // ─────────────────────────────────────────────────── the const store ──
 
     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }
@@ -3357,6 +3501,31 @@ impl Interp {
     /// same file; every caller must sort. `crate::dump` does, and its
     /// determinism test is what holds that.
     pub fn const_keys(&self) -> Vec<ConstKey> { self.consts.keys().cloned().collect() }
+
+    /// The generic point of `name`, if [`crate::poly_run`] has stored one.
+    ///
+    /// Empty on every σ-scheduled run — nothing but the de-scheduled route
+    /// writes here — which is what makes a use-site lookup against it inert on
+    /// the path Gate A measures.
+    pub fn get_poly_const(&self, name: &Name) -> Option<&PolyConst> {
+        self.poly_consts.get(name)
+    }
+
+    /// **First writer wins.** A declaration is walked once per file on the
+    /// de-scheduled route, so a second write would mean two symbols claiming
+    /// to be `⟦c⟧`; the later uses would be about the second and the earlier
+    /// ones about the first, and nothing would report it.
+    ///
+    /// **Unlabelled, unlike [`Interp::put_const`], and deliberately.**
+    /// [`Interp::set_label`] is keyed on a *term*, and a `k`-ary symbol has no
+    /// one term to key on — the labelled thing would have to be `f̂(u⃗)` at this
+    /// declaration's variables, which is not the term any use site builds. A
+    /// label that never matches is worse than none.
+    pub fn put_poly_const(&mut self, name: Name, p: PolyConst) {
+        self.poly_consts.entry(name).or_insert(p);
+    }
+
+    pub fn poly_const_count(&self) -> usize { self.poly_consts.len() }
 
     // ───────────────────────────────────────────── read-only, for the dump ──
 
@@ -3964,10 +4133,11 @@ mod tests {
         let omega = lp.omega();
         let mut vars = LevelVars::new();
         for n in ["u", "v", "w"] {
-            let tm = Term::var(ip.fresh_var());
+            let v = ip.fresh_var();
+            let tm = Term::var(v);
             let in_omega =
                 crate::scope::test_support::assume(Formula::mem(tm.clone(), omega.clone()));
-            vars.insert(Name::simple(n), LevelVar { tm, in_omega });
+            vars.insert(Name::simple(n), LevelVar { v, tm, in_omega });
         }
         (lp, vars)
     }
