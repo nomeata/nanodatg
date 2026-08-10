@@ -705,9 +705,10 @@ stage 6"):
   checker-side pair splits into two subsystems with different fates
   (measured entry counts over the 91 exports, temporary instrument at the
   two entry points): the tg backend's inductive *interpretation*
-  (`walk_spec`/`rec_nest`/`gen_*_nest`, the straight `IndApparatus`
-  duplicate) is deletion-scope under "inductive handling comes from the
-  mini side"; nanoda's inductive *acceptance* (`checker/src/inductive.rs`,
+  (`walk_spec`/`rec_nest`/`gen_*_nest`) was called the straight
+  `IndApparatus` duplicate and put in deletion-scope under "inductive
+  handling comes from the mini side" — **and that scoping does not survive
+  measurement; see the two boxes below**; nanoda's inductive *acceptance* (`checker/src/inductive.rs`,
   1703 lines, + `quot.rs`, 275) is entered **3 times under `Split`** —
   exactly the three fallback inductives, so it is the counted fallback's
   substance, not dead weight — **0 under `ForceMini`**, **102 + 24 under
@@ -723,6 +724,77 @@ stage 6"):
   cover), the `ForceChecker` comparison path and with it the differential
   oracle for the declaration kind, and the only mint-and-compare validation
   of export recursors until A3 lands.
+
+  ### The tg inductive interpretation is not separable from ι — measured
+
+  Attempted under task #125 and **stopped before the deletion**, because the
+  entry-count pricing above measured the wrong entry points. Two findings,
+  both instrumented rather than read off the call graph.
+
+  **1. The four functions are one subsystem rooted at `rec_nest`, and
+  `rec_nest` is on the conversion path.** The call graph is
+  `rec_nest → rec_bottom → gen_rec_bottom → gen_ty_nest → gen_ind →
+  walk_spec`, so `walk_spec`/`gen_ty_nest`/`gen_ctor_nest` cannot go without
+  `rec_nest`. And `rec_nest` has two callers, *neither* of them a
+  declaration-kind dispatch: `interp`'s constant arm (`tg.rs:8172`), which is
+  what gives `⟦T.rec⟧` a defining equation and so "is what makes iota
+  reachable at all" in that site's own words, and `derive_iota`
+  (`tg.rs:11183`) under `Certifier::iota`, which `tc.rs` calls at **every
+  recursor redex in every file**, inductive declarations or none.
+
+  **2. The price, counted.** A temporary pair of counters at `derive_iota`'s
+  `rec_nest` call, over the 91 tutorial exports, one process per file: ι is
+  asked on **8** exports and `rec_nest` answers on **4** —
+  `073_boolRecEqns` 2, `075_nRecReduction` 6, `076_listRecReduction` 5,
+  `116_rtreeRecReduction` 1 — **14 successful ι derivations** that the
+  deletion turns into `Certifier::iota` admitting. A further 19 functions
+  (1,774 lines: `derive_iota_core`, the five `fire_*`, `gen_minor_typed`,
+  `nest_chain`, the `mem_along` family) keep compiling and stop being
+  reachable.
+
+  That cost is real and it is not an `IndApparatus` duplicate:
+  `IndApparatus` is mini's *declaration-side* construction, while what
+  `rec_nest` does at `interp` and `derive_iota` is give the *conversion*
+  checker something to ι-reduce with. **It is also #126's substrate** — that
+  tranche gives `whnf`/`def_eq` evidence-carrying signatures, and handing it
+  a conversion path whose ι step had silently become an admission is
+  precisely the interleave the sequencing was meant to prevent. So the
+  deletion wants a decision it has not had: *what certifies ι for the checker
+  afterwards*. Until that is answered it is not a cleanup, it is a capability
+  being dropped.
+
+  ### `LocalKey::Unique` does **not** become unreachable — measured
+
+  The claim under test was that deleting the tg inductive interpretation
+  would strand `LocalKey::Unique` (`tg.rs:14178`), because that
+  interpretation mints uniques on the certification path while
+  `inductive.rs` — which stays — uses them only on the acceptance path. **It
+  is false**, and the counter-example needs no argument about reachability.
+
+  There are two construction sites. `unique_key` (`tg.rs:14186`) is the
+  inductive-interpretation one and does die with it. The other is `interp`'s
+  own `Expr::Local` arm (`tg.rs:8296`), which the deletion does not touch,
+  and it is fed by exactly the module that stays: `inductive.rs` (17
+  `mk_unique`) and `quot.rs` (11) open every telescope binder at a unique
+  local, `TypeChecker` installs the tg backend unconditionally
+  (`tc.rs:378`) and routes a bare `Expr::Local` to `certifier.ty_local`
+  (`tc.rs:748`), which interprets it. `Dropped::{Inductive,Quot}` discards
+  the resulting *certificate*; the `interp` call has already happened.
+
+  Counted at both sites over the 91 exports, the decisive cells are the
+  exports where the general site fires and the inductive one never runs at
+  all: `036_andType` 4/0, `040_eqType` 2/0, `041_natDef` 2/0,
+  `042_rbTreeDef` 24/0, `062_andRec` 4/0, `066_eqRec` 2/0, `067_nRec` 2/0,
+  `068_rbTreeRef` 24/0, `070_existsRec` 7/0, `077_RBTree.id_spec` 26/0,
+  `094_ruleK` 2/0, `118_accRecReduction` 15/0. So the `Unique` arm stays,
+  `LocalKey` keeps both cases, and only `unique_key` itself (6 lines) is
+  freed by the deletion. `open_level`'s `FVarId::Unique(_) => 0` arm
+  (`tg.rs:4521`) is a read of an existing unique and stays either way.
+
+  Retiring `unique` "completely", or leaving it out of `LocalKey` for
+  certification purposes, therefore needs `inductive.rs` and `quot.rs` to
+  stop opening telescopes at unique locals — a change to the acceptance path
+  this document has just argued should stay.
 
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
