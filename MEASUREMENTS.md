@@ -7053,20 +7053,24 @@ Read together these close every cheap route and identify the expensive one:
 
 #### The verdict, and what it would take
 
-**The eighth measured dead end, and the first that is a genuine absence rather
-than a cost.** What is missing is a term-level route to `app(f,a) ∈ dom` that
-does not pass through an `ExprPtr`. The prelude already has the shape of one —
-`fs_app_mem`, "a function's values lie in its codomain" — but using it needs
-`f ∈ fs(A, dom)` for a head that is a partially reduced spine (4 438 curried,
-812 a defined constant), and nothing on the thread holds a function-space
-membership for those. `has_type_app` derives the analogous fact, but reads the
-`Π` off the head's *syntactic Lean type*, which is precisely what a reduct does
-not have.
+**The eighth measured dead end.** What is missing is a term-level route to
+`app(f,a) ∈ dom` that does not pass through an `ExprPtr`. The prelude has the
+shape of one — `fs_app_mem`, "a function's values lie in its codomain" — but
+using it needs `f ∈ fs(A, dom)` for a head that is a partially reduced spine
+(4 438 curried, 812 a defined constant), and nothing on the thread holds a
+function-space membership for those. `has_type_app` derives the analogous fact,
+but reads the `Π` off the head's *syntactic Lean type*, which is precisely what
+a reduct does not have.
 
-So this is not reachable by threading, by transport, or by another lookup. It
-needs a function-space membership for reduced spines, which is a derivation
-question for `derived/` rather than a plumbing question for the backend — and it
-is the first item this stage has produced that belongs on that side of the line.
+**Both halves of that reading are wrong, and the next section is the
+measurement that refutes them.** The subject has no node; its *leaves* all do,
+and the composite is one `foldl_apps` away, so the route does not need a new
+derivation. And closing the clause completely moves the ledger by exactly zero.
+The paragraph that used to stand here — "not reachable by threading, by
+transport, or by another lookup … a derivation question for `derived/`" — was a
+diagnosis from the consumer's side that never asked whether the premise was
+*binding*, and it is corrected rather than deleted because it is what the
+`derived/` tranche was briefed from.
 
 The residual 920 do have a node; 638 are applications of an **opaque** constant,
 the uninterpreted-inductive obstruction, which is a named bucket and not this
@@ -7241,6 +7245,137 @@ refuted routes were all attempts at exactly that, seven of which paid for their
 answers in escapes. The one that worked, `target_head_step`, worked because it
 made an existing clause reach terms it was already shaped for.
 
-The open lead is unchanged and it is outside `checker/`: a function-space
-membership for reduced spines, which would give `has_type` a way to type an
-application without an `ExprPtr` — 4 693 of these are applications.
+The lead this section named — a function-space membership for reduced spines,
+to give `has_type` a way to type an application without an `ExprPtr`, 4 693 of
+these being applications — **is closed as a dead end by the section below**,
+which measured its supply at 0 of 5 250 and its value at zero rows of the
+ledger. It is corrected here rather than deleted because it is what the
+`derived/` tranche was briefed from.
+
+## Beta's own domain premise is not a blocker — 2026-08-10
+
+*The `derived/` tranche the section above briefed, which measured its own brief
+before building and found nothing left to build. Instrument:
+`scripts/spine-probe.diff`, worktree-only. Two load-bearing claims were tested
+and both failed, so no construction was written; "0 of 5 250" below is why
+writing one would have been the twelfth recorded "skip is not pass".*
+
+### The brief
+
+Every `init-prelude` declaration is to carry a fully proven typing theorem, and
+the census above named beta's own domain premise `x ∈ A` (13 856 firings,
+6 170 declines) as the largest single blocker in the way. Its reading was that
+5 250 of those declines need `app(f,a) ∈ dom` derived **without** an `ExprPtr`,
+that `fs_app_mem` is the shape of the answer, and that supplying its antecedent
+`f ∈ fs(A, dom)` for a partially reduced spine is a `derived/` question.
+
+Two claims, asked in order: *is the antecedent suppliable?* and, before any of
+it, *is the premise binding?*
+
+### The population, split before anything was built
+
+The probe peels each no-node subject's application spine to its atom head and
+counts what is there. Denominator 5 250, exact.
+
+| | |
+|---|---:|
+| spine length 1 / 2 / 3 / 4 / 5 / 6 / 7+ | 812 / 1 682 / 1 527 / 1 045 / 136 / 32 / 16 |
+| atom head is a **defined constant** (equation in `abbrev_defs`) | 5 073 |
+| atom head is an opaque symbol | 177 |
+| atom head is a λ graph | **0** |
+| atom head is a free variable | **0** |
+| **atom head has a Lean node** | **5 250 / 5 250** |
+| **every spine argument has a Lean node** | **5 250 / 5 250** |
+| the domain `dom` is a nullary symbol / another application | 3 594 / 1 656 |
+| the domain is `fs(_,_)` or a dependent product | **0** |
+
+Spine length 1 is exactly the 812 the earlier census called "head is a defined
+constant", and 4 438 of length ≥ 2 are its "head is curried": the same
+partition, read off the term instead of one level of the table.
+
+### Claim 1 refuted: the antecedent has zero supply
+
+`typed_at`/`typed_subj` record every `(subject, target)` any typing rule has
+ever concluded, across the whole run. Asked of these 5 250:
+
+| | |
+|---|---:|
+| this very membership `x ∈ dom` concluded anywhere | **0** |
+| the subject typed at *some* target, ever | **0** |
+| the **immediate head** typed at some target, ever | **0** |
+| the **atom head** typed at some target, ever | **0** |
+| every spine argument typed at some target | 816 |
+| the immediate head's target is `fs(A, dom)` — `fs_app_mem` closes it | **0** |
+
+There is no `f ∈ fs(A, B)` to retarget because there is **no typing for `f` at
+all**, at any target, from any declaration. A `derived/` lemma whose antecedent
+is a function-space membership for the head would have had a supply of 0 of
+5 250 — a proof no consumer shape can feed. (The wider figure it is an instance
+of: 26 constant typings stored of 2 891 declarations with a value, and 6 389
+typing obligations discharged of 40 060.)
+
+### Claim 2 refuted: the node is one call away, and closing the clause is worth nothing
+
+Every leaf has a node, so the composite the index lacks can simply be rebuilt —
+`ctx.foldl_apps(atom_head_node, arg_nodes)` — and the ordinary, unchanged
+`has_type_app` then applies to it. Measured:
+
+| | |
+|---|---:|
+| rebuilt node produced, interpreting back to the subject | **740 / 740** |
+| …a leaf had no node, or the rebuild interpreted elsewhere | **0** |
+| …and the recursion **derived** the membership | **618** (83.5 %) |
+| ……outright, acquiring no assumption | 433 |
+| …and the recursion still declined | 122 |
+
+740 rather than 5 250 because `interp` fills `exprs_rev` on the way: after the
+first encounter the subject *has* a node and the clause never reaches this exit
+again. Returned rather than discarded, the effect on the clause is large:
+
+| row | before | after |
+|---|---:|---:|
+| target beta: premise `x ∈ A` not settled | 6 170 | **1 703** |
+| target beta: reduct still not typeable | 9 306 | **14 021** |
+| `target_mem`: NO LEAN NODE interprets to the subject | 5 250 | **740** |
+| `target_mem`: the `has_type` recursion derived it | 1 251 | **5 705** |
+| one head reduction of a type: contracted a redex | 7 686 | **11 795** |
+
+And the effect on the outcome is **nil**. The whole ledger is byte-identical
+with the fix returning its derivations:
+
+| | before | after |
+|---|---:|---:|
+| gaps | 15 734 | 15 734 |
+| escapes | 2 232 | 2 232 |
+| derived (real kernel `Thm`) | 159 803 | 159 803 |
+| obligations asked / discharged | 40 060 / 6 389 | 40 060 / 6 389 |
+| admitted | 369 | 369 |
+
+The two moved rows say where it went: `TbMiss::Domain` falls by 4 467 and
+`TbMiss::Reduct` rises by 4 715. The redex now contracts, and the contracted
+target has no typing either, so every decline the clause stops making is made
+one step later by the clause after it.
+
+### The verdict
+
+**Beta's own domain premise is a counted obstruction, not a binding one**, and
+`derived/` is not missing a construction. Every rule the successful 618 used is
+one `derived/` already exports; what stood in the way was this clause asking
+the reverse index for a term the *interpretation* had no reason to build, while
+the *derivation* had built it out of pieces the index knows.
+
+Three consequences worth carrying:
+
+* **A census of a clause cannot say whether the clause matters.** Eight routes
+  were measured at this frontier and each was judged by the size of its own
+  residue; this is the first to be judged by removing the residue and reading
+  the ledger, and it is the first to come out at zero. The ledger diff is
+  cheap — a run with the candidate wired in and discarded — and it should
+  precede the tranche, not follow it.
+* **"Nothing on the thread holds it" is two claims.** The head has no
+  function-space membership *and* no membership of any kind; the first sounds
+  like a missing conversion and the second is a missing typing. Asking
+  `typed_subj` costs one lookup and separates them.
+* **The frontier is the reduct's own typing** (`TbMiss::Reduct`, 9 306 rising
+  to 14 021 the moment the premise above stops absorbing them), not anything a
+  function-space lemma reaches.

@@ -9112,16 +9112,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// used, and [`Self::has_type_a`]'s guard checks the resulting theorem
     /// against the claim regardless.
     ///
-    /// # Why the 6 170 declines are a missing fact and not a missing lookup
+    /// # What the 6 170 declines are, in two passes
     ///
     /// *Measured 2026-08-10, task #126, after the same census closed
-    /// [`Self::target_head_step`]. `TmStep` is the census; this is its reading.*
+    /// [`Self::target_head_step`]. `TmStep` is the census; this is its reading.
+    /// The first pass is below and stands; the second pass, in the section after
+    /// it, overturns what the first pass concluded from it.*
     ///
     /// This is the largest *genuine* decline in the target-beta walk, and the
     /// obvious suspicion after `target_head_step` was that it is the same shape:
-    /// a component reading a cache's absence as a fact about the world. **It is
-    /// not**, and four rows say so — three of them zeros that were counted for
-    /// exactly that reason.
+    /// a component reading a cache's absence as a fact about the world. On the
+    /// question those rows asked — *does a Lean node interpret to the subject?*
+    /// — it is not, and four rows say so, three of them zeros that were counted
+    /// for exactly that reason. It turned out to be the wrong question.
     ///
     /// * **0 of 6 170** had the subject already assumed at *another* domain. So
     ///   this is not a conversion problem; nothing in scope mentions these
@@ -9137,12 +9140,45 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///   interprets to them because none ever did. `TmStep::NodeMismatch` is
     ///   **0**, so the index is not lying either.
     ///
-    /// The reverse index is therefore correct and the node genuinely does not
-    /// exist. What is missing is a term-level route to `app(f,a) ∈ dom` that
-    /// does not go through an `ExprPtr` — the prelude's `fs_app_mem` is the
-    /// shape of one, and it would need `f ∈ fs(A, dom)`, a function-space
-    /// membership for a head that is a partially reduced spine (4 438 curried,
-    /// 812 a defined constant). Nothing on the thread holds that.
+    /// The reverse index is therefore correct and the *composite* node does not
+    /// exist.
+    ///
+    /// # The two things this paragraph used to conclude, both refuted
+    ///
+    /// *Measured 2026-08-10 by `scripts/spine-probe.diff`, which peels the
+    /// subject's spine and then rebuilds the node the index lacks. This comment
+    /// previously read "not reachable by threading, by transport, or by another
+    /// lookup … a derivation question for `derived/`". Neither half survived.*
+    ///
+    /// **The node can be rebuilt, and it closes most of the population.** Every
+    /// *leaf* of every one of the 5 250 spines has a Lean node — the atom head
+    /// **5 250 of 5 250** (a defined constant in 5 073, an opaque symbol in 177,
+    /// never a λ graph and never a variable), and every argument **5 250 of
+    /// 5 250**. Only the application is missing, and `foldl_apps` over the
+    /// leaves rebuilds it; the rebuilt node interprets back to the subject
+    /// **740 of 740** times it is tried, and the ordinary recursion then derives
+    /// the membership **618** times (**433** of them acquiring no assumption).
+    /// Returned rather than discarded, that takes this clause's declines from
+    /// **6 170 to 1 703**. So `TmStep::NoNode` was never a fact about what is
+    /// derivable; it was this clause asking the index for a term the
+    /// interpretation had no reason to build.
+    ///
+    /// **And closing it is worth nothing.** With the rebuild landed,
+    /// `init-prelude`'s ledger is *byte-identical*: 15 734 gaps, 2 232 escapes,
+    /// 159 803 derived, 40 060 obligations asked and 6 389 discharged. Every
+    /// decline this clause stops making reappears one step later as
+    /// `TbMiss::Reduct` — "reduct still not typeable" — which rises 9 306 →
+    /// 14 021 as `TbMiss::Domain` falls. The redex contracts and the contracted
+    /// target has no typing either, so the premise is a *counted* obstruction
+    /// and not a *binding* one, and the frontier is the reduct's own typing.
+    ///
+    /// A function-space route for the head — the thing the old paragraph asked
+    /// `derived/` for — has **zero supply** and would have been the twelfth
+    /// "skip is not pass": across the 5 250, the number of subjects whose
+    /// immediate head, atom head, or self was ever typed at *any* target by
+    /// *any* declaration is **0, 0 and 0**. There is no `f ∈ fs(A, B)` to
+    /// retarget because there is no typing for `f` at all; `derived/` already
+    /// exports every rule the successful 618 used.
     ///
     /// The remaining 920 do have a node and the recursion still declined; 638 of
     /// them are applications of an *opaque* constant, i.e. the uninterpreted
