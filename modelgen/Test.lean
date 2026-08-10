@@ -597,6 +597,60 @@ map. This is here so that day is a test failure with a name on it.
    why this tool is on `Environment.addDeclCore` and pays for §5.5's panic.
 
 `modelgen/EnvProbe.lean` is the same two probes at Mathlib scale. -/
+def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
+  let path := s!"{root}/modelgen/tests/prim_carve.ndjson"
+  let text ← IO.FS.readFile path
+  let .ok x := Modelgen.parse text | return check a false "prim_carve does not parse"
+  let env0 ← importModules #[] {}
+  let mut env := env0
+  for d in x.decls do
+    if let some dcl := toDeclaration env d then
+      if let .ok e := env.addDeclCore 0 dcl none false then env := e
+  let reserved : Std.HashSet Name :=
+    x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
+  let act : MetaM (Array (Bool × String)) := do
+    let mut cs : Array (Bool × String) := #[]
+    match ← Modelgen.ensureWCore reserved with
+    | .error e =>
+      return #[(false, s!"the W core splice declined on prim_carve: {e.label}")]
+    | .ok ds =>
+      cs := cs.push (ds.size > 100,
+        s!"the W core splice added {ds.size} records, where the fragment has 149 and \
+           prim_carve supplies only its own Eq")
+      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
+        cs := cs.push (((← getEnv).find? k).isSome,
+          s!"{k} is not visible to Environment.find? after the splice")
+      -- **Once per run.** The sentinel is what makes the splice a splice and
+      -- not 149 kernel checks per W target.
+      match ← Modelgen.ensureWCore reserved with
+      | .error _ => cs := cs.push (false, "the second W core splice declined")
+      | .ok ds2 => cs := cs.push (ds2.isEmpty,
+          s!"the W core spliced a second time and added {ds2.size} records")
+      -- **The exclusion list, from the side that would hurt.** A `_wcore`
+      -- copy of either axiom is a *non-standard* axiom downstream
+      -- (`mini/src/axiom.rs` keys the clause on the name), and a `propext`
+      -- under Lean's name whose statement is at `_wcore.Iff` and `_wcore.Eq`
+      -- is worse than that: it is the name `axiom.rs` trusts carrying a
+      -- statement that is not the one it means. Both are pinned, because the
+      -- rename is one list and either mistake is one entry in it.
+      for n in [Modelgen.wCoreRoot ++ `propext, Modelgen.wCoreRoot ++ `Quot.sound,
+                Modelgen.wCoreRoot ++ `Eq, Modelgen.wCoreRoot ++ `Iff,
+                Modelgen.wCoreRoot ++ `Nat, Modelgen.wCoreRoot ++ `Quot] do
+        cs := cs.push (((← getEnv).find? n).isNone,
+          s!"{n} exists — a shared name was renamed, and the six roots are shared \
+             for a reason `MODELGEN.md` §8.16 spells out")
+      for n in [`propext, `Quot.sound, `Eq, `Iff, `Nat, `Quot] do
+        cs := cs.push (((← getEnv).find? n).isSome, s!"{n} is missing after the splice")
+      -- The statement of the axiom the whole exclusion list is about.
+      if let some ci := (← getEnv).find? `propext then
+        let us := ci.type.getUsedConstants
+        cs := cs.push (us.contains `Eq && us.contains `Iff,
+          s!"propext's statement mentions {us} — it must be Lean's, at Lean's Eq and Iff")
+    return cs
+  let (cs, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)
+    { fileName := "<test>", fileMap := default } { env }
+  return cs.foldl (fun a (ok, msg) => check a ok msg) a
+
 def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/modelgen/tests/nested_iota.ndjson"
   let text ← IO.FS.readFile path
@@ -1025,6 +1079,7 @@ def main (args : List String) : IO UInt32 := do
     a ← runOne root a r (dir := "modelgen/tests") (prim := true)
   a ← runSyntax root a
   a ← runEnvProbe root a
+  a ← runWSpliceProbe root a
   a ← runCollisionProbe a
   a ← runAliasProbe root a
   a ← runMonoCompose root a

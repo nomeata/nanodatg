@@ -171,43 +171,58 @@ by this call. -/
 def renameRoot (fr to : Name) (n : Name) : Name :=
   if fr.isPrefixOf n then n.replacePrefix fr to else n
 
-/-- The same, inside an expression's constant heads. -/
-def renameRootE (fr to : Name) (e : Expr) : Expr :=
+/-- **Every constant an expression names, rewritten** — and there are two kinds
+of node that name one, not one.
+
+`Expr.const` is the obvious kind. The other is `Expr.proj`, whose `typeName`
+field is the structure the projection is *of*: a `proj` left pointing at the
+old name after its structure has been renamed is `(kernel) invalid projection`,
+which is exactly how this was found, splicing a fragment whose `Sigma.fst` is a
+`proj` at `Sigma`. Binder names are not constants and are deliberately not
+touched.
+
+`f` returns `none` to mean "not mine", which both keeps the walk allocation-free
+on the common subterm and, at a `proj`, lets `Expr.replace` recurse into the
+structure the ordinary way. -/
+partial def mapConstsE (f : Name → Option Name) (e : Expr) : Expr :=
   e.replace fun sub => match sub with
-    | .const n us => if fr.isPrefixOf n then some (.const (n.replacePrefix fr to) us) else none
+    | .const n us => (f n).map (Expr.const · us)
+    | .proj n i s => (f n).map (fun n' => Expr.proj n' i (mapConstsE f s))
     | _ => none
 
-/-- One export record with its root renamed — every name it introduces, every
-name it refers to, and every constant inside its expressions. **Every field
-that can hold a `Name` is listed**, because one missed field is a record that
-refers to a constant the output does not contain, and no oracle here would
-see it: the statement check reads the environment, which keeps the alias. -/
-def EDecl.renameRoot (fr to : Name) : EDecl → EDecl
-  | .ax n lp t u => .ax (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) u
-  | .defn n lp t v h sf all =>
-    .defn (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v) h sf
-      (all.map (Modelgen.renameRoot fr to))
-  | .thm n lp t v all =>
-    .thm (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v)
-      (all.map (Modelgen.renameRoot fr to))
-  | .opaq n lp t v u all =>
-    .opaq (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) (renameRootE fr to v) u
-      (all.map (Modelgen.renameRoot fr to))
-  | .quot n lp t k => .quot (Modelgen.renameRoot fr to n) lp (renameRootE fr to t) k
+/-- The prefix rename, inside an expression. -/
+def renameRootE (fr to : Name) (e : Expr) : Expr :=
+  mapConstsE (fun n => if fr.isPrefixOf n then some (n.replacePrefix fr to) else none) e
+
+/-- One export record with **every name it carries** rewritten — every name it
+introduces, every name it refers to, and every constant inside its expressions.
+`f` is applied to declaration names and `g` to expressions, and they are two
+arguments rather than one because the caller that renames a prefix wants a
+prefix test on names and a subterm walk on expressions.
+
+**Every field that can hold a `Name` is listed**, because one missed field is a
+record that refers to a constant the output does not contain, and no oracle here
+would see it: the statement check reads the environment, which keeps the alias.
+This is the single place that enumerates them; both renamers below go through
+it, so a field added to a record is caught once. -/
+def EDecl.mapNames (f : Name → Name) (g : Expr → Expr) : EDecl → EDecl
+  | .ax n lp t u => .ax (f n) lp (g t) u
+  | .defn n lp t v h sf all => .defn (f n) lp (g t) (g v) h sf (all.map f)
+  | .thm n lp t v all => .thm (f n) lp (g t) (g v) (all.map f)
+  | .opaq n lp t v u all => .opaq (f n) lp (g t) (g v) u (all.map f)
+  | .quot n lp t k => .quot (f n) lp (g t) k
   | .induct ts cs rs =>
     .induct
       (ts.map fun t => { t with
-        name := Modelgen.renameRoot fr to t.name, type := renameRootE fr to t.type,
-        all := t.all.map (Modelgen.renameRoot fr to),
-        ctors := t.ctors.map (Modelgen.renameRoot fr to) })
-      (cs.map fun c => { c with
-        name := Modelgen.renameRoot fr to c.name, type := renameRootE fr to c.type,
-        induct := Modelgen.renameRoot fr to c.induct })
+        name := f t.name, type := g t.type, all := t.all.map f, ctors := t.ctors.map f })
+      (cs.map fun c => { c with name := f c.name, type := g c.type, induct := f c.induct })
       (rs.map fun r => { r with
-        name := Modelgen.renameRoot fr to r.name, type := renameRootE fr to r.type,
-        all := r.all.map (Modelgen.renameRoot fr to),
-        rules := r.rules.map fun u => { u with
-          ctor := Modelgen.renameRoot fr to u.ctor, rhs := renameRootE fr to u.rhs } })
+        name := f r.name, type := g r.type, all := r.all.map f,
+        rules := r.rules.map fun u => { u with ctor := f u.ctor, rhs := g u.rhs } })
+
+/-- One export record with its root renamed. -/
+def EDecl.renameRoot (fr to : Name) : EDecl → EDecl :=
+  EDecl.mapNames (Modelgen.renameRoot fr to) (renameRootE fr to)
 
 /-- A whole export: the `meta` line verbatim, then the declarations in order. -/
 structure Export where

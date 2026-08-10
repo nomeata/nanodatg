@@ -2131,6 +2131,158 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
   out := out.push d
   return (nm, out)
 
+/-! ## The W core, spliced
+
+The tagged W construction of `scripts/inductive-basis/WTagged.lean`
+(`MODELGEN.md` §8.16) is the only thing this tool generates that it does not
+*build*: `Wrec`'s well-founded recursion, `canon`, `sub_wf` and `Wrec_key` are
+thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
+`WellFounded`, and writing them as `Expr` builders is not a bigger version of
+what `Simple.lean` already does. So the construction's whole constant closure
+is carried as an **export fragment** and spliced.
+
+**It is spliced through [`Modelgen.addChecked`], which is the checked side of
+the boundary.** `addChecked` is `addDeclCore 0 d none true` and the trusted
+input replay is the same call with `false`, so the two are one boolean apart.
+Compiling the closure in and copying its `ConstantInfo`s — the obvious
+alternative — would have put 190 of *our own* constants on the trusted side,
+unchecked and absent from the report. -/
+
+/-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
+WT.Wrec_iota` over `WTagged.lean`'s core. 500 KB, 149 records — 19 inductive
+blocks, 69 definitions, 58 theorems, 4 quotient records and 2 axioms.
+
+`include_str` rather than a file read: it costs nothing at run time (the string
+is in the binary's data), and the alternative — locating the `.ndjson` relative
+to `IO.appPath` — would make the binary depend on its own build layout. -/
+def wCoreText : String := include_str "../tests/w_core.ndjson"
+
+/-- The prefix every fragment name gets, bar the shared ones below. The
+fragment's names are Lean core's, so splicing its `List` into an input that
+already declares one is a kernel rejection; prefixing makes the core
+self-contained and costs only duplicates. -/
+def wCoreRoot : Name := `_wcore
+
+/-- **The twelve names the fragment shares with the input under Lean's own —
+and the list is exactly these because of what the two axioms' statements
+mention.**
+
+`MODELGEN.md` §8.16 sized this list at six: the four quotient names, which the
+kernel special-cases, and `Quot.sound` and `propext`, which `mini/src/axiom.rs`
+selects **by that exact name**, so a namespaced copy is a non-standard axiom
+and is declined downstream. That much is right and unchanged.
+
+What the sizing missed is that an axiom's *statement* is renamed too. The
+fragment's `Quot.sound` mentions `Eq`, `Quot` and `Quot.mk`; its `propext`
+mentions `Eq` and `Iff`. Prefixing `Eq` and `Iff` while sharing the two axiom
+names would emit
+
+```text
+propext    : ∀ {a b : Prop}, _wcore.Iff a b → _wcore.Eq a b
+Quot.sound : ∀ {α r a b}, r a b → _wcore.Eq (Quot.mk r a) (Quot.mk r b)
+```
+
+— two axioms **under Lean's exact names whose statements are not Lean's**. On
+an input that declares `propext` (which is every real one) that is a kernel
+rejection and the arm reaches nothing; on an input that does not, it is worse
+than a decline, because the name is what `axiom.rs` keys on and it would take
+a statement that is not `propext`'s as the standard `propext` clause. So `Eq`
+and `Iff` are shared for the same reason the axioms are, one level down.
+
+Sharing `Eq` also *removes* work rather than adding it: §8.16 costed one
+`_wcore.Eq → Eq` conversion per ι rule against the recommendation to rename
+it, and at the shared `Eq` the fragment's `Wrec_iota` and the contract's ι
+theorems are already the same equality.
+
+**`Nat` is the fourth shared root, and the kernel forces that one outright.**
+The fragment holds two `Expr.lit (.natVal _)`, and a literal's type is the
+kernel's own `Nat` by fiat — nothing renames it. A prefixed `_wcore.Nat` leaves
+`_wcore.Bool.ctorIdx` returning it while the literal in its body is at `Nat`,
+and that is `(kernel) unknown constant 'Nat'`. Sharing costs nothing anyone
+was counting on: `Nat` is already one of [`Modelgen.primBasis`]'s four, so it
+was never going to be modelled, and sharing it takes an unmodelled inductive
+*out* of the output rather than putting one in. `Nat.beq` and the rest of the
+namespace stay prefixed — they are ordinary definitions and only the type
+former and its two constructors are what the literal needs.
+
+Everything else stays prefixed, and that is deliberate down to the
+sub-namespaces: the fragment carries `Eq.symm`, `Eq.mpr`, `Eq.subst`,
+`Quot.liftOn`, `Nat.brecOn` and nine more under those roots, and sharing
+*those* would redeclare constants a real input has. The list is names, not
+prefixes. -/
+def wCoreShared : Std.HashSet Name := Std.HashSet.ofList
+  [`Eq, `Eq.refl, `Eq.rec, `Iff, `Iff.intro, `Iff.rec,
+   `Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound, `propext,
+   `Nat, `Nat.zero, `Nat.succ, `Nat.rec]
+
+/-- One fragment name as it is spliced. -/
+def wCoreName (n : Name) : Name := if wCoreShared.contains n then n else wCoreRoot ++ n
+
+/-- The same, inside an expression — constant heads **and** the `typeName` of
+every `Expr.proj`, which is what [`Modelgen.mapConstsE`] exists for. The
+fragment is a *closure*, every constant it mentions is one of its own 195
+names, so rewriting every one is right and there is nothing else it could
+refer to. -/
+def wCoreExpr (e : Expr) : Expr :=
+  mapConstsE (fun n => if wCoreShared.contains n then none else some (wCoreRoot ++ n)) e
+
+/-- The carrier the fragment defines, `WT.W` under the prefix. Doubles as the
+**sentinel**: once the reserved-name guard below has passed, nothing but this
+function can have put it in the environment, so its presence means the fragment
+is already spliced and this run must not splice it twice. -/
+def wCoreSelf : Name := wCoreRoot ++ `WT.W
+/-- `WT.sup` under the prefix — the node former. -/
+def wCoreSup : Name := wCoreRoot ++ `WT.sup
+/-- `WT.Wrec` under the prefix — the large recursor. -/
+def wCoreRec : Name := wCoreRoot ++ `WT.Wrec
+/-- `WT.Wrec_iota` under the prefix — its one ι rule. -/
+def wCoreIota : Name := wCoreRoot ++ `WT.Wrec_iota
+
+/-- **The W core in the environment, and the declarations that had to be added
+to put it there** — `#[]` when it is already in, which is every call after the
+first in a run.
+
+Three things can happen to a fragment record:
+
+* every name it introduces is already in the environment — it is one of the
+  shared twelve and the input had it, so it is the *input's* and this skips it;
+* it is new — the reserved guard runs and it goes through `addChecked`;
+* some of its names are present and some are not, which can only happen to a
+  shared declaration and means the input has half of a quotient or of `Eq`.
+  That is a shape this cannot repair, and it says so.
+
+**No shared declaration is separately checked against Lean's statement, and it
+does not need to be.** If the input's `Eq` or `Iff` or `propext` is not Lean's,
+the fragment's 190 proofs are stated and proved against it and `addChecked`
+rejects one of them. That is a decline with a name on it rather than a silent
+wrong answer, which is the property that matters. -/
+def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
+  if (← getEnv).constants.contains wCoreSelf then return #[]
+  let ex ←
+    match Modelgen.parse wCoreText (analyse := false) with
+    | .ok ex => pure ex
+    | .error msg => badShape s!"the W core fragment does not parse ({msg})"
+  let mut out : Array Declaration := #[]
+  for d0 in ex.decls do
+    let d := EDecl.mapNames wCoreName wCoreExpr d0
+    let ns := d.names
+    let env ← getEnv
+    let present := ns.filter (env.constants.contains ·)
+    if !present.isEmpty then
+      unless ns.all wCoreShared.contains do
+        badShape s!"the W core's {ns} would redeclare {present}"
+      continue
+    -- **A name the input introduces later is not ours to write**, exactly as
+    -- in [`Modelgen.ensureEq`], and for the shared twelve as much as for the
+    -- prefixed rest: `reserved` is the whole file's names, so this is the
+    -- case where the input declares `propext` below the target being modelled.
+    for n in ns do
+      if reserved.contains n then declineWith (.nameTaken n)
+    if let some dcl := toDeclaration env d then
+      addChecked dcl
+      out := out.push dcl
+  return out
+
 /-- **The ι rules of one member's recursor**, one per rule `Bₖ.rec` carries, in
 the order it carries them.
 

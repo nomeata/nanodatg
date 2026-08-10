@@ -67,6 +67,36 @@ def probeC (x : Export) (env0 : Environment) : IO Unit := do
   IO.println s!"C checked replay: {ok} accepted, {bad.size} rejected"
   for m in bad[0:10] do IO.println s!"  rejected {m}"
 
+/-- **The W core, spliced onto a replayed input.** Replays `IN` the way the tool
+does — trusted, checking off — and then runs [`Modelgen.ensureWCore`], which is
+the checked side. Reports how many of the fragment's records were added, how
+many the input already had, and what the kernel said. This is the splice's
+oracle at scale: `w_core.ndjson` alone goes in from nothing (that is
+`envprobe tests/w_core.ndjson C`), and this asks the different question of
+whether it goes in *on top of* a real export's own `Eq`, `Iff`, `Quot` and
+`propext`. -/
+def probeW (x : Export) (env0 : Environment) : IO Unit := do
+  let mut env := env0
+  for d in x.decls do
+    if let some dcl := toDeclaration env d then
+      match env.addDeclCore 0 dcl none false with
+      | .ok e => env := e
+      | .error _ => pure ()
+  let reserved : Std.HashSet Name :=
+    x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
+  let act : MetaM Unit := do
+    match ← Modelgen.ensureWCore reserved with
+    | .ok ds =>
+      IO.println s!"W splice: {ds.size} records added, {149 - ds.size} the input already had"
+      let mut n := 0
+      for d in ds do n := n + d.getNames.length
+      IO.println s!"W splice: {n} constants, all through addChecked"
+      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
+        IO.println s!"  {k}: {if ((← getEnv).find? k).isSome then "present" else "MISSING"}"
+    | .error e => IO.println s!"W splice DECLINED: {e.label}"
+  discard <| Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)
+    { fileName := "<envprobe>", fileMap := default } { env }
+
 def probeB (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := do
   let mut kenv := env0.toKernelEnv
   for d in x.decls do
@@ -95,6 +125,7 @@ def main (args : List String) : IO UInt32 := do
     IO.println s!"P parse only: {x.decls.size} records, {names.size} names"
     return 0
   if rest == ["C"] then probeC x env0; return 0
+  if rest == ["W"] then probeW x env0; return 0
   unless rest == ["B"] do probeA x names env0
   unless rest == ["A"] do probeB x names env0
   return 0

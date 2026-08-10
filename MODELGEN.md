@@ -4657,49 +4657,114 @@ So the arm's shape is: get those 190 into the output once, splice-and-model the
 19 inductives among them — measured above, all of them do — and emit
 per-declaration glue against them.
 
-**One module-graph constraint, found while sizing the splice and worth two
-minutes of somebody's time.** `toDeclaration : Environment → EDecl →
-Option Declaration` — which is what turns a parsed fragment record into
-something `addChecked` takes — lives in `Driver.lean`, *below* `Simple.lean`
-in the import order (`Driver` imports `Simple`). So a splice written where
-`primIso` can call it cannot use it where it stands: `toDeclaration` has to
-move up to `Format.lean` or `Model.lean` first, or the splice has to live in
-`Driver.lean` and be handed to the arm. It is 57 lines and a pure function of
-its argument, so moving it is the smaller of the two.
+**One module-graph constraint, found while sizing the splice.**
+`toDeclaration : Environment → EDecl → Option Declaration` — which is what
+turns a parsed fragment record into something `addChecked` takes — lived in
+`Driver.lean`, *below* `Simple.lean` in the import order (`Driver` imports
+`Simple`), so a splice written where `primIso` can call it could not use it
+where it stood. **Done**: it is in `Format.lean`, the shared floor, with the
+`hintsOf`/`hintsTo`/`safetyOf` translations it needs, and `Mono.lean`'s
+trimmed copy — which existed only because the original was above it — is gone.
+Three callers, one definition.
 
-**Three things about the splice, each measured rather than assumed, and each
-one a wasted attempt saved:**
+### The splice, built — `Modelgen.ensureWCore`
 
-* **`include_str` is free.** The 500 KB fragment reads in 0.14 s, so it is
-  baked into the binary and there is no runtime file lookup and no dependence
-  on the build tree. The alternative — locating the `.ndjson` relative to
-  `IO.appPath` — would have made the binary depend on its own build layout for
-  no gain.
-* **Everything gets a `_wcore` prefix except six names, and the exclusion is
-  forced twice over.** The fragment's names are Lean core's, so splicing `List`
-  into an input that already declares one is a kernel rejection; prefixing
-  makes the core self-contained and costs only duplicates. What may **not** be
-  prefixed is `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` (the fragment carries
-  four `quot` records) and the two axioms `Quot.sound` and `propext`. The
-  kernel special-cases the four quotient names — and the second reason is
-  stronger and is already written down in `Model.lean`'s prelude section:
-  **`mini/src/axiom.rs` selects the `Quot.sound` clause by that exact name, so
-  a namespaced copy is a *non-standard axiom* and is declined downstream.**
-  Same for `propext`. So these six are shared under Lean's own names, exactly
-  as §1's prelude splice already shares them. `funext` is *not* on the list —
-  it appears in no emitted statement, only inside proofs, which is precisely
-  why §1 namespaces its own as `T._model.funext`.
-* **`Eq` can go either way, and the earlier note here overstated one side.**
-  The contract's ι theorems are stated at the *input's* `Eq` while the
-  fragment's `Wrec_iota` is at whatever `Eq` the fragment carries. Renaming it
-  costs one conversion per ι rule — `_wcore.Eq.rec (motive := fun x _ => Eq α a
-  x) (Eq.refl α a) h`, two inductives of the same shape, no axiom and no
-  transport. *Not* renaming it makes the fragment's 190 proofs run against the
-  input's own `Eq`, which `ensureEq` guarantees only the shape of — but that is
-  **caught by `addChecked` rather than silent**, so it is a decline and not a
-  hazard, and the earlier framing of it as the "tempting worse answer" was too
-  strong. Renaming is still the recommendation, for robustness: it makes the
-  fragment splice succeed or fail on its own terms rather than on the input's.
+`Modelgen.ensureWCore : Std.HashSet Name → GenM (Array Declaration)`, in
+`Model.lean` beside `ensureEq` and `ensureFunext`, which is the section for
+exactly this: a constant the model needs, taken from the input where the input
+has it and spliced through `addChecked` where it does not.
+
+**Measured, from empty and on top of Mathlib.**
+
+| | |
+|---|---|
+| the fragment alone, `envprobe tests/w_core.ndjson C` | **149 records accepted, 0 rejected**, 0.097 s for the whole process |
+| onto a fixture input (`prim_carve`) | 148 records added, 1 the input already had (its `Eq`) |
+| onto a 1,000,000-line Mathlib prefix | **143 records added, 6 the input already had**, 179 constants through `addChecked`, 0 rejected |
+| the splice's own cost | **413 M instructions**, once per run — against 272 s for a Mathlib pass |
+
+The four roots — `_wcore.WT.W`, `_wcore.WT.sup`, `_wcore.WT.Wrec`,
+`_wcore.WT.Wrec_iota` — are visible to `Environment.find?` afterwards, which is
+the lookup `MetaM` goes through and not the same question as the kernel map
+(§6.6). `Test.lean`'s `runWSpliceProbe` pins all of it, plus idempotence: the
+second call adds nothing, because the splice is once per run and not 149 kernel
+checks per W target.
+
+**Two things about the splice, measured rather than assumed:**
+
+* **`include_str` is free.** The 500 KB fragment is a string literal in the
+  binary's data; there is no runtime file lookup and no dependence on the build
+  tree. The alternative — locating the `.ndjson` relative to `IO.appPath` —
+  would have made the binary depend on its own build layout for no gain.
+* **Everything gets a `_wcore` prefix except sixteen names under four roots,
+  and the list above six of them was got wrong at the sizing.** The fragment's
+  names are Lean core's, so splicing `List` into an input that already declares
+  one is a kernel rejection; prefixing makes the core self-contained and costs
+  only duplicates.
+
+  The six that were obvious are `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` —
+  the kernel special-cases those, and the fragment carries four `quot` records
+  — and the two axioms `Quot.sound` and `propext`, because **`mini/src/axiom.rs`
+  selects the clause by that exact name, so a namespaced copy is a
+  *non-standard axiom* and is declined downstream.** That much was right.
+
+  What it missed is that **an axiom's statement is renamed too.** The
+  fragment's `Quot.sound` mentions `Eq`, `Quot` and `Quot.mk`; its `propext`
+  mentions `Eq` and `Iff`. Prefixing `Eq` and `Iff` while sharing the two axiom
+  names emits
+
+  ```text
+  propext    : ∀ {a b : Prop}, _wcore.Iff a b → _wcore.Eq a b
+  Quot.sound : ∀ {α r a b}, r a b → _wcore.Eq (Quot.mk r a) (Quot.mk r b)
+  ```
+
+  — two axioms **under Lean's exact names carrying statements that are not
+  Lean's**. On an input that declares `propext`, which is every real one, that
+  is a kernel rejection and the arm reaches nothing. On an input that does not,
+  it is *worse than a decline*: the name is what `axiom.rs` keys on, and it
+  would take a statement that is not `propext`'s as the standard `propext`
+  clause. So `Eq` and `Iff` are shared for the same reason the axioms are, one
+  level down, and `Test.lean` pins both halves.
+
+  **`Nat` is the fourth shared root, and the kernel forces that one outright.**
+  The fragment holds two `Expr.lit (.natVal _)`, and a literal's type is the
+  kernel's own `Nat` by fiat — nothing renames it. A prefixed `_wcore.Nat`
+  leaves `_wcore.Bool.ctorIdx` returning it while the literal in its body is at
+  `Nat`, and the kernel says `unknown constant 'Nat'`. Sharing costs nothing
+  anyone was counting on: `Nat` is already one of `primBasis`'s four, so it was
+  never going to be modelled, and sharing takes an unmodelled inductive *out*
+  of the output rather than putting one in.
+
+  The list is **names and not prefixes**, and that matters: the fragment
+  carries `Eq.symm`, `Eq.mpr`, `Eq.subst`, `Quot.liftOn`, `Nat.brecOn` and nine
+  more under those four roots, and sharing *those* would redeclare constants a
+  real input has. Sixteen names: `Eq`, `Eq.refl`, `Eq.rec`, `Iff`, `Iff.intro`,
+  `Iff.rec`, `Nat`, `Nat.zero`, `Nat.succ`, `Nat.rec`, `Quot`, `Quot.mk`,
+  `Quot.lift`, `Quot.ind`, `Quot.sound`, `propext`. `funext` is *not* among
+  them — it appears in no emitted statement, only inside proofs, which is
+  precisely why §1 namespaces its own as `T._model.funext`.
+
+**And the ι-rule conversion §8.16 costed is not owed.** The paragraph this
+replaces weighed renaming `Eq` (one `_wcore.Eq → Eq` conversion per ι rule)
+against not renaming it (the fragment's 190 proofs run at the input's `Eq`),
+and recommended renaming for robustness. The axiom statements settle it the
+other way, and the robustness argument survives intact in the form that
+matters: if the input's `Eq` or `Iff` or `propext` is not Lean's, the
+fragment's proofs are checked against it and `addChecked` rejects one of them.
+That is a decline with a name on it, not a silent wrong answer — which is why
+no shared declaration needs a separate shape check. At the shared `Eq` the
+fragment's `Wrec_iota` and the contract's ι theorems are already the same
+equality, so the conversion is not written and not paid for.
+
+**One latent bug the splice surfaced, in a function older than it.**
+`Modelgen.renameRootE` rewrote `Expr.const` heads and nothing else, but
+`Expr.proj` carries a `typeName` — the structure the projection is *of* — and
+a `proj` left pointing at the old name after its structure is renamed is
+`(kernel) invalid projection`. The fragment's `Sigma.fst` is such a `proj` and
+is how it was found. Both renamers now go through `Modelgen.mapConstsE`, which
+handles the two node kinds that name a constant; binder names are deliberately
+not touched. §8.14's alias renaming was exposed to the same gap on any model
+whose emitted terms project a model-owned structure.
 
 One piece of per-declaration glue **is** required here where arm C had none:
 the currying eta lemmas, one `funext` per constructor, because `W` hands you
