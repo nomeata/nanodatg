@@ -685,16 +685,17 @@ THREADING-CENSUS §2).
    symbols it did before, and the `ledger`/`evidence`/`untranslated` rows over
    all 91 tutorial exports are byte-identical.
 
-   **And the `.sort(` half of this step is an order of magnitude smaller than
-   §5.5's decomposition says, because that table counts test code.** Re-measured
-   by splitting each file at its `mod tests`: of the 69 `.sort(` consumers, **27
-   are production** and 42 are tests, and `interp.rs`'s headline "36 of 69" is
-   **7 production sites and 29 test ones**. None of the seven has a `Level` in
-   hand — each takes a rung `u32` from its caller — so converting them is a
-   signature fan-out through the consumer modules, not work inside `interp.rs`.
-   The genuine volume of step 1 is the other column: **139 production
-   `Gap::SymbolicLevel` sites** (only 3 of the 142 are in tests), led by
-   `zoneb.rs` 24, `kernel.rs` 22, `proj_data.rs` 11, `minor_ix.rs` 9.
+   **What remains of step 1 is neither of the two columns §5.5 offered, and
+   both counts were misleading — see the corrected decomposition there.** In
+   one line: `.sort(` is 28 production sites, not 69, because that table
+   counted fixtures; and the 132 production `Gap::SymbolicLevel` sites are not
+   132 conversions but **112 consumers of one absent thing** — `Checker::new`
+   sets `th: None`, so the declaration-shape zone has no `Interp` at all. The
+   next slice is therefore a `Checker` constructor that opens a declaration's
+   `LevelVars` under `Scopes::assume` and threads an `Interp` through zone A,
+   after which the gap sites stop firing without being edited and the work
+   becomes making the §6.2 clauses succeed at `srt(ℓ̂)` — `zoneb.rs` and
+   `kernel.rs` first, at 23 and 21 sites.
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
@@ -1522,31 +1523,59 @@ not mathematics.
 picks by size rather than by the order the compiler happens to complain in. It
 is not a live-firing count and is not offered as one:
 
-**Production sites only.** The first cut of this table counted whole files and
-was wrong about which half of step 1 is the big one: 42 of the 69 `.sort(`
-consumers and 3 of the 142 `SymbolicLevel` sites are **test code**, and
-`interp.rs`'s headline "36 of 69" was 7 production sites and 29 test ones.
-Re-measured 2026-08-10 by splitting each file at its `mod tests`:
+**Production sites only, and the two columns are the wrong unit for one of
+them.** The first cut of this table counted whole files, and was wrong about
+which half of step 1 is the big one. Re-measured at `7ab9688`, excluding doc and
+comment lines and splitting each file at its `#[cfg(test)]`:
 
 | module | `SymbolicLevel` | `.sort(` | what it is |
 |---|---:|---:|---|
-| `zoneb.rs` | 24 | 2 | zone B: the declaration-shape translation and the pre-ensure |
-| `kernel.rs` | 22 | 2 | mini's `Checker` — `whnf`, `assert_def_eq`, the const/proj arms |
+| `zoneb.rs` | 23 | 2 | zone B: the declaration-shape translation and the pre-ensure |
+| `kernel.rs` | 21 | 2 | mini's `Checker` — `whnf`, `assert_def_eq`, the const/proj arms |
 | `proj_data.rs` / `proj_prop.rs` | 11 / 6 | — / 1 | the two projection clauses |
 | `minor_ix.rs` | 9 | 1 | indexed minor premises |
-| the `rec_*` / `iota_*` family | 32 | 7 | eleven modules, recursors and their ι rules |
-| `interp.rs` | 1 | 7 | the store itself; `Interp::sort` and the ω-vocabulary beside it |
-| `quot*.rs`, `conv.rs`, `direct.rs`, `class_s*.rs`, … | 34 | 7 | the rest, none above 4 |
-| **total** | **139** | **27** | across 40 of 56 files |
+| the `rec_*` / `iota_*` family | 31 | 7 | eleven modules, recursors and their ι rules |
+| `interp.rs` | — | 8 | the store itself; `Interp::sort` and the ω-vocabulary beside it |
+| `quot*.rs`, `conv.rs`, `direct.rs`, `class_s*.rs`, … | 31 | 7 | the rest, none above 4 |
+| **total (production)** | **132** | **28** | across 40 of 56 files |
+| in tests | 1 | 46 | — |
 
-The two columns are the two halves of step 1 and they are not the same job, but
-not in the proportion first reported. `.sort(` is *where a rung is spelled*, and
-at 27 production sites it is the **small** half; none of `interp.rs`'s seven has
-a `Level` in hand — each takes a rung `u32` from its caller — so converting them
-is a signature fan-out through the consumer modules rather than work inside
-`interp.rs`. `SymbolicLevel` is *where the ground path gives up*, and it is both
-the bulk and the spread: `zoneb` and `kernel` are a third of it between them and
-no other module is above eleven.
+`.sort(` is *where a rung is spelled*, and at 28 production sites it is the
+**small** half — the "36 of 69" this table used to give `interp.rs` was 8
+production sites against 33 fixtures. None of the eight has a `Level` in hand;
+each takes a rung `u32` from its caller, so converting them is a signature
+fan-out through the consumer modules rather than work inside `interp.rs`.
+
+**And `SymbolicLevel` is not 132 conversions across 36 files. It is 132
+consumers of one absent thing, and the count is misleading as a work
+estimate.** Classified by what each site actually tests:
+
+| | count | the site reads |
+|---|---:|---|
+| **no `Interp`/thread at all** | **112** | `c.interp().ok_or(Gap::SymbolicLevel)?`, `let Some(th) = self.th …` |
+| a `None` arm in those same functions | 14 | `Ev::missing(Gap::SymbolicLevel)` |
+| pure reporting | 3 | the blocker label, the dump string, `Cause::Scope` |
+| **the level is not a numeral** | **3** | `ground::as_numeral(l).ok_or(…)` |
+
+`mini/src/kernel.rs` has exactly two `Checker` constructors — `Checker::new`,
+"the shape zone: acceptance only, no evidence" (`th: None`), and
+`Checker::threaded`, "the evidence-carrying pass, **at one ground
+instantiation**" (`th: Some`) — and `Gap::SymbolicLevel`'s own doc comment says
+the same thing from the other end: "a judgement made in the declaration-shape
+zone, where levels are the declaration's own parameters and no §6.2 clause
+applies". So the whole population is downstream of **one binary choice**, and
+the de-scheduling's shape at mini is not "edit 132 sites" but *"give zone A a
+thread"*: a `Checker` constructor that opens the declaration's `LevelVars` under
+`Scopes::assume` and hands the checker an `Interp` where today there is none.
+The 132 sites then stop firing without being edited, and what they need instead
+is that the §6.2 clauses behind them succeed at `srt(ℓ̂)` — derivation work, in
+`zoneb` and `kernel` first, not editing work.
+
+This does not make the switchover partial-able (§5.5's disposition stands), but
+it does mean the per-module discipline applies to the *clauses*, not to the gap
+sites: the new constructor can be exercised on its own route while the scheduled
+path keeps calling `Checker::threaded`, so each module still lands green with
+the ledger rows byte-identical.
 
 `ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
 `(name, ground levels)`, its module doc says so in the first thirty lines) and
@@ -1555,9 +1584,10 @@ store**") remain the three named consumers, and each states its σ-dependence in
 its own header.
 
 **Steps 1 and 2 are built** — see §5.3's step-1 and step-2 statuses. Step 1's
-vocabulary exists in `interp.rs` and nothing consumes it yet; what remains of
-step 1 is the 139 `SymbolicLevel` sites and the 27 `.sort(` signatures, module
-by module, each landing at byte-identical ledger rows.
+vocabulary exists in `interp.rs` and nothing consumes it yet; what remains of it
+is a `Checker` constructor that threads an `Interp` through zone A, and then the
+§6.2 clauses at `srt(ℓ̂)` module by module — `zoneb.rs` and `kernel.rs` first —
+each landing at byte-identical ledger rows.
 
 ## 6. What is deliberately not claimed
 
