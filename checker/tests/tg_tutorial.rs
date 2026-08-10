@@ -427,14 +427,23 @@ fn tutorial_files_are_fully_derived() {
 /// the point of the alignment is that the two engines name one head symbol
 /// and agree by reflexivity rather than by bridge theorem.
 ///
-/// The seam still pays, in both directions, and both are asserted: `006`'s
-/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` is `fs(a,a) ∈ U(a)` carried across
-/// `TgBackend::dprod_fs_eq` to the `dprod` term (the `FsDiag` row), and
-/// `075`'s `⟦N.succ⟧ ∈ ⟦N → N⟧` is `derived`'s `succ ∈ fs(N,N)` re-registered
-/// at the `dprod` spelling (a `Ctor` row hit at the new target). Dropping
-/// either seam consumer regresses the file's gap count, which its budget
-/// catches; the row assertions here catch the *silent* failure mode, where a
-/// rescue path masks the loss.
+/// The seam still pays, in both directions. `075`'s `⟦N.succ⟧ ∈ ⟦N → N⟧` is
+/// `derived`'s `succ ∈ fs(N,N)` re-registered at the `dprod` spelling (a
+/// `Ctor` row hit at the new target), asserted here. `006`'s
+/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` *used* to be the other witness — `fs(a,a) ∈
+/// U(a)` carried across `TgBackend::dprod_fs_eq` (the `FsDiag` row) — until
+/// the application check's handoff (2026-08-10) started answering it first:
+/// the argument is checked by `infer_app`, so its typing arrives threaded and
+/// the search is never entered. That is the design's route precedence, not a
+/// rescue masking a loss, and it holds corpus-wide: no tutorial export
+/// crosses the fs seam any more (`init-prelude` still does, 60 `FsDiag`
+/// answers at `a9740c7`). What this file now asserts for `006` is the
+/// threaded route itself; the seam consumer keeps its own witness in
+/// `tg::tests::the_fs_seam_types_an_arrow_nobody_inferred`, which builds the
+/// same obligation with no inference in scope — the one situation the
+/// handoff cannot serve — and pins the *derivation outcome*, which is
+/// stronger than a report row: dropping `dprod_fs_eq` degrades its
+/// certificate to a conditional hoist and turns it red.
 #[test]
 fn arrows_are_typed_by_the_dependent_product_rules() {
     let dir = corpus().join("good/tutorial");
@@ -458,8 +467,14 @@ fn arrows_are_typed_by_the_dependent_product_rules() {
     let f = dir.join("006_betaReduction.ndjson");
     assert_eq!(
         report_row(&f, "by fs(a,a) ∈ U(a)"),
-        Some(1),
-        "006: the arrow's universe membership stopped crossing the fs seam"
+        None,
+        "006: the arrow's universe membership is served by the handoff now; \
+         if the fs seam answers here again, the handoff write or read has \
+         been lost — check the `argument typings handed off` row first"
+    );
+    assert!(
+        report(&f).contains("argument typings handed off by the application check: 2 stored, answering 2 outright"),
+        "006: both obligations must arrive from the application check's handoff"
     );
     let f = dir.join("075_nRecReduction.ndjson");
     assert!(

@@ -17184,6 +17184,60 @@ mod tests {
         .unwrap()
     }
 
+    /// **The fs seam still types an arrow nobody inferred.** The non-dependent
+    /// `Π` interprets as the constant-fibre dependent product (task #125's
+    /// alignment), and an arrow's universe membership `⟦A → B⟧ ∈ ⟦Sort u⟧` is
+    /// `fs(a,a) ∈ U(a)` carried across [`TgBackend::dprod_fs_eq`] to the
+    /// `dprod` spelling — the seam `arrows_are_typed_by_the_dependent_product_
+    /// rules` (tg_tutorial) used to witness through `006`'s report. The
+    /// application check's handoff now outranks the search on every tutorial
+    /// export, so the corpus witness is gone; this fixture is its replacement,
+    /// built so the handoff *cannot* serve it: the redex is never inferred, so
+    /// [`TgBackend::arg_mems`] is empty and the domain obligation
+    /// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` can only be answered through the seam.
+    ///
+    /// Pinned by derivation outcome, not by a report row: the certificate must
+    /// be `Proved` and unconditional. Dropping `dprod_fs_eq` (or the
+    /// `domain_premise` clause it feeds) leaves the obligation underivable and
+    /// degrades this to a `Conditional` hoist — red.
+    #[test]
+    fn the_fs_seam_types_an_arrow_nobody_inferred() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_tc(crate::env::EnvLimit::Empty, |tc| {
+                let x = tc.ctx.str1("x");
+                let p = tc.ctx.str1("p");
+                let zero = tc.ctx.zero();
+                let one = tc.ctx.succ(zero);
+                let prop = tc.ctx.mk_sort(zero);
+                let sort1 = tc.ctx.mk_sort(one);
+                let style = crate::expr::BinderStyle::Default;
+                let v0 = tc.ctx.mk_var(0);
+                let v1 = tc.ctx.mk_var(1);
+
+                // (λ x : Sort 1. x) (Prop → Prop), def_eq'd with no inference
+                // in scope — the handoff store is empty by construction.
+                let id1 = tc.ctx.mk_lambda(x, style, sort1, v0);
+                let arrow = tc.ctx.mk_pi(p, style, prop, prop);
+                // `Prop → Prop` must be non-dependent for the arrow clause:
+                // the body does not mention the binder (`prop`, not `v1`).
+                let _ = v1;
+                let app = tc.ctx.mk_app(id1, arrow);
+                assert!(
+                    tc.certifier.arg_mems.is_empty(),
+                    "the premise of this fixture: nothing was handed off"
+                );
+                let cert = tc.def_eq(app, arrow).expect("the redex contracts to its argument");
+                assert!(
+                    cert.is_proved() && crate::certify::is_unconditional(&cert),
+                    "⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧ must derive through the fs seam \
+                     (fs(a,a) ∈ U(a) across dprod_fs_eq) with no inference to recall \
+                     — got {cert:?}"
+                );
+            })
+        })
+        .unwrap()
+    }
+
     /// **The `Bool.true` shortcut composes the legs it already holds.**
     ///
     /// `def_eq`'s shortcut — `y_n` is `Bool.true` and `whnf(x_n)` reduces to
