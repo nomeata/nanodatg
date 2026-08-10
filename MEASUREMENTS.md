@@ -5980,3 +5980,58 @@ So the census's beta row was **two problems and a third wearing its coat**:
 a threading debt (now paid where it existed), a cascade face (bucket (ii),
 delivery mechanism now in place), and a reduction-built residue that is the
 honest remaining case for stage 2's signature change.
+
+## One per-declaration loop: what the certified prefix costs and buys — 2026-08-10
+
+The pipeline was a whole-file kernel pass and then a whole-file interpretation
+pass. The kernel pass early-returns at the first rejection, so **a file with one
+bad declaration produced no certificate for any of the others.**
+`mini/src/decl_pass.rs` fuses them: parse, schedule, drop the unused axioms, then
+one loop that checks a declaration, interprets it and adds it to the environment.
+
+Instructions with `perf stat -e instructions` over the sweep in
+`scripts/oneloop-sweep.sh` (`--no-modelgen --verbose --mutual`, one process per
+file), the `dev` profile, `origin/master` at `893206c` against `joachim/oneloop`.
+Both binaries built in their own worktree from their own source, because the main
+checkout's `target/debug/mini` was a day older than `HEAD` and would have priced
+the wrong code.
+
+| population | files | before | after | |
+| --- | --- | --- | --- | --- |
+| `good/tutorial` | 91, all accepted | 406.39 G | **397.25 G** | −2.2 % |
+| `good/*.ndjson` | 4, none accepted whole | 2.98 G | **2.91 G** | −2.4 % |
+| `bad/**` | 55, all rejected or declined | 36.45 G | **114.23 G** | +213 % |
+| `good/undecidability` | 4, two rejected | 48.39 G | **120.70 G** | +149 % |
+| whole sweep | 154 | 494.03 G | **635.18 G** | +28.6 % |
+
+**The two halves of that table are different facts and must not be averaged.**
+On the accepted population the run does the same work and is 2.2 % *cheaper* —
+the whole-file `env.clone()` the expansion took per file, and the `positions`
+sweep the nested recognition took per file, are both gone. Everywhere the number
+rises, it rises because the run is now doing something it did not do at all: on
+a stopped file the prefix before the stop is interpreted and certified, and
+before this it was not.
+
+What that buys, per file, on the two populations where a stop is the norm:
+
+| export | verdict | declarations before the stop | certificates: before → after |
+| --- | --- | --- | --- |
+| `good/undecidability/subject-reduction-redex` | reject | 40 | 0 → **22** |
+| `good/undecidability/alg-conv-trans-acc-left` | reject | 39 | 0 → **21** |
+| `bad/ctor-num-fields` | reject | 23 | 0 → **17** |
+| `bad/constlevels` | reject | 11 | 0 → **8** |
+| `bad/tutorial/002_badDef` | reject | 0 | 0 → 0 |
+
+The last row is not a failure: `002_badDef`'s first declaration is the bad one,
+and a prefix of nothing certifies nothing. It is in the table because a
+capability measured only where it fires is a capability nobody has bounded.
+
+**The verdicts did not move.** The 154-file sweep is byte-identical between the
+two binaries — verdict, tag, exit code, `facts`, `clauses`, `elim`, `ledger`,
+`evidence`, `untranslated`, `convs` and `framecache` rows — apart from the new
+`prefix` row. Over `mini/tests/fixtures` (every non-nested fixture, so all ten
+`mutual` ones) it is byte-identical too, apart from three rows that are the one
+waived property: an unused non-standard axiom is no longer kernel-checked, so
+`unused_axiom_ignored` reads `3 declarations` where it read 5,
+`route_unused_axiom` reads 1 where it read 2, and `unused_axiom_illtyped` — a
+fixture added for this — is accepted where it was rejected.
