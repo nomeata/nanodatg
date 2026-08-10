@@ -9,8 +9,8 @@
 //! crate follows):
 //!
 //! * [`crate::levels::ite0::Ite0`], [`crate::levels::order::Order`],
-//!   [`crate::levels::utower::UTower`], [`crate::levels::srt::Srt`] — see each
-//!   file's header; and
+//!   [`crate::levels::utower::UTower`], [`crate::levels::srt::Srt`],
+//!   [`crate::levels::rules::Rules`] — see each file's header; and
 //!
 //! ```text
 //! ⊢ ∀u ∀v. ((u ∈ ω ∧ v ∈ ω) → ite0(v, ∅, u ∪ v) ∈ ω)   [LevelPoly::imax_in_omega]
@@ -37,6 +37,7 @@ use kernel::{Env, Formula, Term, Thm};
 
 use crate::levels::ite0::{ite0, Ite0};
 use crate::levels::order::{order, Order};
+use crate::levels::rules::{rules, Rules};
 use crate::levels::srt::{srt, Srt};
 use crate::levels::utower::{utower, UTower};
 use crate::recursion::{app_of_graph, Rec};
@@ -56,6 +57,11 @@ pub struct LevelPoly {
     pub ut: UTower,
     /// `srt(n) = ite0(n, U₀, app(lvl, n))` and its laws.
     pub s: Srt,
+    /// The rule kit at a variable level — `mono_sub`, the constant-fibre
+    /// flagship `pi_imax`, and the demos. Carried here because the dependent
+    /// kit ([`crate::levels::pi_rules::pi_rules`]) consumes `ru.mono_sub`
+    /// per fibre stack, and it must be over this very chain.
+    pub ru: Rules,
     /// `⊢ ∀u ∀v. ((u ∈ ω ∧ v ∈ ω) → ite0(v, ∅, u ∪ v) ∈ ω)`.
     pub imax_in_omega: Thm,
 }
@@ -89,10 +95,11 @@ pub fn level_poly(env: &mut Env, tower: &Tower) -> Option<LevelPoly> {
     let ord = order(env, &r)?;
     let ut = utower(env, &r, tower.space.lu, &tower.space.lu_ax, tower.space.pow, &tower.space.pow_ax)?;
     let s = srt(env, &r, &i, &ut, tower)?;
+    let ru = rules(env, &r, &i, &ord, &ut, &s, tower)?;
 
     let imax_in_omega = derive_imax_in_omega(env, &r, &i, &ord)?;
 
-    Some(LevelPoly { r, i, ord, ut, s, imax_in_omega })
+    Some(LevelPoly { r, i, ord, ut, s, ru, imax_in_omega })
 }
 
 /// `⊢ ∀u ∀v. ((u ∈ ω ∧ v ∈ ω) → ite0(v, ∅, u ∪ v) ∈ ω)`.

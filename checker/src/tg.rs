@@ -1453,6 +1453,36 @@ struct PropSite {
     dom: Term,
 }
 
+/// Where one particular **wired Undet `Π`** occurrence sits —
+/// `explore/level-poly-target`'s `ite0` clause (`LEVELPOLY.md` §1.4, §5.4
+/// blocker 1). Registered by [`TgBackend::interp_pi_undet_poly`] and consumed
+/// by the typing rule ([`TgBackend::ty_pi_undet_poly`]) and by `Π` congruence.
+struct UndetPolySite {
+    /// Key into [`Shared::pi_infos`] **and** [`Shared::pi_poly`] — the body
+    /// skeleton, shared with both decided clauses.
+    key: Term,
+    /// The abstracted `v`-free subterms, in traversal order.
+    holes: Vec<Term>,
+    /// `⟦binder_type⟧`.
+    dom: Term,
+    /// The guard `v̂` — the ω-vocabulary interpretation of the body's
+    /// canonical sort level. The term's `ite0` was built at exactly this
+    /// guard, and the typing rule refuses unless the obligation's level
+    /// agrees.
+    guard: Term,
+}
+
+/// The per-skeleton dependent-`Π` kit at a variable level: the checker-side
+/// [`derived::levels::pi_rules::PiRules`] plus the `dprod` symbol it is about
+/// (the **same** symbol the `Type` clause uses for this skeleton, so the
+/// `ite0` term's nonzero branch *is* the decided clause's term).
+struct PiPolyKit {
+    /// The shared dependent-product head for this skeleton ([`PiInfo::dprod`]).
+    dprod: FnSym,
+    /// `cndd`, `cndd_ax` and `pi_imax_dep`, over this skeleton's own fibre.
+    rules: derived::levels::pi_rules::PiRules,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The shared signature.
 //
@@ -2325,6 +2355,11 @@ struct Shared {
     /// interpretation, not a step in it. Holding it here is what lets
     /// [`global_report`] say whether this run has it.
     false_anchor: Option<Sealed>,
+    /// The per-skeleton dependent-`Π` kit at a variable level (`LEVELPOLY.md`
+    /// §5.4 blocker 1), keyed like [`Shared::pi_infos`] and populated only
+    /// under `NANODATG_LEVELPOLY=1`. `None` memoises a refusal, per the
+    /// store discipline everywhere here.
+    pi_poly: HashMap<Term, Option<Rc<PiPolyKit>>>,
     /// The level-quantification apparatus (`LEVELPOLY.md`), built over the
     /// prelude's tower when `NANODATG_LEVELPOLY=1` and `None` otherwise.
     ///
@@ -2451,6 +2486,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             declar_typings_poly: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
+            pi_poly: HashMap::new(),
             lp,
         }));
         sh
@@ -2573,6 +2609,12 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     prop_sites: HashMap<ExprPtr<'t>, PropSite>,
     /// Where each `Π` that falls under neither clause of §6.2 sits.
     undet_sites: HashMap<ExprPtr<'t>, PropSite>,
+    /// Where each **wired** Undet `Π` sits — the `ite0` clause of
+    /// `explore/level-poly-target`, populated only under
+    /// `NANODATG_LEVELPOLY=1`. Disjoint from [`Self::undet_sites`]: an Undet
+    /// `Π` is registered here exactly when its guard level was recoverable
+    /// and the `ite0` term was built, there otherwise.
+    undet_poly_sites: HashMap<ExprPtr<'t>, Rc<UndetPolySite>>,
     /// Where each **proof `λ`** sits — §6.2's other lambda clause, whose
     /// interpretation is `•` and so carries no graph. See [`PropLamSite`].
     prop_lam_sites: HashMap<ExprPtr<'t>, PropLamSite<'t>>,
@@ -3534,6 +3576,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             pi_sites: HashMap::new(),
             prop_sites: HashMap::new(),
             undet_sites: HashMap::new(),
+            undet_poly_sites: HashMap::new(),
             prop_lam_sites: HashMap::new(),
             props: HashMap::new(),
             terms: HashMap::new(),
@@ -4449,6 +4492,334 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// reused by the next declaration for something else, and would alias.
     ///
     /// Delegated to [`crate::instantiations::name_key`] rather than spelled out
+    // ── The Undet-`Π` wiring (`LEVELPOLY.md` §5.4 blocker 1) ─────────────────
+    //
+    // All of it flag-gated like the sort seam above: with `NANODATG_LEVELPOLY`
+    // unset nothing below is reachable and the Undet clause keeps its
+    // axiom-free symbol.
+
+    /// A level in the **ω-vocabulary**, term only — [`Self::omega_level`]'s
+    /// spelling with no evidence built. The two must agree term-for-term,
+    /// which they do by construction: each arm builds through the same
+    /// [`derived::levels::apparatus::LevelPoly`] formers.
+    fn omega_term(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        l: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+    ) -> Term {
+        match ctx.read_level(l) {
+            Level::Zero => lp.zero(),
+            Level::Succ(a, _) => {
+                let a = self.omega_term(ctx, a, lp);
+                lp.succ_of(a)
+            }
+            Level::Max(a, b, _) => {
+                let (a, b) = (self.omega_term(ctx, a, lp), self.omega_term(ctx, b, lp));
+                lp.max(a, b)
+            }
+            Level::IMax(a, b, _) => {
+                let (a, b) = (self.omega_term(ctx, a, lp), self.omega_term(ctx, b, lp));
+                lp.imax(a, b)
+            }
+            Level::Param(n, _) => Term::var(self.param_omega_var(n)),
+        }
+    }
+
+    /// **The guard level** of an Undet `Π`'s body: the level `v` with
+    /// `β : Sort v`, recovered by the sibling walk of [`Self::body_clause`] —
+    /// same arms, same recursion, returning the *level* where that returns
+    /// its zero-ness. Partial where the level cannot be spelled
+    /// ([`undet_unknown`]'s population); a `None` keeps the opaque symbol.
+    ///
+    /// The one arm that consults more than `body_clause` does is `Pi`: the
+    /// level of `Π x:α. β` is `imax (lvl α) (lvl β)`, so the domain's own
+    /// sort level is recovered too (zero-ness agrees — `imax a b = 0` exactly
+    /// when `b = 0`, which is why `body_clause` never needed the left arm).
+    /// The body is not opened, exactly as there: a level cannot mention a
+    /// term.
+    fn undet_body_level(&mut self, ctx: &mut TcCtx<'t, 'p>, b: ExprPtr<'t>) -> Option<LevelPtr<'t>> {
+        match ctx.read_expr(b) {
+            // `Sort u : Sort (u+1)`.
+            Expr::Sort { level, .. } => Some(ctx.succ(level)),
+            Expr::Pi { binder_type, body, .. } => {
+                let da = self.undet_body_level(ctx, binder_type)?;
+                let db = self.undet_body_level(ctx, body)?;
+                Some(ctx.imax(da, db))
+            }
+            // A `λ`'s type is a `Π`, never a `Sort` — `body_clause` answers
+            // `Type`; there is no level to spell and no Undet to wire.
+            Expr::Lambda { .. } => None,
+            Expr::Let { val, body, .. } => {
+                let expansion = ctx.inst(body, &[val]);
+                self.undet_body_level(ctx, expansion)
+            }
+            Expr::Local { binder_type, .. } => self.undet_level_after(ctx, binder_type, 0),
+            Expr::Const { name, levels, .. } => {
+                let t = self.declared_ty(ctx, name, levels)?;
+                self.undet_level_after(ctx, t, 0)
+            }
+            Expr::App { .. } => {
+                let (h, args) = ctx.unfold_apps(b);
+                match ctx.read_expr(h) {
+                    Expr::Local { binder_type, .. } => {
+                        self.undet_level_after(ctx, binder_type, args.len())
+                    }
+                    Expr::Const { name, levels, .. } => {
+                        let t = self.declared_ty(ctx, name, levels)?;
+                        self.undet_level_after(ctx, t, args.len())
+                    }
+                    Expr::Lambda { body, .. } => {
+                        let red = ctx.inst(body, &args[..1]);
+                        let red = ctx.foldl_apps(red, args[1..].iter().copied());
+                        self.undet_body_level(ctx, red)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// [`Self::clause_after`]'s sibling: the sort level of what is left of
+    /// `ty` after `k` arguments, raw (the caller canonicalises once, at the
+    /// dispatch point).
+    fn undet_level_after(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty: ExprPtr<'t>,
+        k: usize,
+    ) -> Option<LevelPtr<'t>> {
+        let mut cur = ty;
+        for _ in 0..k {
+            let p = self.expose_pi(ctx, cur)?;
+            let Expr::Pi { body, .. } = ctx.read_expr(p) else { return None };
+            cur = body;
+        }
+        self.expose_sort(ctx, cur)
+    }
+
+    /// The [`PiInfo`] for a skeleton, built and registered if absent — the
+    /// tail of [`Self::finish_pi_site`], factored so the Undet wiring can
+    /// share the *same* `dprod` machinery the `Type` clause uses. Sharing is
+    /// correct where sharing the opaque undet symbol was not: the `ite0`
+    /// term's nonzero branch **is** the decided clause's dependent product,
+    /// which is exactly what the instantiations compute it to.
+    fn pi_info_or_build(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiInfo>> {
+        if let Some(i) = self.pi_info(sk) {
+            return Some(i)
+        }
+        let arity = u32::try_from(holes_len + 1).ok()?;
+        let info = match self.build_fibre(sk, holes_len) {
+            Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
+            // Inert: the right *shape*, so that the interpretation stays
+            // compositional, but with no defining axioms and hence no typing.
+            None => Rc::new(PiInfo { dprod: self.env_mut().declare(arity), fibre: None }),
+        };
+        let mut sh = self.shared.borrow_mut();
+        sh.pi_infos.insert(sk.clone(), info.clone());
+        sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
+        Some(info)
+    }
+
+    /// The per-skeleton dependent-`Π` kit at a variable level, derived once
+    /// per thread and shared ([`Shared::pi_poly`]).
+    ///
+    /// The chain is `LEVELPOLY.md` §5.4 blocker 1's, end to end: the
+    /// skeleton's own fibre stack adapted into a [`derived::ext::DProdN`]
+    /// (`dprod_members_n` + `dprod_subset_funspace_n` over the already-built
+    /// symbols), Replacement for its image, `dprod_in_universe_pair_n`, and
+    /// [`derived::levels::pi_rules::pi_rules`] on top. Every step validates
+    /// its inputs by probe, so a stack that does not fit together memoises a
+    /// refusal rather than describing the wrong terms.
+    fn pi_poly_kit(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolyKit>> {
+        if let Some(k) = self.shared.borrow().pi_poly.get(sk) {
+            return k.clone()
+        }
+        let built = self.pi_poly_kit_build(sk, holes_len);
+        self.shared.borrow_mut().pi_poly.insert(sk.clone(), built.clone());
+        built
+    }
+
+    /// The uncached body of [`Self::pi_poly_kit`].
+    fn pi_poly_kit_build(&mut self, sk: &Term, holes_len: usize) -> Option<Rc<PiPolyKit>> {
+        let lp = self.lp()?;
+        let pre = self.pre.clone();
+        let info = self.pi_info_or_build(sk, holes_len)?;
+        let fb = info.fibre.as_ref()?;
+        let (b, img, img_ax, dprod, dprod_def) =
+            (fb.b, fb.img, fb.img_ax.clone(), info.dprod, fb.dprod_def.clone());
+        let tower = &pre.tower;
+        let mut env = self.env_mut();
+        let dprod_ax =
+            derived::ext::dprod_members_n(&mut env, &pre.ap, &pre.fs, img, b, dprod, &dprod_def)?;
+        let dprod_sub = derived::ext::dprod_subset_funspace_n(
+            &mut env, &pre.ap, &pre.fs, img, b, dprod, &dprod_def,
+        )?;
+        let dp = derived::ext::DProdN {
+            k: holes_len,
+            b,
+            img,
+            img_ax: img_ax.clone(),
+            dprod,
+            dprod_def,
+            dprod_ax,
+            dprod_sub,
+        };
+        let repl = derived::universe::universe_replacement_n(
+            &mut env,
+            &tower.space.empty_ax,
+            img,
+            &img_ax,
+            b,
+        )?;
+        let lrepl = derived::universe::least_universe_replacement_n(
+            &mut env,
+            tower.space.lu,
+            &tower.space.lu_ax,
+            img,
+            b,
+            &repl,
+        )?;
+        let fibre = dp.fibre(&lrepl);
+        let uparts = derived::ext::UniverseParts {
+            lu: tower.space.lu,
+            c2: &tower.space.c2,
+            fs_in_u: &tower.funspace_of,
+            union: &tower.union,
+            bin_union: &tower.bin_union,
+        };
+        let general =
+            derived::ext::dprod_in_universe_of_n(&mut env, &pre.ap, &pre.fs, &fibre, &uparts)?;
+        let pair =
+            derived::ext::dprod_in_universe_pair_n(&mut env, &pre.ap, &fibre, &uparts, &general)?;
+        let rules = derived::levels::pi_rules::pi_rules(
+            &mut env, &lp.r, &lp.i, &lp.ord, &lp.ut, &lp.s, &lp.ru, tower, &dp, &pair,
+        )?;
+        Some(Rc::new(PiPolyKit { dprod, rules }))
+    }
+
+    /// `⟦Π x:α. β⟧` at an undetermined body level, **wired** — the `ite0`
+    /// clause (`LEVELPOLY.md` §1.4):
+    ///
+    /// ```text
+    /// ⟦Π x:α. β⟧ = ite0(v̂, cndd(h⃗,A), dprod(h⃗,A))
+    /// ```
+    ///
+    /// with `v̂` the guard level from [`Self::undet_body_level`], `dprod` the
+    /// `Type` clause's own symbol for this skeleton, and `cndd` the kit's
+    /// conditional singleton over the same fibre. At `v̂ = ∅` the term
+    /// computes (by `when_zero`) to the Prop-shaped set, at `v̂ ≠ ∅` (by
+    /// `when_nonzero`) to the decided clause's dependent product — one term,
+    /// correct on every instantiation, where the opaque symbol asserted
+    /// nothing and blocked everything.
+    ///
+    /// `None` — the guard was not recoverable, the kit refused — falls back
+    /// to the axiom-free symbol, a counted gap exactly as before.
+    fn interp_pi_undet_poly(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        dom: &Term,
+        sk: &Term,
+        holes: &[Term],
+        body: ExprPtr<'t>,
+    ) -> Option<Term> {
+        let lp = self.lp()?;
+        let l = self.undet_body_level(ctx, body)?;
+        let l = self.canon_level(ctx, l);
+        let guard = self.omega_term(ctx, l, &lp);
+        let kit = self.pi_poly_kit(sk, holes.len())?;
+        let mut args: Vec<Term> = holes.to_vec();
+        args.push(dom.clone());
+        let cndd_t = self.mk(kit.rules.cndd, args.clone());
+        let dprod_t = self.mk(kit.dprod, args);
+        let term = self.mk(lp.i.sym, vec![guard.clone(), cndd_t, dprod_t]);
+        self.undet_poly_sites.insert(
+            e,
+            Rc::new(UndetPolySite { key: sk.clone(), holes: holes.to_vec(), dom: dom.clone(), guard }),
+        );
+        Some(term)
+    }
+
+    /// The typing rule of a **wired** Undet `Π`:
+    /// `⟦Π⟧ ∈ ⟦Sort (imax u v)⟧` by
+    /// [`derived::levels::pi_rules::PiRules::pi_imax_dep`] at
+    /// `(h⃗, û, v̂, A)` — a **conditional** certificate whose hypotheses are
+    /// the level parameters' `uᵢ ∈ ω` (discharged at the declaration
+    /// boundary like every other level hypothesis) plus the rule's two
+    /// mathematical premises, `A ∈ srt(û)` and the fibres conjunct, acquired
+    /// as antecedents exactly as a local's typing is — carried, counted, and
+    /// discharged where a binder's guard matches.
+    ///
+    /// `None` — no wired site, an obligation whose level is not an `imax`,
+    /// a guard that canonicalisation reshaped — falls through to the
+    /// ordinary miss, a counted gap.
+    fn ty_pi_undet_poly(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: ExprPtr<'t>,
+        te: &Term,
+        tt: &Term,
+    ) -> Option<TgTyping> {
+        let lp = self.lp()?;
+        let site = self.undet_poly_sites.get(&e)?.clone();
+        let Expr::Sort { level, .. } = ctx.read_expr(ty) else { return None };
+        let l = self.canon_level(ctx, level);
+        let Level::IMax(la, lb, _) = ctx.read_level(l) else { return None };
+        // The guard the term was built at must be the obligation's right arm,
+        // or the rule instance would be about a different `ite0`.
+        let v_hat = self.omega_term(ctx, lb, &lp);
+        if v_hat != site.guard {
+            return None
+        }
+        let u_hat = self.omega_term(ctx, la, &lp);
+        let kit = self.pi_poly_kit(&site.key, site.holes.len())?;
+
+        // The rule instance, and its antecedent taken apart:
+        // `((û∈ω ∧ v̂∈ω) ∧ (A ∈ srt(û) ∧ fib)) → ite0(…) ∈ srt(imax(û,v̂))`.
+        let mut inst_args = site.holes.clone();
+        inst_args.push(u_hat.clone());
+        inst_args.push(v_hat.clone());
+        inst_args.push(site.dom.clone());
+        let inst = derived::inst_all(&kit.rules.pi_imax_dep, &inst_args)?;
+        let (k, _goal) = inst.concl().as_imp()?;
+        let (_k12, k34) = as_and(&k)?;
+        let (a_in, fib) = as_and(&k34)?;
+        debug_assert_eq!(
+            a_in,
+            Formula::mem(site.dom.clone(), lp.srt_at(u_hat.clone())),
+            "ty_pi_undet_poly: the base premise is not the domain's srt membership"
+        );
+
+        // The hypothesis list: the level parameters' `uᵢ ∈ ω` first (their
+        // positions are what `omega_level_rec`'s Param arm projects), then
+        // the two acquired premises.
+        let omega = lp.omega();
+        let mut hyps = Vec::new();
+        self.collect_level_params(ctx, l, &omega, &mut hyps);
+        hyps.push(a_in);
+        hyps.push(fib);
+        let h = conj_of(&hyps);
+
+        // `⊢ H → û∈ω`, `⊢ H → v̂∈ω` — rebuilt through the same recursion the
+        // sort seam uses, under the *full* antecedent.
+        let (u_hat2, pa) = self.omega_level_rec(ctx, la, &lp, &hyps, h.as_ref())?;
+        let (v_hat2, pb) = self.omega_level_rec(ctx, lb, &lp, &hyps, h.as_ref())?;
+        if u_hat2 != u_hat || v_hat2 != v_hat {
+            return None
+        }
+        let n = hyps.len();
+        let p_ain = conj_proj(&hyps, n - 2)?;
+        let p_fib = conj_proj(&hyps, n - 1)?;
+        let k12_thm = derived::hyp_and(&pa, &pb)?;
+        let k34_thm = derived::hyp_and(&p_ain, &p_fib)?;
+        let k_thm = derived::hyp_and(&k12_thm, &k34_thm)?;
+        let thm = derived::syl(&k_thm, &inst)?;
+        Some(self.typing(crate::certify::TyGap::PiUndet, te, tt, thm, hyps))
+    }
+
     /// twice: the pre-pass's schedule is keyed on exactly this, and the audit
     /// that checks the backend against the schedule is worthless if the two
     /// keys can drift.
@@ -5098,7 +5469,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// [`Self::interp_pi`]'s exits come here, and a body that does not mention
     /// the binder takes the degenerate skeleton either way, so `⟦·⟧` stays a
     /// function across the two exits here too.
-    fn interp_pi_undet(&mut self, e: ExprPtr<'t>, dom: Term, bt: Term, v: Option<FreeVar>) -> Option<Term> {
+    ///
+    /// Under `NANODATG_LEVELPOLY=1` the wired route
+    /// ([`Self::interp_pi_undet_poly`]) is tried first: when the body's sort
+    /// level is recoverable, the `Π` interprets as the `ite0` conditional over
+    /// the two clauses' own terms instead of the axiom-free symbol. `body` is
+    /// the body expression at whatever opening the caller had — the guard walk
+    /// reads levels, never terms, so the two exits agree here too.
+    fn interp_pi_undet(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        dom: Term,
+        bt: Term,
+        v: Option<FreeVar>,
+        body: ExprPtr<'t>,
+    ) -> Option<Term> {
         let mut holes = Vec::new();
         let sk = match v {
             Some(v) if bt.occurs_free(v) => self.skeleton(&bt, v, &mut holes)?,
@@ -5108,6 +5494,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 Term::var(h)
             }
         };
+        if levelpoly_enabled() {
+            if let Some(t) = self.interp_pi_undet_poly(ctx, e, &dom, &sk, &holes, body) {
+                return Some(t)
+            }
+        }
         let hit = self.shared.borrow().undet_syms.get(&sk).copied();
         let sym = match hit {
             Some(s) => s,
@@ -5208,7 +5599,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             self.props.insert(e, clause);
             return match clause {
                 Clause::Prop => self.interp_pi_prop(e, dom, b, None),
-                Clause::Undet => self.interp_pi_undet(e, dom, b, None),
+                Clause::Undet => self.interp_pi_undet(ctx, e, dom, b, None, body),
                 // The constant fibre: the body is hole 0 entire and the
                 // skeleton is the bare hole variable — one table entry
                 // corpus-wide, shared with every arrow whatever its codomain.
@@ -5259,7 +5650,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.props.insert(e, clause);
         match clause {
             Clause::Prop => return self.interp_pi_prop(e, dom, bt, Some(v)),
-            Clause::Undet => return self.interp_pi_undet(e, dom, bt, Some(v)),
+            Clause::Undet => return self.interp_pi_undet(ctx, e, dom, bt, Some(v), body_open),
             Clause::Type => {}
         }
 
@@ -5275,23 +5666,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The tail of [`Self::interp_pi`]'s `Type` clause: register (or share) the
     /// fibre skeleton's machinery and record where this occurrence sits.
     fn finish_pi_site(&mut self, e: ExprPtr<'t>, sk: Term, holes: Vec<Term>, dom: Term) -> Option<Term> {
-        let info = match self.pi_info(&sk) {
-            Some(i) => i,
-            None => {
-                let arity = u32::try_from(holes.len() + 1).ok()?;
-                let info = match self.build_fibre(&sk, holes.len()) {
-                    Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
-                    // Inert: the right *shape*, so that the interpretation stays
-                    // compositional, but with no defining axioms and hence no
-                    // typing. A reported gap rather than a wrong answer.
-                    None => Rc::new(PiInfo { dprod: self.env_mut().declare(arity), fibre: None }),
-                };
-                let mut sh = self.shared.borrow_mut();
-                sh.pi_infos.insert(sk.clone(), info.clone());
-                sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
-                info
-            }
-        };
+        // A refused `build_fibre` still registers the inert shape, so this
+        // never declines; see [`Self::pi_info_or_build`].
+        let info = self.pi_info_or_build(&sk, holes.len())?;
 
         let mut args = holes.clone();
         args.push(dom.clone());
@@ -14010,19 +14387,62 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         else {
             return Err("pi congruence: a Π has no applicative interpretation")
         };
-        // A `Π` under neither clause. Its symbol has no axioms, so the only
-        // thing available is plain congruence over it, and only when both sides
-        // are the same shape. Everything else about such a term is a gap by
-        // construction — see [`Clause::Undet`].
+        // A `Π` under neither clause. An **opaque** one has an axiom-free
+        // symbol and supports only plain congruence over an identical shape; a
+        // **wired** one (`explore/level-poly-target`) is the `ite0` conditional
+        // over the two clauses' own terms, and congruence composes through the
+        // guard, the conditional singleton and the dependent product — all
+        // recorded applications, so `ceq_congr` serves each layer.
         let (ua, ub) = (self.undet_sites.contains_key(&a), self.undet_sites.contains_key(&b));
-        if ua || ub {
+        let (wa, wb) =
+            (self.undet_poly_sites.get(&a).cloned(), self.undet_poly_sites.get(&b).cloned());
+        if ua || ub || wa.is_some() || wb.is_some() {
             // Exactly one side undetermined is a **classification
             // disagreement**: the two `Π`s are `def_eq`, so their sorts are
             // too, and one of the two answers is this approximation's fault
             // rather than the level algebra's. Named apart from the honest case
             // so that it can be held at zero.
-            if ua != ub {
+            if (ua || wa.is_some()) != (ub || wb.is_some()) {
                 return Err("pi congruence: one Π of undetermined sort and one decided")
+            }
+            if let (Some(sa), Some(sb)) = (&wa, &wb) {
+                if sa.key != sb.key {
+                    return Err("pi congruence: two Πs of undetermined sort over differently shaped bodies")
+                }
+                if sa.guard != sb.guard {
+                    return Err("pi congruence: two wired Πs at different guard levels")
+                }
+                let kit = self
+                    .pi_poly_kit(&sa.key, sa.holes.len())
+                    .ok_or("pi congruence: the wired Π's kit is gone")?;
+                let n = sa.holes.len();
+                let mut prems = Vec::with_capacity(n + 1);
+                for i in 0..=n {
+                    let (l, r) = if i == n {
+                        (sa.dom.clone(), sb.dom.clone())
+                    } else {
+                        (sa.holes[i].clone(), sb.holes[i].clone())
+                    };
+                    let c = if i == n { dom } else { body };
+                    let Some(p) = self.pi_premise(c, &l, &r) else {
+                        return Err(if i == n { pi_dom_gap(dom) } else { pi_body_gap(body) })
+                    };
+                    prems.push(p);
+                }
+                let cndd_eq = self
+                    .ceq_congr(kit.rules.cndd, &prems)
+                    .ok_or("pi congruence: congruence rule refused")?;
+                let dprod_eq = self
+                    .ceq_congr(kit.dprod, &prems)
+                    .ok_or("pi congruence: congruence rule refused")?;
+                let guard_eq = CondEq::refl(sa.guard.clone());
+                let lp = self.lp().ok_or("pi congruence: the wired Π's kit is gone")?;
+                return self
+                    .ceq_congr(lp.i.sym, &[guard_eq, cndd_eq, dprod_eq])
+                    .ok_or("pi congruence: congruence rule refused")
+            }
+            if wa.is_some() != wb.is_some() {
+                return Err("pi congruence: one wired and one opaque undetermined Π")
             }
             if fa != fb {
                 return Err("pi congruence: two Πs of undetermined sort over differently shaped bodies")
@@ -14790,6 +15210,14 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if which == crate::certify::TyGap::PiProp {
             if let Some(t) = self.prop_in_u0(&te, &tt) {
                 return self.typing(which, &te, &tt, t, Vec::new())
+            }
+        }
+        // The wired Undet clause (`LEVELPOLY.md` §5.4 blocker 1): `pi_imax_dep`
+        // at this site's guard, a conditional certificate. Falls through to the
+        // ordinary miss when the site was not wired or the shapes disagree.
+        if which == crate::certify::TyGap::PiUndet && levelpoly_enabled() {
+            if let Some(t) = self.ty_pi_undet_poly(ctx, e, ty, &te, &tt) {
+                return t
             }
         }
         match self.domain_premise(&te, &tt) {

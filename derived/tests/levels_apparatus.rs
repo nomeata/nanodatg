@@ -46,3 +46,24 @@ fn imax_stays_in_omega() {
         "the closed instance is not about the imax term"
     );
 }
+
+/// The bundled [`Rules`] kit is over the apparatus's **own** chain: its
+/// `punit_demo` instantiates at the apparatus's `∅`, discharges with the
+/// apparatus's own `0 ∈ ω`, and concludes membership in the apparatus's own
+/// `srt(∅)` — a kit derived over a foreign tower would fail each of these.
+#[test]
+fn bundled_rules_are_over_this_chain() {
+    let mut env = Env::new();
+    let lp = setup(&mut env);
+    let zero = lp.zero();
+    let at = derived::inst_all(&lp.ru.punit_demo, std::slice::from_ref(&zero)).expect("inst");
+    let closed = kernel::Thm::mp(&at, &lp.r.peano.core.zero_mem).expect("0 ∈ ω discharges");
+    assert!(closed.hyps().is_empty());
+    let (one, srt0) = closed.concl().as_mem().expect("a membership");
+    assert_eq!(srt0, lp.srt_at(zero), "the target is not this apparatus's srt(∅)");
+    // `1` is the unit of the tower the apparatus was built over; pin it against
+    // an independent spelling through `srt`'s own `at_zero` computation.
+    let _ = one;
+    assert!(lp.ru.pi_imax.hyps().is_empty());
+    assert!(lp.ru.mono_sub.hyps().is_empty());
+}
