@@ -4378,7 +4378,17 @@ other:
   6,698 / 6,816, also **98.3 %**.
 
 They agree to the decimal because a skeleton that models adds one to each side.
-The number to watch is the decline count, and it is **147 → 118**.
+The number to watch is the decline count, and it is **147 → 118** here and
+**→ 109** once §8.14's alias retry lands beside it.
+
+**And the split that now matters more than the count.** Every one of the 29
+families this arm added, and every one of their 29 skeletons, is
+**axiom-free** — `#print axioms` empty, ι by `Eq.refl` — so all 58 are models
+*and* certificates. That is the column to carry into any future census:
+`Classical.choice` has been refuted as a term of the checker's language, so a
+model that spends it is modelled and not covered, and the 43 indexed families
+still waiting on W will land on the wrong side of that line until item E does
+or the owner decides otherwise.
 
 Of the 109: 53 an indexed family whose erasure is *not* linear (43 of them
 composed `_model.aux`), ~50 branching or under a binder, 3 basis, 1 the basis
