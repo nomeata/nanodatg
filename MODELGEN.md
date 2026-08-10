@@ -3674,6 +3674,15 @@ W is not the largest cluster and is being done first because `Lean.ParserDescr`
 is one of the two declarations standing between `init-prelude` and full
 coverage. The indexed family is larger and is deliberately next, not forgotten.
 
+**Two things this table does not say, both established later and both changing
+what to do with it.** The two clusters are *not* stacked: §8.15 builds the
+carve over a spliced index-erased inductive rather than over W, so the indexed
+arm does not wait on the W arm and `CarveOverSkeleton.lean` is the prototype
+that would close this row rather than `IndexedCarve.lean`. And the indexed
+cluster is not 68 independent Mathlib shapes: **42 of the 68 are this tool's
+own composed `_model.aux`**, where every one of the 37 branching declines is an
+input declaration (§8.15's second table).
+
 ## 8.10 The rule the arms are built under: model in dependency order, then use the real type
 
 This governs every arm from here and it was got wrong twice in one day, so it
@@ -4067,3 +4076,124 @@ ones the escape above retires — and the remaining ~836 are the input's own
 duplicate private declarations, which are the export's property and not
 reachable from here at all: those names are the input's and cannot be
 rewritten.
+
+## 8.15 The carve does not need W underneath it — `scripts/inductive-basis/CarveOverSkeleton.lean`
+
+**Verdict: build the indexed carve over a *spliced index-erased inductive*, not
+over a W-type.** It is strictly cheaper on four axes, each of them checked
+mechanically rather than argued, and it makes the indexed arm independent of
+the W arm instead of stacked on it. 507 lines, compiles at the pinned
+toolchain in ~1 s, 0 errors, 0 warnings, 22 `#print axioms` and an asserted
+dependency closure.
+
+This **refutes a sequencing claim, not a result.** `WIndexedCarve.lean`'s own
+verdict — that the indexed carve subsumes the non-indexed case, with
+byte-identical glue at `ι := Unit` — stands; it was re-read, not re-run, and
+nothing below contradicts it. What does not follow from it is *"build one arm,
+not two"*, because that conclusion silently assumes the carve must stand on W.
+§8.10's own rule says otherwise: model in dependency order and then use the
+**real** type. The thing the carve needs underneath it is a non-indexed
+inductive with the same constructor telescopes — and that is a declaration we
+can **splice**, which §8.13's splice-and-model landed the machinery for.
+
+### What the prototype pins
+
+| | carve over W (`WIndexedCarve.lean`) | carve over a spliced skeleton |
+|---|---|---|
+| per-constructor glue | a chosen `B a ≅ Fin k`, an eta lemma, a `cast` | **none** |
+| ι | propositional (`WellFounded.fix_eq`) | **`Eq.refl`**, the literal proof term |
+| axioms, every derived constant | `propext, Classical.choice, Quot.sound` | **none** |
+| inductives the *core* reaches | 20, before any target | `Eq`, `PSigma`, `Nat`, the skeleton |
+
+**The currying glue disappears, and that is the headline.** Both W prototypes
+name it as the one part of the design that is not schematic and the place a
+generator breaks first: `W` hands you `(f : B a → W) → …` where Lean's
+recursor wants the constructor's fields uncurried, so each constructor needs an
+index iso plus an eta lemma proved by case analysis. A spliced skeleton *keeps
+the field telescope* — the minor premise `STri.rec` wants and the minor premise
+`Tri.rec` wants are the same telescope — so there is no iso, no eta lemma, no
+`funext`, and nothing emitted per constructor beyond the constructor itself.
+The whole of the per-constructor work becomes: repackage each recursive field
+as a `PSigma`, and transport the conclusion along the index equation the
+`good` proof already carries.
+
+**ι is `Eq.refl`.** Three Lean features carry it and all three are load-bearing:
+definitional proof irrelevance (`⟨s, h⟩ ≡ ⟨s, h'⟩`, so the `good` component
+never obstructs), ι for the skeleton's *own* recursor — which a real inductive
+has and a model does not, which is precisely §8.10's point — and structure eta
+for `PSigma`. This matters beyond elegance: `modelgen/README.md`'s carve-out
+that *"an ι theorem does not promise `Eq.refl`"* would otherwise have had to
+widen from the graph arm to the whole indexed cluster, i.e. to the largest
+cluster in the residue.
+
+**The basis is unchanged.** `Eq`, `PSigma` and Church conjunction
+(`Modelgen.andCOf`'s shape, whose projections reduce by β alone). Eleven
+inductives are reachable across the three targets and only six belong to the
+construction; the other five — `Add`, `HAdd`, `OfNat`, `PProd`, `PUnit` —
+arrive through the *targets' own index expressions* (`m + n + 1`, the numeral
+`0`, `Nat.rec`'s `below`/`brecOn`), which a generator copies verbatim out of
+the export. The absence of `List`, `Option`, `Sigma`, `Subtype`, `Acc`,
+`WellFounded`, `And`, `Or`, `Iff`, `Exists`, `HEq`, `Decidable`, `Nonempty`,
+`Quot`, `Bool`, `True` and `False` is **asserted**, not reported, so this stops
+being true the day the arm quietly grows a dependency.
+
+Three targets, each pinned twice — the derived recursor against a
+transcription and Lean's own recursor against the *same* transcription:
+`Tri` (indexed, branching, two recursive fields at *different* indices),
+`Two` (**two constructors at the same index**, so the recursor has to tell them
+apart on its own, with `CTwo.l_ne_r` derived from the recursor and its two ι
+rules alone), and `Bal` (an index **telescope** of length two, packed into one
+`PSigma`, which is `Modelgen.packTyOf` — already built, already used by arm F).
+
+### What it costs, and the rule that keeps the contract honest
+
+One spliced inductive per modelled family, which splice-and-model must then
+model. So the arm's reach is *indexed families whose index erasure the existing
+routes model*, and a family whose erasure is branching still waits for W — the
+erasure of `Lean.Expr`'s aux is still `Lean.Expr`-shaped. This does not make
+the arm smaller than the carve-over-W arm would have been; it makes the
+dependency **explicit and separable** where W underneath everything made it
+invisible.
+
+And the obligation is real: a spliced-but-unmodelled skeleton would put a fifth
+inductive in front of a consumer, which is exactly the hole §8.13 closed. So
+the rule is **decline the family when its skeleton does not model.** A decline,
+never an emission.
+
+### The residue, split by who wrote the declaration
+
+Re-measured on `pre-30000000` with the current binary — 110 declines, the same
+110 §8.9 sequences, split along an axis that census did not have:
+
+| cluster | count | of which are this tool's own composed `_model.aux` |
+|---|---|---|
+| an indexed family at a never-zero sort | 68 | **42** |
+| branching or under-a-binder recursion | 37 | **0** |
+| basis / name taken / index-variable field | 5 | — |
+
+**Nearly two thirds of the indexed cluster is our own output.** Those are the
+single indexed inductives layer 2 emits when it packs a mutual block, fed back
+through layer 3 by `primCompose`. Every branching decline, by contrast, is an
+input declaration. That is worth knowing before sequencing: the indexed
+cluster is not 68 independent Mathlib shapes, it is 26 of them plus 42
+instances of one shape *this tool controls the generation of*, and their
+erasures are the erasures of the mutual blocks underneath them.
+
+### What is not done, and is not to be assumed from the above
+
+* **Nothing is generated.** This is a compiled prototype, hand-written at three
+  targets. `Modelgen.primIso` has no carve arm and the splice of a skeleton is
+  not implemented.
+* **`Prop`-valued and small-eliminating targets** are a different construction,
+  unchanged from `WFromPaths.lean`.
+* **Universe polymorphism** is not exercised: the targets are `Type`-valued at
+  a literal level. The carrier is a `PSigma` over the skeleton, so it lands at
+  `max 1 w 0`, and whether that is `w` on the nose at every never-zero `w` the
+  corpus carries is the same level question the Type route's pads already
+  answer — but it is *that* question again and not a new one, and it has not
+  been asked here.
+* **An index telescope whose later index types depend on earlier ones** uses
+  the same `PSigma` packing and I expect no new content, but only the
+  independent case is tested (`Bal`).
+* **The mutual and nested reductions** still land in indices, so they are
+  downstream of this arm rather than beside it.

@@ -137,9 +137,14 @@ single-valuedness and is propositional.
   tuple tower ([`Modelgen.recSlotOf`]) carries *linear* recursion, and its
   spine is a single `Nat`, so a constructor with two recursive fields (or one
   under a binder) has no predecessor to take. That needs W/path, plan B.
-* **indexed at a never-zero sort** (the composed `T._model.aux`) — thesis
-  §5.2's skeleton-plus-`good`; `scripts/inductive-basis/IndexedCarve.lean`
-  compiles it on the thesis's own example.
+* **indexed at a never-zero sort** (the composed `T._model.aux`, which is 42 of
+  the 68 occupants) — thesis §5.2's skeleton-plus-`good`.
+  `scripts/inductive-basis/CarveOverSkeleton.lean` is the prototype that would
+  close it, and it does **not** go through W: it splices the index *erasure*
+  as an ordinary inductive, lets splice-and-model model that, and carves the
+  family out of it with `Eq` and `PSigma`. No axioms, no per-constructor
+  currying glue, and every ι rule `Eq.refl` (`MODELGEN.md` §8.15).
+  `IndexedCarve.lean` is the older, thesis-shaped sketch.
 * **a recursive subsingleton whose data fields are not the conclusion's
   indices** — the graph arm's own boundary, not the class: a *recursive
   subsingleton* models, by [`Modelgen.graphArm`]. What that arm cannot reach
