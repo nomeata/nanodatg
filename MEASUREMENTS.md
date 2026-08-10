@@ -6044,6 +6044,38 @@ which matches neither `convs` nor `framecache` — so the two rows carrying the
 conversion census were silently outside the comparison. The regex is
 `convs|framecache` now and the numbers above are the re-taken ones.*
 
+### `init-prelude`: 0 → at least 265, and the wall moved
+
+The headline case, and the one that motivated the restructure. Run on the
+`modelgen`-filtered export (cached once, so both binaries see the same bytes),
+`--no-modelgen --verbose --mutual --nested`, `MINI_CONV_TRACE=1`,
+`ulimit -v` 20 GB.
+
+**Before**: `decline` — a budget refusal in the recursor type of
+`ByteArray.IsValidUTF8` — after 2 005 s and 26.75 T instructions, with
+`facts declars=2131`. `MINI_CONV_TRACE` emitted **zero rows**. That zero is the
+measurement and it is direct rather than inferred: the interpretation pass is
+downstream of a completed acceptance pass, and the acceptance pass never
+completed, so **not one declaration of the file was certified**.
+
+**After**: the trace runs from the first declaration. At the point the run was
+stopped externally at ~85 minutes it was at declaration **265**
+(`List.utf8Encode`), with `proved` 77 019 756, `sealed` 73 555 792 and
+**`gapped` 0**. So the certified prefix is 0 → **≥ 265**, and every conversion
+in it is closed.
+
+**The wall moved and it moved onto a known one.** The run no longer stops where
+`ByteArray.IsValidUTF8` is; it stops where `Nat.mod_lt` is — the same cliff §"
+`nested.rs` and `init-prelude`, in instructions" already prices (the trace
+crosses 30.3 M conversions inside `Nat.mod_lt`). **This is a real cost
+regression on this file and should be read as one**: the *verdict* on
+`init-prelude` used to be available in 33 minutes and now is not, because
+reaching it means interpreting 2 000-odd declarations first. The verdict itself
+is unchanged. What would restore the fast path is a switch for the evidence
+half — `decl_pass::Pass::new` already takes one, and the used-axiom decline is
+its only caller today — but it is a flag with its own contract and its own
+fixtures and is deliberately not part of this change.
+
 The `good/tutorial` aggregate, which is the standing ratchet, is unchanged to
 the last digit:
 
