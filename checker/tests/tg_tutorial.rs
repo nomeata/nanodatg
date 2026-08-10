@@ -2447,6 +2447,89 @@ fn the_rec_nest_outcome_rows_partition_the_no_curried_row() {
     );
 }
 
+/// **Blocker 3, isolated in one file, with the schedule as its own control** —
+/// `LEVELPOLY.md` §5.4 blocker 3.
+///
+/// `015_levelParams` stores two declaration typings in both states. Under the
+/// schedule one use is answered from the store; with the schedule deleted the
+/// *same* use is not, and the reason row says why: the declaration **is**
+/// stored, at other levels. That is the whole of blocker 3 — a use inside `g`
+/// spells `f`'s levels with `g`'s parameter variables, so the key
+/// `(f, ⟦levels⟧)` misses an entry stored at `f`'s own — reduced to a single
+/// site whose two ends differ by nothing but the schedule.
+///
+/// It is also the size check. `Dt::MissOtherLevels` is the *only* part of the
+/// store-miss population any level construction can reach; on the staged
+/// prelude it is 483 of 17124 misses, so blocker 3 closed completely takes
+/// `uses answered from the store` to at most 117 + 483 = 600 against a ratchet
+/// of 1308. The rest is declarations whose typing was never derived at any
+/// levels, which is not a level problem. This test pins the mechanism; §5.4
+/// carries the number.
+///
+/// `118_accRecReduction` is the discriminating negative — 19 store misses,
+/// none of them cross-level — without which a counter wired to fire on every
+/// miss would pass.
+///
+/// Mutation run against this test (red, then reverted): returning `true`
+/// unconditionally from `stored_at_other_levels`, which takes 118's row 0 → 19.
+///
+/// **One mutation was tried and did *not* redden**, and the code changed rather
+/// than the claim: `stored_at_other_levels` first carried a `levels != key.1`
+/// conjunct, and dropping it left every assertion here green. It is
+/// unreachable — the function is only called once a lookup at that exact key
+/// has missed — so it was removed. A guard no mutation can redden reads as a
+/// check and is not one.
+#[test]
+fn the_store_miss_that_a_level_construction_could_reach_is_counted_apart() {
+    let lp = corpus().join("good/tutorial/015_levelParams.ndjson");
+    let acc = corpus().join("good/tutorial/118_accRecReduction.ndjson");
+    if skip_guard::absent(&lp) || skip_guard::absent(&acc) {
+        return
+    }
+    const STORED: &str = "…stored as ⟦c⟧ ∈ ⟦T⟧";
+    const HIT: &str = "uses answered from the store";
+    const MISS: &str = "uses with no entry";
+    const XLEVEL: &str = "…of them against a declaration stored at other levels";
+
+    // The control: the schedule answers the use.
+    let sched = poly_report(&lp, "1", true);
+    assert_eq!(rows_totalling(&sched, STORED), 2, "scheduled:\n{sched}");
+    assert_eq!(rows_totalling(&sched, HIT), 1, "the schedule must answer the use:\n{sched}");
+    assert_eq!(rows_totalling(&sched, MISS), 0, "scheduled:\n{sched}");
+    assert_eq!(
+        rows_totalling(&sched, XLEVEL),
+        0,
+        "under the schedule every level is ground, so no key can miss on levels alone:\n{sched}"
+    );
+
+    // The deletion: the same two entries, the same one use, now unanswered —
+    // and attributed to the boundary rather than to an absent entry.
+    let staged = poly_report(&lp, "1", false);
+    assert_eq!(rows_totalling(&staged, STORED), 2, "staged:\n{staged}");
+    assert_eq!(
+        rows_totalling(&staged, HIT),
+        0,
+        "the use is expected to go unanswered without the schedule — if this now reads 1, \
+         blocker 3's cross-level consumption has been built and §5.4 needs re-taking:\n{staged}"
+    );
+    assert_eq!(rows_totalling(&staged, MISS), 1, "staged:\n{staged}");
+    assert_eq!(
+        rows_totalling(&staged, XLEVEL),
+        1,
+        "the miss must be attributed to the σ boundary, not to an absent entry:\n{staged}"
+    );
+
+    // The discriminating negative: misses that are *not* the boundary's.
+    let other = poly_report(&acc, "1", false);
+    assert_eq!(rows_totalling(&other, MISS), 19, "staged:\n{other}");
+    assert_eq!(
+        rows_totalling(&other, XLEVEL),
+        0,
+        "these 19 are against declarations stored at no levels at all; a counter that fired \
+         on every miss would be indistinguishable from one that fires on the right ones:\n{other}"
+    );
+}
+
 /// One staged run of `export`, at the given `NANODATG_LEVELPOLY` setting,
 /// returning the report.
 fn staged_poly_report(export: &Path, flag: &str) -> String {

@@ -5575,6 +5575,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `⟦f.{0}⟧` and `⟦f.{u}⟧` are definitions of two different bodies — the
     /// value is level-substituted before it is interpreted — so they are two
     /// symbols and, in the store, two entries.
+    /// **Does this declaration have a stored typing at some *other* level
+    /// instantiation?** — the σ-boundary half of [`Dt::Miss`].
+    ///
+    /// A linear scan of both stores, which is the right shape: they hold tens
+    /// of entries on the whole prelude, not thousands, and a name index would
+    /// be a second thing to keep in step for no measurable gain.
+    ///
+    /// **No `levels != key.1` guard, deliberately.** Both call sites are on the
+    /// miss path, reached only once a lookup at *this very key* has come back
+    /// empty, so an entry under this name is at other levels by construction.
+    /// A guard here would be unreachable, and an unreachable guard is a line no
+    /// mutation can redden — which is worse than no line: it reads as a check.
+    /// The one place the two could differ is `declar_typings_poly`, where an
+    /// entry at the same key can exist and fail the conclusion guard above; on
+    /// this corpus that store is empty in every state, so the distinction is
+    /// unmeasurable today and is not pretended otherwise.
+    fn stored_at_other_levels(&self, key: &(u32, Vec<Term>)) -> bool {
+        let sh = self.shared.borrow();
+        sh.declar_typings.keys().any(|(n, _)| *n == key.0)
+            || sh.declar_typings_poly.keys().any(|(n, _)| *n == key.0)
+    }
+
     fn const_key(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -10867,6 +10889,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         }
                     }
                     note_dt(Dt::Miss);
+                    if self.stored_at_other_levels(&key) {
+                        note_dt(Dt::MissOtherLevels);
+                    }
                     if self.shared.borrow().declined_cond.contains(&key) {
                         note_dt(Dt::MissCond);
                     }
@@ -16072,6 +16097,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
                 }
             }
             note_dt(Dt::Miss);
+            if self.stored_at_other_levels(&key) {
+                note_dt(Dt::MissOtherLevels);
+            }
             if self.shared.borrow().declined_cond.contains(&key) {
                 note_dt(Dt::MissCond);
             }
@@ -17635,6 +17663,14 @@ enum Dt {
     PolyHit,
     /// A use found no entry: never stored, or stored at **other levels**.
     Miss,
+    /// …and the declaration **does** have an entry, at *other* levels — the
+    /// σ-boundary miss, `LEVELPOLY.md` §5.4 blocker 3. Split out from
+    /// [`Dt::Miss`] because it is the only part of the miss population a level
+    /// construction can reach: the rest is a declaration whose typing was
+    /// never derived at *any* levels, which no amount of level machinery
+    /// changes. The two are counted from the same lookup so
+    /// `MissOtherLevels ≤ Miss` by construction.
+    MissOtherLevels,
     /// …and the entry is missing *because the typing was conditional* — the
     /// declaration was translated and the translation was thrown away
     /// ([`Dt::Conditional`]). Split out from [`Dt::Miss`] because the two say
@@ -17682,7 +17718,7 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 23;
+const N_DT: usize = 24;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -17703,6 +17739,7 @@ impl Dt {
             Dt::Hit => "uses answered from the store",
             Dt::PolyHit => "uses answered from the quantified store, conditionally",
             Dt::Miss => "uses with no entry (or at other levels)",
+            Dt::MissOtherLevels => "…of them against a declaration stored at other levels",
             Dt::MissCond => "…of them against a typing that was derived and discarded",
             Dt::Wrong => "uses whose target is not the declared type",
             Dt::Poly => "stored entries that are level-polymorphic",
@@ -17729,6 +17766,7 @@ impl Dt {
         Dt::Hit,
         Dt::PolyHit,
         Dt::Miss,
+        Dt::MissOtherLevels,
         Dt::MissCond,
         Dt::Wrong,
         Dt::Poly,
