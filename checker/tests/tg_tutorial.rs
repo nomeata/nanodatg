@@ -1940,3 +1940,97 @@ fn no_tutorial_export_reaches_the_general_iota_rule() {
         );
     }
 }
+
+/// **The declaration-boundary quantifier stores, answers, and keys by level
+/// expression** — `LEVELPOLY.md` §5.3 step 5, on its own fixture.
+///
+/// `test_resources/LevelPoly/export` is five universe-polymorphic
+/// definitions — the atoms this pin needs, because two pass under each of the
+/// bugs it is written against:
+///
+/// * `myty.{u} : Sort (u+2) := Sort (u+1)` — its value typing is the sort rule
+///   at a *variable* level, conditional on exactly `u ∈ ω`, so the boundary
+///   must quantify it: `⊢ ∀u. u ∈ ω → ⟦myty⟧(u) ∈ srt(succ (succ u))`.
+/// * `myty2.{u} : Sort (u+2) := myty.{u}` — a use **at the same parameter
+///   name**, whose key matches the stored entry: the quantified store answers
+///   it, conditionally, and the answer is itself quantified at *its* boundary.
+/// * `myothr.{v} : Sort (v+2) := myty.{v}` — a use **at a different parameter
+///   name**, whose key does not match. It must *miss* the quantified store —
+///   the entry is per level expression, not per constant — so its own value
+///   typing stays a counted gap and it is *not* quantified at its boundary;
+///   pinning both counts exactly is what makes a key that stopped
+///   discriminating fail here.
+/// * `mypair.{u,v} : Sort (max u v + 2) := Sort (max u v + 1)` and
+///   `mypair2.{u,v} := mypair.{u,v}` — the **two-parameter** pair, without
+///   which the quantifier *prefix order* is unobservable: with one variable,
+///   generalising forward and in reverse coincide, and the first version of
+///   this test stayed green under exactly that mutation. With two, a wrong
+///   prefix re-opens with the antecedents swapped, the guard refuses, and the
+///   hit count drops.
+///
+/// Both runs are under `NANODATG_NO_SCHEDULE=1`, the deletion's staging
+/// switch: under the σ-schedule a definition is only ever interpreted at
+/// ground levels, so the boundary the quantifier guards is unreachable — the
+/// pre-deletion prelude measures exactly 0 on both rows, and this fixture is
+/// the reason that 0 is "not yet reachable" rather than "cannot fire". The
+/// flag-off run is the wedge's standing bit-identity promise: both rows zero
+/// even in the staged state.
+///
+/// Mutations run against this test (each made the cell red, then was
+/// reverted): generalising in forward order instead of reverse leaves the
+/// quantifier prefix inverted on `mypair`, `gen_checked` and the re-open
+/// guard between them refuse it, and the store row reads 3; generalising the
+/// *untransported* theorem — about `⟦val⟧` instead of `⟦c⟧` — is refused at
+/// the consult guard, the conditional answers never happen, and the store
+/// row reads 2.
+#[test]
+fn the_declaration_boundary_quantifier_stores_and_answers() {
+    let export = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_resources/LevelPoly/export");
+    let run = |flag: &str| -> String {
+        let cfg_path = tmp_cfg(&format!("lp{flag}"), &export);
+        let cfg = format!(
+            r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true, "print_success_message": false}}"#,
+            serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+        );
+        std::fs::write(&cfg_path, cfg).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
+            .arg(&cfg_path)
+            .env("NANODATG_LEVELPOLY", flag)
+            .env("NANODATG_NO_SCHEDULE", "1")
+            .output()
+            .expect("spawn");
+        let _ = std::fs::remove_file(&cfg_path);
+        assert!(out.status.success(), "the LevelPoly fixture must be accepted (flag={flag})");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    const STORED: &str = "…quantified at the boundary and stored";
+    const HIT: &str = "uses answered from the quantified store, conditionally";
+
+    let on = run("1");
+    // `myty` and `mypair` quantify their own sort-rule typings at the
+    // boundary; `myty2` and `mypair2` quantify the store's conditional
+    // answers in turn. `myothr` misses the store, so its value typing has no
+    // evidence and nothing to quantify — exactly 4, not 5.
+    assert_eq!(
+        rows_totalling(&on, STORED),
+        4,
+        "the boundary quantifier stored {} declarations, expected exactly 4 \
+         (myty, myty2, mypair, mypair2; myothr's different-name key must miss):\n{on}",
+        rows_totalling(&on, STORED)
+    );
+    // …and exactly two uses — `myty2`'s and `mypair2`'s, at the matching
+    // parameter names — are answered from the store. `myothr`'s must miss:
+    // its key is a different level expression.
+    assert_eq!(
+        rows_totalling(&on, HIT),
+        2,
+        "the quantified store answered {} uses, expected exactly 2 \
+         (a per-name key stopped discriminating, or a same-name use missed):\n{on}",
+        rows_totalling(&on, HIT)
+    );
+
+    let off = run("0");
+    assert_eq!(rows_totalling(&off, STORED), 0, "flag off must be bit-identical: nothing stored");
+    assert_eq!(rows_totalling(&off, HIT), 0, "flag off must be bit-identical: nothing answered");
+}

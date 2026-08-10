@@ -2154,6 +2154,19 @@ struct Shared {
     /// derives that two universe parameters are *distinct*, so mapping the `u`
     /// of two declarations to one constant loses information and adds none.
     param_syms: HashMap<u32, Term>,
+    /// One kernel **free variable** per universe parameter name — the
+    /// ω-vocabulary's reading of a parameter (`LEVELPOLY.md` §1.1), beside the
+    /// opaque symbol [`Shared::param_syms`] keeps for the *syntactic*
+    /// vocabulary.
+    ///
+    /// A variable and not a symbol, because the declaration-boundary
+    /// quantifier (§5.3 step 5) must `Thm::gen` over it: a theorem
+    /// `⊢ u ∈ ω → φ(u)` at a free variable `u` generalises to `⊢ ∀u. …`,
+    /// while at a declared constant it is stuck at that constant forever.
+    /// Shared across declarations for the reason `param_syms` is — nothing
+    /// derives two parameters distinct, and `⟦f.{u}⟧` inside a later `g.{u}`
+    /// must be about the same `u`.
+    param_vars: HashMap<u32, FreeVar>,
     /// One nullary symbol per de Bruijn index. See [`TgBackend::idx_term`].
     idx_syms: HashMap<u64, FnSym>,
     /// One opaque nullary symbol per **literal value**.
@@ -2282,6 +2295,19 @@ struct Shared {
     /// against the caller's claim at the point of use by
     /// [`TgBackend::has_type_a`]'s single-exit guard, like every other clause.
     declar_typings: HashMap<(u32, Vec<Term>), Sealed>,
+    /// The **quantified** declaration typings — `LEVELPOLY.md` §5.3 step 5.
+    ///
+    /// A value typing whose every antecedent is `uᵢ ∈ ω` over an ω-vocabulary
+    /// parameter variable ([`Shared::param_vars`]) is not discarded: the
+    /// antecedents are the *level hypotheses* of a level-polymorphic
+    /// declaration, and the declaration boundary closes them by `Thm::gen`
+    /// into `⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧ ∈ ⟦T⟧`. Stored beside the entry the vars
+    /// (outermost quantifier first, the order `inst_all` wants) and the
+    /// antecedent list at the generic point, so a use can re-open the
+    /// implication and hand the `uᵢ ∈ ω` assumptions to the caller's own
+    /// antecedent channel (§5.2). `Sealed`, like every store here: the
+    /// quantified theorem itself carries no sequent hypotheses.
+    declar_typings_poly: HashMap<(u32, Vec<Term>), (Vec<FreeVar>, Vec<Formula>, Sealed)>,
     /// Keys whose declaration typing was **derived and then discarded** because
     /// the derivation stood under antecedents ([`Dt::Conditional`]).
     ///
@@ -2414,6 +2440,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             opaque_syms: HashMap::new(),
             const_syms: HashMap::new(),
             param_syms: HashMap::new(),
+            param_vars: HashMap::new(),
             idx_syms: HashMap::new(),
             lit_syms: HashMap::new(),
             ind_syms: HashMap::new(),
@@ -2421,6 +2448,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             gen_ty_nests: HashMap::new(),
             gen_ctor_nests: HashMap::new(),
             declar_typings: HashMap::new(),
+            declar_typings_poly: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
             lp,
@@ -2517,6 +2545,11 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// the set of caches the (level, type) discipline exists to serve.
     locals: HashMap<LocalKey, kernel::FreeVar>,
     params: HashMap<NamePtr<'t>, Term>,
+    /// The ω-vocabulary's free variable per parameter name — the per-backend
+    /// memo over [`Shared::param_vars`], with a per-backend variable for a
+    /// name interned in this declaration's arena (such names cannot outlive
+    /// the declaration, so neither need their variable).
+    param_omegas: HashMap<NamePtr<'t>, FreeVar>,
     idxs: HashMap<u64, Term>,
 
     /// The applicative structure of every term this backend built.
@@ -3462,6 +3495,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             consts: HashMap::new(),
             locals: HashMap::new(),
             params: HashMap::new(),
+            param_omegas: HashMap::new(),
             idxs: HashMap::new(),
             parts: HashMap::new(),
             lam_sites: HashMap::new(),
@@ -4155,6 +4189,43 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// The ω-vocabulary's **free variable** for the parameter name `n` —
+    /// shared per thread through [`Shared::param_vars`] when the name is the
+    /// export file's, per backend otherwise (an arena name cannot outlive its
+    /// declaration).
+    ///
+    /// A variable, where [`Self::interp_level`]'s Param arm mints an opaque
+    /// *symbol*: the symbol gives the syntactic vocabulary its injectivity,
+    /// the variable is what the declaration-boundary quantifier can
+    /// `Thm::gen` over. `⟦Sort u⟧ = srt(u)` at the variable `u` is therefore
+    /// implicitly universal exactly the way the checker means it.
+    fn param_omega_var(&mut self, n: NamePtr<'t>) -> FreeVar {
+        if let Some(v) = self.param_omegas.get(&n) {
+            return *v
+        }
+        let shared = self.name_key(n).and_then(|k| self.shared.borrow().param_vars.get(&k).copied());
+        let v = match shared {
+            Some(v) => v,
+            None => {
+                let v = self.env_mut().fresh_var();
+                if let Some(k) = self.name_key(n) {
+                    self.shared.borrow_mut().param_vars.insert(k, v);
+                }
+                v
+            }
+        };
+        self.param_omegas.insert(n, v);
+        v
+    }
+
+    /// Whether `v` is one of the ω-vocabulary's parameter variables — i.e. a
+    /// variable [`Self::param_omega_var`] has handed out on this thread or in
+    /// this backend. What the declaration boundary may quantify over.
+    fn is_param_omega_var(&self, v: FreeVar) -> bool {
+        self.param_omegas.values().any(|w| *w == v)
+            || self.shared.borrow().param_vars.values().any(|w| *w == v)
+    }
+
     /// The `u ∈ ω` assumptions a level's interpretation needs, one per distinct
     /// parameter, in traversal order.
     fn collect_level_params(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>, omega: &Term, out: &mut Vec<Formula>) {
@@ -4165,8 +4236,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 self.collect_level_params(ctx, a, omega, out);
                 self.collect_level_params(ctx, b, omega, out);
             }
-            Level::Param(..) => {
-                let t = self.interp_level(ctx, l);
+            Level::Param(n, _) => {
+                let t = Term::var(self.param_omega_var(n));
                 let f = Formula::mem(t, omega.clone());
                 if !out.contains(&f) {
                     out.push(f);
@@ -4183,10 +4254,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// This is deliberately **not** [`Self::interp_level`]: that map reifies
     /// level *syntax* into axiom-free symbols (`lzero`, `lmax`, …) for the
     /// injectivity the sort rule needs; this one interprets levels as the
-    /// natural numbers they denote, which is what `srt(·)` consumes. The two
-    /// meet only at parameters, where both use the shared per-name symbol —
-    /// so an `assms` entry here is a fact *about* the very constant the
-    /// ground path leaves opaque.
+    /// natural numbers they denote, which is what `srt(·)` consumes. A
+    /// parameter here is the shared per-name **free variable**
+    /// ([`Self::param_omega_var`]) — so an `assms` entry is a hypothesis about
+    /// a variable the declaration boundary can `gen` over, where the
+    /// syntactic vocabulary's per-name symbol stays a constant forever.
     fn omega_level(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> Option<(Term, Vec<Formula>, Thm)> {
         let lp = self.lp()?;
         let omega = lp.omega();
@@ -4252,8 +4324,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let thm = lift(&cl, &both)?;
                 Some((lp.imax(ta, tb), thm))
             }
-            Level::Param(..) => {
-                let t = self.interp_level(ctx, l);
+            Level::Param(n, _) => {
+                let t = Term::var(self.param_omega_var(n));
                 let f = Formula::mem(t.clone(), lp.omega());
                 let i = assms.iter().position(|a| *a == f)?;
                 Some((t, conj_proj(assms, i)?))
@@ -4391,8 +4463,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 note_dt(Dt::Drift);
             }
         }
-        let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
-        let t = self.mk(sym, vec![]);
+        // A body mentioning the ω-vocabulary's parameter variables gets a
+        // symbol of that arity — `LEVELPOLY.md` §1.6's `f̂(u⃗)` — whose defining
+        // axiom `⊢ ∀u⃗. f̂(u⃗) = body(u⃗)` is instantiated back at the variables
+        // so the equation handed out is at the generic point, exactly the
+        // shape the nullary case hands out. Any other free variable in a body
+        // is a leak, and refusing it (below, via `define_abbrev`'s own guard)
+        // is what the opaque fallback at the call site is for.
+        let mut fvs = Vec::new();
+        body.free_vars(&mut fvs);
+        fvs.sort();
+        fvs.dedup();
+        fvs.retain(|v| self.is_param_omega_var(*v));
+        let (sym, all) = derived::define_abbrev(&mut self.env_mut(), &fvs, body)?;
+        let args: Vec<Term> = fvs.iter().map(|v| Term::var(*v)).collect();
+        let ax = if fvs.is_empty() { all } else { derived::inst_all(&all, &args)? };
+        let t = self.mk(sym, args);
         // The house rule: pin the conclusion *and* read `hyps()`. The seal below
         // asks the same question again, by type, at the store.
         if !derived::establishes(&ax, &Formula::eq(t.clone(), body.clone())) {
@@ -5801,8 +5887,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let (sym, ax) = self.shared.borrow().ind_syms.get(k).cloned()?;
             let ax = ax.into_thm();
             // The symbol came from another backend, so *this* backend has never
-            // seen its applicative shape; `mk` is what re-registers it.
-            let t = self.mk(sym, vec![]);
+            // seen its applicative shape; `mk` is what re-registers it. Its
+            // arguments are the body's ω-vocabulary parameter variables, in
+            // the same sorted order the mint below chose them — deterministic
+            // in the body, so both backends reconstruct the same application.
+            let mut fvs = Vec::new();
+            body.free_vars(&mut fvs);
+            fvs.sort();
+            fvs.dedup();
+            fvs.retain(|v| self.is_param_omega_var(*v));
+            let t = self.mk(sym, fvs.iter().map(|v| Term::var(*v)).collect());
             if *ax.concl() == Formula::eq(t.clone(), body.clone()) {
                 Some((t, ax))
             } else {
@@ -5813,8 +5907,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (t, ax) = match from_shared {
             Some(hit) => hit,
             None => {
-                let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
-                let t = self.mk(sym, vec![]);
+                // The §1.6 arity, exactly as [`Self::const_abbrev`]: a carrier
+                // whose body mentions ω-vocabulary parameter variables is a
+                // symbol applied to them, with the defining axiom quantified
+                // and handed back at the generic point.
+                let mut fvs = Vec::new();
+                body.free_vars(&mut fvs);
+                fvs.sort();
+                fvs.dedup();
+                fvs.retain(|v| self.is_param_omega_var(*v));
+                let (sym, all) = derived::define_abbrev(&mut self.env_mut(), &fvs, body)?;
+                let args: Vec<Term> = fvs.iter().map(|v| Term::var(*v)).collect();
+                let ax = if fvs.is_empty() { all } else { derived::inst_all(&all, &args)? };
+                let t = self.mk(sym, args);
                 // `⊢ sym = body`, which is what `abbrev_defs` is read for —
                 // under no hypotheses, which is what the store requires.
                 if !derived::establishes(&ax, &Formula::eq(t.clone(), body.clone())) {
@@ -6360,7 +6465,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if !same_bottom(&c.nest.bottom, bottom) {
             return None
         }
-        let head = self.mk(c.head_sym, vec![]);
+        // As in [`Self::adopt_ty_nest`]: a head over ω-vocabulary parameter
+        // variables is an application, and its arguments are read off the
+        // stored head rather than assumed nullary.
+        let args = match c.nest.head.as_app() {
+            Some((_, args)) => args.to_vec(),
+            None => vec![],
+        };
+        let head = self.mk(c.head_sym, args);
         if head != c.nest.head {
             return None
         }
@@ -7540,7 +7652,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// what turns "the same symbol" into a checked claim rather than an
     /// assumption; a mismatch declines the entry and the nest is rebuilt.
     fn adopt_ty_nest(&mut self, tn: &Rc<GenTyNest>) -> Option<Rc<GenTyNest>> {
-        let head = self.mk(tn.head_sym?, vec![]);
+        // The head's arguments are read off the stored head itself: a carrier
+        // over ω-vocabulary parameter variables is a symbol *applied to them*
+        // (`LEVELPOLY.md` §1.6), and rebuilding it nullary would be an arity
+        // error, not a decline.
+        let args = match tn.head.as_app() {
+            Some((_, args)) => args.to_vec(),
+            None => vec![],
+        };
+        let head = self.mk(tn.head_sym?, args);
         if head != tn.head {
             return None
         }
@@ -7930,7 +8050,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         bottom: &Term,
     ) -> Option<Term> {
         let app = self.pre.ap.app;
-        let ct = self.mk(sc.ct_sym, vec![]);
+        // As in [`Self::adopt_ty_nest`]: a constructor over ω-vocabulary
+        // parameter variables is a symbol applied to them; the arguments are
+        // read off the stored term rather than assumed nullary.
+        let ct_args = match sc.ct.as_app() {
+            Some((_, args)) => args.to_vec(),
+            None => vec![],
+        };
+        let ct = self.mk(sc.ct_sym, ct_args);
         if ct != sc.ct || sc.ct_ax.concl().as_eq()?.0 != ct {
             return None
         }
@@ -9122,6 +9249,97 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// This is still threading debt and is counted as such: 198 certificates
     /// were computed and thrown away. [`Dt::MissCond`] is how many uses would
     /// benefit if that changed.
+    /// The parameter variable of a **level hypothesis** `u ∈ ω`, when `f` is
+    /// exactly that: a membership whose subject is one of the ω-vocabulary's
+    /// parameter variables and whose set is the apparatus's own `ω`. Anything
+    /// else — a hoisted family, a membership at another set, a variable this
+    /// backend never handed out — is `None`, and the caller treats the
+    /// hypothesis as the binder-owed obligation it then is.
+    fn omega_hyp_var(&self, f: &Formula) -> Option<FreeVar> {
+        let lp = self.lp()?;
+        let (t, om) = f.as_mem()?;
+        if om != lp.omega() {
+            return None
+        }
+        let mut fvs = Vec::new();
+        t.free_vars(&mut fvs);
+        let [v] = fvs[..] else { return None };
+        if t != Term::var(v) {
+            return None
+        }
+        self.is_param_omega_var(v).then_some(v)
+    }
+
+    /// **The declaration-boundary quantifier** — `LEVELPOLY.md` §5.3 step 5.
+    ///
+    /// Takes a value typing `⊢ ⋀(uᵢ∈ω) → ⟦val⟧ ∈ ⟦T⟧` whose every antecedent
+    /// is a level hypothesis ([`Self::omega_hyp_var`]), transports it across
+    /// the defining equation `⟦c⟧ = ⟦val⟧` **under the same antecedent**, and
+    /// closes the level hypotheses by `Thm::gen` — they are hypotheses about
+    /// the declaration's own parameters, and the declaration boundary is the
+    /// binder that owns them:
+    ///
+    /// ```text
+    /// ⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧(u⃗) ∈ ⟦T⟧(u⃗)
+    /// ```
+    ///
+    /// Stored with the variables (outermost first) and the antecedents at the
+    /// generic point, so [`Self::has_type_const`] can re-open the implication
+    /// and hand the `uᵢ ∈ ω` assumptions to its caller's antecedent channel.
+    /// `false` on any other hypothesis shape or any refused step, and the
+    /// caller's discard-and-count path runs unchanged.
+    fn store_poly_typing(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        key: &(u32, Vec<Term>),
+        tyt: &Term,
+        val: ExprPtr<'t>,
+        thm: &Thm,
+        hyps: &[Formula],
+    ) -> bool {
+        if hyps.is_empty() || !thm.hyps().is_empty() {
+            return false
+        }
+        let mut vars: Vec<FreeVar> = Vec::with_capacity(hyps.len());
+        for f in hyps {
+            match self.omega_hyp_var(f) {
+                Some(v) if !vars.contains(&v) => vars.push(v),
+                _ => return false,
+            }
+        }
+        let Some(h) = conj_of(hyps) else { return false };
+        // The theorem must be about this declaration's value and declared
+        // type — the same refusal the unconditional path makes, one
+        // antecedent deeper.
+        let vt = self.interp(ctx, val);
+        if u_concl(thm, Some(&h)) != Some(Formula::mem(vt.clone(), tyt.clone())) {
+            return false
+        }
+        let Some((ct, def)) = self.const_abbrev(Some(key.clone()), &vt) else { return false };
+        let Some(back) = derived::eq_symm(&mut self.env_mut(), &def) else { return false };
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(vt.clone(), ct.clone(), w, Formula::mem(Term::var(w), tyt.clone()));
+        let Some(step) = Thm::mp(&leib, &back) else { return false };
+        let Some(out) = derived::syl(thm, &step) else { return false };
+        if !derived::establishes(&out, &Formula::imp(h, Formula::mem(ct, tyt.clone()))) {
+            return false
+        }
+        let mut all = out;
+        for v in vars.iter().rev() {
+            all = match Thm::gen_checked(*v, &all) {
+                Some(t) => t,
+                None => return false,
+            };
+        }
+        let Ok(sealed) = Sealed::new(all) else { return false };
+        self.shared
+            .borrow_mut()
+            .declar_typings_poly
+            .entry(key.clone())
+            .or_insert((vars, hyps.to_vec(), sealed));
+        true
+    }
+
     fn store_declar_typing(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9146,7 +9364,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 note_dt(Dt::FromInfer);
                 Some(thm.clone())
             }
-            TgTyping::Derived { hyps, .. } => {
+            TgTyping::Derived { thm, hyps } => {
+                // §5.3 step 5, the declaration boundary. A derivation whose
+                // every antecedent is `uᵢ ∈ ω` over a parameter variable is
+                // not owed to any binder — those are the declaration's *level
+                // hypotheses*, and the boundary is exactly where they close:
+                // `gen` over the variables turns the implication into the
+                // quantified typing `⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧ ∈ ⟦T⟧`.
+                if self.store_poly_typing(ctx, &key, &tyt, val, thm, hyps) {
+                    note_dt(Dt::Conditional);
+                    note_dt(Dt::PolyStored);
+                    return
+                }
                 // A conditional typing is not stored, for the reason above —
                 // and the key is remembered, so that a use that then misses can
                 // be told apart from a use whose declaration was never proved.
@@ -9157,6 +9386,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // perturb the run it is measuring.
                 for f in hyps {
                     note_dt(Dt::CondHyp);
+                    if self.omega_hyp_var(f).is_some() {
+                        note_dt(Dt::CondOmega);
+                        continue
+                    }
                     match self.hoisted.get(f).map(|(_, _, phi)| phi.as_mem().is_some()) {
                         Some(true) => note_dt(Dt::CondMem),
                         Some(false) => note_dt(Dt::CondNest),
@@ -9271,6 +9504,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
                 Some(_) => note_dt(Dt::Wrong),
                 None => {
+                    // The quantified store (§5.3 step 5). Instantiating the
+                    // `∀u⃗` at the variables themselves re-opens exactly the
+                    // implication that was generalised, so the guard below is
+                    // against the very membership being claimed; the `uᵢ ∈ ω`
+                    // antecedents join the caller's own assumption set, which
+                    // is the §5.2 channel and is counted by the conditional-
+                    // typing ledger like any other antecedent the caller
+                    // carries.
+                    let phit = self.shared.borrow().declar_typings_poly.get(&key).cloned();
+                    if let Some((vars, whyps, sealed)) = phit {
+                        let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+                        if let Some(opened) = derived::inst_all(sealed.thm(), &args) {
+                            let want = Formula::mem(te.clone(), ty.clone());
+                            let h = conj_of(&whyps);
+                            if u_concl(&opened, h.as_ref()) == Some(want) {
+                                let merged = merge_hyps(assms, &whyps);
+                                if let Some(re) = reassume(&opened, &whyps, &merged) {
+                                    note_dt(Dt::PolyHit);
+                                    return Some((re, HtClause::Const, merged))
+                                }
+                            }
+                        }
+                    }
                     note_dt(Dt::Miss);
                     if self.shared.borrow().declined_cond.contains(&key) {
                         note_dt(Dt::MissCond);
@@ -14300,7 +14556,12 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         for h in hyps.iter().chain(thm.hyps()) {
             h.free_vars(&mut seen);
         }
-        seen.iter().all(|v| allowed.contains(v))
+        // A parameter's ω-variable is confined by *name*, not by context: the
+        // same `u` in the same declaration reaches the same variable wherever
+        // the memoised expression recurs, so an assumption `u ∈ ω` recalls
+        // correctly under any context — the property the locals check asserts
+        // occurrence-by-occurrence, held here by construction instead.
+        seen.iter().all(|v| allowed.contains(v) || self.is_param_omega_var(*v))
     }
 
     /// `⟦Π A B⟧ ∈ ⟦Sort (imax u v)⟧`, as far as the *term-level* facts reach.
@@ -14383,6 +14644,25 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         };
         let hit = self.shared.borrow().declar_typings.get(&key).cloned();
         let Some(t) = hit else {
+            // The quantified store (§5.3 step 5): the `∀u⃗` entry, re-opened at
+            // the generic point exactly as [`Self::has_type_const`] does, its
+            // `uᵢ ∈ ω` antecedents riding the typing's own hypothesis channel
+            // — inference then carries them like any binder-owed assumption,
+            // and the declaration boundary of the *using* declaration is
+            // where they close again.
+            let phit = self.shared.borrow().declar_typings_poly.get(&key).cloned();
+            if let Some((vars, whyps, sealed)) = phit {
+                let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+                if let Some(opened) = derived::inst_all(sealed.thm(), &args) {
+                    let te = self.interp(ctx, e);
+                    let tt = self.interp(ctx, ty);
+                    let h = conj_of(&whyps);
+                    if u_concl(&opened, h.as_ref()) == Some(Formula::mem(te.clone(), tt.clone())) {
+                        note_dt(Dt::PolyHit);
+                        return self.typing(crate::certify::TyGap::Const, &te, &tt, opened, whyps)
+                    }
+                }
+            }
             note_dt(Dt::Miss);
             if self.shared.borrow().declined_cond.contains(&key) {
                 note_dt(Dt::MissCond);
@@ -15927,10 +16207,24 @@ enum Dt {
     /// …of them a plain membership `⟦a⟧ ∈ ⟦A⟧`, the shape
     /// [`TgBackend::peel_family`] would attempt.
     CondMem,
+    /// …of them a **level-parameter membership** `u ∈ ω` over an ω-vocabulary
+    /// parameter variable — the antecedent the declaration-boundary quantifier
+    /// (`LEVELPOLY.md` §5.3 step 5) closes by `gen` rather than by discharge.
+    /// Counted only when the typing was *not* quantified away (a mixed
+    /// antecedent set, or the transport refused).
+    CondOmega,
     /// …and `⟦c⟧ ∈ ⟦T⟧` was formed and stored.
     Stored,
+    /// …and every antecedent was `u ∈ ω` over a parameter variable, so the
+    /// typing was **quantified at the boundary** — `⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧ ∈ ⟦T⟧`
+    /// — and stored in the quantified store instead of being discarded.
+    PolyStored,
     /// A store entry answered a use of the constant.
     Hit,
+    /// A **quantified** entry answered a use of the constant — instantiated at
+    /// the generic point and handed back conditionally, its `u ∈ ω`
+    /// assumptions riding the caller's own antecedent channel (§5.2).
+    PolyHit,
     /// A use found no entry: never stored, or stored at **other levels**.
     Miss,
     /// …and the entry is missing *because the typing was conditional* — the
@@ -15980,7 +16274,7 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 20;
+const N_DT: usize = 23;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -15995,8 +16289,11 @@ impl Dt {
             Dt::CondHyp => "…the antecedents they carry, each a hoisted guarded family",
             Dt::CondNest => "…of them a family of families, which peeling declines",
             Dt::CondMem => "…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt",
+            Dt::CondOmega => "…of them a level-parameter membership u ∈ ω (not quantified away)",
             Dt::Stored => "…stored as ⟦c⟧ ∈ ⟦T⟧",
+            Dt::PolyStored => "…quantified at the boundary and stored as ⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧ ∈ ⟦T⟧",
             Dt::Hit => "uses answered from the store",
+            Dt::PolyHit => "uses answered from the quantified store, conditionally",
             Dt::Miss => "uses with no entry (or at other levels)",
             Dt::MissCond => "…of them against a typing that was derived and discarded",
             Dt::Wrong => "uses whose target is not the declared type",
@@ -16018,8 +16315,11 @@ impl Dt {
         Dt::CondHyp,
         Dt::CondNest,
         Dt::CondMem,
+        Dt::CondOmega,
         Dt::Stored,
+        Dt::PolyStored,
         Dt::Hit,
+        Dt::PolyHit,
         Dt::Miss,
         Dt::MissCond,
         Dt::Wrong,
@@ -16449,7 +16749,12 @@ fn note_ht_miss(m: HtMiss) { HT_MISSES[m as usize].fetch_add(1, std::sync::atomi
 fn ht_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let (asked, settled) = (HT_ASKED.load(Relaxed), HT_SETTLED.load(Relaxed));
-    if asked == 0 {
+    // The declaration-typing ledger prints whenever a declaration reached the
+    // boundary, whether or not any `has_type` obligation was ever asked — a
+    // run small enough to settle every obligation structurally still stores
+    // (or quantifies) its declaration typings, and a section that vanishes
+    // with the recursion reads as zero to every consumer of the report.
+    if asked == 0 && DT[Dt::Seen as usize].load(Relaxed) == 0 {
         return String::new()
     }
     let width = HtClause::ALL

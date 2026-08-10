@@ -304,6 +304,19 @@ impl<'p> ExportFile<'p> {
     /// using declaration's σ, and that is where the levels matter.
     fn check_declar_all(&self, d: &Declar<'p>, schedule: &crate::instantiations::Instantiations) {
         use Declar::*;
+        // `NANODATG_NO_SCHEDULE=1` — **the schedule deletion's staging
+        // switch** (`explore/level-poly-target`; `LEVELPOLY.md` §5.3 step 5).
+        // Every declaration is checked once, at its own universe parameters,
+        // and the σ-schedule is not consulted — the exact behaviour the
+        // branch's endpoint reaches by *deleting* the schedule. Runnable
+        // today so that state's counters can be measured against the
+        // scheduled ones and its fixtures exercised; the endpoint deletes the
+        // schedule and this switch together. Acceptance cannot move either
+        // way: σ selects which set a `Π` is interpreted as, never whether a
+        // declaration is accepted (see `TcCtx::sigma`).
+        if std::env::var_os("NANODATG_NO_SCHEDULE").is_some() {
+            return self.check_declar_at(d, &[])
+        }
         if matches!(d, Inductive(..) | Quot { .. }) {
             return self.check_declar_at(d, &[])
         }
