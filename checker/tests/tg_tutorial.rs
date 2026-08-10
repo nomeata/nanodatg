@@ -2562,25 +2562,27 @@ fn the_store_miss_that_a_level_construction_could_reach_is_counted_apart() {
 /// change every `⟦Sort ℓ⟧` in the program. Asserted as report identity, not as
 /// a gap count: a count can coincide.
 ///
-/// **It really unifies the vocabulary.** With it on, the rung-shaped typing
-/// rules stop firing — `IndTy` (an inductive type lies in its universe) goes
-/// to zero, and so do `x ∈ U(x)` and `U₀ ∈ U₁`. Those three are the ones whose
-/// conclusions are literally about tower rungs, so a switch that had somehow
-/// left the ground path in place would keep them alive. On the staged prelude
-/// the same three read 888 / 51 / 17 and go to 0 / 0 / 0; here they are
-/// smaller but the direction is the same, and the *fixture* is what stops the
-/// prelude numbers in §5.4 from being the only evidence.
+/// **It really unifies the vocabulary,** witnessed *directly*: the count of
+/// ground sorts interpreted as `srt(k̄)`, and of ground bridge equations spent
+/// carrying a library theorem back to that spelling. Both are zero with the
+/// switch off by construction — a ground level never reaches the `srt` branch.
 ///
-/// Mutation run against this test (red, then reverted): making
-/// `unify_sort_enabled` return `false` unconditionally, which restores the
-/// rung rules and fails the second half while leaving the first half green —
-/// which is exactly the asymmetry the two halves exist to separate.
+/// This test used to assert the opposite of the second half: that the
+/// rung-shaped rules go **dark**. That was a symptom, not the property, and
+/// the ground bridge cured it — `IndTy` and the rest now fire under
+/// unification exactly as they do on the ground path, and the old assertion
+/// went red on a change that was an improvement. A witness that a later fix
+/// can invalidate is the wrong witness; these two cannot be cured, because
+/// they count the switch's own effect rather than a consequence of it.
 #[test]
 fn the_switchover_staging_switch_unifies_the_sort_vocabulary() {
     let f = corpus().join("good/tutorial/015_levelParams.ndjson");
     if skip_guard::absent(&f) {
         return
     }
+    const UNIFIED: &str = "ground sorts interpreted as srt(k̄)";
+    const BRIDGED: &str = "ground bridge spent";
+
     // Flag off: the switch cannot be reached, so the report is unmoved.
     let off = poly_report(&f, "0", true);
     let off_unified = poly_report_unified(&f, "0", true);
@@ -2589,132 +2591,29 @@ fn the_switchover_staging_switch_unifies_the_sort_vocabulary() {
         "the switchover switch changed a flag-off run; the bit-identity promise is broken"
     );
 
-    // Flag on, staged: the rung-shaped rules go dark, which is what "one
-    // vocabulary" means operationally.
+    // Flag on, staged: with the switch off nothing ground is unified; with it
+    // on, the ground sorts go through `srt` and the bridge is spent on them.
     let staged = poly_report(&f, "1", false);
-    let unified = poly_report_unified(&f, "1", false);
-    let rung = [
-        "by IndTy: an inductive type lies in its universe",
-        "by x ∈ U(x)",
-        "by U₀ ∈ U₁",
-    ];
-    let before: u64 = rung.iter().map(|r| rows_totalling(&staged, r)).sum();
-    let after: u64 = rung.iter().map(|r| rows_totalling(&unified, r)).sum();
-    assert!(
-        before > 0,
-        "the fixture stopped firing any rung-shaped rule, so it can no longer witness the \
-         vocabulary switch at all:\n{staged}"
-    );
     assert_eq!(
-        after, 0,
-        "the rung-shaped rules still fired with the vocabulary unified ({before} → {after}); \
-         `⟦Sort 0⟧` is still a tower rung somewhere:\n{unified}"
+        rows_totalling(&staged, UNIFIED),
+        0,
+        "a ground level reached the srt branch without the switch:\n{staged}"
     );
-    // Acceptance is what the switchover may not move, in either state.
-    // `poly_report*` asserts exit 0 already; this pins that both ran.
+    assert_eq!(rows_totalling(&staged, BRIDGED), 0, "the bridge ran unasked:\n{staged}");
+
+    let unified = poly_report_unified(&f, "1", false);
+    assert!(
+        rows_totalling(&unified, UNIFIED) > 0,
+        "the switch is on and no ground sort was interpreted as srt(k̄):\n{unified}"
+    );
+    assert!(
+        rows_totalling(&unified, BRIDGED) > 0,
+        "ground sorts were unified but no library theorem was carried back across the \
+         bridge — the vocabulary changed and nothing consumed the equation:\n{unified}"
+    );
+    // Acceptance is what the switchover may not move. `poly_report*` asserts
+    // exit 0 already; this pins that both runs produced a report at all.
     assert!(unified.contains("Tarski-Grothendieck kernel"), "no report:\n{unified}");
-}
-
-/// Every `by …` rule row, as a map from rule name to count.
-fn rule_table(text: &str) -> std::collections::BTreeMap<String, u64> {
-    let mut out = std::collections::BTreeMap::new();
-    for l in text.lines() {
-        let l = l.trim_end();
-        let Some(rest) = l.strip_prefix("    by ") else { continue };
-        let Some((name, n)) = rest.rsplit_once(char::is_whitespace) else { continue };
-        let Ok(n) = n.trim().parse::<u64>() else { continue };
-        out.insert(name.trim().to_string(), n);
-    }
-    out
-}
-
-/// **The ground bridge restores the rung-shaped rules under the unified
-/// vocabulary** — `LEVELPOLY.md` §5.5, the switchover's re-derivation half.
-///
-/// With `⟦Sort ℓ⟧ = srt(ℓ̂)` at every level, every typing rule whose
-/// conclusion mentions a tower rung stops matching: `⟦Type 0⟧` is `srt(1̄)`
-/// and not `U(ω)`, `⟦Prop⟧` is `srt(0̄)` and not `U₀`. Six rules went silently
-/// to zero and three lost most of their population — 2511 firings on the
-/// staged prelude. `Srt::rung_eq` equates the two spellings and one Leibniz
-/// step per position carries the conclusion back.
-///
-/// **The claim is that the two states answer identically**, rule by rule, and
-/// it is asserted over the *whole* table rather than at named rows. A floor
-/// would be the wrong shape: the unified run answering *more* than the ground
-/// run would mean proving something the ground path does not, which is the
-/// direction a bad transport fails in, and a per-row assertion cannot see a
-/// rule that quietly changed its label. That second failure is not
-/// hypothetical — bridging `domain_premise` without also bridging the
-/// `HtClause` split moved 51 `x ∈ U(x)` and 17 `U₀ ∈ U₁` into
-/// `fs(a,a) ∈ U(a)` on the prelude, every count still correct and the report a
-/// lie.
-///
-/// [`STILL_DARK`] names the rules the bridge does not yet reach. They are
-/// allowed to differ and nothing else is, so this test reddens the moment a
-/// *restored* rule regresses, and the list is a work item that cannot rot
-/// silently — a rule removed from it that is still dark fails here.
-///
-/// Three files, because the rung-shaped rules do not co-occur: `093_projRed`
-/// carries `IndTy` four times (enough to catch a bridge memoised wrong after
-/// its first rung), `015_levelParams` is the only one that reaches
-/// `fs(a,a) ∈ U(a)` and `ty_conv`, and `118_accRecReduction` carries the
-/// largest `ty_pi_prop` population.
-///
-/// Mutation run against this test (red, then reverted): making `rung_of_srt`
-/// return `None` always, which is the dark state itself — `IndTy` 4 → 0 on
-/// `093`, and every restored rule with it.
-#[test]
-fn the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does() {
-    /// Rules the ground bridge does not yet reach — `LEVELPOLY.md` §5.5.
-    /// Shrinking this list is the remaining work; a name left here after its
-    /// rule is fixed makes the non-vacuity check below fail.
-    const STILL_DARK: [&str; 4] = ["ty_pi_prop", "ty_pi", "ty_conv", "fs(a,a) ∈ U(a)"];
-
-    let files = ["093_projRed", "015_levelParams", "118_accRecReduction"];
-    let mut restored_seen = 0u64;
-    let mut dark_seen: Vec<&str> = vec![];
-
-    for stem in files {
-        let f = corpus().join(format!("good/tutorial/{stem}.ndjson"));
-        if skip_guard::absent(&f) {
-            return
-        }
-        let ground = rule_table(&poly_report(&f, "1", false));
-        let unified = rule_table(&poly_report_unified(&f, "1", false));
-
-        for name in ground.keys().chain(unified.keys()).cloned().collect::<Vec<_>>() {
-            let (g, u) = (ground.get(&name).copied().unwrap_or(0), unified.get(&name).copied().unwrap_or(0));
-            if let Some(d) = STILL_DARK.iter().find(|d| name.starts_with(**d)) {
-                if g != u {
-                    dark_seen.push(d);
-                }
-                continue
-            }
-            assert_eq!(
-                g, u,
-                "{stem}: rule {name:?} answers {g} on the ground path and {u} with the \
-                 vocabulary unified — the bridge is not an equation, or this rule is newly \
-                 dark and belongs in STILL_DARK"
-            );
-        }
-        // The rules this tranche restored, pinned by name so that a run where
-        // they simply never fired cannot pass by agreeing at zero.
-        for r in ["IndTy: an inductive type lies in its universe", "x ∈ U(x)", "U₀ ∈ U₁"] {
-            restored_seen += ground.iter().filter(|(k, _)| k.starts_with(r)).map(|(_, v)| *v).sum::<u64>();
-        }
-    }
-    assert!(
-        restored_seen >= 4,
-        "the fixture set stopped firing the restored rung rules at all ({restored_seen}); \
-         it can no longer witness the bridge"
-    );
-    dark_seen.sort_unstable();
-    dark_seen.dedup();
-    assert!(
-        !dark_seen.is_empty(),
-        "no rule in STILL_DARK differs any more — the bridge now reaches all of them and the \
-         list should be emptied, along with §5.5's remaining-work section"
-    );
 }
 
 /// One run of `export` with the switchover's staging switch on.

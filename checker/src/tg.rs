@@ -2447,6 +2447,19 @@ struct Shared {
     lp: Option<Rc<derived::levels::apparatus::LevelPoly>>,
 }
 
+/// **Ground sorts interpreted through the unified vocabulary**, and ground
+/// obligations the ground bridge carried.
+///
+/// The direct witness that [`unify_sort_enabled`] is doing what it claims:
+/// with the switch off both are zero by construction, because a ground level
+/// never reaches the `srt` branch. They are *not* a proxy — the first counts
+/// exactly the `⟦Sort k⟧` at a closed `k` that became `srt(k̄)`, and the
+/// second exactly the rung equations spent carrying a library theorem back to
+/// that spelling. Neither can be cured by later work the way "the rung rules
+/// went dark" could, which is why the switch's fixture is pinned here.
+static SORT_UNIFIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RUNG_BRIDGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// How far [`TgBackend::rung_of_srt`] looks for a numeral rung.
 ///
 /// Lean's own prelude never spells a closed universe above a handful, and the
@@ -4508,7 +4521,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // rung-shaped typing rules, six of which go dark, and §5.4 blocker 3
         // lists them with their populations.
         if levelpoly_enabled() && (unify_sort_enabled() || !self.level_ground(ctx, l)) {
+            let ground = unify_sort_enabled() && self.level_ground(ctx, l);
             if let Some(t) = self.interp_sort_poly(ctx, l) {
+                if ground {
+                    SORT_UNIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return t
             }
         }
@@ -6664,6 +6681,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             if lp.srt_at(num.clone()) == *ty {
                 let bridge = self.rung_bridge(&lp, n)?;
                 let (_, rung) = bridge.concl().as_eq()?;
+                RUNG_BRIDGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some((rung.clone(), bridge))
             }
             num = lp.succ_of(num);
@@ -18348,7 +18366,12 @@ fn pipoly_report() -> String {
         .map(|w| (format!("guard-walk nodes — {}", w.name()), GUARD_WHY[*w as usize].load(Relaxed)))
         .collect();
     let (sk_no, sk_yes) = (PIPOLY_SK[0].load(Relaxed), PIPOLY_SK[1].load(Relaxed));
-    if rows.iter().all(|(_, n)| *n == 0) && sk_no + sk_yes == 0 {
+    // The unified-vocabulary counters keep the block alive on their own: a run
+    // that unifies every sort but wires no Undet-Π still has something to say,
+    // and gating them behind another partition's emptiness made the switch's
+    // own witness invisible on exactly the file that tests it.
+    let unified_rows = SORT_UNIFIED.load(Relaxed) + RUNG_BRIDGED.load(Relaxed);
+    if rows.iter().all(|(_, n)| *n == 0) && sk_no + sk_yes == 0 && unified_rows == 0 {
         return String::new()
     }
     let width = rows
@@ -18378,6 +18401,16 @@ fn pipoly_report() -> String {
         let n = LEARM[a as usize].load(Relaxed);
         s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("level bridge — {}", a.name())));
     }
+    s.push_str(&format!(
+        "    {:<width$}  {:>10}\n",
+        "ground sorts interpreted as srt(k̄) (NANODATG_UNIFY_SORT)",
+        SORT_UNIFIED.load(Relaxed)
+    ));
+    s.push_str(&format!(
+        "    {:<width$}  {:>10}\n",
+        "ground bridge spent: ⊢ srt(k̄) = Uₖ",
+        RUNG_BRIDGED.load(Relaxed)
+    ));
     s
 }
 
