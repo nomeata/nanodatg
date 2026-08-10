@@ -540,21 +540,51 @@ tranche, and they are engineering, not arithmetic:
   which is a *field* of the `TypeChecker` (`tc.certifier.beta(tc.ctx, …)`), so
   there is no path from the backend back to `infer`. On-demand inference there
   needs the ownership restructured, which is a bigger change than the payoff.
-* **At the construction site, with a named risk.** These terms are built by
-  the reduction itself, inside `whnf`, where `self` *is* a `TypeChecker` and
-  `infer` is in hand — so the right reading of "the typing arrives with the
-  whnf call" is not a cursor-carried typing but **inference invoked at each
-  beta contraction on the argument, handed over through the existing
-  `Certifier::app_arg_checked` store**. The risk to measure first is
-  re-entrancy: `infer` calls `ensure_pi` calls `whnf`, and beta is 81 % of all
-  reduction steps, so this is the hot path calling itself. Bound it before
-  building it.
+* **At the construction site — BUILT, 2026-08-10, and it pays.**
+  `TypeChecker::beta_arg_typing`. These terms are built by the reduction
+  itself, inside `whnf`, where `self` *is* a `TypeChecker` and `infer` is in
+  hand, so the right reading of "the typing arrives with the whnf call" is not
+  a cursor-carried typing but **inference invoked at the beta contraction on
+  the argument, handed over through the existing `Certifier::app_arg_checked`
+  store** the beta rule already reads. Re-entrancy — `infer` calls `ensure_pi`
+  calls `whnf`, on 81 % of all reduction steps — is bounded at depth one by
+  `TypeChecker::whnf_typing_depth`, so termination is immediate rather than an
+  argument about shrinking terms that no measure orders.
+
+  Three restrictions, each measured (`MEASUREMENTS.md`, "Typing the
+  reduction's own arguments"): **closed arguments only** — unrestricted,
+  inference drives more `whnf` and the run inflates, +16.8 % instructions with
+  escapes 2 247 → 3 033, against +0.47 % and escapes unmoved when restricted;
+  **`Check` not `InferOnly`** — +977 discharged against +32; **the outermost
+  argument only**, whose domain is the lambda's own and needs no instantiation.
+  Safety: the backend is asked first (`Certifier::wants_arg_typing`, default
+  `false`, so the null backend pays nothing), and the conversion uses `def_eq`
+  rather than `assert_def_eq`, because a redex the reduction built need not be
+  well-typed and a hard failure would turn an accepted file into a rejected
+  one.
+
+  **Result:** 3 313 closed arguments asked, 3 313 typed, no declines.
+  Obligations discharged 5 373 → 6 350; handoff outright answers 102 → 3 266;
+  raw hoists 20 328 → 19 460; and this row's own subject, "never checked at an
+  application", **18 656 → 16 502**. Of that 2 154, 868 are now answered and
+  1 286 are re-attributed into "a hole at their own check" — out of "nobody
+  looked" and into the `ty_const` cascade, a gain in knowledge rather than in
+  proving. Escapes unmoved at 2 247; three gap ratchets moved with the trade
+  written at each assertion (+229 gaps, all six rows downstream of `nat_reduce`
+  and `proj_reduce`, both already admitting and both bucket (ii)).
+
+  **What is left of the 7 717 after it**, and where a successor goes: the
+  inner binders of a nested redex (their domains are the instantiated ones,
+  needing the intermediate lambdas the composite `inst` avoids building), and
+  the open arguments, whose cost is the measured 16.8 % unless something
+  cheaper than full inference can type them.
 
 *Measurables, restated:* the `raw hoists by cause` row and its two new
 cross-cuts (`lambda typing declines, by cause`; the subject/skeleton reach
-rows) are what any successor tranche must move. The old measurable — "escapes
-continue down" — stands, and stands unmoved: escapes were 2 247 before and
-after everything above, because nothing above closed an obligation.
+rows) are what any successor tranche must move. The fifth route moved the first
+of them by 2 154. Escapes stand unmoved at 2 247 throughout — and that is now a
+*result* rather than an absence, since the tranche that closed 868 obligations
+closed them without adding an assumption anything failed to discharge.
 
 **Stage 3: `def_eq` takes typings.**
 `def_eq(a, b, ta, tb)` and thread to: `proof_irrel_eq` (already fed by stage
