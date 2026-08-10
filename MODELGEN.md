@@ -4772,3 +4772,80 @@ the currying eta lemmas, one `funext` per constructor, because `W` hands you
 prototypes name it as where a generator first breaks. It costs no *axiom*
 beyond what the core already spends (§8.16's first correction), but it is
 emitted code per constructor rather than a uniform term.
+
+### 8.16.1 The tag scheme — `scripts/inductive-basis/WGeneric.lean`
+
+**The thing a generator hits before the eta lemmas, and that none of the three
+prototypes above settles.** `WTagged.lean`'s targets each pick their tag type
+by hand — `KBT := Bool`, `KFT := Bool`, `KIT := Unit` — and the core's
+signature is `{K : Type} … [DecidableEq K]`. **The fragment carries no
+`DecidableEq` for any concrete `K`**, and cannot: the closure of `W`, `sup`,
+`Wrec` and `Wrec_iota` takes the instance as a parameter, so it is not in the
+closure. A generator must therefore either mint a bespoke enumeration
+inductive per declaration and *prove* its `DecidableEq` — an nc × nc case
+split, plus an inductive that `Iso.requires` then obliges the run to model in
+turn — or fix one tag type for every declaration and get its `DecidableEq`
+from the fragment, once.
+
+`WGeneric.lean` builds the second, and it compiles at **0 errors, 0 warnings,
+`[propext, Quot.sound]`** on every emitted constant.
+
+```text
+K  := Nat                  the tag is the constructor's index
+D  : Nat → Type u          tag ↦ that constructor's non-recursive fields
+B' : Nat → Type u          tag ↦ that constructor's branch type
+A  := Sigma D              the label: a tag and its data
+tg := Sigma.fst
+```
+
+`Nat` rather than `Fin nc`, and the second reason is the deciding one: `Nat` is
+**already shared with the input** by the splice above — the kernel's
+`Expr.lit` forces it — so it costs no new fragment inductive and no new
+unmodelled constant in the output; and `Fin` is a structure over `Nat` whose
+`DecidableEq` reduces to `Nat`'s anyway, so it would buy only the finiteness.
+
+**Finiteness is not needed, because the junk tags are uninhabited**, and that
+is the one part of this that is not obvious. `D t` for `t ≥ nc` is an *empty*
+type, so `A = Sigma D` has no element whose tag is out of range and `W B' tg`
+has no tree whose root label is. Had `D` sent the junk tags to `PUnit`
+instead, `W` would have been strictly bigger than the target — trees the
+recursor must still eliminate and no constructor produces — and **the model
+would be wrong while every constructor and ι check still passed**.
+`ATT.no_junk` is the check that fails if that is ever weakened; the mutation
+was run and it does. The empty type is `Subtype (fun _ : PUnit => False)`,
+built from what the fragment already carries, because `PEmpty` is not in it.
+
+**What the fragment must gain: exactly one root.** A `DecidableEq Nat`.
+`w_core.ndjson` today carries `Nat.beq` and `noConfusion_of_Nat` but not the
+instance, because nothing in the closure of the four roots names it.
+Re-exporting with `instDecidableEqNat` as a fifth root is the whole change, and
+then the generator never proves a decidable equality. `Sigma.fst`, `Subtype`,
+`PUnit` and `False` are already in.
+
+**The target is four constructors**, and the fourth is the point. Three
+*shapes* — data and no children, data and two children, a recursive field under
+a binder — because two cannot distinguish a dispatch that is right from one
+with its arms swapped. And a fourth constructor **of the first one's shape at
+another tag**, because differently-shaped arms cannot be transposed without a
+type error in the `Nat.casesOn` cascade, so a file of only those never asks
+whether the tag assignment is right — it asks whether it elaborates.
+`CTT.leaf_ne_alt` and `CTT.iota_alt` are the two pins with no type error behind
+them, and giving `alt` the tag `0` breaks exactly those.
+
+Four mutations were run against the file and all four are caught: transposing
+`node`'s children, sending the junk tags to `PUnit`, dropping `leaf`'s payload
+(`CFT.tip_inj_data`'s shape, which the brief asked to carry into the generated
+arm), and giving `alt` `leaf`'s tag.
+
+**What this settles and what it does not.** It settles the tag scheme, the
+label and branch encodings, the junk-tag hazard, the fragment's one missing
+root, and the shape of the emitted `rec_0` — a `Nat.casesOn` cascade whose
+motive must be well-typed at *every* tag, with the eta `funext` inside each
+arm and the junk arm discharged from emptiness. It does **not** generate
+anything: `Modelgen.primIso` still has no W arm, and what remains is
+`Expr`-building `D`, `B'`, `A`, `tg`, the constructors, that cascade and the ι
+theorems from a declaration's constructor telescopes, plus `Iso.requires` over
+every inductive the arm leaves behind. The cascade is the piece with no
+precedent in `Simple.lean`: arm C's largest emitted term is a `PSigma` and an
+`Eq.rec`, and this is a dependent motive over a `Nat` scrutinee with one arm
+per constructor and a `funext` in each.
