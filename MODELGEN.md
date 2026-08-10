@@ -3958,14 +3958,35 @@ which keys on `privateToUserName` — the name with its private prefix stripped.
 `Environment.find?`. `MetaM`'s `inferType` goes through `find?`, so the next
 declaration naming it dies.
 
-**Not fixable by dropping to the kernel API**, and that was checked before it
-was tried: `Driver.lean` and `Test.lean`'s `runEnvProbe` already record that
-`Environment.find?` reads the imported map and then the *async* map, so a
-constant added through `Kernel.Environment` is invisible to the generator —
-`Tree.rec_1`, the constant every nested model is *about*, is the pinned
-witness. The async bookkeeping is not a cost we merely pay; MetaM depends on
-it. It would not have helped anyway: this is a name collision, not an API
-choice.
+**Not fixable by dropping to the kernel API**, and that is now measured rather
+than inferred — `Test.lean`'s `runCollisionProbe` is the probe and every
+sentence below is one of its checks.
+
+`Environment.find?` reads `env.base.constants.map₁` and *then* the async map,
+which reads as though a constant could be visible without the async map being
+involved at all. **It cannot.** `mkEmptyEnvironment` and `finalizeImport` both
+hand out a constant map already switched to **SMap stage 2**, so `SMap.insert`
+puts every locally-added constant in `map₂`; `map₁` is the *imported* half and
+this tool imports nothing. The base probe never fires for anything we add — so
+"in the async map or invisible to `MetaM`" is the whole of the available
+space, and that is a property of the map's stage rather than of which field an
+add happens to write. `Environment.ofKernelEnv` is strictly worse and is
+pinned so: after it, even a non-colliding `Tree.rec` stops resolving.
+
+`Tree.rec_1` is a **different** phenomenon and the two were once run together.
+It is invisible because `Declaration.getNames` omits *"auxiliary recursors
+computed by the kernel for nested inductive types"* and that list is the loop
+`addDeclCore` registers async constants from — no collision is involved, and
+`Tree.rec`, which *is* in `getNames`, resolves fine beside it. `runEnvProbe`
+pins that pair; `runCollisionProbe` pins this one.
+
+The remaining public routes were read off the pinned toolchain and none is an
+escape: `addConstAsync` (`Lean/Environment.lean:1018`) and `replayConsts`
+(`:2440`) both insert through the same `AsyncConsts.add`, and `replayConsts`
+additionally cannot replay an inductive at all (`panic! "must be
+definition/theorem"`); `Kernel.Environment`'s constructor is `private mk ::`,
+so its constant map cannot be rebuilt into stage 1 from outside that module.
+The async bookkeeping is not a cost we merely pay; `MetaM` depends on it.
 
 **The fix is in `addChecked`: a declaration the kernel accepts but the
 environment then loses is a decline.** Checking membership *after* the add is
@@ -3996,17 +4017,35 @@ next thing), ~52 branching or under-a-binder recursion (W), **10 name taken**
 — the new guard, i.e. exactly the collisions that used to be fatal — and 3
 basis primitives.
 
-**The 10 name-taken declines are a coverage loss, and a recoverable one.** They
-are declarations whose model name is indistinguishable, after private-prefix
-stripping, from one already emitted. Turning a fatal into a decline is the
-right first move — a decline, never an emission — but the coverage-preserving
-fix is to disambiguate the generated name so the normalized forms differ. That
-changes the four-name contract and wants a deliberate decision, so it is
-recorded here rather than taken.
+**The 10 name-taken declines are a coverage loss, and a recoverable one —
+without a contract change.** They are declarations whose model name is
+indistinguishable, after private-prefix stripping, from one already emitted.
+Turning a fatal into a decline was the right first move — a decline, never an
+emission. What was recorded here before was that the coverage-preserving fix
+is to disambiguate the *emitted* name, which changes the four-name contract
+and is the owner's call. **That is not the only fix, and the cheaper one is
+ours alone.**
 
-**And there is an upstream bug worth reporting.** Lean's `addDeclCore` adds
-*private* names to the **public** async-consts map, because the guard is
-commented out:
+The four names are a property of the **output**; what collides is a property
+of the **environment** the generator builds a model in. Those can be
+different names. Generate the whole model under a root whose normalized form
+cannot collide — the model prefix is chosen in exactly three places
+(`Simple.lean`'s `primIso`, `Model.lean`'s nested `iso`, `Mutual.lean`'s
+`mutualIso`, each one `let model := Name.str root "_model"`) — and rewrite
+that root to the contract name on the way into the export. The declaration the
+kernel accepted and the declaration emitted then differ by an **injective
+renaming of constants this run introduced**, so nothing about "only what the
+tool generates is checked, one at a time, with checking on" is weakened, and
+`T._model.self` still means what `modelgen/README.md` says it means.
+`runCollisionProbe` pins that the escape is open: a second declaration whose
+root normalizes differently is added and found. Not taken here — it wants the
+`Iso`'s name fields renamed in step with its `decls`, and a fixture holding an
+input that declares both `X` and `_private.M.0.X` — but it is a coverage fix
+of 10 with no decision above this seat's pay grade in it.
+
+**And the upstream bug that was reported here is real but is not the cause.**
+Lean's `addDeclCore` does add *private* names to the **public** async-consts
+map, behind a commented-out guard:
 
 ```lean
     -- TODO
@@ -4014,7 +4053,17 @@ commented out:
       env := { env with asyncConstsMap.public := ... }
 ```
 
-A private name should not be in the public map at all; that is why it collides
-with the public name it shadows. 854 PANICs on the full file, of which 18
-involve our own `_model` names and the rest are the input's own duplicate
-privates.
+That is worth reporting on its own account. It is **not** why our names
+collide, and the earlier claim that it was is withdrawn: the insertion into
+`asyncConstsMap.private` twenty lines above is *unconditional*, and its trie
+is keyed on `privateToUserName` too, so the private view collides whatever the
+public guard does. The measurement is direct — one colliding add prints the
+panic **twice**, once per view, and `runCollisionProbe` produces exactly four
+across its two orderings. Uncommenting the guard would move the loss from the
+public name to the private one and lose the same count.
+
+854 PANICs on the full file, of which 18 involve our own `_model` names — the
+ones the escape above retires — and the remaining ~836 are the input's own
+duplicate private declarations, which are the export's property and not
+reachable from here at all: those names are the input's and cannot be
+rewritten.

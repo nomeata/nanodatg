@@ -585,6 +585,112 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
      MODELGEN.md §6.7's obstacle is gone and this tool can move to lean4checker's model"
   return a
 
+/-- `def n : Nat → Nat := fun x => x`, under whatever name is asked for. The
+collision probe needs two declarations that differ in nothing but their name. -/
+private def probeIdDecl (n : Name) : Declaration :=
+  let nat : Expr := .const `Nat []
+  .defnDecl { name := n, levelParams := [], type := .forallE `x nat nat .default,
+              value := .lam `x nat (.bvar 0) .default,
+              hints := .abbrev, safety := .safe }
+
+private def probeNatDecl : Declaration :=
+  let nat : Expr := .const `Nat []
+  .inductDecl [] 0
+    [{ name := `Nat, type := .sort (.succ .zero),
+       ctors := [{ name := `Nat.zero, type := nat },
+                 { name := `Nat.succ, type := .forallE `n nat nat .default }] }] false
+
+/-- **The normalized-name collision, measured rather than inherited** —
+`MODELGEN.md` §8.14's decline, and the three things about it that are easy to
+get wrong. Every claim here is a fact about *Lean* that this tool's
+`nameTaken` decline rests on, so each is a test rather than a paragraph.
+
+1. **`Environment.find?`'s `base` fast path is dead for anything this tool
+   adds.** `find?` reads `env.base.constants.map₁` first and only then the
+   async map, which reads as though a constant could be visible without the
+   async map being involved. It cannot: `mkEmptyEnvironment` and
+   `finalizeImport` both hand out a constant map already switched to **stage
+   2**, so `SMap.insert` puts every locally-added constant in `map₂` and the
+   `map₁` probe never fires. `map₁` is the *imported* half and this tool
+   imports nothing. So "in the async map or invisible" is the whole of the
+   available space, and it is not an artefact of which field an earlier
+   experiment happened to write.
+
+2. **The loss is the second arrival, in either order**, and it is a *name*
+   property, not an API one: `AsyncConsts.add` keys its trie on
+   `privateToUserName`, `panic!`s on a duplicate, and returns the collection
+   **unchanged**. Adding the public name first loses the private one and vice
+   versa, so no ordering discipline avoids it — which is why the guard in
+   `Modelgen.addChecked` tests membership *after* the add.
+
+3. **A name that normalizes differently is added and found.** This is the
+   escape, and it is inside this tool rather than inside Lean: generate the
+   model under a root whose normalized form cannot collide and rename to the
+   contract name on the way out. It costs no contract change and no weakening
+   of the kernel check — the declaration the kernel accepts and the
+   declaration emitted differ by an injective renaming of constants this run
+   introduced. Nothing takes that route today; this pins that it is *open*, so
+   that the day it closes is a test failure with a name on it.
+
+What is **not** an escape, all of it read off the pinned toolchain's
+`Lean/Environment.lean` rather than guessed: `addConstAsync` (`:1018`) and
+`replayConsts` (`:2440`) both insert through the same `AsyncConsts.add`, and
+`replayConsts` additionally cannot replay an inductive at all (`panic! "must
+be definition/theorem"`); `ofKernelEnv` is pinned above as strictly worse; and
+`Kernel.Environment`'s constructor is `private mk ::`, so the constant map
+cannot be rebuilt into stage 1 from outside that module.
+
+**And Lean's own commented-out `!isPrivateName` guard would not have fixed
+this.** `addDeclCore` (`:711`) adds to `asyncConstsMap.private`
+*unconditionally* and only the `.public` insertion sits behind the guard, so
+the private view collides whatever the guard does. A single colliding add
+prints the panic **twice**, once per view. `MODELGEN.md` §8.14 said the
+upstream bug was the cause; it is a real bug and it is not this one. -/
+def runCollisionProbe (a : TAcc) : IO TAcc := do
+  let env0 ← importModules #[] {}
+  let mut a := a
+  -- (1) the base fast path
+  a := check a (!env0.constants.stage₁)
+    "the fresh environment's constant map is in SMap stage 1 — locally added constants would \
+     now land in `map₁` and `Environment.find?`'s base probe would see them without the async \
+     map; MODELGEN.md §8.14's collision may no longer be structural"
+  let mut env := env0
+  let some env1 := (env.addDeclCore 0 probeNatDecl none true).toOption
+    | return check a false "the collision probe cannot install Nat"
+  env := env1
+  a := check a (env.constants.map₁.isEmpty)
+    "a locally added constant reached `base.constants.map₁`, which is supposed to be the \
+     imported half only — `Environment.find?`'s base probe is live and §8.14 wants re-measuring"
+  -- (2) the collision, both orders. `X.foo` and `_private.M.0.X.foo` normalize alike.
+  let publ : Name := `X.foo
+  let priv : Name := (`_private.M).mkNum 0 |>.str "X" |>.str "foo"
+  a := check a (privateToUserName priv == publ)
+    "privateToUserName no longer strips the private prefix, so this probe measures nothing"
+  let secondIsLost := fun (first second : Name) => Id.run do
+    let some e1 := (env.addDeclCore 0 (probeIdDecl first) none true).toOption | return false
+    let some e2 := (e1.addDeclCore 0 (probeIdDecl second) none true).toOption | return false
+    -- the kernel took it; the environment lost it; and the first one survives
+    return e2.constants.contains second && (e2.find? second).isNone && (e2.find? first).isSome
+  a := check a (secondIsLost priv publ)
+    "the public name added after the private one is now visible to `Environment.find?` — \
+     MODELGEN.md §8.14's collision is gone and the `name taken` declines can be retired"
+  a := check a (secondIsLost publ priv)
+    "the private name added after the public one is now visible to `Environment.find?` — \
+     the collision has become order-dependent, so `Modelgen.addChecked`'s check-after-add \
+     could be replaced by an ordering rule"
+  -- (3) the escape: a root that normalizes differently is added and found.
+  let al : Name := (`_private.M).mkNum 0 |>.str "X" |>.str "_mg1" |>.str "foo"
+  a := check a (privateToUserName al != publ)
+    "the alias root no longer normalizes away from the contract name, so it is not an escape"
+  let aliasWorks := Id.run do
+    let some e1 := (env.addDeclCore 0 (probeIdDecl publ) none true).toOption | return false
+    let some e2 := (e1.addDeclCore 0 (probeIdDecl al) none true).toOption | return false
+    return (e2.find? al).isSome && (e2.find? publ).isSome
+  a := check a aliasWorks
+    "a second declaration under a differently-normalizing root is no longer visible either — \
+     the generate-under-an-alias escape for §8.14's 10 declines has closed"
+  return a
+
 /-- **The two streams and the four exit statuses**, against the built binary.
 
 Axes 1–4 call `runFilter` directly and so cannot see the process boundary at
@@ -802,6 +908,7 @@ def main (args : List String) : IO UInt32 := do
     a ← runOne root a r (dir := "modelgen/tests") (prim := true)
   a ← runSyntax root a
   a ← runEnvProbe root a
+  a ← runCollisionProbe a
   a ← runMonoCompose root a
   a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
