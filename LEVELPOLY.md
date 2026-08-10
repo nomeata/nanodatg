@@ -624,13 +624,25 @@ at this branch's head:
   Typing obligations discharged 5373 → 1624; declaration-typing store
   answers 1329 → 117. A ground use's interpretation (tower rungs) and a
   quantified theorem's instance (`srt(n̄)`) are provably equal, **not
-  identical**, so every literal-formula guard misses across the boundary;
-  consuming the `∀`-store at ground instances needs the §1.2 bridge
-  equations rewritten through the terms — designed, not built. This is also
+  identical**, so every literal-formula guard misses across the boundary.
+  **The §4.5 invariant resolves this by dissolution, not by bridges**: when
+  `⟦Sort ℓ⟧ = srt(ℓ̂)` for *every* level — numerals included — there is one
+  vocabulary and the boundary the guards miss across no longer exists. The
+  tower-rung spelling retires from the interpretation entirely (it remains
+  `derived/`'s internal business); `⟦Sort 1⟧` is `srt(succ ∅)`, whose facts
+  (`at_zero`/`at_succ`/`sort_in_sort` at numerals, with the numerals'
+  *unconditional* ω-membership) replace the vacuous `x ∈ U(x)` discharge
+  with honest unconditional certificates. The §1.2 bridge equations are
+  then needed only where a `derived` library theorem is stated over rung
+  terms or `fs` (`fs_app_mem`, the machine's `Ctor::mem` carriers), a
+  bounded, listable set of seams — not inside every formula. This is the
+  switchover's actual content, and why it is **one commit that deletes and
+  re-derives together**: unify `interp_sort` on `srt(·)`, retire the ground
+  special case, re-point the sort-typing rules at the `Srt` kit, delete the
+  schedule, and re-take every ratchet on the far side. This is also
   why the wedge could not be consumed incrementally: **§1.6's cross-level
   payoff needs the schedule gone, and the no-regression deletion needs
-  blockers 1–2 closed first. The end of §5.3 is a switchover, not a
-  ratchet.**
+  blockers 1–2 closed first.**
 * **Blocker 4 — mini** (§5.1's last row): its evidence pipeline is
   (declaration, σ)-shaped end to end, and none of §5.3 steps 1–2 is built.
 
