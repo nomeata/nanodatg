@@ -4657,6 +4657,16 @@ So the arm's shape is: get those 190 into the output once, splice-and-model the
 19 inductives among them — measured above, all of them do — and emit
 per-declaration glue against them.
 
+**One module-graph constraint, found while sizing the splice and worth two
+minutes of somebody's time.** `toDeclaration : Environment → EDecl →
+Option Declaration` — which is what turns a parsed fragment record into
+something `addChecked` takes — lives in `Driver.lean`, *below* `Simple.lean`
+in the import order (`Driver` imports `Simple`). So a splice written where
+`primIso` can call it cannot use it where it stands: `toDeclaration` has to
+move up to `Format.lean` or `Model.lean` first, or the splice has to live in
+`Driver.lean` and be handed to the arm. It is 57 lines and a pure function of
+its argument, so moving it is the smaller of the two.
+
 **Three things about the splice, each measured rather than assumed, and each
 one a wasted attempt saved:**
 
@@ -4665,25 +4675,31 @@ one a wasted attempt saved:**
   on the build tree. The alternative — locating the `.ndjson` relative to
   `IO.appPath` — would have made the binary depend on its own build layout for
   no gain.
-* **Everything gets a `_wcore` prefix except the quotient.** The fragment's
-  names are Lean core's, so splicing `List` into an input that already declares
-  one is a kernel rejection; prefixing every name makes the core self-contained
-  and collision-proof, and costs only duplicates of types the input may already
-  have. **But the fragment carries four `quot` records** — `Quot`, `Quot.mk`,
-  `Quot.lift`, `Quot.ind` — and those are kernel *built-ins* whose names the
-  kernel special-cases. They cannot be renamed and must be shared with the
-  input's, which the prelude machinery already does for the nested model's
-  `funext`. So the rename is "everything but the quotient", and the exclusion
-  list is not a matter of taste.
-* **`_wcore.Eq` needs one conversion at the boundary, and it is axiom-free.**
-  The contract's ι theorems are stated at the *input's* `Eq`, while
-  `Wrec_iota` is at the fragment's. They are two inductives of the same shape,
-  so `_wcore.Eq.rec (motive := fun x _ => Eq α a x) (Eq.refl α a) h` carries a
-  proof from one to the other with no axiom and no transport. One such
-  conversion per ι rule. The alternative — excluding `Eq` from the rename the
-  way `Quot` is excluded — looks tempting and is worse: it makes the fragment's
-  own 190 proofs depend on whatever `Eq` the input happens to declare, where
-  `ensureEq` only guarantees the *shape*.
+* **Everything gets a `_wcore` prefix except six names, and the exclusion is
+  forced twice over.** The fragment's names are Lean core's, so splicing `List`
+  into an input that already declares one is a kernel rejection; prefixing
+  makes the core self-contained and costs only duplicates. What may **not** be
+  prefixed is `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` (the fragment carries
+  four `quot` records) and the two axioms `Quot.sound` and `propext`. The
+  kernel special-cases the four quotient names — and the second reason is
+  stronger and is already written down in `Model.lean`'s prelude section:
+  **`mini/src/axiom.rs` selects the `Quot.sound` clause by that exact name, so
+  a namespaced copy is a *non-standard axiom* and is declined downstream.**
+  Same for `propext`. So these six are shared under Lean's own names, exactly
+  as §1's prelude splice already shares them. `funext` is *not* on the list —
+  it appears in no emitted statement, only inside proofs, which is precisely
+  why §1 namespaces its own as `T._model.funext`.
+* **`Eq` can go either way, and the earlier note here overstated one side.**
+  The contract's ι theorems are stated at the *input's* `Eq` while the
+  fragment's `Wrec_iota` is at whatever `Eq` the fragment carries. Renaming it
+  costs one conversion per ι rule — `_wcore.Eq.rec (motive := fun x _ => Eq α a
+  x) (Eq.refl α a) h`, two inductives of the same shape, no axiom and no
+  transport. *Not* renaming it makes the fragment's 190 proofs run against the
+  input's own `Eq`, which `ensureEq` guarantees only the shape of — but that is
+  **caught by `addChecked` rather than silent**, so it is a decline and not a
+  hazard, and the earlier framing of it as the "tempting worse answer" was too
+  strong. Renaming is still the recommendation, for robustness: it makes the
+  fragment splice succeed or fail on its own terms rather than on the input's.
 
 One piece of per-declaration glue **is** required here where arm C had none:
 the currying eta lemmas, one `funext` per constructor, because `W` hands you
