@@ -589,15 +589,37 @@ at this branch's head:
   mathematics for the `ite0` clause exists (`levels::rules`, the flagship)
   for the constant-fibre/`fs` form; the dependent `dprod` form at a variable
   rung is underived (§6), and master's `⟦Π⟧` is a `dprod` at every codomain.
-* **Blocker 2 — ι and the nests at a symbolic eliminating universe.** ι
-  sites computed 92 → 37; declarations translated 283 → 236; the T-policy
-  and S/P-ambiguity declines rise. `gen_ty_nest`'s per-parameter
-  `define_abbrev(xs = value params)` refuses a body whose domain interps
-  mention a free level variable (`…declined: the parameter nest refused`),
-  and threading the ω-variables through `lambda_n`/`beta_conditional_n`/the
-  spine equations is the unbuilt piece — census row 7 made concrete. The
-  k-ary abbreviations *did* close most of the staged state's canonicity
-  declines (16/11/6 → 1/1/0 on the three pinned-zero rows).
+* **Blocker 2 — ι and the nests at a symbolic eliminating universe.**
+  **First slice built** (the ω-prefix, commit `b6d93fa`): `gen_ty_nest` and
+  `gen_ctor_nest` thread the level variables free in their domains as
+  leading arguments of every body symbol and graph — `lambda_n` and
+  `beta_conditional_n` are arity-generic and needed no change — closing the
+  60 "parameter nest refused" rows and, staged, building +281 constructor
+  rules (5803 → 6084); pinned by the `037_prodType` staged fixture with its
+  mutation run red. ι stays at 37 staged because the remaining sites are
+  deeper, and they are two:
+  * **2b — the `βⱼ` field abbreviations** (76 rows staged, misattributed to
+    `…declined: field type depends on a recursive field`, whose guard is
+    the same free-variable refusal): `βᵢ` has arity `np + i` by the
+    `DeclSpec` well-formedness check (`derived/src/inductive/spec.rs:271`),
+    and the convention threads through `Telescope`, the carriers,
+    `Ctor::mem`, the step values and the ι rules — a machine-wide contract
+    shared with mini through the one `Machine`. Two candidate routes,
+    neither built: (i) extend the spec with an ω-arity, every `βᵢ` becoming
+    `nw + np + i` — mechanical but touches every consumer of the
+    convention; (ii) hand the level variables to the machine as *ordinary
+    parameters* (`np' = nw + np`) — levels are sets, the machine cannot
+    tell — with the checker's bridge keeping them symbol-applied
+    (`f̂(u⃗)`-style) while set parameters stay `ap`-applied; the spine shape
+    at use sites is the part to get right, since a Lean use applies only
+    the set arguments. Route (ii) is the §1.6 spirit and probably smaller;
+    it needs the `ty_of`/spine bridge to split the two argument kinds.
+  * **2c — the recursor path** (its own `define_abbrev` chains and the
+    eliminating universe): untouched, next after 2b.
+  The staged drift rows (15/9/6) are the *documented, expected* per-backend
+  head drift (`Dt::IndDrift`'s own doc), population-scaled now that these
+  nests build at all; a share-only-when-shared-named gating was tried and
+  measured to change nothing, so it is not in the tree.
 * **Blocker 3 — evidence consumption across the vocabulary switch.**
   Typing obligations discharged 5373 → 1624; declaration-typing store
   answers 1329 → 117. A ground use's interpretation (tower rungs) and a
