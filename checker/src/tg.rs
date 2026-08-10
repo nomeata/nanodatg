@@ -2312,6 +2312,33 @@ struct Shared {
     /// thrown away are the same `Dt::Miss` today, and they call for completely
     /// different work.
     declined_cond: std::collections::HashSet<crate::const_store::ConstKey>,
+    /// **Every typing judgement any declaration on this thread has concluded**,
+    /// as the interpreted pair it is about, with the declaration that concluded
+    /// it and whether it stood free of antecedents.
+    ///
+    /// This is the *reach measurement* for the beta rule's raw-hoist residue,
+    /// not a store anything reads for a derivation: [`Self::typed_at`] is
+    /// written at [`TgBackend::typing`], the single exit of every typing rule,
+    /// and read only by [`TgBackend::domain_obligation`]'s raw fallback to
+    /// classify the obligation it is about to assume. The question it answers
+    /// is the one the census could not: of the obligations no application
+    /// check ever visited, how many are about a `(subject, target)` pair that
+    /// *some* declaration's inference did conclude — and of those, how many
+    /// concluded it in an **earlier** declaration, which is what a
+    /// cross-declaration typing store would have to carry.
+    ///
+    /// The pair is interpreted, so the key is comparable across declarations
+    /// exactly to the extent the shared constant store makes it so (task
+    /// #125): a `⟦c⟧` carrier is one term per thread, a skeleton is one term
+    /// per thread, and only per-declaration free variables can make two
+    /// occurrences of "the same" Lean term interpret apart. That is a property
+    /// of the measurement and it is why the ledger splits by declaration.
+    typed_at: HashMap<(Term, Term), (u32, bool)>,
+    /// Serial number of the next `TgBackend`, i.e. of the declaration-check
+    /// about to start. Only ever compared for equality/order, so a wrap would
+    /// be a mis-measurement and not a fault; `u32` is three orders of
+    /// magnitude clear of the largest corpus.
+    decl_seq: u32,
     /// `⊢ ∀x. ¬(x ∈ ⟦False⟧)` — **the threat-model anchor**, at the very symbol
     /// [`TgBackend::false_const`] hands the rest of the backend for `False`.
     ///
@@ -2438,6 +2465,8 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             gen_ty_nests: HashMap::new(),
             gen_ctor_nests: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
+            typed_at: HashMap::new(),
+            decl_seq: 0,
             false_anchor: None,
         }));
         sh
@@ -2622,6 +2651,10 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// already a hole there — so a later raw fallback about them is the
     /// `ty_const`-cascade's face at the beta rule, not a threading miss.
     arg_gapped: FxHashSet<ExprPtr<'t>>,
+    /// Which declaration-check this backend is, for [`Shared::typed_at`]. A
+    /// backend is built per declaration, so this is the declaration's serial
+    /// number on the thread.
+    seq: u32,
     /// The constant instantiations currently being unfolded, innermost last.
     ///
     /// This is what makes [`TgBackend::has_type_const`]'s step into a
@@ -3487,9 +3520,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     pub fn new(decls: &'x crate::env::Env<'x, 't>) -> Self {
         let pre = prelude();
         let shared = shared(&pre);
-        let (syms, core) = {
-            let sh = shared.borrow();
-            (sh.syms, sh.core.clone())
+        let (syms, core, seq) = {
+            let mut sh = shared.borrow_mut();
+            sh.decl_seq += 1;
+            (sh.syms, sh.core.clone(), sh.decl_seq)
         };
         let x_canon = core.x_canon;
         TgBackend {
@@ -3526,6 +3560,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             arg_mems: HashMap::new(),
             arg_stored: new_fx_hash_set(),
             arg_gapped: new_fx_hash_set(),
+            seq,
             const_active: Vec::new(),
             ht_active: Vec::new(),
             points: HashMap::new(),
@@ -10657,6 +10692,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             if derived::establishes(&t, &full) {
                 note_arg_mem(if used.is_empty() { ArgMem::Outright } else { ArgMem::UnderAntecedents });
                 note_ht_call(used.is_empty());
+                // **The reach probe's own claim-check.** A handoff entry *is* a
+                // typing rule's conclusion about this very pair, so
+                // [`Shared::typed_at`] must know it. If it does not, the probe
+                // is keyed on something other than what it claims and its
+                // verdict on the raw hoists is worthless — which is why this is
+                // counted rather than assumed. Expected 0, in the spirit of
+                // `ArgMem::Mismatch`.
+                if !self.shared.borrow().typed_at.contains_key(&(ta.clone(), dom.clone())) {
+                    PROBE_BLIND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return (Some(t), used)
             }
             note_arg_mem(ArgMem::Mismatch);
@@ -10700,13 +10745,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // `ty_const` cascade, interpretation scope), and one no
                 // application check ever visited (a term the reduction itself
                 // constructed — stage 2's genuine residue).
-                note_arg_mem(if self.arg_stored.contains(&arg) {
+                let cause = if self.arg_stored.contains(&arg) {
                     ArgMem::RawStoredElsewhere
                 } else if self.arg_gapped.contains(&arg) {
                     ArgMem::RawGapAtCheck
                 } else {
                     ArgMem::RawNeverChecked
-                });
+                };
+                note_arg_mem(cause);
+                if matches!(cause, ArgMem::RawNeverChecked) {
+                    // The reach probe. Was this very membership ever a typing
+                    // rule's conclusion — here, or in a declaration checked
+                    // earlier? See [`Shared::typed_at`].
+                    let here = self.seq;
+                    let seen = self.shared.borrow().typed_at.get(&(ta.clone(), dom.clone())).copied();
+                    note_reach(match seen {
+                        None => Reach::Never,
+                        Some((s, true)) if s < here => Reach::EarlierUncond,
+                        Some((_, true)) => Reach::HereUncond,
+                        Some((s, false)) if s < here => Reach::EarlierCond,
+                        Some(_) => Reach::HereCond,
+                    });
+                }
                 note_ht_raw(self.ht_shape(ctx, arg));
                 let t = self.ht_target(dom);
                 note_ht_raw_target(t);
@@ -14226,6 +14286,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         match u_concl(&thm, conj_of(&hyps).as_ref()) {
             Some(c) if c == want => {
                 note_ty_out(by, hyps.is_empty());
+                // The reach probe, not a store: first conclusion per pair
+                // wins, so the recorded declaration is the *earliest* one that
+                // held the fact — which is the one a cross-declaration store
+                // would have had to carry it from. See [`Shared::typed_at`].
+                let (seq, uncond) = (self.seq, hyps.is_empty());
+                self.shared
+                    .borrow_mut()
+                    .typed_at
+                    .entry((te.clone(), ty.clone()))
+                    .or_insert((seq, uncond));
                 TgTyping::Derived { thm, hyps }
             }
             _ => self.ty_miss(crate::certify::TyGap::Claim),
@@ -15999,6 +16069,51 @@ const N_ARG_MEM: usize = 7;
 static ARG_MEM: [std::sync::atomic::AtomicU64; N_ARG_MEM] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_ARG_MEM];
 fn note_arg_mem(k: ArgMem) { ARG_MEM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// **The reach measurement for [`ArgMem::RawNeverChecked`]** — the population
+/// the census sized at 18 656 and could only probe-sample.
+///
+/// Each raw hoist no application check visited is asked whether *some*
+/// declaration's inference nevertheless concluded the very membership now
+/// being assumed ([`Shared::typed_at`]). The split says which mechanism could
+/// reach it: a pair first concluded in an **earlier** declaration is what a
+/// cross-declaration typing store (task #125's shared environment) would
+/// carry; a pair first concluded **here** is intra-declaration evidence the
+/// application-check handoff misses because the conclusion was not drawn at an
+/// application; a pair never concluded at all is genuine stage-2 residue,
+/// where only a typing flowing down the reduction can help.
+///
+/// Conditionality matters because it decides what may cross: a conditional
+/// typing's antecedents are memberships about *that declaration's* free
+/// variables, which the reading declaration has no binder for, so only the
+/// unconditional rows are crossable as they stand.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum Reach {
+    /// No typing rule anywhere concluded this membership.
+    Never,
+    /// Concluded, free of antecedents, in an earlier declaration.
+    EarlierUncond,
+    /// Concluded in an earlier declaration, under that declaration's own
+    /// ambient-local antecedents.
+    EarlierCond,
+    /// Concluded, free of antecedents, in this declaration — but not at an
+    /// application check, so the handoff never saw it.
+    HereUncond,
+    /// Concluded in this declaration under antecedents, likewise off the
+    /// handoff's path.
+    HereCond,
+}
+const N_REACH: usize = 5;
+static REACH: [std::sync::atomic::AtomicU64; N_REACH] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_REACH];
+fn note_reach(k: Reach) { REACH[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Handoff recalls whose pair [`Shared::typed_at`] does **not** know — the
+/// reach probe measured blind. A positive count invalidates the `Reach` row
+/// and nothing else; see the check site in
+/// [`TgBackend::domain_obligation`].
+static PROBE_BLIND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// The deepest recursion at which `has_type_h` actually derived something.
 ///
 /// There is no bound to compare it against any more (see the termination note
@@ -16627,6 +16742,21 @@ fn ht_report() -> String {
             am(ArgMem::RawGapAtCheck),
             am(ArgMem::RawNeverChecked),
         ));
+        let rc = |k: Reach| REACH[k as usize].load(Relaxed);
+        s.push_str(&format!(
+            "      of the never-checked, the same membership was concluded: {} in an earlier declaration ({} of them free of antecedents), {} in this one ({} free), {} never anywhere\n",
+            rc(Reach::EarlierUncond) + rc(Reach::EarlierCond),
+            rc(Reach::EarlierUncond),
+            rc(Reach::HereUncond) + rc(Reach::HereCond),
+            rc(Reach::HereUncond),
+            rc(Reach::Never),
+        ));
+        let blind = PROBE_BLIND.load(Relaxed);
+        if blind > 0 {
+            s.push_str(&format!(
+                "      REACH PROBE BLIND ON A KNOWN HANDOFF PAIR (invalidates the row above, expected 0): {blind}\n",
+            ));
+        }
     }
     for c in HtClause::ALL {
         let n = HT_CLAUSES[c as usize].load(Relaxed);
