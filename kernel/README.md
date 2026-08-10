@@ -88,8 +88,18 @@ Everything below has to be right. Nothing else does.
 
    One caveat specific to this axiom, on top of the redundancy noted above: it
    **cannot** be Skolemised into a symbol by `define`, which requires `∃!` — a
-   choice function is never unique — so callers carry `IsChoiceFn(f,u)` as an
-   antecedent with `f` free. See `derived::choice`.
+   choice function is never unique. That much is unchanged.
+
+   **What has changed is the consequence.** This paragraph used to end "so
+   callers carry `IsChoiceFn(f,u)` as an antecedent with `f` free", full stop,
+   and that is now only half the story — corrected here rather than appended to,
+   because a reader asking whether this kernel can name `ε` would otherwise get
+   the wrong answer. `thm::henkin` (added 2026-08-10, and item 4 of the trusted
+   base below) mints a **0-ary constant** from `⊢ ∃y. φ` with `FV(φ) ⊆ {y}`, so
+   at a *closed* `u` — every rung of `derived::tower` is one — `ε` is a symbol
+   and `⊢ IsChoiceFn(ε,u)` is a hypothesis-free sentence. At a `u` carrying a
+   parameter the rule refuses, and the free-variable route is still the only one.
+   See `derived::choice::epsilon`, which is its single caller.
 
    ### Infinity: a theorem, not an axiom — question closed
 
@@ -131,6 +141,19 @@ Everything below has to be right. Nothing else does.
    distinct-variable side conditions on substitution and generalisation.
 3. *(from milestone 4)* The claim that the host's bignum operations correctly
    implement the intended interpretation of the primitive arithmetic symbols.
+4. The two **conservative-extension** rules and their guards: `define`
+   (`∃!` ⇒ a function symbol) and `thm::henkin` (`∃` with `FV(φ) ⊆ {y}` ⇒ a
+   0-ary constant). Neither is an inference; each is an *assertion* justified by
+   a model-expansion argument written on it, and each returns `None` rather than
+   adapting when its guards fail.
+
+   `henkin`'s free-variable check is the whole of what separates it from
+   Skolemisation at arity ≥ 1, which would be a **genuine unsoundness** here
+   because `ax_replacement` accepts formulas mentioning the new symbol and an
+   arbitrary Skolem function need not be amenable. A constant is a parameter, so
+   the schemes survive. `kernel/tests/henkin.rs` pins all three guards, each
+   with a real derivation as the witness so that the refusal cannot be the shape
+   check firing instead, and each was watched going red with its guard removed.
 
 Item 3 is a deliberate, eyes-open addition to the TCB. See below.
 
@@ -147,7 +170,7 @@ Item 3 is a deliberate, eyes-open addition to the TCB. See below.
   (Łukasiewicz propositional axioms, instantiation, distribution, modus ponens,
   generalisation, reflexivity, Leibniz) plus the two structural rules `assume`
   and `implies_intr`, the TG set axioms plus choice,
-  and conservative definitional extension via `define`. Ordered pairs,
+  and the two conservative extensions, `define` and `henkin`. Ordered pairs,
   equinumerosity, non-emptiness and "is a choice function" are *described* as
   first-order formulas over `{∈,=}` rather than introduced as symbols, so the
   axioms that mention them add no primitives.
@@ -416,8 +439,9 @@ Enforced by `ci/check-boundary.sh`, which is itself tested by
 | No external crate dependencies | empty `[dependencies]` in `Cargo.toml` |
 | `Thm` has no public fields and no public constructor | — |
 | No I/O, no serialization, no printing of derivations | — |
-| ≤ 700 non-comment lines (676 today) | — |
+| ≤ 700 non-comment lines (697 today) | — |
 | No `Thm::gen(` outside `kernel/`; `assume` confined to one module per crate; stores take `Sealed`; every workspace member scanned by something | — |
+| `thm::henkin` has **exactly one** caller in the workspace, and it is `derived/src/choice/epsilon.rs` (rule 7) | — |
 
 The last rule is about a *panic* and a *reading*, not about the kernel's own
 contents: `Thm::gen` panics on a hypothetical premise and kept its infallible
@@ -444,6 +468,22 @@ condition and its `gen_checked` entry point, `define`'s emptiness guard, and the
 total order on `Formula` and `Term`. That leaves 38 lines of slack, which is
 tight enough that the next addition to the trusted surface has to argue for
 itself — which is the point of the number.
+
+**Nor did `henkin`.** 682 → 697: fifteen non-comment lines for the rule and its
+three guards, against sixty of doc comment carrying the conservativity argument,
+which is the ratio this budget is designed to encourage. Three lines of slack
+left. The *next* addition does have to raise this number and say why here — and
+whoever does should first read rule 7 above, because the cheapest way back under
+700 is to notice that a primitive with no callers should be deleted rather than
+budgeted for.
+
+**Rule 7 is not a size rule and does not belong to this section**; it is listed
+here because it is the mechanism by which the trusted base is expected to
+*shrink* again. The project owner's condition on `henkin` was that we might
+"regret that choice later and build it differently"; `derived/src/choice/
+epsilon.rs`'s header records what a replacement must provide, and rule 7 turns
+"the primitive is now unused" from something a reader might notice into a red
+build.
 
 ### Why no derivation printing
 

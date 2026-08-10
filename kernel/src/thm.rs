@@ -259,6 +259,16 @@
 //! axiom out of a proved formula has to answer the same question. See the
 //! comment on the check in [`define`] for the argument in full.
 //!
+//! **There is now a second such rule, and it answers it the same way.**
+//! [`henkin`] turns `⊢ ∃y. φ` into a fresh 0-ary constant `c` and `⊢ φ(c)`, and
+//! its `FV(φ) ⊆ {y}` scan is not a convenience: a stray `v` there gives `⊢ c = v`
+//! with `v` free, which is the bug above with `define` swapped out. It is also
+//! the line that separates a Henkin constant from Skolemisation at arity ≥ 1,
+//! which [`define`]'s comment shows would be unsound *in this kernel* because
+//! [`Thm::ax_replacement`] accepts formulas mentioning the new symbol. So the
+//! trusted surface gains exactly one rule and three checks, all of them in
+//! [`henkin`].
+//!
 //! **Hypotheses put a second instance of that same shape in front of `define`**,
 //! and it is guarded by the same reasoning: a witness proved under `Γ` justifies
 //! a symbol only where `Γ` holds, while the defining axiom `define` returns holds
@@ -1350,7 +1360,13 @@ fn close_all(xs: &[FreeVar], body: Formula) -> Formula {
 /// conservative including the schemes, because a constant is a parameter — an
 /// `ax_replacement` instance mentioning `c` is derivable by proving it at a fresh
 /// free variable, generalising, and instantiating at `c`. No metatheoretic choice
-/// is needed to expand a model by one witness. It is not implemented here.
+/// is needed to expand a model by one witness. **It is [`henkin`], below.**
+///
+/// (That last sentence used to read "It is not implemented here", and it is
+/// corrected rather than appended to: a reader deciding whether this kernel can
+/// name a choice function would otherwise get the wrong answer from the file
+/// that is supposed to settle it. The paragraph above is unchanged, because it
+/// is still the argument [`henkin`] rests on.)
 ///
 /// Returns `None` if the witness does not prove precisely the expected
 /// statement. Rejecting is right: a mismatch means the caller has not
@@ -1419,8 +1435,102 @@ pub fn define(
     Some((f, Thm::mk_defining_axiom(axiom)))
 }
 
+/// **Primitive: a 0-ary Henkin constant.**
+///
+/// Given a proof of `⊢ ∃y. φ` with `FV(φ) ⊆ {y}`, mint a fresh constant `c` — a
+/// function symbol of arity **zero** — and return `⊢ φ(c)`.
+///
+/// This is the rule [`define`]'s comment describes and this file used to say was
+/// not implemented. It exists for one reason: a choice function is never unique,
+/// so `define` cannot name Carneiro's `ε`, and the alternative of carrying
+/// `IsChoiceFn(f,u)` as an antecedent with `f` free makes every downstream
+/// theorem hypothetical. `derived::choice::epsilon` is its **only** caller and
+/// `ci/check-boundary.sh` rule 7 keeps it that way, so that a later replacement
+/// — a derived well-ordering from Tarski's Axiom A, say — has one seam to cut.
+///
+/// # Why this is conservative, including the schemes
+///
+/// Take any model `M` of the theory over the current signature. `∃y. φ` is
+/// provable, hence true in `M`, so some `a ∈ M` satisfies `φ`; interpret `c` as
+/// `a`. The expansion `M' = (M, c ↦ a)` satisfies `φ(c)` and agrees with `M` on
+/// every sentence not mentioning `c`, so nothing new is provable in the base
+/// language and consistency is preserved. Picking **one** witness for **one**
+/// constant is not a use of choice in the metatheory; the Skolem expansion, which
+/// picks one per tuple, is.
+///
+/// **The schemes survive, and that is the half [`define`]'s comment is about.**
+/// [`Thm::ax_replacement`] takes an arbitrary `Formula`, so an instance may
+/// mention `c`. It holds in `M'` because a constant is a **parameter**: that
+/// instance is the base-language instance at `φ[v/c]` for a fresh `v`, read at
+/// the assignment `v ↦ a`, and this kernel's Replacement already leaves the free
+/// variables of its `φ` unquantified and reads them universally (module header,
+/// "What a `Thm` asserts") — so it is *already* Replacement with parameters. A
+/// Skolem symbol of arity ≥ 1 gives no such thing: the function it denotes need
+/// not be amenable, and the expanded model need not satisfy Replacement for
+/// formulas mentioning it. That difference is entirely the free-variable check
+/// below, which is why that check is not a precondition to document but a line
+/// to execute.
+///
+/// Several constants are the same argument iterated. Each `∃y. φ` is proved in
+/// the theory the previous expansion already models — `φ` may mention constants
+/// minted earlier — so the expansions compose and the composite is conservative
+/// over the base.
+///
+/// # Why the result is not `∀`-closed, unlike [`define`]'s
+///
+/// There is nothing to close over. `define` returns `∀x⃗. φ(x⃗, f(x⃗))` because its
+/// symbol is parameterised; here `FV(φ) ⊆ {y}` has just been checked and `y` is
+/// substituted away, so `⊢ φ(c)` is a **sentence**. A caller reading it under the
+/// universal convention gets the same statement either way.
+///
+/// Returns `None` on any mismatch rather than adapting, as [`define`] does: a
+/// mismatch means the caller has not discharged the obligation.
+pub fn henkin(env: &mut Env, y: FreeVar, phi: Formula, witness: &Thm) -> Option<(FnSym, Thm)> {
+    // The witness must be **unconditional**, for [`define`]'s reason and in the
+    // shape of this project's SECOND SOUNDNESS BUG. This rule returns an axiom
+    // carrying no hypotheses, so a `Γ` on the witness would be silently dropped
+    // and `c` asserted to satisfy `φ` outright when only `Γ ⊢ ∃y. φ` was proved.
+    // Model-theoretically: a model failing `Γ` supplies no witness to interpret
+    // `c` by, and the argument above expands *every* model of the base theory.
+    if !witness.hyps.is_empty() {
+        return None
+    }
+    // **`FV(φ) ⊆ {y}` — the check that makes this a constant rather than a
+    // Skolem function, and the single load-bearing line in the rule.**
+    //
+    // A stray free variable is universally quantified on the premise side while
+    // `c` is not parameterised by it, so the axiom would claim one `c` works for
+    // every value of it — which is `define`'s free-variable bug verbatim, and
+    // reaches `⊢ ⊥` by the same route. Take `φ := (y = v)`: `⊢ ∃y. y = v` is
+    // provable from `eq_refl` and `ax_inst` in five kernel calls, the axiom comes
+    // back as `⊢ c = v` with `v` free, `gen` makes that `⊢ ∀v. c = v`, and two
+    // instantiations give `c₁ = c₂` for arbitrary constants. `kernel/tests/
+    // henkin.rs` builds that witness for real and pins the refusal, so deleting
+    // this check turns a test red rather than silently widening the rule.
+    let mut fvs = Vec::new();
+    phi.free_vars(&mut fvs);
+    if fvs.iter().any(|v| *v != y) {
+        return None
+    }
+    // The witness must prove **this** existential, spelled by the one spelling of
+    // `∃` there is — [`Formula::exists`] — for `exists_unique_at`'s reason: a
+    // second way to say it in a file where every line is trusted is a divergence
+    // waiting to happen. Alpha-equivalent formulas are syntactically equal here,
+    // so the caller's choice of `y` is invisible in the comparison.
+    if *witness.concl() != Formula::exists(y, phi.clone()) {
+        return None
+    }
+    let c = env.declare(0);
+    Some((c, Thm::mk_defining_axiom(phi.subst(y, &Term::apply(c, Vec::new())))))
+}
+
 impl Thm {
-    /// Trusted: the defining axiom produced by [`define`].
+    /// Trusted: the axiom produced by [`define`] or by [`henkin`].
+    ///
+    /// **Both** go through this one spelling, and that is the point of having a
+    /// spelling at all: the greppable set below is the set of conservative
+    /// *assertions* this file makes, so a second constructor for the second such
+    /// rule would have split the very list this name exists to enumerate.
     ///
     /// **This is a naming device, not a capability restriction.** An earlier
     /// version of this comment claimed it was "private to this module's
