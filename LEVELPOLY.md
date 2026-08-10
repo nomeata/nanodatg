@@ -1143,13 +1143,14 @@ and it makes `interp_sort` answer `srt(ℓ̂)` at every level, `⟦Sort 0⟧` be
 reachable" is now answered by running it rather than by argument, and **the
 answer is yes**:
 
-| | staged | staged + unified |
-|---|---:|---:|
-| `init-prelude` acceptance | exit 0 | **exit 0** |
-| arena corpus | 152/0/2/0 | **152 matched, 0 mismatched, 2 declined, 0 waived** |
-| TOTAL gaps | 10531 | 10752 (+221) |
-| typing obligations discharged | 1624 | 519 (−1105) |
-| instructions | 615.18 G | **618.33 G (+0.5 %)** |
+| | staged | + unified | + the ground bridge |
+|---|---:|---:|---:|
+| `init-prelude` acceptance | exit 0 | exit 0 | **exit 0** |
+| arena corpus | 152/0/2/0 | 152/0/2/0 | **152 matched, 0 mismatched, 2 declined, 0 waived** |
+| TOTAL gaps | 10531 | 10752 (+221) | **10535 (+4)** |
+| typing obligations discharged | 1624 | 519 (−1105) | **1569 (−55)** |
+| rule firings | 38587 | 36076 (−2511) | **38434 (−153)** |
+| instructions | 615.18 G | 618.33 G (+0.5 %) | **620.56 G (+0.9 %)** |
 
 Three readings, all of them load-bearing.
 
@@ -1185,12 +1186,54 @@ population:
 
 Every one of them has a tower rung in its conclusion, which is exactly the
 predicted shape: a `derived` library theorem stated over `U(·)`, `U₀`, `U₁` or
-`fs` no longer matches an interpretation spelled `srt(·)`. Re-pointing them at
-the `Srt` kit is 2511 firings of engineering with a known size, and the
-`Srt` facts they need (`at_zero`/`at_succ`/`sort_in_sort` at numerals, whose
-ω-memberships are *unconditional*) are built. TOTAL gaps rise by only 221
-because most of the lost discharges become carried antecedents rather than
-absent ones (obligations carried 19925 → 21030).
+`fs` no longer matches an interpretation spelled `srt(·)`.
+
+**They were six symptoms of one missing equation, not six jobs.** The
+construction is `⊢ srt(k̄) = Uₖ` at any rung — §1.2's numeral bridge,
+generalised in `derived::levels` from the two hand-rolled instances
+(`UTower::rung1_eq`/`rung2_eq`) that were already in the tree for exactly this
+purpose. `UTower::rung_eq` iterates the ladder step at a numeral; `Srt::rung_eq`
+composes it with `at_succ`, and answers rung 0 from `at_zero` instead — the one
+place the two ladders differ in shape, since `lvl(0̄) = ω` while `srt(0̄) = U₀`.
+It is **unconditional**: `numeral_in_omega` discharges every `n̄ ∈ ω` premise
+with no hypothesis, which is why a ground use of a quantified theorem costs
+nothing extra.
+
+The checker spends it at **three guards** — `ind_ty_mem`, `domain_premise` (in
+*both* positions, since `⟦Prop⟧ ∈ ⟦Type 0⟧` is a rung twice over), and
+`prop_in_u0` — with `transport_to_srt`/`transport_subject_to_srt` carrying the
+conclusion back in one Leibniz step each, checked against the membership
+actually wanted. That closed **94 %** of the re-derivation half:
+
+| | dark | bridged |
+|---|---:|---:|
+| `IndTy` | 0 | **888** |
+| `ty_pi_prop` | 0 | **446** |
+| `x ∈ U(x)` | 0 | **51** |
+| `U₀ ∈ U₁` | 0 | **17** |
+| `ty_const` | 1 | **112** |
+| `Lam` | 105 | **593** |
+| net rule firings vs the ground path | −2511 | **−153** |
+
+What is left is small and named: `ty_pi` 50, `the target type beta-reduced`
+50, `Ctor` 32, `ty_lam` 11, and five rules under five each. `ty_pi` and
+`fs(a,a) ∈ U(a)` are the one shape the bridge does not yet reach — the
+*fibre* position, where the sort is a component of a `dprod(t,t)` rather than
+the subject or the target, so the transport has to go through the fibre
+equation as well. `STILL_DARK` in
+`the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does`
+is that list, and the test fails if a name is left there after its rule is
+fixed.
+
+**One honest defect the bridge introduced and the fixture caught.** Bridging
+`domain_premise` without also bridging the `HtClause` split left every count
+correct and the report wrong: 51 `x ∈ U(x)` and 17 `U₀ ∈ U₁` were silently
+reported as 68 `fs(a,a) ∈ U(a)`. This is why the fixture compares the *whole*
+rule table rather than named rows — a per-row assertion cannot see a rule that
+changed its label — and why the claim is *equality* with the ground path
+rather than a floor: a unified run answering **more** than the ground run
+would mean proving something the ground path does not, which is the direction
+a bad transport fails in.
 
 #### What the three clauses now say
 
@@ -1239,11 +1282,13 @@ absent ones (obligations carried 19925 → 21030).
    `interp_sort` does not touch it. What the switchover removes is the
    *comparison*: the ratchet 15542 is a count over the scheduled prelude, and
    after the deletion there is no scheduled prelude. The gate must therefore be
-   **re-taken on the only state that exists** (staged, 10531 today / 10752
-   unified) with the denomination named — the same rename-with-explanation as
-   clause 2, not a fix. Surviving as an accepted red would still not be
-   acceptable; passing by accident because the new number is smaller would be
-   worse, and is the failure mode clause 2 exists to prevent.
+   **re-taken on the only state that exists** — staged, **10535** at this head
+   with the vocabulary unified and the ground bridge in (10531 on the ground
+   path) — with the denomination named, the same rename-with-explanation as
+   clause 2. Two dispositions are ruled out and one is required: it may **not**
+   land as an accepted red, and it may **not** pass by accident because the new
+   number happens to be smaller than a bar set over twice the population. It is
+   re-baselined, at a stated denominator, in the switchover commit itself.
 
 #### The counter correspondence
 
@@ -1267,6 +1312,18 @@ a rate moved as well as a denominator, the rate is printed. A re-based counter
 with no explanation is indistinguishable from a hidden regression, and three
 of these moved for reasons that are *not* the re-basing.
 
+**These counters change meaning at the switchover whether or not anyone
+touches them.** That is the point of writing the correspondence down rather
+than leaving it to be noticed. `fired`, `stored`, `hit`, `pairs` and `constEv`
+are denominated in a unit — the (declaration, σ) pair — that the deletion
+abolishes; a reader comparing 43 against a ratchet of 80 after the switchover
+is comparing counts over different populations, and *nothing in the number
+says so*. A counter left un-renamed through a denominator change is not a
+neutral omission: it silently reports a smaller number against an unchanged
+bar, which is exactly what a hidden regression looks like, and equally what a
+hidden *improvement* looks like. Renaming is what makes the direction
+recoverable.
+
 #### Acceptance invariance, on the far side
 
 Exit 0 and the same declarations in every state now measured — scheduled,
@@ -1281,8 +1338,11 @@ init-prelude at the untouched 15542 gaps / 2257 escapes.
 
 Not blockers 1–2, and not blocker 3 *as a precondition*. What is left is:
 
-* **The rung-shaped typing rules, re-pointed at the `Srt` kit** — the ten rows
-  above, 2511 firings. Engineering; the `Srt` facts exist; sized.
+* **The rung-shaped typing rules** — **94 % done**, by the one ground-bridge
+  construction above. What remains is 153 firings across nine rules, of which
+  the only distinct *shape* is the fibre position (`ty_pi`, `fs(a,a) ∈ U(a)`)
+  where a sort sits inside a `dprod(t,t)` and the transport must go through
+  the fibre equation too.
 * **The store answering cross-level uses** (§1.6). Unifying `interp_sort`
   leaves all 483 cross-level misses in place, because the store key is
   `(name, ⟦levels⟧)` and the vocabulary switch does not make a use spelled
