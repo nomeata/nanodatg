@@ -3366,6 +3366,21 @@ on this arm. `modelgen/README.md` says so where a consumer will read it.
 | a recursive field **with** binders (`Acc`'s own shape, `G2`, `G3`, `G4`, `G5`) | `Classical.choice` | `Classical.choice`, `funext` (so the quotient and `Quot.sound`) |
 | a recursive field with **no** binders (`G1`, `Inf`) | `Classical.choice` | `Classical.choice` |
 
+**And that bill is now payable rather than merely stated.** For a while the
+`Classical.choice` in this table read as a *refusal* — the checker's `Sealed`
+rejects hypothetical theorems and a choice function is never unique, so
+`define` cannot introduce one, so a model spending it was modelled and not
+certifiable. That reading was narrower than it looked: the kernel has choice
+(`Thm::ax_choice`, set-sized, no consistency cost); what was missing was a way
+to **name a witness**, and a **0-ary Henkin constant** — from `⊢ ∃y. φ` with
+`FV(φ) ⊆ {y}` — is conservative even over the schemes, because a constant is a
+parameter. Skolemising at arity ≥ 1 would not be, since `ax_replacement` takes
+an arbitrary `Formula` and a Skolem function need not be amenable. Carneiro
+fixes one `ε` on one set, which is that shape exactly. So the price this
+section paid to take `Acc` out of the basis is **refunded**, not re-priced,
+and §8.16 depends on the refund at exactly one place: `Acc`'s own model, which
+every W target's fragment carries.
+
 `funext` is reached from exactly one place — `Graph.unique`'s congruence, to
 equate two recursive-argument *functions* pointwise — and
 [`Modelgen.funextUp`] runs it once per binder, so at zero binders it is the
@@ -4563,7 +4578,7 @@ core and modelling what it splices leaves **nothing** unmodelled in front of a
 consumer. `Test.lean`'s `w_core` row pins it, so the day one of the 18 stops
 modelling is a test failure with a name on it.
 
-### The choice question is one declaration, not ninety-nine
+### The choice question was one declaration, and it is now none
 
 The fragment's own bill is `[propext, Quot.sound]`. But **`Acc`'s model** is
 arm G's graph route, and arm G spends `Classical.choice` — so modelling the
@@ -4571,23 +4586,50 @@ fragment splices the axiom once, at exactly one site, which the report names.
 Nothing else in the 18 does: `Nonempty` and `WellFounded` are non-recursive
 `Prop`s and take the Church route.
 
-This is worth stating carefully, because it is easy to read as undoing §8.16's
-result and it does not:
+**And that one site is no longer a cost.** `Classical.choice`'s refutation was
+narrower than it read: the kernel *has* choice — `Thm::ax_choice`,
+`∀x ∃f. IsChoiceFn(f,x)`, set-sized and asserted at no consistency cost. What
+was missing was a way to **name a witness**. Skolemising at arity ≥ 1 is
+genuinely unsound there, because `ax_replacement` takes an arbitrary `Formula`
+and a Skolem function need not be amenable; but a **0-ary Henkin constant** —
+from `⊢ ∃y. φ` with `FV(φ) ⊆ {y}` — is conservative *including* over the
+schemes, because a constant is a parameter. Carneiro fixes one `ε` on one set,
+which is exactly that shape, and the owner has authorised it. So `Acc`'s model
+is certifiable and **the price §8.7 paid to take `Acc` out of the basis is
+refunded rather than merely re-priced**: the basis stays at four, `Acc` is
+modelled, and no horn of the trade remains.
 
-* **A W target's own model is still `[propext, Quot.sound]`.** It depends on
-  the *inductive* `Acc` — a declaration, spliced and kernel-checked — and not
-  on `Acc`'s model. So all 99 are certifiable, as measured.
-* What costs `Classical.choice` is **making the output four-primitive**, i.e.
-  modelling `Acc` rather than leaving it as a fifth exempt inductive. §8.7 took
-  `Acc` out of the basis by the graph arm and paid exactly this; the price was
-  recorded then as an axiom and reads differently now that the axiom is
-  refuted rather than pending.
+**Keep the distinction that made the trade legible in the first place**, since
+it is the kind a later reader collapses: a W target's own model is `[propext,
+Quot.sound]` because it depends on the **inductive** `Acc` — spliced and
+kernel-checked — and *not* on `Acc`'s model. Those are two different objects
+and only one of them ever spent an axiom. That was true when the axiom was a
+problem and it is still true now that it is not.
 
-So the trade is a real one with a name on it, and it is the owner's: **`Acc` as
-a fifth exempt primitive and the whole output is choice-free, or `Acc` modelled
-and one declaration in the output is not certifiable.** Either way it is *one*
-declaration shared by every W target, which is a far better position than
-ninety-nine, and #150 can be decided on it directly.
+### The carrier's universe is not a boundary, and the first measurement of it was wrong
+
+The core is stated at `A B' : Type u`, so the carrier it produces is a
+`Type u` — and a declaration's sort `w` is only required to be *never-zero*.
+Those are different conditions, and a `Sort (max 1 u)` carrier would have
+needed a `Sort`-polymorphic rebuild of the core (`List` and `Option` replaced
+by `Sort`-valued analogues), which is a fragment thrown away and re-made if it
+is discovered after the arm is built rather than before.
+
+Asked before building, and the answer is that **all 103 declarations waiting on
+W have a `Type u` carrier**, so the core as written reaches every one of them
+and no rebuild is needed.
+
+**The first flag said 13 of them did not, and the flag was wrong** — recorded
+because the mistake is a standing trap and not a slip. The test was
+`w.normalize matches .succ _`, and Lean's level normalizer **pushes `succ`
+inward through `max`**: `Type (max u v)` is `Sort (succ (max u v))`, which
+normalizes to `max (succ u) (succ v)` and matches no `succ` pattern, even
+though it is a `Type` at every instantiation. The right test is
+`Level.dec`, which is `w - 1` and answers the question that was being asked.
+The 13 were `Lean.RBNode`, `FreeAlgebra.Pre`, `Turing.TM1.Stmt` and the like —
+ordinary multi-parameter polymorphic types, and the flag's own shape was what
+made them look exceptional. Nothing was designed around it, because it was
+measured before anything was built on it.
 
 ### What building the arm costs, and the one thing to settle first
 

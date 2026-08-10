@@ -1030,13 +1030,14 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
-    (tagged : Bool := true) : GenM (Option Nat) := do
+    (tagged : Bool := true) (typeU : Bool := true) : GenM (Option Nat) := do
   -- **The W arm's bill, printed at the decline that names W.** `tagged` is
   -- [`Modelgen.tagFactored`] for the whole declaration: yes and the tagged
   -- construction models it at `[propext, Quot.sound]`, which is covered; no
   -- and it needs the classical route, which spends `Classical.choice` and is
   -- not certifiable. Two populations, so the census counts two numbers.
-  let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}"
+  let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}\
+; carrier is Type u: {if typeU then "yes" else "no"}"
   let mut cur := tele
   let mut slot : Option Nat := none
   for i in [0:nf] do
@@ -1998,7 +1999,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
         MODELGEN.md §8.15 — so its reach is bounded by whether that erasure \
         models, and a branching erasure is W's, not the tuple tower's); \
         erasure linear: no; B factors through the tag: \
-        {if tagFactored tname np exportCtors then "yes" else "no"}"
+        {if tagFactored tname np exportCtors then "yes" else "no"}\
+        ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}"
     -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
@@ -2590,6 +2592,7 @@ the subsingleton rule that minted {ern} does not hold of it"
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
         recSlotOf tname np cn (numForalls tele) tele (tagFactored tname np exportCtors)
+          w.normalize.dec.isSome
     let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
     let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
     -- **A recursive declaration with no base constructor**, which Lean accepts
