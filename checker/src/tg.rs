@@ -6112,6 +6112,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// membership claimed. Nothing here can return a theorem about some other
     /// set.
     fn prop_in_u0(&mut self, te: &Term, tt: &Term) -> Option<Thm> {
+        // The ground bridge: with the vocabulary unified `⟦Prop⟧` is `srt(0̄)`
+        // and not `U₀`, which is the term `Tower::cond_in_u0` concludes about.
+        // Same seam as `ind_ty_mem`'s, in target position only — `te` here is
+        // a conditional singleton, never a sort. `LEVELPOLY.md` §5.5.
+        if let Some((rung, bridge)) = self.rung_of_srt(tt) {
+            let inner = self.prop_in_u0(te, &rung)?;
+            return self.transport_to_srt(&inner, te, &rung, tt, &bridge)
+        }
         if *tt != self.pre.u0() {
             return None
         }
