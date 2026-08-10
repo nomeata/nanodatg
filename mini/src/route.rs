@@ -376,6 +376,12 @@ pub(crate) fn run_routed(
     let mut chk = ef.as_ref().map(|ef| CheckerEngine { rc: nanoda_lib::routed::RoutedChecker::new(ef) });
 
     let mut blocked = false;
+    // Groups mini itself vouches for — walked without a decline. The stray
+    // sweep exempts exactly these and the anchors the checker claimed, so a
+    // fallback that failed to actually reach the checker leaves its group
+    // unexempted and the sweep both checks and *names* it. Coverage is
+    // earned, never inferred from the routing decision.
+    let mut covered_by_mini: HashSet<String> = HashSet::new();
     {
         let mut mini_eng = MiniEngine { env, schedule, ip: &mut *ip, led: &mut led };
         for d in decls {
@@ -388,7 +394,9 @@ pub(crate) fn run_routed(
                         blocked = true;
                         break
                     }
-                    if !rep.declined.is_empty() {
+                    if rep.declined.is_empty() {
+                        covered_by_mini.extend(group_names(d).iter().map(|n| n.to_string()));
+                    } else {
                         // The counted fallback: mini refused, the checker
                         // takes the group — never silently.
                         let name = d.name().to_string();
@@ -423,13 +431,11 @@ pub(crate) fn run_routed(
     }
     if !blocked {
         led.finish(ip);
-        // The stray sweep: export groups no mini declaration names. `known`
-        // is every name a group covers, so a routed-to-mini group is not a
-        // stray merely because the checker never saw a claim for it.
+        // The stray sweep: export groups neither engine vouches for — an
+        // anchor the checker never claimed whose name mini never covered
+        // (the natural population: a dropped unused axiom, `run.rs`'s retain).
         if let Some(c) = chk.as_mut() {
-            let known: HashSet<String> =
-                decls.iter().flat_map(group_names).map(|n| n.to_string()).collect();
-            report.strays = c.rc.check_strays(&known);
+            report.strays = c.rc.check_strays(&covered_by_mini);
         }
     }
     report.cross = ip.core().consts().borrow().report();

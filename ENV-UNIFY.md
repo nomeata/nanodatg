@@ -554,22 +554,63 @@ stage 6"):
   complete (pinned by `kernel.rs::a_foreign_store_entry_is_adopted_on_miss`,
   three atoms) but measures 0 on this corpus shape, because without
   per-declaration routing mini fills every constant itself before any use
-  misses; its crossings arrive with track D. The `nested_model` /
-  `init-prelude` measurements stay ahead, gated on B5 closing the declined
-  populations.
+  misses; track D's routed run is where it first measures nonzero (7, see
+  track D below). The `nested_model` / `init-prelude` measurements stay
+  ahead, gated on B5 closing the declined populations.
 * **B5** — shared skeleton-site tables, scoped by B0's result: full sharing
   if the normal forms coincide, constant-level sharing with counted
   structural gaps if not.
 
-**Track D — the driver** (after A2/A3 and B4): panics→statuses at the two
-cited sites (§3.9), then the dispatcher — walk the map in order, partition
-into groups, route by kind (constructions → mini arc, defs/theorems →
-checker), both engines over the one environment, stop at first rejection;
-differential mode (route a group to both, compare) as the standing
-cross-check. **External dependency, named**: checker's stage-1 scope wiring
-(THREADING-CENSUS §2), without which B4's checker-side writes stay empty
-(§3.6). It is independent work, already sequenced first in PIVOT §5, and
-nothing in tracks A/B waits on it — but the *payoff* does.
+**Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
+axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
+`checker/src/routed.rs`, the checker's half). The policy function is
+`Mode::pick` — `Split` is the owner's split (inductive constructions, the
+quotient family and axioms → mini; definitions and theorems → checker), and
+`ForceMini`/`ForceChecker` keep both single-engine runs reachable behind the
+same flag. The seam is the `GroupEngine` trait: one declaration group in,
+the gap/decline ledger out; certificates land in the shared store, and
+nothing about dispatch, `whnf` or `def_eq` crosses it. The driver replaces
+`Ledger::run`'s single call inside `check_file_with_interp` with an
+interleaved walk — declarations in file order, each group handed to the
+engine the policy picks, both engines over the run's one `EnvCore` — and the
+checker's export entries follow their **route anchor** (constructors and
+recursors to their inductive, the quotient family to `Quot`), so one
+decision covers one group on either side. The asymmetry is in the return
+types: a mini decline falls back to the checker as a counted, named event
+(`fellBack:name=reason`), a routed name the export never saw falls back to
+mini the same way, and export groups neither engine vouched for are swept,
+checked and named (`strays`). What this stage deliberately does **not**
+route is the acceptance axis: mini's zone A still checks the whole file
+(1.58% of a mini run), because mini's `Environment` is grown by checking —
+single-engine acceptance is track A's shared syntactic store, and the two
+panic→status sites of §3.9 also remain (a checker rejection is still a
+panic). `mini/tests/route_tg.rs` pins the policy (three modes over one
+file), both crossing directions, the fallback and the stray sweep.
+
+**The crossing under routing, measured** (`Split`, the same 91 exports,
+`--no-modelgen`; the sweep behind the numbers is one `mini --route=split`
+run per file): mini published 573 entries / 571 slots, the checker 88 / 156.
+**7 typings crossed checker→mini** (`adoptedByMiniTyping=7`, `converged=7`,
+on `052`/`072`/`113`/`114`) — the direction B4 measured at **0**, observable
+for exactly the reason B4 predicted: with defs routed away, mini's
+constructions finally *miss*, and `Checker::adopt_shared` fires in
+production. The checker→mini reverse of B4's 52: **0 adopted, 284 typing
+offers declined** at the statement guards — B4's 52 defeq adoptions were
+mini's *def* equations, which mini no longer derives under `Split`; the
+residue is B5's, unchanged. Three files regressed against `ForceMini` and
+are named, counted and fallen back rather than netted: `052_reduceCtorParam
+.mk`, `113_reduceCtorParamRefl.mk`, `114_reduceCtorParamRefl2.mk` decline
+`ind-spec(…: parameter reduction)` under `Split` because that arm's threaded
+`whnf_conv` needs the defining equation of a def (`id`) the policy routed to
+the checker, and mini's adoption guard (typing-carrying entries only —
+correctly) does not take the checker's entry for it; the checker checks all
+three groups via the counted fallback, and the corpus ratchet under `Split`
+is 86 exit-0 + 3 exit-4 + 2 declines against `ForceMini`'s 89 + 0 + 2,
+which reproduces the unrouted run exactly (798 / 1014 published, B4's
+numbers, pinned by `route_tg.rs`). **External dependency, unchanged**:
+checker's stage-1 scope wiring (THREADING-CENSUS §2) is what would turn the
+checker's 156 slots into a typing per def and the 7 into a population
+(§3.6); it is independent work, already sequenced first in PIVOT §5.
 
 ## 6. σ, and what this design assumes about it
 
