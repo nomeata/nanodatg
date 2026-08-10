@@ -1885,6 +1885,15 @@ pub struct EnvCore {
             Option<Option<Rc<std::cell::RefCell<derived::inductive::Machine>>>>,
         >,
     >,
+    /// **The shared constant store** (ENV-UNIFY.md B4): `⟦c.{σ}⟧` carriers
+    /// with their typings and defining equations, under the joint
+    /// [`crate::const_store::ConstKey`], written and read by both engines.
+    /// On the core rather than on [`Shared`] so that `mini` — which holds an
+    /// `EnvCore` but no `Shared` — reaches the same cell; the checker's
+    /// funnels are [`TgBackend::const_abbrev`] and the `declar_typings`
+    /// read/write sites, mini's are `Interp::put_const` and its
+    /// constant-evidence miss path.
+    consts: Rc<std::cell::RefCell<crate::const_store::ConstStore>>,
 }
 
 impl EnvCore {
@@ -1904,7 +1913,14 @@ impl EnvCore {
             hole_vars: Rc::new(std::cell::RefCell::new(Vec::new())),
             wtb: Rc::new(std::cell::RefCell::new(None)),
             machine: Rc::new(std::cell::RefCell::new(None)),
+            consts: Rc::new(std::cell::RefCell::new(crate::const_store::ConstStore::default())),
         }
+    }
+
+    /// The shared constant store. Same-thread cell; every use must be
+    /// short-lived, like [`EnvCore::env_mut`]'s.
+    pub fn consts(&self) -> &Rc<std::cell::RefCell<crate::const_store::ConstStore>> {
+        &self.consts
     }
 
     /// The kernel `Env`, for the duration of one statement. Every use must be
@@ -2140,12 +2156,14 @@ struct Shared {
     /// Keyed by the name and its universe arity; the levels are the symbol's
     /// arguments, as before.
     opaque_syms: HashMap<(u32, u32), FnSym>,
-    /// `(⟦c.{us}⟧, ⊢ ⟦c.{us}⟧ = ⟦value⟧)` for constants introduced as explicit
-    /// definitions. Keyed by the name **and** the levels, exactly as
-    /// [`TgBackend::ind_abbrev`] is, so the interpretation stays injective on
-    /// constants: two distinct names never share a symbol however equal their
-    /// values are.
-    const_syms: HashMap<(u32, Vec<Term>), (Term, Sealed)>,
+    // `(⟦c.{us}⟧, ⊢ ⟦c.{us}⟧ = ⟦value⟧)` for constants introduced as explicit
+    // definitions — **`const_syms`, moved to the [`EnvCore`]'s shared constant
+    // store** (ENV-UNIFY.md B4), under the joint [`crate::const_store::ConstKey`],
+    // so `mini`'s entries and this engine's are one table. The keying
+    // discipline is unchanged: name **and** levels, so the interpretation
+    // stays injective on constants — two distinct names never share a symbol
+    // however equal their values are. [`TgBackend::const_abbrev`] is still the
+    // only funnel.
     /// One opaque nullary symbol per universe **parameter name**.
     ///
     /// Sharing these across declarations is what makes `⟦f.{u}⟧` at `f`'s own
@@ -2277,11 +2295,14 @@ struct Shared {
     /// could be derived when the declaration was checked, keyed by the constant
     /// and the universe levels it is stated at.
     ///
-    /// Unconditional by construction — [`TgBackend::store_declar_typing`] drops
-    /// a derivation that left antecedents rather than storing it — and matched
-    /// against the caller's claim at the point of use by
-    /// [`TgBackend::has_type_a`]'s single-exit guard, like every other clause.
-    declar_typings: HashMap<(u32, Vec<Term>), Sealed>,
+    // Unconditional by construction — [`TgBackend::store_declar_typing`] drops
+    // a derivation that left antecedents rather than storing it — and matched
+    // against the caller's claim at the point of use by
+    // [`TgBackend::has_type_a`]'s single-exit guard, like every other clause.
+    // **`declar_typings`, moved to the [`EnvCore`]'s shared constant store**
+    // (ENV-UNIFY.md B4) as the `typing` slot of the joint entries, so a typing
+    // `mini` derived is readable here and vice versa — behind exactly the
+    // same guards.
     /// Keys whose declaration typing was **derived and then discarded** because
     /// the derivation stood under antecedents ([`Dt::Conditional`]).
     ///
@@ -2290,7 +2311,7 @@ struct Shared {
     /// own check gapped and a declaration whose translation was computed and
     /// thrown away are the same `Dt::Miss` today, and they call for completely
     /// different work.
-    declined_cond: std::collections::HashSet<(u32, Vec<Term>)>,
+    declined_cond: std::collections::HashSet<crate::const_store::ConstKey>,
     /// `⊢ ∀x. ¬(x ∈ ⟦False⟧)` — **the threat-model anchor**, at the very symbol
     /// [`TgBackend::false_const`] hands the rest of the backend for `False`.
     ///
@@ -2305,6 +2326,14 @@ thread_local! {
     static SHARED: std::cell::RefCell<Option<Rc<std::cell::RefCell<Shared>>>> =
         const { std::cell::RefCell::new(None) };
 }
+
+/// The export file's stable index for `n` — the name half of the joint
+/// [`crate::const_store::ConstKey`] — or `None` for a name interned in a
+/// per-declaration arena, which has no identity outside it and so cannot
+/// cross. Public for `mini`, whose `Name` is a `NamePtr` into *its* installed
+/// export file; the store's spelling guard is what keeps the two engines'
+/// indices honest against each other.
+pub fn export_name_key(n: NamePtr<'_>) -> Option<u32> { crate::instantiations::name_key(n) }
 
 /// Install a caller-supplied [`EnvCore`] as the seed of this thread's
 /// [`Shared`] — the production route to one signature across both engines:
@@ -2382,7 +2411,6 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             gen_inds: HashMap::new(),
             gen_recs: HashMap::new(),
             opaque_syms: HashMap::new(),
-            const_syms: HashMap::new(),
             param_syms: HashMap::new(),
             idx_syms: HashMap::new(),
             lit_syms: HashMap::new(),
@@ -2390,7 +2418,6 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             rec_nests: HashMap::new(),
             gen_ty_nests: HashMap::new(),
             gen_ctor_nests: HashMap::new(),
-            declar_typings: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
         }));
@@ -2447,6 +2474,10 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     level_canon: HashMap<LevelPtr<'t>, LevelPtr<'t>>,
     /// Per-name and per-index constants, allocated on demand.
     consts: HashMap<NamePtr<'t>, FnSym>,
+    /// The rendered spelling per name, for the shared constant store's alias
+    /// guard — memoised per backend, so the guard costs one rendering per name
+    /// per declaration rather than one per read.
+    spellings: HashMap<NamePtr<'t>, Rc<str>>,
     /// Lean local ids to kernel free variables. Allocated through `Env` rather
     /// than derived from the Lean id: the derived rules mint fresh variables for
     /// Leibniz holes, and a collision between such a hole and a Lean local would
@@ -3429,6 +3460,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             level_reps: Vec::new(),
             level_canon: HashMap::new(),
             consts: HashMap::new(),
+            spellings: HashMap::new(),
             locals: HashMap::new(),
             params: HashMap::new(),
             idxs: HashMap::new(),
@@ -4116,9 +4148,62 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         name: NamePtr<'t>,
         levels: LevelsPtr<'t>,
-    ) -> Option<(u32, Vec<Term>)> {
+    ) -> Option<crate::const_store::ConstKey> {
         let k = self.name_key(name)?;
-        Some((k, self.interp_levels(ctx, levels)))
+        let ls = ctx.read_levels(levels).iter().copied().collect::<Vec<_>>();
+        let lks = ls.into_iter().map(|l| self.level_key(ctx, l)).collect();
+        Some((k, lks))
+    }
+
+    /// One level of the joint key: [`LevelKey::Ground`] when the level
+    /// evaluates to a numeral under σ — the arm on which this engine's keys
+    /// and `mini`'s are equal values — else the interpreted level term,
+    /// exactly the historical key component. The ground test is
+    /// [`Self::audit_instantiation`]'s: a ground simplified level is
+    /// `succ^n(zero)` and nothing else.
+    fn level_key(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> crate::const_store::LevelKey {
+        let ls = ctx.under_sigma(l);
+        let (base, n) = ctx.level_succs(ls);
+        if matches!(ctx.read_level(base), Level::Zero) {
+            if let Ok(n) = u32::try_from(n) {
+                return crate::const_store::LevelKey::Ground(n)
+            }
+        }
+        crate::const_store::LevelKey::Sym(self.interp_level(ctx, l))
+    }
+
+    /// The name's rendered spelling, for the shared store's alias guard —
+    /// same format as `mini`'s `Name` `Display` (`pre.s`, `pre.3`, anonymous
+    /// prefixes omitted), so equal names spell equal on both sides of the
+    /// seam. Memoised per backend.
+    fn spell(&mut self, ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>) -> Rc<str> {
+        if let Some(s) = self.spellings.get(&n) {
+            return s.clone()
+        }
+        fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>, out: &mut String) {
+            match ctx.read_name(n) {
+                crate::name::Name::Anon => out.push_str("[anonymous]"),
+                crate::name::Name::Str(pre, s, _) => {
+                    if !matches!(ctx.read_name(pre), crate::name::Name::Anon) {
+                        go(ctx, pre, out);
+                        out.push('.');
+                    }
+                    out.push_str(ctx.read_string(s).as_ref());
+                }
+                crate::name::Name::Num(pre, i, _) => {
+                    if !matches!(ctx.read_name(pre), crate::name::Name::Anon) {
+                        go(ctx, pre, out);
+                        out.push('.');
+                    }
+                    out.push_str(&i.to_string());
+                }
+            }
+        }
+        let mut s = String::new();
+        go(ctx, n, &mut s);
+        let rc: Rc<str> = Rc::from(s);
+        self.spellings.insert(n, rc.clone());
+        rc
     }
 
     /// **Check one interpreted constant instantiation against the schedule.**
@@ -4171,13 +4256,42 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// per-backend symbol — which reproduces the old behaviour exactly, and is
     /// counted, so that "the store never hits" cannot be mistaken for "nothing
     /// is derivable".
-    fn const_abbrev(&mut self, key: Option<(u32, Vec<Term>)>, body: &Term) -> Option<(Term, Thm)> {
-        if let Some(k) = key.as_ref() {
-            if let Some((t, ax)) = self.shared.borrow().const_syms.get(k) {
-                if *ax.concl() == Formula::eq(t.clone(), body.clone()) {
-                    return Some((t.clone(), ax.thm().clone()))
+    fn const_abbrev(
+        &mut self,
+        key: Option<(crate::const_store::ConstKey, Rc<str>)>,
+        body: &Term,
+    ) -> Option<(Term, Thm)> {
+        use crate::const_store::{Engine, Slot};
+        if let Some((k, sp)) = key.as_ref() {
+            // The shared store may hold up to one carrier per engine for this
+            // key. Whichever entry's defining equation is about the body *this*
+            // backend just interpreted is adopted — statement first, provenance
+            // only for the ledger. An adopted `mini` carrier is a certificate
+            // that crossed; a cross entry none of whose equations matched is a
+            // counted decline, and the fallback is today's private mint.
+            let entries = self.core.consts().borrow_mut().get(k, sp, Engine::Checker);
+            let mut cross_offered = false;
+            for e in &entries {
+                if let Some((ax, by)) = &e.defeq {
+                    if *ax.concl() == Formula::eq(e.term.clone(), body.clone()) {
+                        if *by != Engine::Checker {
+                            self.core
+                                .consts()
+                                .borrow_mut()
+                                .note_adopted(k, Slot::Defeq, Engine::Checker);
+                        }
+                        return Some((e.term.clone(), ax.thm().clone()))
+                    }
+                    if *by != Engine::Checker {
+                        cross_offered = true;
+                    }
                 }
+            }
+            if !entries.is_empty() {
                 note_dt(Dt::Drift);
+            }
+            if cross_offered {
+                self.core.consts().borrow_mut().note_declined(k, Slot::Defeq, Engine::Checker);
             }
         }
         let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
@@ -4187,9 +4301,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if !derived::establishes(&ax, &Formula::eq(t.clone(), body.clone())) {
             return None
         }
-        if let Some(k) = key {
+        if let Some((k, sp)) = key {
             if let Ok(sealed) = Sealed::new(ax.clone()) {
-                self.shared.borrow_mut().const_syms.entry(k).or_insert((t.clone(), sealed));
+                self.core.consts().borrow_mut().publish(
+                    &k,
+                    &sp,
+                    Engine::Checker,
+                    t.clone(),
+                    None,
+                    Some(sealed),
+                );
             }
         }
         Some((t, ax))
@@ -7911,7 +8032,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 });
                 if let Some(val_subst) = value {
                     let body = self.interp(ctx, val_subst);
-                    let key = self.const_key(ctx, name, levels);
+                    let key = match self.const_key(ctx, name, levels) {
+                        Some(k) => Some((k, self.spell(ctx, name))),
+                        None => None,
+                    };
                     // A definition body with free variables outside the parameter list
                     // cannot be introduced soundly; fall back to an opaque symbol.
                     let Some((t, axiom)) = self.const_abbrev(key, &body) else {
@@ -8925,6 +9049,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // declaration's arena; nothing else can be stored, so nothing else is
         // attempted.
         let Some(key) = self.const_key(ctx, name, uparams) else { return note_dt(Dt::NoKey) };
+        let sp = self.spell(ctx, name);
         let tyt = self.interp(ctx, ty);
 
         // What inference established, if it established anything. This is the
@@ -8973,7 +9098,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // parameters. It is *not* fetched by interpreting a `Const` node for
         // `c`: the environment stops at `c`, so `interp` would make it opaque.
         let body = self.interp(ctx, val);
-        let Some((ct, def)) = self.const_abbrev(Some(key.clone()), &body) else { return note_dt(Dt::Refused) };
+        let Some((ct, def)) = self.const_abbrev(Some((key.clone(), sp.clone())), &body) else {
+            return note_dt(Dt::Refused)
+        };
 
         // `⟦val⟧ ∈ ⟦T⟧` carried across the equation, backwards, by Leibniz.
         let Some(back) = derived::eq_symm(&mut self.env_mut(), &def) else { return note_dt(Dt::Refused) };
@@ -8985,7 +9112,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // is the same discipline every rule in this file follows; a stored
         // theorem is checked here *and* against the caller's claim at the point
         // of use.
-        if !derived::establishes(&out, &Formula::mem(ct, tyt)) {
+        if !derived::establishes(&out, &Formula::mem(ct.clone(), tyt)) {
             return note_dt(Dt::Refused)
         }
         if !ctx.read_levels(uparams).is_empty() {
@@ -8993,7 +9120,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         note_dt(Dt::Stored);
         let Ok(out) = Sealed::new(out) else { return note_dt(Dt::Refused) };
-        self.shared.borrow_mut().declar_typings.entry(key).or_insert(out);
+        // Into the shared store's typing slot, on the entry whose carrier is
+        // `ct` — which is the entry [`Self::const_abbrev`] just wrote or
+        // adopted, so if the carrier was `mini`'s the typing lands beside
+        // `mini`'s certificates (a counted convergence) rather than in a
+        // second row.
+        self.core.consts().borrow_mut().publish(
+            &key,
+            &sp,
+            crate::const_store::Engine::Checker,
+            ct,
+            Some(out),
+            None,
+        );
     }
 
     /// `⟦c⟧ ∈ ty` — **a lookup**, in the store
@@ -9048,21 +9187,54 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // theorem back for it would be returning a theorem not matched against
         // the claim. So it falls through to the derivation instead.
         if let Some(key) = self.const_key(ctx, name, levels) {
-            let hit = self.shared.borrow().declar_typings.get(&key).cloned();
+            use crate::const_store::{Engine, Slot};
+            let sp = self.spell(ctx, name);
+            let entries = self.core.consts().borrow_mut().get(&key, &sp, Engine::Checker);
+            let want = Formula::mem(te.clone(), ty.clone());
+            let mut offered = false;
+            let mut cross_offered = false;
+            let mut hit = None;
+            for e in &entries {
+                if let Some((t, by)) = &e.typing {
+                    offered = true;
+                    if *t.concl() == want {
+                        hit = Some((t.clone(), *by));
+                        break
+                    }
+                    if *by != Engine::Checker {
+                        cross_offered = true;
+                    }
+                }
+            }
             match hit {
-                Some(t) if *t.concl() == Formula::mem(te.clone(), ty.clone()) => {
+                Some((t, by)) => {
                     note_dt(Dt::Hit);
+                    if by != Engine::Checker {
+                        self.core
+                            .consts()
+                            .borrow_mut()
+                            .note_adopted(&key, Slot::Typing, Engine::Checker);
+                    }
                     return Some((
                         u_a1i(t.thm(), conj_of(assms).as_ref()),
                         HtClause::Const,
                         assms.to_vec(),
                     ))
                 }
-                Some(_) => note_dt(Dt::Wrong),
                 None => {
-                    note_dt(Dt::Miss);
-                    if self.shared.borrow().declined_cond.contains(&key) {
-                        note_dt(Dt::MissCond);
+                    if cross_offered {
+                        self.core
+                            .consts()
+                            .borrow_mut()
+                            .note_declined(&key, Slot::Typing, Engine::Checker);
+                    }
+                    if offered {
+                        note_dt(Dt::Wrong);
+                    } else {
+                        note_dt(Dt::Miss);
+                        if self.shared.borrow().declined_cond.contains(&key) {
+                            note_dt(Dt::MissCond);
+                        }
                     }
                 }
             }
@@ -14156,8 +14328,17 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let Some(key) = self.const_key(ctx, name, levels) else {
             return self.ty_miss(crate::certify::TyGap::Const)
         };
-        let hit = self.shared.borrow().declar_typings.get(&key).cloned();
-        let Some(t) = hit else {
+        use crate::const_store::{Engine, Slot};
+        let sp = self.spell(ctx, name);
+        let entries = self.core.consts().borrow_mut().get(&key, &sp, Engine::Checker);
+        let mut slots: Vec<(Sealed, Engine)> =
+            entries.iter().filter_map(|e| e.typing.clone()).collect();
+        // This engine's own slot first — behaviour-preserving where it exists;
+        // the other engine's typing is tried when this engine derived none,
+        // which is exactly a certificate crossing, and `typing`'s own
+        // statement guard decides whether it fits.
+        slots.sort_by_key(|(_, by)| *by != Engine::Checker);
+        let Some((t, by)) = slots.into_iter().next() else {
             note_dt(Dt::Miss);
             if self.shared.borrow().declined_cond.contains(&key) {
                 note_dt(Dt::MissCond);
@@ -14169,7 +14350,17 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // what a stored theorem has to be about.
         let te = self.interp(ctx, e);
         let tt = self.interp(ctx, ty);
-        self.typing(crate::certify::TyGap::Const, &te, &tt, t.into_thm(), Vec::new())
+        let out = self.typing(crate::certify::TyGap::Const, &te, &tt, t.into_thm(), Vec::new());
+        if by != Engine::Checker {
+            let cell = self.core.consts();
+            let mut st = cell.borrow_mut();
+            if matches!(out, TgTyping::Derived { .. }) {
+                st.note_adopted(&key, Slot::Typing, Engine::Checker);
+            } else {
+                st.note_declined(&key, Slot::Typing, Engine::Checker);
+            }
+        }
+        out
     }
 
     /// A context local: its own declared typing, **acquired as an antecedent**.

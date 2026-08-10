@@ -3280,6 +3280,16 @@ impl<'e, 'i> Checker<'e, 'i> {
         if self.th.is_none() || !missing(self) {
             return None
         }
+        // ENV-UNIFY.md B4, the mini-side read: before constructing an
+        // interpretation of our own, adopt the shared store's entry if the
+        // *other* engine already published one carrying a typing. One store
+        // hit is one carrier for the key — building our own beside it would
+        // be the two-carriers state the identity doctrine forbids. On a
+        // mini-only run the store mirrors `ip.consts` exactly, so this path
+        // cannot fire and behaviour is unchanged.
+        if self.adopt_shared(name, &key) {
+            return None
+        }
         match crate::zoneb::recorded_reason(self, name, inst) {
             Gap::NoInterpretation(..) => {
                 if let Some(th) = self.th.as_mut() {
@@ -3292,6 +3302,44 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             g => Some(g),
         }
+    }
+
+    /// Adopt the shared constant store's entry for `key`, if the other engine
+    /// published one that carries a typing — the mini half of ENV-UNIFY.md
+    /// B4's crossing. Returns whether an entry landed in `ip`'s table.
+    ///
+    /// What is and is not checked here: the store's own publish gate already
+    /// forced the typing (and the defining equation, if any) to be *about the
+    /// entry's carrier*, and the spelling guard refused an aliased key — so
+    /// the adoption takes the carrier with certificates known to speak of it.
+    /// Whether those certificates fit what a *use* claims is decided where
+    /// every mini certificate is decided: at the consumption sites, which
+    /// match statements (`retarget_to`, the acceptance funnel), so a foreign
+    /// typing at the wrong type is a counted gap downstream, never a claim.
+    fn adopt_shared(&mut self, name: &Name, key: &crate::interp::ConstKey) -> bool {
+        use nanoda_lib::const_store::{Engine, Slot};
+        let Some(jk) = crate::interp::joint_key(key) else { return false };
+        let Some(th) = self.th.as_mut() else { return false };
+        let sp = name.to_string();
+        let cell = th.ip.core().consts().clone();
+        let entries = cell.borrow_mut().get(&jk, &sp, Engine::Mini);
+        let Some(e) = entries
+            .into_iter()
+            .find(|e| matches!(&e.typing, Some((_, by)) if *by != Engine::Mini))
+        else {
+            return false
+        };
+        let (typing, _) = e.typing.clone().expect("filtered on a present typing");
+        th.ip.put_const(
+            key.clone(),
+            crate::interp::ConstInterp {
+                term: e.term.clone(),
+                typing: Ok(typing),
+                defeq: e.defeq.clone().map(|(s, _)| s),
+            },
+        );
+        cell.borrow_mut().note_adopted(&jk, Slot::Typing, Engine::Mini);
+        true
     }
 
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
@@ -5922,5 +5970,100 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(c.body_clause(&e).unwrap(), first);
         }
+    }
+
+    /// **The mini half of ENV-UNIFY.md B4's crossing.** A constant mini never
+    /// filled, whose entry the *other* engine published into the shared
+    /// constant store, is adopted on the miss path — carrier, typing and all —
+    /// instead of re-derived; and the two shapes that must *not* adopt do not.
+    /// Three names, not two, because what is pinned is a split: an entry with
+    /// a cross-engine typing adopts, a same-engine entry does not (mini's own
+    /// table is authoritative for mini's writes), and a carrier without a
+    /// typing does not (the store carries claims, and a bare term claims
+    /// nothing a use could consume).
+    ///
+    /// Names come from a parsed export, because only an export-file name has
+    /// a joint key — which is itself part of what this pins: `Name::simple`
+    /// names live in the scratch arena and cannot cross.
+    #[test]
+    fn a_foreign_store_entry_is_adopted_on_miss() {
+        use nanoda_lib::const_store::{Engine, Slot};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("vendor/arena-tests/good/tutorial/034_boolType.ndjson");
+        if corpus_absent(&path) {
+            return
+        }
+        let loaded = crate::convert::load_with(&path, crate::convert::LoadOptions::default())
+            .expect("034 loads");
+        let name_of = |s: &str| {
+            loaded
+                .decls
+                .iter()
+                .map(|d| d.name())
+                .find(|n| n.to_string() == s)
+                .unwrap_or_else(|| panic!("{s} is declared in 034"))
+        };
+        // The constructors are bundled into the `Inductive` declaration on
+        // this side, so their names are reached through the arena — the
+        // two-tier lookup resolves them to the export file's own pointers,
+        // which is what gives them joint keys.
+        let bool_n = name_of("Bool");
+        let true_n = Name(crate::arena::name_str(bool_n.0, "true"));
+        let false_n = Name(crate::arena::name_str(bool_n.0, "false"));
+        assert!(
+            crate::interp::joint_key(&(true_n, vec![])).is_some(),
+            "Bool.true resolves into the export file's arena"
+        );
+
+        let mut ip = Interp::over(nanoda_lib::tg::EnvCore::fresh());
+        let term = ip.sort(0);
+        let typing = crate::ev::Sealed::new(ip.sort_typing(0).expect("⊢ U₀ ∈ U₁"))
+            .expect("unconditional");
+        let publish = |ip: &Interp, n: &Name, eng, typing: Option<crate::ev::Sealed>| {
+            let jk = crate::interp::joint_key(&(*n, vec![])).expect("an export name has a key");
+            ip.core().consts().borrow_mut().publish(&jk, &n.to_string(), eng, ip.sort(0), typing, None);
+            jk
+        };
+        // The atom that adopts, and the two that must not.
+        let jk = publish(&ip, &bool_n, Engine::Checker, Some(typing.clone()));
+        publish(&ip, &true_n, Engine::Mini, Some(typing.clone()));
+        publish(&ip, &false_n, Engine::Checker, None);
+
+        let env = Environment::empty();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let (t, ev) = c.const_evidence(&bool_n, &[]);
+        assert_eq!(t.as_ref(), Some(&term), "the foreign carrier is adopted, not re-minted");
+        assert!(matches!(ev, Ev::Proved(_)), "the foreign typing crossed: {ev:?}");
+        let (t2, ev2) = c.const_evidence(&true_n, &[]);
+        assert!(
+            t2.is_none() && !ev2.is_proved(),
+            "a same-engine entry must not adopt — mini's table is authoritative for mini"
+        );
+        let (t3, ev3) = c.const_evidence(&false_n, &[]);
+        assert!(t3.is_none() && !ev3.is_proved(), "a typing-less carrier must not adopt");
+        drop(c);
+        assert!(ip.get_const(&(bool_n, vec![])).is_some(), "adoption fills mini's own table");
+        assert!(
+            ip.core().consts().borrow().stats.adopted.contains(&(jk, Slot::Typing, Engine::Mini)),
+            "the crossing is on the ledger"
+        );
+    }
+
+    // SKIP is not PASS — `ci/skip-guard.rs`'s contract, restated here because
+    // `#[path]` cannot reach out of an inline test module (the synthesized
+    // `kernel/tests/` directory does not exist on disk): under
+    // `NANODATG_REQUIRE_CORPUS=1` an absent corpus is a failure, never an
+    // `ok`-reporting skip.
+    fn corpus_absent(p: &std::path::Path) -> bool {
+        if p.exists() {
+            return false
+        }
+        let required = std::env::var_os("NANODATG_REQUIRE_CORPUS")
+            .is_some_and(|v| !v.is_empty() && v != "0");
+        assert!(!required, "NANODATG_REQUIRE_CORPUS=1, but the corpus is absent: {}", p.display());
+        eprintln!("SKIP: {} absent. This test ran nothing.", p.display());
+        true
     }
 }

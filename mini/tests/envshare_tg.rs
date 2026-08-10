@@ -88,6 +88,137 @@ fn one_core_serves_both_engines_mini_then_checker() {
     assert!(Rc::ptr_eq(&mc, &mm), "one machine on both sides of the seam");
 }
 
+/// Both engines over one core and one export, mini first; the shared
+/// constant store's crossing report handed back for pinning.
+fn cross_report(file: &str) -> Option<String> {
+    let export = corpus().join(file);
+    if skip_guard::absent(&export) {
+        return None
+    }
+    let core = EnvCore::fresh();
+    let (out, _ip) = mini::run::check_file_with_interp(
+        &export,
+        mini::run::Options::default(),
+        Interp::over(core.clone()),
+    );
+    assert!(out.verdict.is_accepted(), "mini accepts {file}: {:?}", out.verdict);
+    nanoda_lib::tg::install_shared_core(core.clone());
+    run_checker(&export);
+    let report = core.consts().borrow().report();
+    eprintln!("{report}");
+    Some(report)
+}
+
+/// One `k=v` field of a `cross` report row.
+fn field(report: &str, k: &str) -> u64 {
+    report
+        .split('\t')
+        .skip(1)
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(key, _)| *key == k)
+        .unwrap_or_else(|| panic!("{k} missing from:\n{report}"))
+        .1
+        .parse()
+        .expect("a number")
+}
+
+/// **The B4 crossing, measured and pinned — the adopting file** (ENV-UNIFY.md
+/// §3.4 items 3, 5, 6). `012_levelComp1` is one definition whose body both
+/// dispatches interpret to the same term, so mini's defining equation is the
+/// one the checker adopts: one mini entry, no checker entry beside it
+/// (`converged`, not `divergent`), one crossed certificate.
+///
+/// The exact numbers are the point: `adoptedByCheckerDefeq = 1` goes red if
+/// the statement guard in `const_abbrev` is loosened (more would cross,
+/// wrongly labelled) *or* if the crossing regresses to 0.
+#[test]
+fn a_defining_equation_crosses_from_mini_to_checker() {
+    let Some(r) = cross_report("good/tutorial/012_levelComp1.ndjson") else { return };
+    assert_eq!(field(&r, "miniEntries"), 1, "{r}");
+    assert_eq!(field(&r, "checkerEntries"), 0, "the checker minted beside mini's carrier:\n{r}");
+    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 1, "the crossing moved:\n{r}");
+    assert_eq!(field(&r, "converged"), 1, "{r}");
+    assert_eq!(field(&r, "divergent"), 0, "{r}");
+    assert_eq!(field(&r, "alias"), 0, "a NameKey meant two different names:\n{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "a certificate not about its carrier:\n{r}");
+}
+
+/// **The B4 crossing, measured and pinned — the declining file.** On
+/// `034_boolType` (inductive-only) the two engines' carriers genuinely
+/// differ, so nothing may cross: the checker consults mini's three typings
+/// (`Bool`, its recursor spine) and the statement guard refuses each. The
+/// declines being *counted* — rather than the entries being trusted — is the
+/// adopt-and-check discipline itself, so `adopted* = 0` here is as load-
+/// bearing as `adopted = 1` is in the fixture above; it goes red if the
+/// typing guard in `has_type_const`/`ty_const` is loosened.
+#[test]
+fn a_mismatched_typing_is_declined_not_adopted() {
+    let Some(r) = cross_report("good/tutorial/034_boolType.ndjson") else { return };
+    assert_eq!(field(&r, "miniEntries"), 6, "{r}");
+    assert_eq!(field(&r, "adoptedByCheckerTyping"), 0, "a typing crossed unguarded:\n{r}");
+    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 0, "{r}");
+    assert_eq!(field(&r, "declinedByCheckerTyping"), 3, "the declined population moved:\n{r}");
+    assert_eq!(field(&r, "alias"), 0, "{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "{r}");
+}
+
+/// **The B4 measurement across the whole tutorial corpus** — one process,
+/// one thread per export (an `EnvCore` is `!Send`, so each file's core lives
+/// and dies on its own thread), mini first and the checker second over one
+/// core, the crossing ledgers summed. `#[ignore]`d: this is the measurement
+/// run behind ENV-UNIFY.md B4's numbers, minutes of work the default suite
+/// does not owe; `cargo test … cross_sweep_tutorial -- --ignored --nocapture`
+/// reproduces it.
+#[test]
+#[ignore]
+fn cross_sweep_tutorial() {
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("corpus dir")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "ndjson"))
+        .collect();
+    files.sort();
+    let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
+    for f in files {
+        let name = f.file_stem().unwrap().to_string_lossy().to_string();
+        let report = std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                let core = EnvCore::fresh();
+                let (out, _ip) = mini::run::check_file_with_interp(
+                    &f,
+                    mini::run::Options::default(),
+                    Interp::over(core.clone()),
+                );
+                if !out.verdict.is_accepted() {
+                    return format!("skip\tfile={name}\tverdict=declined")
+                }
+                nanoda_lib::tg::install_shared_core(core.clone());
+                run_checker(&f);
+                let r = core.consts().borrow().report();
+                format!("{r}\tfile={name}")
+            })
+            .expect("spawn")
+            .join()
+            .expect("file thread");
+        eprintln!("{report}");
+        if report.starts_with("cross\t") {
+            for kv in report.split('\t').skip(1) {
+                let (k, v) = kv.split_once('=').expect("k=v");
+                if let Ok(n) = v.parse::<u64>() {
+                    *totals.entry(k.to_string()).or_default() += n;
+                }
+            }
+        }
+    }
+    let row: Vec<String> = totals.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    eprintln!("crossTotal\t{}", row.join("\t"));
+}
+
 /// The same, checker first — the seam is order-independent: installing the
 /// core before either engine has minted anything and running mini into the
 /// signature the checker grew is the routing driver's other half-step.

@@ -60,6 +60,19 @@ use crate::expr::Name;
 /// A constant at one ground instantiation.
 pub type ConstKey = (Name, Vec<u32>);
 
+/// The joint cross-engine key for `(name, σ)` (ENV-UNIFY.md B3): the export
+/// file's stable index for the name, and the levels — all ground on this
+/// side, which is the arm of `LevelKey` the checker's keys meet on. `None`
+/// when the name lives outside the installed export file's arena; such a
+/// constant has no per-run-stable identity and stays mini-local.
+pub fn joint_key(key: &ConstKey) -> Option<nanoda_lib::const_store::ConstKey> {
+    let nk = nanoda_lib::tg::export_name_key(key.0 .0)?;
+    Some((
+        nk,
+        key.1.iter().map(|&n| nanoda_lib::const_store::LevelKey::Ground(n)).collect(),
+    ))
+}
+
 /// What the store holds for `⟦c.{σ}⟧`.
 #[derive(Debug, Clone)]
 pub struct ConstInterp {
@@ -2883,12 +2896,30 @@ impl Interp {
 
     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }
 
+    /// Insert `⟦c.{σ}⟧` — and **publish it to the shared cross-engine store**
+    /// (ENV-UNIFY.md B4): the carrier, its sealed typing if it has one, and
+    /// its defining equation, under the joint key, tagged as mini's. The
+    /// local table stays authoritative for mini's own reads; the publication
+    /// is what lets the checker's `const_abbrev`/typing lookups adopt these
+    /// certificates behind their own statement guards. A gapped typing
+    /// publishes as no typing — the store carries claims, never absences.
     pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) {
         if crate::blocker::is_armed() || self.labels_on {
             let (name, sigma) = &key;
             let s: Vec<String> = sigma.iter().map(u32::to_string).collect();
             let t = c.term.clone();
             self.set_label(&t, format!("⟦{name}.{{{}}}⟧", s.join(",")));
+        }
+        if let Some(jk) = joint_key(&key) {
+            let sp = key.0.to_string();
+            self.core.consts().borrow_mut().publish(
+                &jk,
+                &sp,
+                nanoda_lib::const_store::Engine::Mini,
+                c.term.clone(),
+                c.typing.as_ref().ok().cloned(),
+                c.defeq.clone(),
+            );
         }
         self.consts.insert(key, c);
     }
