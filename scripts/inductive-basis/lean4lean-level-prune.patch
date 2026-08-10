@@ -1,0 +1,141 @@
+diff --git a/Lean4Lean/Level.lean b/Lean4Lean/Level.lean
+index ea798f7..c81d8e2 100644
+--- a/Lean4Lean/Level.lean
++++ b/Lean4Lean/Level.lean
+@@ -152,6 +152,56 @@ def NormLevel.subsumption (acc : NormLevel) (paths := false) : NormLevel :=
+ def normalize (l : Level) (paths := false) : NormLevel :=
+   Normalize.normalizeAux l [] 0 (.insert {} [] default) |>.subsumption paths
+ 
++/-!
++### ===================================================================== ###
++### NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM, DO NOT PUSH         ###
++### ===================================================================== ###
++
++This block, and the `isEquiv'`/`geq'` block at the end of the file, are a
++**local experimental patch carried for nanodatg's `modelgen`**.  They are not
++part of lean4lean and have not been upstreamed.
++
++What it repairs: `Normalize.normalize` builds a `NormLevel`, a map from
++variable lists to `Node`s.  The root key `[]` is seeded with `default`, and
++`subsumption` empties (rather than erases) nodes it has fully subsumed — it
++sets `const := 0` and can drain `var` to `[]`.  A `vs => { const := 0,
++var := [] }` entry contributes `0` to the level, i.e. carries no information,
++but `instBEqNormLevel` compares maps entry-by-entry and so treats such an
++entry as distinguishing.  `imax` paths are what create these keys, so the
++observable symptom is that an `imax` is not absorbed into a `max` that
++dominates it — for instance
++    max 1 (imax (imax u v) v) (max 1 u v)   vs   max 1 u v
++which are equal at every assignment.  That is exactly the level identity
++`modelgen` needs for the `BoxF` carrier, and it is the reason the planner
++declines that shape.
++
++`NormLevel.prune` drops the information-free entries, and `isEquiv'`/`geq'`
++below both go through it.  `normalize'` deliberately does NOT: with
++`paths := true` the map must satisfy the invariant that every suffix of a
++`path` is present as a key, and `toTree`/`buildPaths` rely on it.
++
++Standing: lean4lean itself documents this path as experimental and incomplete
++in `divergences.md` — "an experimental new algorithm … intended to be complete
++for level algebra … currently known to be incomplete in cases where Lean's
++algorithm is not", with the plan of record being to verify Lean's original
++algorithm instead.  This patch is a measurement on a handful of level pairs,
++NOT a completeness proof, and it is NOT a licence for `modelgen` to emit a
++proof Lean's own kernel rejects.
++
++The stock definitions are preserved beside the patched ones as
++`isEquiv'Stock` and `geq'Stock`, so one binary can measure both.
++-/
++
++/-- A node that contributes nothing: `max` of the constant `0` and no
++variables.  See the NANODATG patch note above. -/
++def Node.isTrivial (n : Node) : Bool := n.const == 0 && n.var.isEmpty
++
++/-- Drop the information-free entries of a normal form.  See the NANODATG
++patch note above.  Not sound to use where the suffix-closure invariant on
++`path` is needed (i.e. before `toTree`). -/
++def NormLevel.prune (acc : NormLevel) : NormLevel :=
++  Std.TreeMap.filter (fun _ n => !n.isTrivial) acc
++
+ def leVars : List VarNode → List VarNode → Bool
+   | [], _ => true
+   | _, [] => false
+@@ -243,11 +293,31 @@ end Normalize
+ 
+ def normalize' (l : Level) : Level := (Normalize.normalize l (paths := true)).toTree.reify
+ 
+-def isEquiv' (u v : Level) : Bool := u == v || Normalize.normalize u == Normalize.normalize v
++/-- NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM.  lean4lean's stock
++`isEquiv'`, preserved for measurement.  See the patch note above
++`Normalize.NormLevel.prune`. -/
++def isEquiv'Stock (u v : Level) : Bool := u == v || Normalize.normalize u == Normalize.normalize v
++
++/-- NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM.  `isEquiv'Stock`, but
++comparing pruned normal forms, so that information-free `NormLevel` entries
++left behind by `imax` paths do not block the comparison.  See the patch note
++above `Normalize.NormLevel.prune`. -/
++def isEquiv' (u v : Level) : Bool :=
++  u == v || (Normalize.normalize u).prune == (Normalize.normalize v).prune
+ 
+ def isEquivList : List Level → List Level → Bool := List.all2 isEquiv'
+ 
+-def geq' (u v : Level) : Bool := (Normalize.normalize v).le (Normalize.normalize u)
++/-- NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM.  lean4lean's stock
++`geq'`, preserved for measurement. -/
++def geq'Stock (u v : Level) : Bool := (Normalize.normalize v).le (Normalize.normalize u)
++
++/-- NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM.  `geq'Stock` routed
++through `NormLevel.prune`, for uniformity with `isEquiv'`.  `NormLevel.le`
++already skips information-free entries on both sides, so this is expected to
++agree with `geq'Stock` everywhere; see the patch note above
++`Normalize.NormLevel.prune`. -/
++def geq' (u v : Level) : Bool :=
++  (Normalize.normalize v).prune.le (Normalize.normalize u).prune
+ 
+ -- local elab "normalize " l:level : command => do
+ --   Elab.Command.runTermElabM fun _ => do
+diff --git a/Lean4Lean/Verify/Level.lean b/Lean4Lean/Verify/Level.lean
+index df08aa3..4e99db9 100644
+--- a/Lean4Lean/Verify/Level.lean
++++ b/Lean4Lean/Verify/Level.lean
+@@ -573,6 +573,30 @@ theorem NormLevel.eval_congr {a b : NormLevel} (H : a == b) : a.eval ls ρ = b.e
+   · exact Node.eval_congr h2 ▸ Nat.le_max_right ..
+   · exact Nat.le_trans (ih H) (Nat.le_max_left ..)
+ 
++/-! ### NANODATG LOCAL EXPERIMENTAL PATCH — NOT UPSTREAM.
++`Lean4Lean/Level.lean` routes `isEquiv'` and `geq'` through
++`Normalize.NormLevel.prune`; see the patch note there.  These two lemmas carry
++`isEquiv'_wf` across that change: a pruned entry has `const = 0` and no
++variables, hence evaluates to `0`, hence pruning does not change
++`NormLevel.eval`.  This makes the *soundness* of the patched `isEquiv'` as
++verified as the stock one was; it says nothing about completeness. -/
++
++theorem Node.eval_of_isTrivial {l : Node} (h : l.isTrivial) : Node.eval ls ρ l = 0 := by
++  simp [Node.isTrivial] at h
++  simp [Node.eval, h.1, h.2]
++
++theorem NormLevel.get?_prune {l : NormLevel} {a : List Name} {b : Node} :
++    (NormLevel.prune l).get? a = some b ↔ l.get? a = some b ∧ b.isTrivial = false := by
++  simp [NormLevel.prune, Option.filter_eq_some_iff]
++
++theorem NormLevel.prune_eval {l : NormLevel} :
++    (NormLevel.prune l).eval ls ρ = l.eval ls ρ := by
++  refine Nat.le_antisymm (eval_le.2 fun a b h => ?_) (eval_le.2 fun a b h => ?_)
++  · exact eval_le.1 (Nat.le_refl _) a b (get?_prune.1 h).1
++  · by_cases hb : b.isTrivial
++    · simp [Node.eval_of_isTrivial hb, evalPath]
++    · exact eval_le.1 (Nat.le_refl _) a b (get?_prune.2 ⟨h, by simpa using hb⟩)
++
+ end Normalize
+ 
+ theorem isEquiv'_wf (h : isEquiv' u v)
+@@ -580,7 +604,9 @@ theorem isEquiv'_wf (h : isEquiv' u v)
+   simp [isEquiv'] at h; obtain rfl | h := h
+   · cases hu.symm.trans hv; rfl
+   refine VLevel.equiv_def.2 fun ls' => ?_
+-  rw [← Normalize.normalize_eval hu, ← Normalize.normalize_eval hv]
++  rw [← Normalize.normalize_eval hu, ← Normalize.normalize_eval hv,
++    ← Normalize.NormLevel.prune_eval (l := Normalize.normalize u),
++    ← Normalize.NormLevel.prune_eval (l := Normalize.normalize v)]
+   exact Normalize.NormLevel.eval_congr h
+ 
+ theorem isEquivList_wf (H : Level.isEquivList us vs) :

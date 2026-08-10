@@ -87,8 +87,8 @@ interface names, no internal declarations at all, every ι theorem `Eq.refl`.
 (p : Prop) : Sort u` is: it is the one basis type former that reaches a bare
 variable sort and can be *empty*, which is what makes `PEmpty` modellable and
 retires the `False`-Π pad that used to cost a `funext`. `MODELGEN.md` §8
-carries the construction, its measured coverage (119 of `init-prelude`'s 125
-simple inductives; every decline with a printed reason), its cost (+24 %
+carries the construction, its measured coverage (121 of `init-prelude`'s 125
+simple inductives; every decline with a printed reason), its cost (+26 %
 instructions there), and §8.6 the lean4lean cross-check on the one decline
 that is a level-arithmetic gap rather than a type error.
 
@@ -233,10 +233,12 @@ and **every refusal path has a fixture**. Three shapes remain that *Lean
 itself* rejects, recorded with the error Lean gives. `--prim-models` is
 narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
 paths have fixtures too (`tests/prim_declines.lean`). What it declines today:
-recursive or indexed carriers at a **never-zero** sort, indexed or recursive
+**branching** recursion (a constructor with two recursive fields, or one under
+a binder), indexed carriers at a **never-zero** sort, indexed or recursive
 **subsingletons**, indices or recursion at a maybe-zero sort, and one
 level-arithmetic gap. Indexed and recursive small-eliminating `Prop`s model,
-and so does the whole maybe-zero class. Every remaining decline names a
+the whole maybe-zero class models, and so does *linear* recursion at a
+never-zero sort — `List` and `Lean.Name` by tuple towers, every ι `Eq.refl`. Every remaining decline names a
 compiled prototype under `scripts/inductive-basis/` that would close it.
 
 On Mathlib (5.6 GB export, 670,630 declarations):

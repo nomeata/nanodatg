@@ -2545,12 +2545,12 @@ recursive field *followed* by a non-recursive one.
 
 `vendor/arena-tests/good/init-prelude.ndjson` has 126 inductive types. One
 (`Lean.Syntax`) is nested and is §1's business. Of the 125 simple ones,
-**119 model and 6 decline**, each decline with its printed reason:
+**121 model and 4 decline**, each decline with its printed reason:
 
 | declined | count | reason |
 |---|---|---|
 | `Eq`, `Nat` | 2 | the basis itself — the exemption that makes the construction well-founded |
-| `List`, `Lean.Name`, `Lean.ParserDescr` | 3 | recursive `Type`-valued — the carrier needs the tuple-tower construction for linear recursion (`scripts/inductive-basis/LinearRec.lean`, compiled) or W/path in general (§8.4) |
+| `Lean.ParserDescr` | 1 | a **branching** recursive constructor (`binary`, `sepBy`, `sepBy1` each take two `ParserDescr`s) — the tuple tower's spine is one `Nat`, so this needs W/path (§8.4) |
 | `HEq` | 1 | an indexed **subsingleton** — the packed-index-equation model, INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case, compiled as `HEq'` in `scripts/inductive-basis/PropArms.lean` |
 
 plus, on the composed side, `Lean.Syntax._model.0._model.aux` — indexed at a
@@ -2574,6 +2574,11 @@ Four of those ten are now models:
   needing thesis §5.2. They do not: they are small-eliminating `Prop`s, and
   the Church encoding carries indices by quantifying `C` over the index
   telescope. What they *did* need is the strong-induction fold (§8.1).
+* **`List`** and **`Lean.Name`** were recorded as needing W. They do not
+  either: both are *linearly* recursive, and the tuple tower (§8.1, §8.4)
+  models them with every ι rule `Eq.refl` and no axiom. `Lean.ParserDescr` is
+  the one that genuinely branches, and it is the only member of that class
+  left.
 
 `PUnit` models on the maybe-zero route, `PULift` on a `PULiftP ⊤` pad, and
 `Trans` on a boxed field.
@@ -2581,10 +2586,10 @@ Four of those ten are now models:
 ### The three oracles
 
 Every generated declaration goes through `Environment.addDeclCore` with
-checking on. §4's statement oracle runs on all of it: **271 statements
+checking on. §4's statement oracle runs on all of it: **278 statements
 compared against the installed recursors' own rules, 0 differ**. Replaying
 the whole output export from bytes, through `addDeclCore` with checking on,
-accepts **2326 declarations and rejects 0** — `modelgen/EnvProbe.lean` mode
+accepts **2340 declarations and rejects 0** — `modelgen/EnvProbe.lean` mode
 `C`, which is new; mode `A` deliberately swallows rejections because it is
 asking about visibility, and nothing in the tree counted them before.
 
@@ -2619,6 +2624,8 @@ different fixture could not:
 | fields and induction hypotheses handed to the minor in the wrong order | `Le3` | `IdxP` — no recursive field, so the two orders are the same array |
 | Pair premises handed to the fold in reverse constructor order | `IdxP`, `Le3` | `Tor` — three constructors but no indices and no recursion, so it takes the plain-fold path |
 | ι stated at reversed index arguments | `Le3.below`, `Nat.le.below` | `Le3`, `IdxP` — one index cannot distinguish an index ordering |
+| every step constructor given tag 0 (a non-injective tag collision) | `MNm`, `Weave` | `Lst` — one step constructor, so a collision is a no-op |
+| the step constructor storing the predecessor's spine, not its successor | `Lst`, `MNm`, `Weave` | — |
 
 The third is the two-atoms lesson one dimension up, and it is why the
 fixture needs a two-index family. Note also that on the Church routes ι is
@@ -2698,12 +2705,14 @@ with zero real tags being the constant family rather than a `Nat.rec`, which
 would otherwise stick on the bound tag. It genuinely cannot express a
 constructor with **two** recursive fields — the spine is a single `Nat` and
 `⟨r.1 + 1, …⟩` has one predecessor to take — so `Lean.ParserDescr` (whose
-`binary`, `sepBy` and `sepBy1` branch) stays with plan B. That arm is
-compiled and **not wired up**; wiring it is the named continuation for
-`List` and `Lean.Name`.
+`binary`, `sepBy` and `sepBy1` branch) stays with plan B. That arm **is now wired up**: `List`
+and `Lean.Name` model, `recSlotOf` declines the two shapes the tower cannot
+express by name, and `prim_declines.lean`'s `Branch` and `Binder` hold both
+refusal paths open.
 
 Three classes remain declined, each with a compiled prototype naming the
-construction: recursive `Type`-valued (above); an indexed **subsingleton**
+construction: **branching** recursion at a never-zero sort (above); an
+indexed **subsingleton**
 (`HEq` — the packed-index-equation model, `PropArms.lean`'s `HEq'`, one
 `Eq.rec` at a `PSigma`-packed index telescope, ι by `rfl`, resting on
 `PSigma` structure eta); and a recursive subsingleton (`AccPhi.lean`, which
@@ -2722,14 +2731,14 @@ cross-checks it against lean4lean.
 | | instructions | output bytes |
 |---|---|---|
 | `modelgen` (layers 1+2) | 2.567 × 10⁹ | 3,857,568 |
-| `modelgen --prim-models` | 3.183 × 10⁹ | 4,716,327 |
+| `modelgen --prim-models` | 3.232 × 10⁹ | 4,770,946 |
 
-**+24.0 % instructions and +22.3 % output bytes for 120 models** (119 input
-inductives and one composed tag) — about 5.1 × 10⁶ instructions per model.
-Against the previous tranche's 3.164 × 10⁹ for 116 models this is **+0.6 %
-for four more models**, which is the honest shape of the change: the new arms
-are the same order of work per declaration as the old ones, and nothing in
-the common path got slower. Reproduce with:
+**+25.9 % instructions and +23.7 % output bytes for 122 models** (121 input
+inductives and one composed tag) — about 5.5 × 10⁶ instructions per model.
+Against the tranche that first landed layer 3 (3.164 × 10⁹ for 116 models)
+this is **+2.2 % for six more models**, which is the honest shape of the
+change: the new arms cost the same order of work per declaration as the old
+ones, and nothing in the common path got slower. Reproduce with:
 
 ```bash
 cd modelgen && lake build
@@ -2818,7 +2827,80 @@ Two further findings, both from reading lean4lean's own notes and source:
   and it is offered upstream-shaped rather than as something this repository
   depends on.
 
-Nothing in `modelgen` requires the better algorithm today: the population it
-would rescue on our corpus is **empty** (`init-prelude` has no `BoxF`-shaped
-declaration; the fixture is designed). What the cross-check settles is that
-the sixth item is a real gap and which side of it lean4lean is on.
+### The repair, applied and measured
+
+The repair was applied locally — `vendor-l4l/nanodatg-level-prune.patch`,
+against `3dc52e0`, marked unmistakably as a nanodatg-local experimental delta
+and not upstreamed, with the stock predicates preserved beside the patched
+ones as `isEquiv'Stock`/`geq'Stock` so one binary measures both. It adds
+`NormLevel.prune`, which drops entries whose node is `const = 0` with no
+variables, and routes `isEquiv'` and `geq'` through it. `normalize'` is
+deliberately *not* routed through it: with `paths := true` the map must be
+suffix-closed and `toTree` depends on that.
+
+Patching `isEquiv'` breaks lean4lean's own soundness theorem `isEquiv'_wf`,
+so the patch carries it across rather than deleting it: a pruned entry
+evaluates to `0`, so pruning does not change `NormLevel.eval`, and the
+patched predicate is **as verified as the stock one was**. No new `sorry`.
+(The pre-existing `subsumption_eval` sorry sits underneath both.)
+
+With the patch, the survey's `l4lPatch` column agrees with `sem` on **every**
+row: it closes four pairs stock lean4lean rejects — including both `BoxF` pad
+candidates — and leaves all three semantically-false rows false. A 33,670-pair
+fuzz (depth-4 random levels, three variables, oracle = every assignment in
+0..4) found **0 disagreements with the semantic oracle** for the patched
+predicate, against 415 for Lean and 370 for stock lean4lean, and **0**
+claims-true-but-semantically-false for any of the three. `geq'` behaviour is
+unchanged. That is a measurement on ~34k pairs against a bounded oracle,
+**not a completeness proof**, and it is worth saying twice.
+
+### The declaration, through all three kernels
+
+The faithful thing was measured, not a proxy: `PULiftP` added as a raw
+inductive (both kernels accept it — the maybe-zero resultant sort is an
+*elaborator* refusal, not a kernel one), then the actual model carrier
+
+```lean
+def BoxF_model_self.{u,v} (α : Sort u) (β : Sort v) : Sort (max 1 u v) :=
+  PSigma (fun _ : ((α → β) → β) => PULiftP.{max 1 u v} CTrue)
+```
+
+| checker | verdict |
+|---|---|
+| Lean's kernel | **reject** — `declaration type mismatch … has type … Sort (max (max 1 (imax (imax u v) v)) 1 u v) but it is expected to have type … Sort (max 1 u v)` |
+| stock lean4lean (`3dc52e0`) | **reject** — byte-identical message |
+| patched lean4lean | **accept** |
+
+So, precisely: **the `BoxF` carrier is accepted by a locally repaired level
+checker and rejected by Lean's normaliser and by stock lean4lean.** That is a
+result about the level algorithm. It is **not** a licence to emit: the
+contract is that a proof Lean's kernel rejects is a decline, never an
+emission, so `BoxF` **remains a decline** and `prim_declines.lean` still
+pins it.
+
+Nothing in `modelgen` requires the better algorithm today, and coverage does
+not move: `init-prelude` contains no `BoxF`-shaped declaration — the fixture
+is designed, precisely to hold this refusal path open. What the cross-check
+settles is that the sixth item is a real gap, which side of it lean4lean is
+on, and that one prune closes it on everything measured.
+
+### Two caveats, both load-bearing
+
+* **The version gap was checked by diff, not by rebuild.** The clone's
+  `origin/master` (`1a16b72`) is 24 commits ahead of the pinned `3dc52e0`,
+  and includes `#22` "use the standard library level operations" and `#23`
+  "Verify the standard library universe level operations". `Lean4Lean/
+  Level.lean` differs across that gap by exactly three things — a docstring,
+  an `@[reducible]`, and `isEquivList` switching *away* from `isEquiv'` to
+  the stock `isEquiv` — and the `Normalize` namespace (`normalize`, `Node`,
+  `NormLevel`, `isEquiv'`, `geq'`) is **byte-identical**. So the survey's
+  rows cannot move across the gap; the function under test is the same
+  function. `origin/master` needs `v4.33.0-rc2`, which is not installed, so
+  it was not rebuilt.
+* **lean4lean's own replay tool could not be run.** `lake exe lean4lean Init`
+  segfaults on this clone — *before* the patch as well as after, confirmed by
+  reverting to stock and reproducing — most plausibly because the clone's
+  `lean-toolchain` was retargeted from upstream's to our `v4.29.1`. So `lake
+  build` (150 jobs, clean) and the re-proved soundness lemma are the whole of
+  the sanity check; nothing exercised the patched checker over a large real
+  corpus. This is the weakest link in §8.6 and it is not hidden.

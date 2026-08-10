@@ -2,8 +2,11 @@
    decline path of `Modelgen/Simple.lean`, each asserting the refusal and
    its printed reason:
 
-   * `Lst` — **recursive, `Type`-valued**: the carrier needs the W/path
-     construction (plan B), which is not implemented.
+   * `Branch` — a **branching** recursive constructor (two recursive
+     fields): the tuple tower's spine is one `Nat` and a constructor takes
+     one predecessor, so this needs the W/path construction (plan B).
+   * `Binder` — a recursive occurrence **under a binder**, which is the
+     infinitely-branching case and the same boundary from the other side.
    * `Inf` — **recursive proposition**: the Church induction derivation is
      not implemented.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
@@ -35,10 +38,6 @@ unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
 unsafe axiom lcVoid : Type
 
-inductive Lst (α : Type u) : Type u where
-  | nil : Lst α
-  | cons : α → Lst α → Lst α
-
 inductive Inf : Prop where
   | mk : Inf → Inf
 
@@ -48,6 +47,14 @@ inductive P : Type where
 
 inductive Idx : P → Prop where
   | mk : Idx P.one
+
+inductive Branch : Type where
+  | leaf : Branch
+  | node : Branch → Branch → Branch
+
+inductive Binder : Type where
+  | tip : Binder
+  | lim : (P → Binder) → Binder
 
 inductive BoxF (α : Sort u) (β : Sort v) : Sort (max 1 u v) where
   | mk : ((α → β) → β) → BoxF α β

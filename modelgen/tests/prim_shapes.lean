@@ -58,6 +58,19 @@
    * `UL` — `PULift`'s shape: a carrier raised by a level (`r`) no field
      reaches, whose pad level is not `dsingOk` — the `PULiftP ⊤` pad,
      discharged by transport in the destructor.
+   * `Lst` — the linear-recursion tower at its simplest: one base
+     constructor with no fields, one step constructor with the recursive
+     field **last**, level-polymorphic.
+   * `MNm` — `Lean.Name`'s shape: no parameters, **three** constructors, the
+     recursive field **first**, two step tags with different payloads.
+   * `Weave` — the shape that pins the base/step split and the tag map,
+     which neither of the other two can: four constructors in the
+     **interleaved** order base, step, base, step, so the export index → 
+     (tower, tag) map is not "all bases first"; a step constructor with
+     fields **both before and after** the recursive one; a `Prop` field in a
+     base chain, so the pad is doing real work. `s0` and `s1` are given the
+     *same* telescope deliberately — that is what lets a non-injective tag
+     collision typecheck and therefore be caught only by an ι rule.
    * `TrL` — `Trans`'s shape: a Π-typed field at an **imax** level, stored
      **boxed** (codomain wrapped `Σ'(_ : S), D 1`) so the level collapses
      to the carrier's never-zero `max`; the recursor unboxes by projection
@@ -146,3 +159,18 @@ inductive UL (α : Sort s) : Sort (max s r 1) where
 
 inductive TrL (α : Sort u) (r : α → α → Sort v) : Sort (max 1 u v) where
   | mk : ((a b : α) → r a b) → TrL α r
+
+inductive Lst (α : Type u) : Type u where
+  | nil : Lst α
+  | cons : α → Lst α → Lst α
+
+inductive MNm : Type where
+  | anon : MNm
+  | str : MNm → Tri → MNm
+  | num : MNm → Opt Tri → MNm
+
+inductive Weave (α : Type u) (p : Prop) : Type u where
+  | b0 : Weave α p
+  | s0 : α → Weave α p → p → Weave α p
+  | b1 : α → p → Weave α p
+  | s1 : α → Weave α p → p → Weave α p

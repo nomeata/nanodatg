@@ -289,6 +289,20 @@ def psigmaMk (u v : Level) (α β fst snd : Expr) : Expr :=
 def psigmaRec (s u v : Level) (α β motive m t : Expr) : Expr :=
   mkAppN (.const `PSigma.rec [s, u, v]) #[α, β, motive, m, t]
 
+/-- `PSigma.fst`, as a `PSigma.rec`. Structure eta makes `⟨fst y, snd y⟩ ≡ y`
+for a neutral `y`, which is what lets a tuple be taken apart and put back
+together with no transport. -/
+def psigmaFst (u v : Level) (α β y : Expr) : Expr :=
+  psigmaRec u u v α β (.lam `p (psigmaT u v α β) α .default)
+    (.lam `a α (.lam `b (Expr.app β (.bvar 0)).headBeta (.bvar 1) .default) .default) y
+
+/-- `PSigma.snd`, at the motive `fun z => β (fst z)`. -/
+def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
+  let motive := Expr.lam `p (psigmaT u v α β)
+    (Expr.app β (psigmaFst u v α β (.bvar 0))).headBeta .default
+  psigmaRec v u v α β motive
+    (.lam `a α (.lam `b (Expr.app β (.bvar 0)).headBeta (.bvar 0) .default) .default) y
+
 def natRec (s : Level) (motive z sc t : Expr) : Expr :=
   mkAppN (.const `Nat.rec [s]) #[motive, z, sc, t]
 
@@ -633,28 +647,29 @@ partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
 constructor `j`'s destructor and the successor case descends; past the last
 constructor the fibre is empty and [`Modelgen.emptyAtElim`] closes it. `scrut`
 is the level's own binder; the original tag is `succ^j scrut`. -/
-partial def stepTower (v w : Level) (eqi : EqInfo) (fib motive : Expr)
-    (minors : Array Expr) (cs : Array PCtor) (j : Nat) (scrut : Expr) : GenM Expr := do
+partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
+    (tgt : Expr → Expr) (minorOf : Nat → Array Expr → Expr)
+    (cs : Array PCtor) (j : Nat) (scrut : Expr) : GenM Expr := do
   let natT : Expr := .const `Nat []
   let mkAt := fun (tag tup : Expr) => psigmaMk (.succ .zero) w natT fib tag tup
   let mot ← withLocalDeclD `m natT fun m => do
     let tag := natSuccs j m
     withLocalDeclD `f (mkApp fib tag).headBeta fun f => do
-      mkLambdaFVars #[m] (← mkForallFVars #[f] (mkApp motive (mkAt tag f)))
+      mkLambdaFVars #[m] (← mkForallFVars #[f] (tgt (mkAt tag f)))
   let zc ← do
     let c := cs[j]!
     withLocalDeclD `f c.chain fun f => do
-      let target := fun (tup : Expr) => pure (mkApp motive (mkAt (natNumeral j) tup))
-      let minorAt := fun (vs : Array Expr) => mkAppN minors[j]! vs
+      let target := fun (tup : Expr) => pure (tgt (mkAt (natNumeral j) tup))
+      let minorAt := minorOf j
       mkLambdaFVars #[f] (← chainDestruct v eqi c.pad? c.boxed c.nf c.tele f id target minorAt)
   let sc ← withLocalDeclD `m natT fun m => do
     let inner ←
       if j + 1 == cs.size then
         let tag := natSuccs (j + 1) m
         withLocalDeclD `f (emptyAt w) fun f => do
-          mkLambdaFVars #[f] (← emptyAtElim eqi v w (mkApp motive (mkAt tag f)) f)
+          mkLambdaFVars #[f] (← emptyAtElim eqi v w (tgt (mkAt tag f)) f)
       else
-        stepTower v w eqi fib motive minors cs (j + 1) m
+        stepTower v w eqi fib tgt minorOf cs (j + 1) m
     withLocalDeclD `ih (mkApp mot m).headBeta fun ih =>
       mkLambdaFVars #[m, ih] inner
   return natRec (mkLevelIMax' w v).normalize mot zc sc scrut
@@ -734,6 +749,70 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
     -- safe exactly where it matters and irrelevant elsewhere.
     let (rest, acc') ← churchSwapAt tname np ni C (nf - 1) (b.instantiate1 xv) (acc.push fld)
     return (← mkForallFVars #[xv] rest, acc')
+
+/-! ## Linear recursion at a never-zero sort: the tuple tower
+
+`INDUCTIVE-BASIS.md` §3.4, compiled in `scripts/inductive-basis/LinearRec.lean`
+on three targets. A **linearly recursive** declaration is one whose every
+constructor has at most one recursive field, with that field not under a
+binder. Constructors then split into *base* (no recursive field) and *step*
+(exactly one), and the carrier is a spine-indexed tower:
+
+```text
+V 0       := Σ'(tag : Nat), Base_tag           -- a Nat.rec tag tower
+V (n+1)   := Σ'(tag : Nat), Step_tag (V n)     -- another, at the shorter spine
+T         := Σ'(n : Nat), V n
+
+base ctor c_j f⃗            := ⟨0,       ⟨bⱼ, chain f⃗⟩⟩
+step ctor c_j pre r post   := ⟨r.1 + 1, ⟨sⱼ, chain (pre, r.2, post)⟩⟩
+```
+
+`n` counts recursive depth, so the representation is unique and no carve is
+needed. The recursor is `PSigma.rec` on the outer pair, `Nat.rec` on the
+spine, the existing tag towers inside each level, and `PSigma.rec` down each
+chain — and **every ι rule is `Eq.refl`**, because at a step constructor the
+recursive argument is rebuilt as `⟨n, r.2⟩`, which structure eta makes
+definitionally `r`, and the induction hypothesis is the spine's own `Nat.rec`
+at `r.1` applied to `r.2`, which is the recursor at `r` for the same reason.
+No transport, no `funext`.
+
+What it cannot do is a constructor with **two** recursive fields: the spine is
+a single `Nat` and `⟨r.1 + 1, …⟩` has exactly one predecessor to take, so two
+sub-terms at spines `n₁` and `n₂` cannot both sit in one fibre `V n` unless
+the spine is generalised to a tree — which is the very inductive being built.
+That is plan B's territory, and `Lean.ParserDescr` lives there. -/
+
+/-- Which field of a constructor is the recursive one, if any. Declines the
+shapes the tower cannot express, each by name. -/
+def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr) :
+    GenM (Option Nat) := do
+  let mut cur := tele
+  let mut slot : Option Nat := none
+  for i in [0:nf] do
+    let .forallE _ d b _ := cur | badShape "field telescope shorter than its field count"
+    if mentionsAny #[tname] d then
+      if slot.isSome then
+        badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
+Nat and a constructor takes one predecessor, so a branching constructor needs the \
+W/path construction (plan B)"
+      unless d.getAppFn.isConstOf tname do
+        badShape s!"{cn} has a recursive field that is not a bare occurrence of \
+{tname} — under a binder, or nested, neither of which the tuple tower reaches"
+      slot := some i
+    cur := b
+  return slot
+
+/-- The constructor's field telescope with its recursive field's type replaced
+by the shorter spine's fibre `V n`. The recursive occurrence sits at `Sort w`
+either way, so the storage plan computed on the export's telescope is the
+plan for this one too. -/
+partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
+    GenM Expr := do
+  if nf == 0 then return tele
+  let .forallE x d b bi := tele | badShape "field telescope shorter than its field count"
+  let d' := if mentionsAny #[tname] d then Vn else d
+  withLocalDecl x bi d' fun xv => do
+    mkForallFVars #[xv] (← spineSwap tname Vn (nf - 1) (b.instantiate1 xv))
 
 /-- The same classification as [`Modelgen.churchSwapAt`] makes, without the
 rewrite — used where the *values* are built, since those are bound at the
@@ -941,10 +1020,9 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       badShape "an indexed family at a never-zero sort (the skeleton-plus-good \
         translation, thesis §5.2, is not implemented — the Church routes carry \
         indices, the Nat-tagged sum does not)"
-    if isRec then
-      badShape "a recursive Type-valued inductive (the carrier needs the tuple-tower \
-        construction for linear recursion, or W/path in general — not implemented; \
-        scripts/inductive-basis/LinearRec.lean compiles the linear arm)"
+    -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
+    -- declines the shapes it cannot express — a branching constructor, or a
+    -- recursive occurrence under a binder — by name, further down.
   | PrimRoute.bare =>
     if ni > 0 then
       badShape s!"an indexed family at Sort {w}: the lift carries the Church \
@@ -1026,10 +1104,60 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       withLocalDeclD `n natT fun n =>
         return (cs, ← mkLambdaFVars #[n] (← fibreTower w cs 0 n))
 
+    -- Which constructors carry the recursion, and where. Empty for a
+    -- non-recursive declaration, in which case everything below degenerates
+    -- to the single tag tower the previous tranche had.
+    let slots : Array (Option Nat) ← withParams fun ps =>
+      exportCtors.mapM fun (cn, cty) => do
+        let tele ← instForall cty ps
+        recSlotOf tname np cn (numForalls tele) tele
+    let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
+    let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
+    -- export constructor index ↦ its tag *within its own tower*
+    let tagOf : Array Nat := (Array.range nc).map fun j =>
+      let tower := if slots[j]!.isNone then baseJ else stepJ
+      (tower.findIdx? (· == j)).getD 0
+
+    -- The tag tower of a set of constructors, at a parameter scope. `sub` is
+    -- the shorter spine's fibre `V n`, which a step constructor's chain
+    -- stores in place of its recursive field; base constructors never look
+    -- at it.
+    let towerAt : Array Expr → Array Nat → Expr → GenM (Array PCtor × Expr) :=
+      fun ps js sub => do
+      let pads ← padsAt plans
+      let cs : Array PCtor ← js.mapM fun j => do
+        let (_, cty) := exportCtors[j]!
+        let tele0 ← instForall cty ps
+        let nf := numForalls tele0
+        let tele ← spineSwap tname sub nf tele0
+        let pl : CPlan := plans[j]!
+        let (chain, _) ← chainTy pads[j]! pl.boxed nf tele
+        pure { tele, nf, pad? := pads[j]!, boxed := pl.boxed, chain }
+      let fib ← withLocalDeclD `tag natT fun tg =>
+        do mkLambdaFVars #[tg] (← fibreTower w cs 0 tg)
+      return (cs, fib)
+
+    -- `V : Nat → Sort w`, the spine tower: base chains at spine 0, step
+    -- chains at every successor, with the predecessor's fibre plugged in.
+    let spineAt := fun (ps : Array Expr) => do
+      let (_, bfib) ← towerAt ps baseJ (.sort w)
+      let zc := psigmaT (.succ .zero) w natT bfib
+      let sc ← withLocalDeclD `n natT fun n =>
+        withLocalDeclD `R (.sort w) fun R => do
+          let (_, sfib) ← towerAt ps stepJ R
+          mkLambdaFVars #[n, R] (psigmaT (.succ .zero) w natT sfib)
+      withLocalDeclD `n natT fun n =>
+        mkLambdaFVars #[n]
+          (natRec (.succ w) (.lam `x natT (.sort w) .default) zc sc n)
+
     -- ── the carrier ──
-    let selfVal ← withParams fun ps => do
-      let (_, fib) ← fibreAt ps
-      mkLambdaFVars ps (psigmaT (.succ .zero) w natT fib)
+    -- Non-recursive: one tag tower under a `Nat`. Linearly recursive: the
+    -- spine tower, `Σ'(n : Nat), V n`.
+    let carrierAt := fun (ps : Array Expr) => do
+      if isRec then pure (psigmaT (.succ .zero) w natT (← spineAt ps))
+      else do pure (psigmaT (.succ .zero) w natT (← fibreAt ps).2
+    )
+    let selfVal ← withParams fun ps => do mkLambdaFVars ps (← carrierAt ps)
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -1041,12 +1169,39 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       let (_, cty) := exportCtors[j]!
       let ty := restore tbl cty
       let val ← withParams fun ps => do
-        let (cs, fib) ← fibreAt ps
-        let c := cs[j]!
-        forallBoundedTelescope c.tele (some c.nf) fun fs _ => do
-          let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
-          mkLambdaFVars (ps ++ fs)
-            (psigmaMk (.succ .zero) w natT fib (natNumeral j) tup)
+        if !isRec then
+          let (cs, fib) ← fibreAt ps
+          let c := cs[j]!
+          forallBoundedTelescope c.tele (some c.nf) fun fs _ => do
+            let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
+            mkLambdaFVars (ps ++ fs)
+              (psigmaMk (.succ .zero) w natT fib (natNumeral j) tup)
+        else do
+          -- The binders come from the **restored** telescope: the recursive
+          -- field's type there is `T._model.self p⃗`, i.e. the spine pair, and
+          -- what goes into the chain is its second component.
+          let spine ← spineAt ps
+          let rtele ← instForall ty ps
+          let nf := numForalls rtele
+          forallBoundedTelescope rtele (some nf) fun fs _ => do
+            let mkOuter := fun (n tup : Expr) =>
+              psigmaMk (.succ .zero) w natT spine n tup
+            match slots[j]! with
+            | none =>
+              let (bcs, bfib) ← towerAt ps baseJ (.sort w)
+              let c := bcs[tagOf[j]!]!
+              let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
+              mkLambdaFVars (ps ++ fs) (mkOuter (natNumeral 0)
+                (psigmaMk (.succ .zero) w natT bfib (natNumeral (tagOf[j]!)) tup))
+            | some k =>
+              let r := fs[k]!
+              let rn := psigmaFst (.succ .zero) w natT spine r
+              let rv2 := psigmaSnd (.succ .zero) w natT spine r
+              let (scs, sfib) ← towerAt ps stepJ (mkApp spine rn).headBeta
+              let c := scs[tagOf[j]!]!
+              let tup ← chainTuple c.pad? c.boxed c.nf c.tele (fs.set! k rv2)
+              mkLambdaFVars (ps ++ fs) (mkOuter (.app (.const `Nat.succ []) rn)
+                (psigmaMk (.succ .zero) w natT sfib (natNumeral (tagOf[j]!)) tup))
       let d := Declaration.defnDecl
         { name := ctorN j, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
@@ -1060,19 +1215,70 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
       let major := bs[bs.size - 1]!
-      let (cs, fib) ← fibreAt ps
-      let minor ←
-        if nc == 0 then
-          withLocalDeclD `n natT fun n => do
-            withLocalDeclD `f (emptyAt w) fun f => do
-              mkLambdaFVars #[n, f] (← emptyAtElim eqi v w
-                (mkApp motive (psigmaMk (.succ .zero) w natT fib n f)) f)
-        else
-          withLocalDeclD `n natT fun n => do
-            withLocalDeclD `f (mkApp fib n).headBeta fun f => do
-              mkLambdaFVars #[n, f]
-                (mkApp (← stepTower v w eqi fib motive minors cs 0 n) f)
-      mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT fib motive minor major)
+      if !isRec then
+        let (cs, fib) ← fibreAt ps
+        let minor ←
+          if nc == 0 then
+            withLocalDeclD `n natT fun n => do
+              withLocalDeclD `f (emptyAt w) fun f => do
+                mkLambdaFVars #[n, f] (← emptyAtElim eqi v w
+                  (mkApp motive (psigmaMk (.succ .zero) w natT fib n f)) f)
+          else
+            withLocalDeclD `n natT fun n => do
+              withLocalDeclD `f (mkApp fib n).headBeta fun f => do
+                mkLambdaFVars #[n, f]
+                  (mkApp (← stepTower v w eqi fib (fun z => mkApp motive z)
+                    (fun j vs => mkAppN minors[j]! vs) cs 0 n) f)
+        mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT fib motive minor major)
+      else do
+        -- `PSigma.rec` on the outer pair, `Nat.rec` on the spine, the tag
+        -- towers inside each level, `PSigma.rec` down each chain.
+        let spine ← spineAt ps
+        let mkOuter := fun (n tup : Expr) => psigmaMk (.succ .zero) w natT spine n tup
+        -- the Nat.rec motive: `fun n => (x : V n) → motive ⟨n, x⟩`
+        let nmot ← withLocalDeclD `n natT fun n =>
+          withLocalDeclD `x (mkApp spine n).headBeta fun x => do
+            mkLambdaFVars #[n] (← mkForallFVars #[x] (mkApp motive (mkOuter n x)))
+        -- spine 0: the base tower
+        let zc ← do
+          let (bcs, bfib) ← towerAt ps baseJ (.sort w)
+          withLocalDeclD `x (psigmaT (.succ .zero) w natT bfib) fun x => do
+            let tgt := fun (tup : Expr) => mkApp motive (mkOuter (natNumeral 0) tup)
+            let minorOf := fun (b : Nat) (vs : Array Expr) => mkAppN minors[baseJ[b]!]! vs
+            let inner ← withLocalDeclD `tag natT fun tg =>
+              withLocalDeclD `f (mkApp bfib tg).headBeta fun f => do
+                mkLambdaFVars #[tg, f]
+                  (mkApp (← stepTower v w eqi bfib tgt minorOf bcs 0 tg) f)
+            let mot ← withLocalDeclD `z (psigmaT (.succ .zero) w natT bfib) fun z =>
+              mkLambdaFVars #[z] (mkApp motive (mkOuter (natNumeral 0) z))
+            mkLambdaFVars #[x]
+              (psigmaRec v (.succ .zero) w natT bfib mot inner x)
+        -- spine n+1: the step tower, with the induction hypothesis in hand
+        let sc ← withLocalDeclD `n natT fun n =>
+          withLocalDeclD `ih (mkApp nmot n).headBeta fun ih => do
+            let sub := (mkApp spine n).headBeta
+            let (scs, sfib) ← towerAt ps stepJ sub
+            let nsucc := Expr.app (.const `Nat.succ []) n
+            withLocalDeclD `x (psigmaT (.succ .zero) w natT sfib) fun x => do
+              let tgt := fun (tup : Expr) => mkApp motive (mkOuter nsucc tup)
+              let minorOf := fun (b : Nat) (vs : Array Expr) =>
+                let j := stepJ[b]!
+                let k := (slots[j]!).getD 0
+                let sv := vs[k]!
+                mkAppN minors[j]! ((vs.set! k (mkOuter n sv)).push (mkApp ih sv))
+              let inner ← withLocalDeclD `tag natT fun tg =>
+                withLocalDeclD `f (mkApp sfib tg).headBeta fun f => do
+                  mkLambdaFVars #[tg, f]
+                    (mkApp (← stepTower v w eqi sfib tgt minorOf scs 0 tg) f)
+              let mot ← withLocalDeclD `z (psigmaT (.succ .zero) w natT sfib) fun z =>
+                mkLambdaFVars #[z] (mkApp motive (mkOuter nsucc z))
+              mkLambdaFVars #[n, ih, x]
+                (psigmaRec v (.succ .zero) w natT sfib mot inner x)
+        let minor ← withLocalDeclD `n natT fun n =>
+          withLocalDeclD `x (mkApp spine n).headBeta fun x => do
+            mkLambdaFVars #[n, x]
+              (mkApp (natRec (mkLevelIMax' w v).normalize nmot zc sc n) x)
+        mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT spine motive minor major)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }

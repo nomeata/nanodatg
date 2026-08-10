@@ -1,47 +1,35 @@
 /-
-LevelSurvey.lean — how complete is level definitional equality, in Lean and
-in lean4lean, and does either one close `modelgen`'s `BoxF` decline?
+LevelSurvey.lean — how complete is level definitional equality, in Lean, in
+lean4lean, and in lean4lean with `modelgen`'s local prune patch applied?
 
 This file does NOT compile against this repository's toolchain alone: it
-imports `Lean4Lean.Level`, so it needs a lean4lean checkout. Reproduce with
+imports `Lean4Lean.Level`, so it needs a lean4lean checkout with the patch in
+`lean4lean-level-prune.patch` beside this file. Reproduce with
 
   git clone https://github.com/digama0/lean4lean vendor-l4l/lean4lean
   cd vendor-l4l/lean4lean && git checkout 3dc52e0
   echo leanprover/lean4:v4.29.1 > lean-toolchain      # ours; upstream differs
+  git apply ../../scripts/inductive-basis/lean4lean-level-prune.patch
   lake build
-  cp <this file> . && T=~/.elan/toolchains/leanprover--lean4---v4.29.1
-  env -u LEAN_PATH LEAN_SYSROOT=$T LEAN_PATH=$PWD/.lake/build/lib/lean \
-    $T/bin/lean LevelSurvey.lean
+  cp ../../scripts/inductive-basis/LevelSurvey.lean .
+  T=~/.elan/toolchains/leanprover--lean4---v4.29.1
+  P=$PWD/.lake/build/lib/lean:$PWD/.lake/packages/batteries/.lake/build/lib/lean
+  env -u LEAN_PATH LEAN_SYSROOT=$T LEAN_PATH=$P $T/bin/lean LevelSurvey.lean
 
 Pinned revision: 3dc52e0 "Prove Expr cached flag correctness (#19)".
-`vendor-l4l/` is gitignored, like `/vendor`.
+`vendor-l4l/` is gitignored, like `/vendor`. The clone's `origin/master` is 24
+commits further on, but `Lean4Lean/Level.lean`'s `Normalize` namespace — the
+function under test — is byte-identical across that gap, so these rows cannot
+move; see MODELGEN.md §8.6.
 
-It prints four judgements per pair: `sem` (brute-force semantic equality over
-all assignments in 0..4), `lean` (`Level.isEquiv`, Lean's normal-form
-comparison), `l4l` (lean4lean's experimental `Level.isEquiv'`), and `fix` (a
-candidate repair of `isEquiv'`, below).
-
-Findings, and `MODELGEN.md` §8.6 records them:
-
-  * lean4lean is strictly more complete than Lean — it buys four imax
-    distributivity/associativity laws Lean lacks.
-  * It still does NOT absorb an `imax` into a `max` that dominates it, which
-    is the one law `modelgen`'s `BoxF` decline needs. So the decline stands
-    under both, and it is a level-arithmetic gap, not a type error: the last
-    three rows show the field level, and the two pad candidates the planner
-    tries, all semantically equal to the carrier's level at every assignment.
-  * `isEquivFix` is the candidate repair. lean4lean's normal form is a map
-    keyed by variable sets; `imax` paths leave entries with `const = 0` and
-    no variables — keys that subsumption emptied but did not erase — and
-    `isEquiv'` compares them structurally. Dropping empty entries first turns
-    every semantically-true pair here true and leaves both false pairs false.
-    That is a measurement on twelve pairs, not a completeness proof.
-
-lean4lean documents the incompleteness itself, in its `divergences.md`:
-`normalize'`/`isEquiv'`/`geq'` are "an experimental new algorithm … intended
-to be complete for level algebra … currently known to be incomplete in cases
-where Lean's algorithm is not", with the plan of record being to verify
-Lean's original algorithm instead.
+Four judgements per pair: `sem` (brute force over all assignments in 0..4),
+`lean` (`Level.isEquiv`), `l4lStock`, `l4lPatch`. MODELGEN.md §8.6 records the
+table and what it settles. In one line: the patch agrees with `sem` on every
+row here and on 33,670 fuzzed pairs, which is a measurement against a bounded
+oracle and **not a completeness proof**; it closes `modelgen`'s `BoxF` level
+identity, which Lean and stock lean4lean both reject; and `BoxF` remains a
+decline regardless, because the contract is that a proof Lean's kernel rejects
+is a decline, never an emission.
 -/
 import Lean4Lean.Level
 
@@ -105,22 +93,40 @@ def pairs : List (String × Level × Level) := [
     mx (imx (imx u v) v) (mx one u), mx one (mx u v))
 ]
 
-/-- lean4lean's `isEquiv'`, but ignoring `NormLevel` entries that carry no
-information (`const = 0` and no vars) — these are keys created by `imax` paths
-that subsumption emptied but did not erase. -/
-def isEquivFix (a b : Level) : Bool :=
-  let strip (m : Level.Normalize.NormLevel) : List (List Name × Level.Normalize.Node) :=
-    m.toList.filter fun (_, n) => !(n.const == 0 && n.var.isEmpty)
-  let na := strip (Level.Normalize.normalize a)
-  let nb := strip (Level.Normalize.normalize b)
-  na.length == nb.length && (na.zip nb).all fun ((p1, n1), (p2, n2)) => p1 == p2 && n1 == n2
+/-!
+This version of the survey is run against the LOCALLY PATCHED
+`Lean4Lean/Level.lean` in `vendor-l4l/lean4lean`, which keeps the stock
+predicate as `Level.isEquiv'Stock` and makes `Level.isEquiv'` compare pruned
+normal forms.  Columns:
+
+  sem        brute-force semantic equality over all assignments in 0..4
+  lean       `Lean.Level.isEquiv`   (Lean's own normal-form comparison)
+  l4lStock   `Lean.Level.isEquiv'Stock` (lean4lean as shipped at 3dc52e0)
+  l4lPatch   `Lean.Level.isEquiv'`      (the nanodatg local patch)
+-/
+
+def pad (s : String) (n : Nat) : String := s.pushn ' ' (n - s.length)
 
 #eval show IO Unit from do
-  IO.println s!"{"pair".pushn ' ' 42} sem  lean  l4l  fix"
+  IO.println s!"{pad "pair" 46} sem    lean   l4lStock  l4lPatch"
+  let mut unsound := 0
+  let mut helped := 0
+  let mut stillIncomplete := 0
   for (name, a, b) in pairs do
     let se := semEq 4 a b
     let le := Level.isEquiv a b
-    let l4 := Level.isEquiv' a b
-    let fx := isEquivFix a b
-    let flag := if fx != se then "  UNSOUND-OR-INCOMPLETE-FIX" else if se != l4 then "  <-- l4l incomplete, fix helps" else ""
-    IO.println s!"{name.pushn ' ' (46 - name.length)} {se}  {le}  {l4}  {fx}{flag}"
+    let st := Level.isEquiv'Stock a b
+    let px := Level.isEquiv' a b
+    if px && !se then unsound := unsound + 1
+    if px && !st then helped := helped + 1
+    if se && !px then stillIncomplete := stillIncomplete + 1
+    let flag :=
+      if px && !se then "  *** UNSOUND ***"
+      else if se && !px then "  <-- still incomplete"
+      else if px && !st then "  <-- patch closes this"
+      else ""
+    IO.println s!"{pad name 46} {pad s!"{se}" 6} {pad s!"{le}" 6} {pad s!"{st}" 9} {pad s!"{px}" 9}{flag}"
+  IO.println ""
+  IO.println s!"patched-true-but-semantically-false (unsound) : {unsound}"
+  IO.println s!"semantically-true-but-patched-false (gaps)    : {stillIncomplete}"
+  IO.println s!"pairs the patch newly closes over stock       : {helped}"
