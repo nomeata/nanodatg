@@ -612,37 +612,27 @@ impl Ev {
     }
 }
 
-/// A theorem with no hypotheses. **The only constructor checks it.**
-///
-/// Everything that outlives the declaration currently being checked — the
-/// interpretation store, the per-`(name, σ)` typings, the defining equations,
-/// the iota rules, the final verdict — passes through here. Mini has no
-/// expression-level caches at all, so the cache-imports-`Γ` hazard that
-/// motivated nanoda's `is_unconditional` guards is structurally absent; the
-/// funnel enforces it anyway, because "no caches" is a fact about today's mini
-/// rather than a property of the repo.
-///
-/// By the scope invariant I2, at top level no scopes are open, so `new` cannot
-/// fail on a correctly threaded run. A failure is therefore a threading bug
-/// surfaced at the funnel, which is where it should surface.
-#[derive(Debug, Clone)]
-pub struct Sealed(Thm);
-
-impl Sealed {
-    /// `Err(t)` hands the offending theorem back, so the caller can report
-    /// *which* hypotheses escaped rather than only that some did.
-    pub fn new(t: Thm) -> Result<Sealed, Thm> {
-        if t.hyps().is_empty() {
-            Ok(Sealed(t))
-        } else {
-            Err(t)
-        }
-    }
-
-    pub fn thm(&self) -> &Thm { &self.0 }
-
-    pub fn into_thm(self) -> Thm { self.0 }
-}
+// A theorem with no hypotheses, checked by the only constructor — **the
+// checker's type, re-exported** (ENV-UNIFY.md §3.4 item 2: one `Sealed`).
+//
+// Everything that outlives the declaration currently being checked — the
+// interpretation store, the per-`(name, σ)` typings, the defining equations,
+// the iota rules, the final verdict — passes through here. Mini has no
+// expression-level caches at all, so the cache-imports-`Γ` hazard that
+// motivated nanoda's `is_unconditional` guards is structurally absent; the
+// funnel enforces it anyway, because "no caches" is a fact about today's mini
+// rather than a property of the repo.
+//
+// By the scope invariant I2, at top level no scopes are open, so `new` cannot
+// fail on a correctly threaded run. A failure is therefore a threading bug
+// surfaced at the funnel, which is where it should surface.
+//
+// Mini's own newtype was byte-for-byte the same gate (`hyps().is_empty()` in
+// the one constructor); since the shared constant store holds `Sealed`s both
+// engines wrote, the two spellings had to become one *type*, and the
+// checker's — which also carries the `seal` convenience and `concl` — is the
+// survivor. The type-identity is pinned by `sealed_is_the_checkers_type`.
+pub use nanoda_lib::sealed::Sealed;
 
 #[cfg(test)]
 mod tests {
@@ -667,6 +657,18 @@ mod tests {
 
         let unconditional = kernel::Thm::eq_refl(Term::apply(env.declare(0), vec![]));
         assert!(Sealed::new(unconditional).is_ok());
+    }
+
+    /// The B3 identity: mini's `Sealed` **is** the checker's, as a fact about
+    /// the types rather than about two implementations agreeing. Re-introducing
+    /// a private newtype here stops this compiling.
+    #[test]
+    fn sealed_is_the_checkers_type() {
+        fn witness(s: Sealed) -> nanoda_lib::sealed::Sealed { s }
+        let mut env = Env::new();
+        let t = kernel::Thm::eq_refl(Term::apply(env.declare(0), vec![]));
+        let s = Sealed::new(t).expect("unconditional");
+        let _ = witness(s);
     }
 
     #[test]
