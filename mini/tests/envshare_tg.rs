@@ -143,6 +143,38 @@ fn a_defining_equation_crosses_from_mini_to_checker() {
     assert_eq!(field(&r, "incoherent"), 0, "a certificate not about its carrier:\n{r}");
 }
 
+/// **The declining side of the defeq slot.** `003_arrowType`'s one
+/// definition interprets to different bodies under the two dispatches, so
+/// mini's defining equation is *offered* and the statement guard in
+/// `const_abbrev` refuses it: one counted decline, a second carrier beside
+/// mini's (`divergent = 1`), and no adoption. This is the fixture that goes
+/// red if that guard is loosened — `034` below cannot catch it, because an
+/// inductive-only file never calls `const_abbrev` at all.
+#[test]
+fn a_mismatched_defining_equation_is_declined_not_adopted() {
+    let Some(r) = cross_report("good/tutorial/003_arrowType.ndjson") else { return };
+    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 0, "a defeq crossed unguarded:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerDefeq"), 1, "the declined population moved:\n{r}");
+    assert_eq!(field(&r, "divergent"), 1, "{r}");
+    assert_eq!(field(&r, "alias"), 0, "{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "{r}");
+}
+
+/// **The `has_type_const` guard, specifically.** `034` below exercises only
+/// `ty_const`'s read (whose statement check lives inside `typing`), so a
+/// loosened guard in `has_type_const` — the obligation-discharge read — slips
+/// past it; measured under exactly that mutation, `084_projProp1` is a file
+/// where it shows: one mini typing gets wrongly adopted there (0 → 1) while
+/// this fixture pins 0 adopted and all thirteen offers declined.
+#[test]
+fn the_obligation_read_declines_mismatched_typings() {
+    let Some(r) = cross_report("good/tutorial/084_projProp1.ndjson") else { return };
+    assert_eq!(field(&r, "adoptedByCheckerTyping"), 0, "a typing crossed unguarded:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerTyping"), 13, "the declined population moved:\n{r}");
+    assert_eq!(field(&r, "alias"), 0, "{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "{r}");
+}
+
 /// **The B4 crossing, measured and pinned — the declining file.** On
 /// `034_boolType` (inductive-only) the two engines' carriers genuinely
 /// differ, so nothing may cross: the checker consults mini's three typings
