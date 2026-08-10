@@ -227,3 +227,82 @@ fn prop_and_type_zero_stay_distinct() {
     );
     assert!(out.hyps().is_empty());
 }
+
+/// **The ground bridge `⊢ srt(n̄) = Uₙ`, at three rungs** — `LEVELPOLY.md`
+/// §1.2's numeral bridge, which is what lets one vocabulary replace two.
+///
+/// Three atoms is the floor here for a reason the ladder makes concrete: the
+/// two ladders agree at every rung but are built differently at *three*
+/// different places. Rung 0 comes from the `ite0` guard and never touches
+/// `lvl`; rung 1 comes from `at_succ` composed with the ladder's `ω` **base**;
+/// rung 2 is the first that composes `at_succ` with a recursive ladder result.
+/// A bridge tested at rungs 0 and 1 alone passes under an implementation that
+/// never recurses — which is exactly the degenerate case this file's sibling
+/// found — and one tested at 1 and 2 alone passes under one that has no `ite0`
+/// guard at all and would put `⟦Prop⟧` at `U(ω)`.
+///
+/// The right-hand sides are compared against [`Tower::u`] **syntactically**,
+/// not up to any equation: the point of the bridge is that after it the two
+/// spellings are the *same term*, so a checker's literal-formula guard matches.
+///
+/// Mutations run against this test (each red, then reverted): asking the
+/// ladder for rung `n` instead of `n-1` inside `Srt::rung_eq`, which leaves
+/// rung 0 green and moves rungs 1 and 2 one rung up — the off-by-one the
+/// recursion exists to get right, invisible without a rung that recurses; and
+/// answering rung 0 from `at_succ` rather than `at_zero`, which leaves rungs 1
+/// and 2 green and is caught only because rung 0 is *not* the ladder's.
+#[test]
+fn the_ground_bridge_equates_the_sort_ladder_with_the_tower_rungs() {
+    let mut env = Env::new();
+    let se = setup(&mut env);
+    let t = Tower::new(&mut env);
+    // The tower rung terms come from the *same* assembly `setup` built over;
+    // rebuilding one here would compare two different chains' look-alikes.
+    let _ = t;
+    let (r, ut, s) = (&se.r, &se.ut, &se.s);
+    let u_of = |x: Term| Term::apply(se.lu, vec![x]);
+
+    // `U₀`, `U(ω)`, `U(U(ω))` — `Tower::u(0..=2)`, spelled here so the test
+    // states the ladder it is checking rather than deferring to the thing
+    // under test.
+    let want = [se.u0.clone(), u_of(r.omega()), u_of(u_of(r.omega()))];
+    assert_eq!(want[1], se.u1, "Tower::u(1) is not U(ω)");
+
+    let mut numerals = Vec::new();
+    let mut k = r.zero();
+    for _ in 0..3 {
+        numerals.push(k.clone());
+        k = r.succ_of(k);
+    }
+
+    for (n, (num, rhs)) in numerals.iter().zip(want.iter()).enumerate() {
+        let br = s.rung_eq(&mut env, r, ut, se.lu, n).expect("the ground bridge must build");
+        assert!(br.hyps().is_empty(), "rung {n}: the bridge must be unconditional");
+        assert_eq!(
+            *br.concl(),
+            Formula::eq(s.at(num.clone()), rhs.clone()),
+            "rung {n}: the bridge does not equate srt({n}̄) with the tower's own rung term"
+        );
+        assert!(kernel::thm::debug_locally_closed(br.concl()));
+    }
+
+    // The ladder's own rungs, which the sort ladder's differ from at 0 only.
+    // `lvl(0̄) = ω` while `srt(0̄) = U₀`: the one place the two disagree, and
+    // the reason the sort bridge cannot just delegate.
+    let l0 = ut.rung_eq(&mut env, r, se.lu, 0).expect("lvl rung 0");
+    assert_eq!(*l0.concl(), Formula::eq(ut.at(numerals[0].clone()), r.omega()));
+    assert_ne!(
+        r.omega(),
+        se.u0,
+        "if ω and U₀ were the same term the bottom of the two ladders would coincide and \
+         this whole test would be vacuous"
+    );
+    for n in 1..3 {
+        let ln = ut.rung_eq(&mut env, r, se.lu, n).expect("lvl rung");
+        assert_eq!(
+            *ln.concl(),
+            Formula::eq(ut.at(numerals[n].clone()), want[n].clone()),
+            "the ladder and the sort ladder must agree from rung 1 up"
+        );
+    }
+}

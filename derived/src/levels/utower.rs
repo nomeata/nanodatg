@@ -81,6 +81,74 @@ pub struct UTower {
 impl UTower {
     /// The term `app(lvl, n)`.
     pub fn at(&self, n: Term) -> Term { Term::apply(self.app, vec![self.set.clone(), n]) }
+
+    /// **The numeral bridge at any rung** — `⊢ app(lvl, n̄) = ω` for `n = 0`
+    /// and `⊢ app(lvl, n̄) = U(U(…U(ω)…))` with `n` applications otherwise.
+    ///
+    /// [`UTower::rung1_eq`] and [`UTower::rung2_eq`] are this at `n = 1, 2`,
+    /// kept as fields because they are derived eagerly and most callers want
+    /// only those two. This is the same derivation with the iteration left
+    /// open: the step at `(n-1)̄` — a natural by `succ`-closure from
+    /// [`OmegaCore::zero_mem`] — reduces rung `n` to rung `n-1`, and one
+    /// `U(·)`-congruence carries the recursive result across it.
+    ///
+    /// **`n = 0` is `ω`, not `U₀`.** The ladder is seeded at `ω`
+    /// (`base`), because a tower seeded at `U₀` would make `⟦Type 0⟧` a set
+    /// with no infinite member — see [`crate::tower`]'s countermodel. The
+    /// sort ladder's own rung 0 is `U₀` and reaches it by the `ite0` guard
+    /// rather than through here; [`crate::levels::srt::Srt::rung_eq`] is the
+    /// composition that gets that right.
+    ///
+    /// `lu` must be the same least-universe symbol the ladder was built over,
+    /// or the congruence below will not line up and this returns `None`.
+    pub fn rung_eq(&self, env: &mut Env, r: &Rec, lu: FnSym, n: usize) -> Option<Thm> {
+        if n == 0 {
+            return Some(self.base.clone())
+        }
+        let prev = self.rung_eq(env, r, lu, n - 1)?;
+        let (_, rhs_prev) = prev.concl().as_eq()?;
+        let rhs_prev = rhs_prev.clone();
+        let m = numeral(r, n - 1);
+        let m_mem = numeral_in_omega(r, n - 1)?;
+        // `⊢ app(lvl, n̄) = U(app(lvl, (n-1)̄))`.
+        let step = Thm::mp(&inst_all(&self.step, std::slice::from_ref(&m))?, &m_mem)?;
+        let lm = self.at(m);
+        let ulm = Term::apply(lu, vec![lm.clone()]);
+        let w = env.fresh_var();
+        let congr = mpd_const(
+            &Thm::eq_leibniz(
+                lm,
+                rhs_prev,
+                w,
+                Formula::eq(ulm.clone(), Term::apply(lu, vec![Term::var(w)])),
+            ),
+            &Thm::eq_refl(ulm),
+        )?;
+        let u_eq = Thm::mp(&congr, &prev)?;
+        eq_trans(env, &step, &u_eq)
+    }
+}
+
+/// The numeral `n̄ = succⁿ(∅)` over the chain.
+pub(crate) fn numeral(r: &Rec, n: usize) -> Term {
+    let mut t = r.zero();
+    for _ in 0..n {
+        t = r.succ_of(t);
+    }
+    t
+}
+
+/// `⊢ n̄ ∈ ω` — `zero_mem` then `succ`-closure, `n` times. **Unconditional**:
+/// a numeral's ω-membership needs no hypothesis, which is the whole reason a
+/// ground use of a quantified theorem costs nothing extra.
+pub(crate) fn numeral_in_omega(r: &Rec, n: usize) -> Option<Thm> {
+    let mut t = r.zero();
+    let mut thm = r.core().zero_mem.clone();
+    for _ in 0..n {
+        thm = Thm::mp(&inst_all(&r.core().succ_closed, std::slice::from_ref(&t))?, &thm)?;
+        t = r.succ_of(t);
+    }
+    Some(thm)
 }
 
 /// Run the recursion at `G := U(·)`, base `ω`, and derive the ladder.

@@ -52,12 +52,12 @@
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use crate::levels::ite0::Ite0;
-use crate::levels::utower::UTower;
+use crate::levels::utower::{numeral, numeral_in_omega, UTower};
 use crate::recursion::{hyp_eq_symm, hyp_eq_trans, induction_scheme, Rec};
 use crate::tower::Tower;
 use crate::{
     a1i, and_intro, and_left, and_right, eq_symm_imp, eq_trans, ex_falso, hyp_and, hyp_mp,
-    hyp_or_elim, iff_mp, inst_all, syl, uncurry,
+    hyp_or_elim, iff_mp, inst_all, mpd_const, syl, uncurry,
 };
 
 /// The sort ladder `srt(n) = ite0(n, U₀, app(lvl, n))`, with everything proved
@@ -98,6 +98,68 @@ impl Srt {
 
     /// The rung-0 term `U₀`, exactly as the theorems spell it.
     pub fn u0(&self) -> Term { self.u0.clone() }
+
+    /// **The ground bridge: `⊢ srt(n̄) = Uₙ`** — the sort ladder at a closed
+    /// numeral, equated with the meta-level rung term
+    /// [`crate::tower::Tower::u`] builds.
+    ///
+    /// This is `LEVELPOLY.md` §1.2's bridge equation at a numeral, and it is
+    /// what lets one vocabulary replace two: with `⟦Sort ℓ⟧ = srt(ℓ̂)` at
+    /// *every* level, a `derived` library theorem stated over a rung —
+    /// `x ∈ U(x)`, `U₀ ∈ U₁`, an inductive type's membership in `U(ω)` — is
+    /// transported to the unified spelling by this equation and one Leibniz
+    /// step, instead of being blinded by it.
+    ///
+    /// The two ladders agree everywhere but disagree in *shape* at the bottom,
+    /// which is the whole content:
+    ///
+    /// ```text
+    /// srt(0̄) = U₀            — the ite0 guard, not the ladder    [at_zero]
+    /// srt(1̄) = U(ω)  = U₁    — at_succ at 0̄, then lvl(0̄) = ω
+    /// srt(n̄) = U(U_{n-1}) = Uₙ  for n ≥ 2
+    /// ```
+    ///
+    /// so rung 1 is seeded at `ω` and *not* at `U(U₀)` — the countermodel in
+    /// [`crate::tower`] is why, and getting it wrong would make `⟦Type 0⟧` a
+    /// set with no infinite member while `⟦N⟧` is infinite.
+    ///
+    /// `r`, `ut` and `lu` must be the ones this `Srt` was built over.
+    /// Unconditional: the `n̄ ∈ ω` premises `at_succ` carries are discharged
+    /// here by [`numeral_in_omega`], which needs no hypothesis.
+    pub fn rung_eq(
+        &self,
+        env: &mut Env,
+        r: &Rec,
+        ut: &UTower,
+        lu: FnSym,
+        n: usize,
+    ) -> Option<Thm> {
+        if n == 0 {
+            return Some(self.at_zero.clone())
+        }
+        let m = numeral(r, n - 1);
+        let m_mem = numeral_in_omega(r, n - 1)?;
+        // `⊢ srt(n̄) = U(app(lvl, (n-1)̄))`.
+        let step = Thm::mp(&inst_all(&self.at_succ, std::slice::from_ref(&m))?, &m_mem)?;
+        // `⊢ app(lvl, (n-1)̄) = ω` (n = 1) or `= U_{n-1}` (n ≥ 2).
+        let below = ut.rung_eq(env, r, lu, n - 1)?;
+        let (_, rhs_below) = below.concl().as_eq()?;
+        let rhs_below = rhs_below.clone();
+        let lm = ut.at(m);
+        let ulm = Term::apply(lu, vec![lm.clone()]);
+        let w = env.fresh_var();
+        let congr = mpd_const(
+            &Thm::eq_leibniz(
+                lm,
+                rhs_below,
+                w,
+                Formula::eq(ulm.clone(), Term::apply(lu, vec![Term::var(w)])),
+            ),
+            &Thm::eq_refl(ulm),
+        )?;
+        let u_eq = Thm::mp(&congr, &below)?;
+        eq_trans(env, &step, &u_eq)
+    }
 }
 
 /// Everything the derivations below share: the chain, the conditional, the
