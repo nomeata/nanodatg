@@ -2780,3 +2780,57 @@ fn the_prefix_agrees_with_the_ledger_on_an_accepted_file() {
     // Not vacuous: the file does certify something.
     assert!(p.get("certified") > Some(&0), "the fixture certifies nothing:\n{stdout}");
 }
+
+/// **`MINI_CONV_TRACE` still names every declaration as the run reaches it.**
+///
+/// The trace was `Ledger::run`'s loop. `mini::decl_pass` fused the pipeline and
+/// stopped calling that loop, so the trace went **silent** — and a silent
+/// progress trace does not look broken, it looks like a run that has not
+/// started yet. It cost most of an hour on `init-prelude` before anyone asked
+/// why there were no rows. It lives in `Ledger::walk_decl` now, which every
+/// path that walks a declaration goes through, and this is the cell that says
+/// so.
+///
+/// # Three rows, and a fourth that must not be there
+///
+/// `reject_midfile_prefix.ndjson` is three good definitions, then an ill-typed
+/// one, then two more. The trace must carry **`one`, `two`, `three` in that
+/// order and stop** — which is four claims a single row cannot make:
+///
+/// * that it fires at all (the regression above);
+/// * that it fires per declaration and not once (one row would satisfy a
+///   trace that only ever names the first);
+/// * that the order is the file's (three names, not a set);
+/// * that it stops at the rejection, so the last row names the last
+///   declaration certified — the property the whole trace exists for, and the
+///   one that makes an aborted run's tail readable.
+#[test]
+fn the_conversion_trace_names_each_declaration_as_the_loop_reaches_it() {
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--no-modelgen")
+        .env("MINI_CONV_TRACE", "1")
+        .arg(fixture("reject_midfile_prefix.ndjson"))
+        .output()
+        .expect("spawn mini");
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    let rows: Vec<Vec<&str>> = err
+        .lines()
+        .filter(|l| l.starts_with("convtrace\t"))
+        .map(|l| l.split('\t').collect())
+        .collect();
+    let named: Vec<&str> = rows.iter().filter_map(|r| r.get(3).copied()).collect();
+    assert_eq!(
+        named,
+        vec!["one", "two", "three"],
+        "the trace must name each declaration the loop reaches, in file order, and stop at \
+         the rejection:\n{err}"
+    );
+    // The index is the count of declarations already finished, so the rows are
+    // numbered from zero and the last one is the last certified.
+    let idx: Vec<&str> = rows.iter().filter_map(|r| r.get(1).copied()).collect();
+    assert_eq!(idx, vec!["0", "1", "2"], "the trace index is not the position in the walk:\n{err}");
+    assert!(
+        rows.iter().all(|r| r.get(2) == Some(&"starting")),
+        "the row is emitted before the declaration it names, and says so:\n{err}"
+    );
+}

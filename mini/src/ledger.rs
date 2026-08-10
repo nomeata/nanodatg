@@ -644,45 +644,63 @@ impl Ledger {
     ) -> Ledger {
         let mut led = Ledger::default();
         Self::arm_labels(ip);
-        // **The conversion census, while the run is still alive.** `conv_row`
-        // prints once, at the end, which is exactly when a run that exhausts
-        // memory has nothing to print: an aborted experiment yielded pass/fail
-        // where it should have yielded a number. Gated, because on the corpus
-        // this is one line per declaration and the census is not what most runs
-        // are for.
-        //
-        // **The row says `starting`, and that word is load-bearing.** It is
-        // emitted *before* the declaration it names is interpreted, so its
-        // counters are the totals for everything **up to but not including**
-        // it — which is what makes the last row of an aborted run name the
-        // declaration that killed it. The cost *of* a declaration is therefore
-        // the difference to the **next** row, and reading it off the row's own
-        // line attributes every declaration's cost to its predecessor.
-        //
-        // That is not hypothetical. `MINI-HANDOFF.md` §43 reported
-        // "`Nat.modCore_lt` alone takes conversions from 7.8 M to 20.2 M";
-        // that span is the row *labelled* `Nat.modCore_lt` minus the one
-        // before it, so it is `Nat.modCoreGo_lt`'s cost, and `Nat.modCore_lt`'s
-        // own is the next span, 10.1 M. Both are enormous and the conclusion
-        // does not move, but the declaration named does, and a hot spot is
-        // acted on by name.
-        let trace = std::env::var_os("MINI_CONV_TRACE").is_some();
-        for (done, d) in decls.iter().enumerate() {
-            if trace {
-                eprintln!(
-                    "convtrace\t{done}\tstarting\t{}\tproved={}\tsealed={}\tgapped={}",
-                    d.name(),
-                    ip.convs.proved,
-                    ip.convs.sealed,
-                    ip.convs.gapped
-                );
-            }
+        for d in decls {
             if led.walk_decl(env, d, schedule, ip) {
                 return led
             }
         }
         led.finish(ip);
         led
+    }
+
+    /// **The conversion census, while the run is still alive** —
+    /// `MINI_CONV_TRACE`, one row per declaration on stderr.
+    ///
+    /// `conv_row` prints once, at the end, which is exactly when a run that
+    /// exhausts memory has nothing to print: an aborted experiment yielded
+    /// pass/fail where it should have yielded a number. Gated, because on the
+    /// corpus this is one line per declaration and the census is not what most
+    /// runs are for.
+    ///
+    /// **The row says `starting`, and that word is load-bearing.** It is
+    /// emitted *before* the declaration it names is interpreted, so its
+    /// counters are the totals for everything **up to but not including**
+    /// it — which is what makes the last row of an aborted run name the
+    /// declaration that killed it. The cost *of* a declaration is therefore
+    /// the difference to the **next** row, and reading it off the row's own
+    /// line attributes every declaration's cost to its predecessor.
+    ///
+    /// That is not hypothetical. `MINI-HANDOFF.md` §43 reported
+    /// "`Nat.modCore_lt` alone takes conversions from 7.8 M to 20.2 M";
+    /// that span is the row *labelled* `Nat.modCore_lt` minus the one
+    /// before it, so it is `Nat.modCoreGo_lt`'s cost, and `Nat.modCore_lt`'s
+    /// own is the next span, 10.1 M. Both are enormous and the conclusion
+    /// does not move, but the declaration named does, and a hot spot is
+    /// acted on by name.
+    ///
+    /// **It lives in the walk and not in the driver**, and that is a
+    /// correction rather than a tidy-up: it used to be [`Ledger::run`]'s loop,
+    /// and when `crate::decl_pass` fused the pipeline nothing called that loop
+    /// any more — so the trace went silent on the one run it exists for, and
+    /// the silence looked like a run that had not started. Every path that
+    /// walks a declaration goes through here.
+    ///
+    /// The index is `self.declarations`, read **before** the walk increments
+    /// it, so it is still the count of declarations finished — the same number
+    /// the enumerated loop printed.
+    fn trace(&self, d: &Declaration, ip: &Interp) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ON.get_or_init(|| std::env::var_os("MINI_CONV_TRACE").is_some()) {
+            return
+        }
+        eprintln!(
+            "convtrace\t{}\tstarting\t{}\tproved={}\tsealed={}\tgapped={}",
+            self.declarations,
+            d.name(),
+            ip.convs.proved,
+            ip.convs.sealed,
+            ip.convs.gapped
+        );
     }
 
     /// The armed-blocker labels — the terms a report is most likely to have
@@ -717,6 +735,7 @@ impl Ledger {
         schedule: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
         ip: &mut Interp,
     ) -> bool {
+        self.trace(d, ip);
         {
             let led = self;
             let (name, lparams, ty, val) = match d {
