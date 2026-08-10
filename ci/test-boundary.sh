@@ -90,8 +90,36 @@ pub struct Thm {
 impl Thm {
     pub fn concl(&self) -> u32 { self.concl }
 }
+pub fn henkin(y: u32) -> u32 { y }
 EOF
 }
+
+# A clean workspace for rule 7: the Henkin primitive with **exactly one** caller,
+# in the one module allowed to have it. Exported as the baseline for every cell,
+# for the same reason `DERIVED_DIR` and `CHECKER_DIR` are: rule 7 scans the whole
+# workspace, so leaving it pointed at the real repository would make the
+# self-test's verdict depend on code it is not testing.
+#
+# `mk_clean` declares `pub fn henkin`, so the *live* branch of rule 7 runs in
+# every cell rather than the vacuous one — a self-test whose baseline skips the
+# rule under test is the defect this file exists to catch.
+mk_henkin() { # mk_henkin <dir> <n-calls-in-home> [<stray-file>]
+  local d="$1" n="$2" stray="${3:-}"
+  mkdir -p "$d/derived/src/choice"
+  : > "$d/derived/src/choice/epsilon.rs"
+  echo '//! kernel::thm::henkin( in a comment is not a call.' >> "$d/derived/src/choice/epsilon.rs"
+  local i
+  for ((i = 0; i < n; i++)); do
+    echo "pub fn mint$i() { let _ = kernel::thm::henkin(env, y, phi, &w); }" \
+      >> "$d/derived/src/choice/epsilon.rs"
+  done
+  if [[ -n "$stray" ]]; then
+    mkdir -p "$d/$(dirname "$stray")"
+    echo 'pub fn sneak() { let _ = kernel::thm::henkin(env, y, phi, &w); }' > "$d/$stray"
+  fi
+}
+mk_henkin "$TMP/hk-base" 1
+export HENKIN_SCAN_ROOT="$TMP/hk-base"
 
 # expect_fail <name> <dir>; expect_pass <name> <dir>
 expect_fail() {
@@ -495,6 +523,46 @@ expect_fail_because "a workspace manifest whose members do not parse" \
 expect_fail_because "a missing workspace manifest" \
   "is missing — the coverage check would enumerate nothing" \
   WS_MANIFEST="$TMP/no-such-manifest.toml"
+
+# ── Rule 7: the Henkin primitive has exactly one caller ────────────────────
+# The baseline (`$TMP/hk-base`, one call in the home module) is already exercised
+# by every cell above; this names it, and then varies each way the encapsulation
+# can be lost. All four use `expect_fail_because` rather than `expect_fail_out`,
+# because rule 7 has three distinct failures and a cell that only read `$?`
+# could not tell which one fired.
+expect_pass_out "a Henkin primitive with exactly one caller, in its home module" \
+  HENKIN_SCAN_ROOT="$TMP/hk-base"
+
+mk_henkin "$TMP/hk-stray" 1 "mini/src/axiom.rs"
+expect_fail_because "a Henkin call outside the home module" \
+  "is called outside derived/src/choice/epsilon.rs" \
+  HENKIN_SCAN_ROOT="$TMP/hk-stray"
+
+mk_henkin "$TMP/hk-two" 2
+expect_fail_because "two Henkin calls in the home module" \
+  "one seam, not two" \
+  HENKIN_SCAN_ROOT="$TMP/hk-two"
+
+# The one that matters on the day the rule is replaced: `epsilon.rs` rewritten
+# over a derived well-ordering leaves the primitive in the trusted base with
+# nobody calling it, and this is what says so.
+mk_henkin "$TMP/hk-none" 0
+expect_fail_because "a Henkin primitive nothing calls" \
+  "must leave the trusted base, not sit in it" \
+  HENKIN_SCAN_ROOT="$TMP/hk-none"
+
+# …and the scan must have something to read. Falsifier: delete the
+# `henkin_files -print | wc -l` branch and this cell goes green, because an
+# empty workspace has no stray callers either.
+mkdir -p "$TMP/hk-empty"
+expect_fail_because "an empty workspace (rule 7's scan reads no files)" \
+  "the single-caller scan would read nothing" \
+  HENKIN_SCAN_ROOT="$TMP/hk-empty"
+
+# A kernel with no `henkin` at all: the rule is vacuous and the compiler is what
+# enforces it, so this must *pass* even though the workspace is full of callers.
+d="$TMP/nohenkin"; mk_clean "$d"; sed -i '/pub fn henkin/d' "$d/src/lib.rs"
+expect_pass "a kernel that declares no Henkin primitive" "$d"
 
 echo
 if (( fails )); then echo "$fails self-test failure(s)" >&2; exit 1; fi

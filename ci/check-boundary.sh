@@ -200,6 +200,81 @@ else
   ok "size within budget ($code_lines <= $BUDGET)"
 fi
 
+# ── 7. The Henkin primitive has exactly one caller ───────────────────────────
+# `kernel::thm::henkin` mints a fresh constant out of a proved `∃`. It is the
+# newest item in the trusted base and the one the project owner asked to be able
+# to take back out — "in case we regret that choice later and build it
+# differently" — so the property that makes it replaceable is *checked* rather
+# than intended: **one call site in the whole workspace, and it is
+# `derived/src/choice/epsilon.rs`.**
+#
+# Three failures, not one, and the third is the point:
+#
+#   * a call site anywhere else — the encapsulation is gone, and every consumer
+#     that went around `derived::choice::Epsilon` is a place a replacement would
+#     have to be re-derived;
+#   * two call sites in the home module — one seam, not two;
+#   * **zero call sites while the primitive exists** — an unused rule in the
+#     trusted base is one nobody reads and nobody deletes. The day `epsilon.rs`
+#     is rewritten over a derived well-ordering (see its header) this reds, and
+#     the primitive comes out of `thm.rs` with it rather than staying behind.
+#
+# If the kernel declares no `henkin` at all, the rule is vacuous **and the
+# compiler enforces it** — a call to a function that is not there does not
+# build — so it says so and moves on. That is the one reading of "nothing to
+# scan" this project accepts (`DECISIONS.md` 2026-08-08, "SKIP is not PASS"),
+# and it is stated rather than left as silence.
+#
+# The scan reads the *workspace*, not one crate, because the property is about
+# who may call in from outside. `$K` itself is excluded — the rule's definition,
+# its doc comment and `kernel/tests/henkin.rs` are not callers in the sense that
+# matters — and so are `target*`, `vendor/` and `.claude/`, the last because a
+# `git worktree` under `.claude/worktrees/` is a second copy of this repository
+# and would otherwise read as a second caller.
+HENKIN_HOME="${HENKIN_HOME:-derived/src/choice/epsilon.rs}"
+HENKIN_ROOT="${HENKIN_SCAN_ROOT:-$ROOT}"
+#
+# The exclusions are **anchored at `$HENKIN_ROOT`** and not written as `*/…/*`
+# globs. Measured: `-not -path '*/.claude/*'` excluded the entire tree, because
+# every seat on this project works in a worktree under `.claude/worktrees/`, so
+# the root itself contains that component and the scan read zero files. An
+# unanchored exclusion is a rule about the *absolute* path of the checkout,
+# which is not a property of this repository.
+henkin_files() { # henkin_files <-print|-print0>
+  find "$HENKIN_ROOT" -name '*.rs' -type f -not -path "$K/*" \
+    -not -path "$HENKIN_ROOT/target*" -not -path "$HENKIN_ROOT/vendor/*" \
+    -not -path "$HENKIN_ROOT/.git/*" -not -path "$HENKIN_ROOT/.claude/*" \
+    -not -path '*/target/*' "$@" 2>/dev/null
+}
+# `-H` is load-bearing, not decoration: `grep` omits the filename when handed a
+# single file, so on a workspace with one candidate file both the comment filter
+# (which skips `path:line:`) and the home-module test (which matches on the path)
+# silently stopped applying. The self-test's rule 7 cells caught it.
+henkin_calls() {
+  henkin_files -print0 | xargs -0 -r grep -HInE 'thm::henkin[[:space:]]*\(' 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*)'
+}
+if ! grep -rIqE 'pub fn henkin\b' --include='*.rs' "$K/src" 2>/dev/null; then
+  ok "no Henkin primitive in this kernel — rule 7 is vacuous and the compiler enforces it"
+elif (( $(henkin_files -print | wc -l) < 1 )); then
+  fail "rule 7 matched no .rs files under $HENKIN_ROOT — the single-caller scan would read nothing"
+else
+  henkin_home=$(henkin_calls | grep -c "/${HENKIN_HOME}:")
+  henkin_other=$(henkin_calls | grep -v "/${HENKIN_HOME}:")
+  if [[ -n "$henkin_other" ]]; then
+    fail "\`kernel::thm::henkin\` is called outside $HENKIN_HOME"
+    printf '%s\n' "$henkin_other" >&2
+    echo "  The Henkin constant has exactly one seam, so that a replacement has one" >&2
+    echo "  place to cut. Go through \`derived::choice::Epsilon\`." >&2
+  elif (( henkin_home == 0 )); then
+    fail "\`kernel::thm::henkin\` has no caller — an unused primitive must leave the trusted base, not sit in it"
+  elif (( henkin_home > 1 )); then
+    fail "\`kernel::thm::henkin\` is called $henkin_home times in $HENKIN_HOME — one seam, not two"
+  else
+    ok "kernel::thm::henkin has exactly one caller, in $HENKIN_HOME"
+  fi
+fi
+
 # ── 6′. The hypothesis discipline outside the kernel ─────────────────────────
 # `Thm` is a sequent `Γ ⊢ φ`, and `Thm::assume` is the only rule that puts
 # anything in `Γ`.

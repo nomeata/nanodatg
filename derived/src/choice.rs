@@ -15,12 +15,18 @@
 //! ⊢ ∀f ∀u ∀x. (IsChoiceFn(f,u)
 //!        → ((x ∈ u ∧ ∃w. w ∈ x) → app(f,x) ∈ x))               [choice_app]
 //! ⊢ ∃f. (IsChoiceFn(f, {{∅}}) ∧ app(f,{∅}) = ∅)                [choice_nonvacuous]
+//!
+//! Epsilon::on(env, u)   for a CLOSED u                         [epsilon]
+//! ⊢ IsChoiceFn(ε, u)                                           [Epsilon::is_choice_fn]
+//! ⊢ ∀x. ((x ∈ u ∧ ∃w. w ∈ x) → app(ε,x) ∈ x)                   [Epsilon::chooses]
 //! ```
 //!
 //! [`choice_app`] is the lemma a caller actually needs; [`choice_nonvacuous`]
-//! is the evidence that its antecedent is not empty.
+//! is the evidence that its antecedent is not empty. [`Epsilon`] is the same
+//! lemma with that antecedent **discharged into a symbol**, and it is the only
+//! export here whose theorems are unconditional.
 //!
-//! # Why `f` is a free variable and not a symbol
+//! # Why `f` is a free variable, and where it stops being one
 //!
 //! Carneiro's model fixes **one** choice function on **one** set: "Fix a choice
 //! function `ε` on `U_ω`, that is, a function such that `ε(x) ∈ x` for all
@@ -28,17 +34,32 @@
 //! `ε` is scoped by that "fix" — it is a parameter of the interpretation, not a
 //! definable object.
 //!
-//! This module reproduces that scoping exactly, and it has no choice about it.
-//! [`kernel::thm::define`] requires `∃!`, and a choice function is **never**
-//! unique — any set with two or more members admits two of them — so `define`
-//! cannot introduce `ε`, and no `define_choice` primitive was added to let it.
-//! What is available instead is the LCF-faithful shape: carry `f` as a free
-//! variable under the antecedent `IsChoiceFn(f,u)`, and discharge it once, at
-//! the top, against [`choice_fn_existence`].
+//! Everything in [`function`] reproduces that scoping in the LCF-faithful shape:
+//! carry `f` as a free variable under the antecedent `IsChoiceFn(f,u)`, and
+//! discharge it at the top against [`choice_fn_existence`].
+//! [`kernel::thm::define`] cannot do better, and that has not changed:
+//! `define` requires `∃!`, and a choice function is **never** unique — any set
+//! with two or more members admits two of them.
 //!
-//! Whether that antecedent propagates tolerably through a real interpretation of
-//! `Classical.choice` is an **empirical** question, and it is not answered here.
-//! No machinery has been added to avoid it in advance.
+//! **The rest of this section used to read "and no `define_choice` primitive was
+//! added to let it", and that is now false.** It is corrected here rather than
+//! appended to, because a reader deciding whether this development can name `ε`
+//! would get the wrong answer from the file that is supposed to settle it.
+//!
+//! What was added is *not* `define_choice`. Skolemising `⊢ ∀x⃗ ∃y. φ` at arity
+//! ≥ 1 remains **unsound in this kernel** — [`kernel::thm::define`]'s comment
+//! carries the argument, and it turns on [`kernel::Thm::ax_replacement`]
+//! accepting formulas that mention the new symbol. What was added is
+//! [`kernel::thm::henkin`]: from `⊢ ∃y. φ` with `FV(φ) ⊆ {y}`, a fresh **0-ary**
+//! constant and `⊢ φ(c)`. A constant is a parameter, so the schemes survive, and
+//! expanding a model by one witness needs no metatheoretic choice.
+//!
+//! [`epsilon`] is the single place that calls it, `ci/check-boundary.sh` rule 7
+//! enforces that, and that module's header says what a replacement would have to
+//! provide. The free-variable route in [`function`] is **not** deprecated: it is
+//! what proves the existential [`Epsilon::on`] consumes, and it is the only route
+//! available at a `u` that carries a parameter — which is precisely the case the
+//! kernel rule must refuse.
 //!
 //! # The bridge, and why it costs anything at all
 //!
@@ -76,14 +97,17 @@
 //! |---|---|
 //! | [`bridge`] | described pairs ↔ constructed pairs — reusable, and not about choice |
 //! | [`function`] | the choice function itself, its values, and its non-vacuity |
+//! | [`epsilon`] | `ε` as a **symbol**, and the only call to [`kernel::thm::henkin`] |
 //!
 //! `shared` holds the propositional and quantifier combinators the bridge needs
 //! and the crate does not already have; it exports no theorem and is not
 //! re-exported.
 
 pub mod bridge;
+pub mod epsilon;
 pub mod function;
 mod shared;
 
 pub use bridge::{opair_described, pair_in_bridge};
+pub use epsilon::Epsilon;
 pub use function::{choice_app, choice_fn_existence, choice_fn_on_universe, choice_nonvacuous};
