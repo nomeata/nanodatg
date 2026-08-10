@@ -27,11 +27,30 @@ What separates this branch from a shipping variant is engineering volume in
 `checker/`/`mini/` — the ground-σ assumption is load-bearing in the
 translation layer's keying and clause dispatch — and that volume is mapped in
 §5, with what was prototyped named as prototyped and what is unmeasured named
-as unmeasured. Nothing in it is blocked on mathematics. §5.5 states the
-switchover as a checkable condition; **one of its three clauses is settled
-and two are not**, and the remaining distance has been re-attributed by
-measurement from blocker 1 (which will not close it) to blockers 2c and 3
-(which must).
+as unmeasured. Nothing in it is blocked on mathematics.
+
+**The switchover's first clause has now been run rather than argued.** With
+`NANODATG_UNIFY_SORT=1`, `interp_sort` answers `srt(ℓ̂)` at *every* level,
+numerals included — one vocabulary, the ground special case retired — and
+both corpora are still accepted: `init-prelude` exit 0, arena
+`152 matched, 0 mismatched, 2 declined, 0 waived`, at **+0.5 %** of
+instructions. The design's central move is neither a soundness question nor a
+performance one.
+
+**What blocked the switchover turned out not to be about levels.** §5.5's
+first clause required blockers 1–2 closed, measured by three tg-suite
+ratchets. Partition-checked counters now attribute every one of them to a
+level-independent cause: `iota: no curried interpretation` is 399 of 399 a
+nullary-constructor gate and a shape gate, with all eighteen level-reachable
+arms at zero and the same rows in all four flag/schedule states;
+`stored` is 10 because 92.3 % of declarations have no value typing at all, at
+the *same* rate the scheduled state has; `hit` is bounded by `stored`. Clause
+1 is retired on that evidence, and what replaces it is clause 2 — the counter
+correspondence — grown to cover `fired`/`stored`/`hit`, which are
+σ-denominated too. The remaining work is named and sized in §5.5: ten
+rung-shaped typing rules to re-point at the `Srt` kit (2511 firings), the
+store's cross-level instantiation (483 sites, §1.6's other half, **not**
+delivered by the vocabulary unification as §5.4 used to claim), and mini.
 
 Two claims in the commissioning brief are **refuted** by the tree as it stands,
 and both make the design *easier* than briefed:
@@ -417,7 +436,15 @@ rebase exactly.
   |---|---:|---:|
   | flag off, scheduled | 222.18 G | **222.75 G** |
   | flag on, scheduled | 221.67 G | **247.08 G** (+10.9 %) |
-  | flag on, staged deletion | 142.79 G (−36 %) | **616.53 G** (+177 %) |
+  | flag on, staged deletion | 142.79 G (−36 %) | **615.18 G** (+177 %) |
+  | flag on, staged, **vocabulary unified** | — | **618.33 G** (+0.5 % on the row above) |
+
+  The last row is the one that changes how the +177 % reads. Unifying
+  `interp_sort` on `srt(·)` at *every* level — the switchover's central move,
+  which changes every `⟦Sort ℓ⟧` in the program — costs **+0.5 %** (§5.5). The
+  branch's cost is the Undet-`Π` clause and the level bridge; none of it is the
+  quantified sort. A reader who assumed the design's central move was what made
+  this branch slow would be wrong by two orders of magnitude.
 
   Flag off is unmoved (+0.26 %), as the bit-identity promise requires — the
   clause, the bridge and their counters are unreachable with the flag unset.
@@ -662,7 +689,14 @@ declarations quantified, two uses answered, a different-parameter-name use
 green under the gen-order mutation; the two-parameter `mypair` atom is what
 made it observable). On the **scheduled** prelude the quantifier fires zero
 times, structurally: a definition under σ is only ever interpreted at ground
-levels (§4.2). Its live population arrives with the deletion.
+levels (§4.2). **The prediction that its live population arrives with the
+deletion is refuted by measurement**: staged — the deletion's own control flow
+— it still fires zero times, because no declaration typing reaches the
+boundary carrying a `uᵢ ∈ ω` antecedent. Of 1645 declarations, 1519 have no
+value-typing certificate at all, and the 116 derived only under antecedents
+carry *value* premises (87 a family of families, 30 a membership), never a
+level one. The store's input population is empty for a reason upstream of
+levels; §5.4 blocker 2c has the rates.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 
@@ -878,13 +912,13 @@ at this branch's head:
     corpus that is a small number of distinct pairs against 1466 sites. This
     is a measurement-shaped guess and is written here as one; it has not been
     tried.
-  * **"Blocker 1 closes 2c's residue too" is refuted, at 5× the coverage.**
-    The commissioning brief carried this coupling; at 304/2407 wired it was
-    neither confirmed nor refuted, and the honest reading was that it stayed
-    open. It is now decided. With the bridge landed the clause answers
-    **1466 of 2407** — 4.8× the sites, 61 % of the population — and every
-    recursor row on the staged prelude is **byte-identical** to what it read
-    at 304:
+  * **"Blocker 1 closes 2c's residue too" is refuted, at 5× the coverage —
+    and so is every other level-shaped explanation for 2c.** The commissioning
+    brief carried the coupling; at 304/2407 wired it was neither confirmed nor
+    refuted. It is now decided twice over. With the bridge landed the clause
+    answers **1466 of 2407** — 4.8× the sites, 61 % of the population — and
+    every recursor row on the staged prelude is **byte-identical** to what it
+    read at 304:
 
     | row | at 304 wired | at 1466 wired |
     |---|---:|---:|
@@ -895,18 +929,59 @@ at this branch's head:
     | declarations translated | 315 | 315 |
     | constant typings stored / uses answered | 10 / 117 | 10 / 117 |
 
-    Not one of them moved. A coupling that survives a 4.8× change in the
-    coupled quantity with zero response is not a coupling, and the earlier
-    hedge (`what could move is no curried`/ι) is withdrawn: **`no curried`
-    does not move either.** The `T-policy` row's own decline site was already
-    verified in code to be the level-independent no-nullary-constructor gate
-    (`gen_rec_bottom`), which blocker 1's machinery cannot reach; the rest of
-    2c has to be built on its own terms. The three tg-suite rows that go red
-    under the deletion — `fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10),
-    `hit ≥ 1308` (reads 117) — are therefore **untouched by blocker 1's
-    completion**, and blocker 1 closing entirely would still leave all three
-    red. That is the switchover's real remaining distance, and it is blocker
-    2c's and blocker 3's, not blocker 1's.
+    A coupling that survives a 4.8× change in the coupled quantity with zero
+    response is not a coupling. **What replaced the dead attribution is a
+    partition, not another guess** — the same method that turned the 2103 into
+    "72 % is one identity", applied to the recursor path.
+
+    `RecMiss` has one variant per `rec_nest` refusal site (`rec_nest`,
+    `rec_bottom` and `gen_rec_bottom` return `Result<_, RecMiss>` and no bare
+    `None` exit survives in any of them), and `note_rec_miss` is called from
+    **exactly one place** — the ι site that asked. So the rows sum to the gap
+    row, which `certify.rs`'s ledger counts on an unrelated code path. Staged
+    `init-prelude`, flag on:
+
+    | reason | count | share |
+    |---|---:|---:|
+    | the `T`-policy gate: no nullary constructor | **349** | 87.5 % |
+    | indices / several motives / `K`-like / mutual | **50** | 12.5 % |
+    | every other arm — eighteen of them | **0** | — |
+    | **sum, = the gap row** | **399** | |
+
+    The eighteen zeros are the finding. `OmegaEscape` (a domain mentioning an
+    ω-variable the recursor's levels do not name), `BottomLevels` (the level
+    list not `ind + motive`), `TPolicyTerm`, `Abbrev`, `RecOf` — every arm a
+    level construction could ever reach — never fires once. And the fixture
+    asserts the same rows in **all four states**: flag on and off, scheduled
+    and staged. Level-independence stated as a test rather than as a sentence.
+
+    **The `T`-policy row is all 600 the same gate**, established in code (one
+    `note_decline(Decline::TPolicy)` site) and then *measured* rather than
+    argued from the doc comment. Widening the gate: TOTAL gaps stay **10531**,
+    ι fired stays **43**, `no curried` stays **399**; the 349 redistribute into
+
+    * **172** refused by the nest walk's two-minor floor — `depth < np + 4`,
+      inherited from the two-constructor hand-written bottoms, so a
+      single-constructor structure sits at `np + 3` and is refused;
+    * **149** with no `T`-policy target in the walk's own domains;
+    * **28** with fewer than four recursor arguments;
+
+    at the cost of **106** extra `GenRecursor` builds for zero closed gaps.
+    Three named, level-independent constructions, and the largest of them is a
+    hard-coded arity floor rather than anything about universes.
+
+    **The other two ratchets are level-independent for their own reasons.**
+    `stored ≥ 26` reads 10 because **1519 of 1645 declarations (92.3 %) have no
+    value-typing certificate at all**, at the *same* 92.3 % rate the scheduled
+    state has — so the drop is the census halving, not a level loss. And zero
+    declarations reach the boundary with a `uᵢ ∈ ω` antecedent in either
+    state, which **refutes §5.3's step-5 status line**: the quantified store's
+    live population does *not* arrive with the deletion. `hit ≥ 1308` reads 117
+    and is bounded by `stored`; see blocker 3 for the 483 that are not.
+
+    The three tg-suite rows the deletion reddens are therefore nobody's
+    blocker in the level sense — not blocker 1's, not 2c's, and not 3's. §5.5
+    clause 1 is retired on this evidence.
   * **The instrument's own fixture.** `118_accRecReduction` staged populates
     three outcome rows at once (2 fired, 9 not wired, 1 bridge refused), so
     the partition is pinned there against the independent gap ledger and
@@ -991,87 +1066,249 @@ at this branch's head:
   head drift (`Dt::IndDrift`'s own doc), population-scaled now that these
   nests build at all; a share-only-when-shared-named gating was tried and
   measured to change nothing, so it is not in the tree.
-* **Blocker 3 — evidence consumption across the vocabulary switch.**
-  Typing obligations discharged 5373 → 1624; declaration-typing store
-  answers 1329 → 117. A ground use's interpretation (tower rungs) and a
+* **Blocker 3 — evidence consumption across the vocabulary switch. Not
+  separately closable, measured — and only half of it dissolves at the
+  switchover.** Typing obligations discharged 5373 → 1624; declaration-typing
+  store answers 1329 → 117. A ground use's interpretation (tower rungs) and a
   quantified theorem's instance (`srt(n̄)`) are provably equal, **not
   identical**, so every literal-formula guard misses across the boundary.
-  **The §4.5 invariant resolves this by dissolution, not by bridges**: when
-  `⟦Sort ℓ⟧ = srt(ℓ̂)` for *every* level — numerals included — there is one
-  vocabulary and the boundary the guards miss across no longer exists. The
-  tower-rung spelling retires from the interpretation entirely (it remains
-  `derived/`'s internal business); `⟦Sort 1⟧` is `srt(succ ∅)`, whose facts
-  (`at_zero`/`at_succ`/`sort_in_sort` at numerals, with the numerals'
-  *unconditional* ω-membership) replace the vacuous `x ∈ U(x)` discharge
-  with honest unconditional certificates. The §1.2 bridge equations are
-  then needed only where a `derived` library theorem is stated over rung
-  terms or `fs` (`fs_app_mem`, the machine's `Ctor::mem` carriers), a
-  bounded, listable set of seams — not inside every formula. This is the
-  switchover's actual content, and why it is **one commit that deletes and
-  re-derives together**: unify `interp_sort` on `srt(·)`, retire the ground
-  special case, re-point the sort-typing rules at the `Srt` kit, delete the
-  schedule, and re-take every ratchet on the far side. This is also
-  why the wedge could not be consumed incrementally: **§1.6's cross-level
-  payoff needs the schedule gone, and the no-regression deletion needs
-  blockers 1–2 closed first.**
+
+  **How big it is.** `Dt::MissOtherLevels` counts the only part of the
+  store-miss population a level construction can reach: a use whose
+  declaration *is* stored, at other levels. Staged `init-prelude`, flag on:
+  **483 of 17124 misses (2.8 %)**; scheduled, 29. So blocker 3 closed
+  completely takes `uses answered from the store` to at most **117 + 483 =
+  600**, against a ratchet of **1308**. The other 97.2 % are declarations
+  stored at no levels at all, which is not a level problem (see 2c).
+
+  **Which half it is — the question §5.5 left open, now answered.** A
+  cross-level miss at another declaration's *parameter variables* would need
+  only the stored `∀u⃗` instantiated: no vocabulary switch, closable today. A
+  miss at *numerals* needs `⟦Sort 0⟧` to be `srt(∅)` rather than a tower rung.
+  Measured: **483 of 483 are ground.** There is no variable-to-variable
+  population. Blocker 3 is therefore **part of** the switchover and not a
+  precondition of it — the dissolution argument's conclusion is right, and it
+  is now a measurement rather than an argument. `015_levelParams` is the whole
+  thing at one site, with the schedule as its own control: two entries stored
+  in both states, one use answered under σ and unanswered without it.
+
+  **But the dissolution is only half of what was claimed.** §5.4 used to say
+  the switchover dissolves this blocker in one commit. It does not. Running
+  the vocabulary unification (`NANODATG_UNIFY_SORT=1`, §5.5) leaves **all 483
+  cross-level misses in place**, because the store key is `(name, ⟦levels⟧)`
+  and unifying the sort vocabulary does not make a use spelled `f.{0}` find an
+  entry stored at `f`'s parameter variable. That needs §1.6's other half —
+  instantiating the stored `∀u⃗` at the *use's own* levels. The consumer
+  exists (`declar_typings_poly`, §5.3 step 5) but opens at the **generic
+  point**, which answers only uses at the declaration's own parameter
+  variables: a population measured at **zero**. Two independent mechanisms,
+  one run and one not built.
+
+  What the unification *does* buy is the seam §5.4 promised as "bounded and
+  listable", now listed and sized: six rules go dark and three lose most of
+  their population, 2511 firings in all, every one of them with a tower rung
+  in its conclusion (§5.5's table). The `Srt` facts that replace them —
+  `at_zero`/`at_succ`/`sort_in_sort` at numerals, with the numerals'
+  *unconditional* ω-membership — are built, and they replace the vacuous
+  `x ∈ U(x)` discharge with honest unconditional certificates.
 * **Blocker 4 — mini** (§5.1's last row): its evidence pipeline is
   (declaration, σ)-shaped end to end, and none of §5.3 steps 1–2 is built.
 
-The tg-suite rows that would go red under the deletion today are exactly the
-blockers' rows: `fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10),
-`hit ≥ 1308` (reads 117), and the per-file zero-gap pins on polymorphic
-tutorial declarations. Those are coverage losses, not honest-conditional
-re-baselines, and they are why the schedule is still in the tree.
+The tg-suite rows that would go red under the deletion today are
+`fired ≥ 80` (reads 43), `stored ≥ 26` (reads 10) and `hit ≥ 1308`
+(reads 117), plus the per-file zero-gap pins on polymorphic tutorial
+declarations. **They used to be called "the blockers' rows"; they are not.**
+The partitions above attribute every one of them to a level-independent cause
+— an arity floor and a nullary-constructor gate for `fired`, a 92.3 %
+declaration-typing gap rate for `stored`, and `stored` itself for `hit`, with
+483 of the residue in blocker 3. They are part coverage loss and part
+**σ-denomination**: the ratchets count over 2891 (declaration, σ) pairs and
+the deleted state walks 1645 declarations. §5.5's counter correspondence is
+what makes the comparison honest, and neither reading lets them be quietly
+re-based.
 
-### 5.5 The switchover, and the distance to it — stated as a condition, not a date
+### 5.5 The switchover, run — what it costs and what still blocks it
 
 The switchover is one commit: unify `interp_sort` on `srt(·)` at *every*
 level, numerals included; retire the ground special case; delete
-`instantiations.rs` (511 lines), `tc.rs`'s schedule driver (~45), `util.rs`'s
-σ-plumbing (~80) and `tg.rs`'s σ-reads (~90); de-schedule mini
-(`ground.rs`'s 141 lines, `ledger.rs`'s per-σ pair walk, `zoneb`'s
-pre-ensure, `dump.rs`'s enumeration); and re-take every ratchet on the far
-side. **It cannot be a ratchet** and it cannot be partial: §1.6's cross-level
-payoff needs the schedule gone, and blocker 3 dissolves only when there is
-one vocabulary rather than two.
+`instantiations.rs` (511 lines, verified), `tc.rs`'s schedule driver (~45),
+`util.rs`'s σ-plumbing (~80) and `tg.rs`'s σ-reads (~90); de-schedule mini;
+and re-take every ratchet on the far side. **It cannot be a ratchet** and it
+cannot be partial: §1.6's cross-level payoff needs the schedule gone.
 
-Three things have to be true when that commit lands, and exactly one of them
-is now settled.
+**Its first clause has been run.** `NANODATG_UNIFY_SORT=1` is the staging
+switch — the twin of `NANODATG_NO_SCHEDULE=1`, deleted with it at the end —
+and it makes `interp_sort` answer `srt(ℓ̂)` at every level, `⟦Sort 0⟧` being
+`srt(∅)` rather than the tower's `U₀`. So the question "is the switchover
+reachable" is now answered by running it rather than by argument, and **the
+answer is yes**:
 
-1. **Blockers 1–2 closed.** *Not met, and blocker 1's completion will not
-   meet it.* This tranche established that at 1466/2407 — 4.8× the previous
-   coverage — every recursor row is byte-identical, so `fired`, `stored` and
-   `hit` are blocker 2c's and blocker 3's to move and nobody else's. That is
-   the single most useful thing the measurement bought: the remaining
-   distance is now attributed to the right blocker instead of being hoped
-   onto this one.
-2. **The counter correspondence, stated.** *Designed, not written.* `pairs`
-   and `constEv` are σ-denominated and lose their referent; `decls`/`declEv`
-   are their defined replacements (§4.5). The rule is rename-with-explanation,
-   never silent re-basing — and this tranche is the precedent for how that
-   reads in practice: `TNotImax` and `TGuardDrift` were retired into
-   `TBridge` with both old names recorded at the new row, because a re-based
-   counter with no explanation is indistinguishable from a hidden regression.
-3. **The ι gate at zero or re-decomposed with its new cause.** *Its cause has
-   moved and is now known.* `the_general_iota_rule_computes_on_the_prelude`
-   is still red flag-on, but the +26/+6 it trips on is no longer §4.2's old
-   "+18 certificate copies": the largest single row is the **+10 congruence
-   split between wired and opaque Undet `Π`s** (§4.2's table). That row is
-   an artefact of the two interpretations coexisting, and the switchover —
-   which makes every Undet `Π` wired — is what removes it rather than
-   something to be fixed beforehand. Deferring it remains right; surviving
-   the switchover as an accepted red would not be.
+| | staged | staged + unified |
+|---|---:|---:|
+| `init-prelude` acceptance | exit 0 | **exit 0** |
+| arena corpus | 152/0/2/0 | **152 matched, 0 mismatched, 2 declined, 0 waived** |
+| TOTAL gaps | 10531 | 10752 (+221) |
+| typing obligations discharged | 1624 | 519 (−1105) |
+| instructions | 615.18 G | **618.33 G (+0.5 %)** |
 
-**Acceptance invariance holds and was re-checked here.** Exit 0 and the same
-declarations in all three states at this head, as it must be: σ selects which
-set a `Π` is interpreted as, never whether a declaration is accepted
-(`TcCtx::sigma`). Flag off is bit-identical — 113 test binaries green,
+Three readings, all of them load-bearing.
+
+*The ground special case is not load-bearing for any verdict.* Both corpora
+are accepted with one vocabulary, at master's own arena numbers. Nothing in
+the switchover's core is a mathematical obstruction, and nothing in it is a
+soundness question either — acceptance is unmoved in the state where every
+`⟦Sort ℓ⟧` in the program changed.
+
+*The vocabulary unification is free.* +0.5 % of instructions. The branch's
++177 % (§4.2) belongs entirely to the Undet-`Π` clause and the level bridge,
+and none of it to the design's central move. A reader who assumed the
+quantified sort was what cost the branch its performance would be wrong by
+two orders of magnitude.
+
+*The −1105 is blocker 3's seam, and it is now a list rather than a promise.*
+§5.4 used to call it "a bounded, listable set of seams"; here it is, measured
+on the staged prelude. Six typing rules go dark and three lose most of their
+population:
+
+| rule | staged | unified | Δ |
+|---|---:|---:|---:|
+| `IndTy`: an inductive type lies in its universe | 888 | 0 | −888 |
+| `Lam`: a graph is a section of its fibres | 594 | 105 | −489 |
+| `ty_pi_prop` | 446 | 0 | −446 |
+| `ty_lam` | 1217 | 1079 | −138 |
+| `ty_const` | 112 | 1 | −111 |
+| `Const`: along the defining equation | 85 | 14 | −71 |
+| `x ∈ U(x)` (Sort, and any `U`-shaped domain) | 51 | 0 | −51 |
+| `ty_pi` | 50 | 0 | −50 |
+| `U₀ ∈ U₁` (`⟦Prop⟧ ∈ ⟦Type 0⟧`) | 17 | 0 | −17 |
+| `fs(a,a) ∈ U(a)` | 2 | 0 | −2 |
+
+Every one of them has a tower rung in its conclusion, which is exactly the
+predicted shape: a `derived` library theorem stated over `U(·)`, `U₀`, `U₁` or
+`fs` no longer matches an interpretation spelled `srt(·)`. Re-pointing them at
+the `Srt` kit is 2511 firings of engineering with a known size, and the
+`Srt` facts they need (`at_zero`/`at_succ`/`sort_in_sort` at numerals, whose
+ω-memberships are *unconditional*) are built. TOTAL gaps rise by only 221
+because most of the lost discharges become carried antecedents rather than
+absent ones (obligations carried 19925 → 21030).
+
+#### What the three clauses now say
+
+1. **Blockers 1–2 closed.** **Retired as a precondition — it was never a level
+   condition at all.** The three tg-suite rows the deletion reddens
+   (`fired ≥ 80` reads 43, `stored ≥ 26` reads 10, `hit ≥ 1308` reads 117)
+   are now decomposed by partition-checked counters, and *not one of them can
+   be moved by any level construction*:
+   * `iota: this recursor has no curried interpretation` = **399, of which
+     349 are the `T`-policy-3 gate (no nullary constructor) and 50 are
+     indices / several motives / `K`-like / mutual.** Every arm a level could
+     reach — an ω-variable escaping a nest, a level list of the wrong shape, a
+     refused abbreviation — reads **zero**. The fixture asserts the same rows
+     in all four states (flag on/off × scheduled/staged), which is the
+     level-independence claim stated as a test rather than as a sentence.
+   * The `T`-policy row is **all 600** the no-nullary-constructor gate: one
+     `note_decline(Decline::TPolicy)` site in the program. Widening it was
+     *measured*, not reasoned about: TOTAL gaps stay 10531, ι fired stays 43,
+     `no curried` stays 399, and the 349 merely redistribute into 172 refused
+     by the nest walk's two-minor floor (`depth < np + 4` — a single-
+     constructor structure sits at `np + 3`), 149 with no `T`-policy target in
+     the walk's domains, and 28 with fewer than four arguments, at the cost of
+     106 extra `GenRecursor` builds. The doc comment that claimed this was
+     right; it is now a measurement.
+   * `stored` is 10 because **1519 of 1645 declarations (92.3 %) have no
+     value-typing certificate at all** — against the scheduled state's
+     *identical* 92.3 % rate. And **zero** declarations reach the boundary
+     carrying a `uᵢ ∈ ω` antecedent, in either state: the 116 that derive only
+     under antecedents carry *value* premises (87 a family of families, 30 a
+     membership). This **refutes §5.3's step-5 status line** — the quantified
+     store's "live population arrives with the deletion" is false; it fires
+     zero times staged too, and for a reason upstream of levels.
+   * `hit` is bounded by `stored`. Of 17124 store misses, **483 (2.8 %)** are
+     against a declaration stored at other levels — the only part a level
+     construction reaches. Blocker 3 closed completely takes `hit` to at most
+     **600**, against a ratchet of **1308**.
+2. **The counter correspondence, stated.** *Written, below.* It is larger than
+   §4.5 anticipated, because `fired`/`stored`/`hit` turn out to be
+   σ-denominated too, not merely `pairs`/`constEv`.
+3. **The ι gate at zero or re-decomposed with its new cause.** **The predicted
+   cause is refuted and the disposition changes.** §5.5 used to say the
+   switchover removes the +10 `pi congruence: two Πs of undetermined sort over
+   differently shaped bodies` row "by making every Undet `Π` wired". Measured
+   at all four states, that row reads **69 scheduled and 756 staged, with the
+   vocabulary unified or not**. The switchover does not remove it; unifying
+   `interp_sort` does not touch it. What the switchover removes is the
+   *comparison*: the ratchet 15542 is a count over the scheduled prelude, and
+   after the deletion there is no scheduled prelude. The gate must therefore be
+   **re-taken on the only state that exists** (staged, 10531 today / 10752
+   unified) with the denomination named — the same rename-with-explanation as
+   clause 2, not a fix. Surviving as an accepted red would still not be
+   acceptable; passing by accident because the new number is smaller would be
+   worse, and is the failure mode clause 2 exists to prevent.
+
+#### The counter correspondence
+
+The unit of account changes from the **(declaration, σ) pair** to the
+**declaration**, and on `init-prelude` that is 2891 → 1645. Every counter
+denominated in the old unit loses its referent and must be renamed with its
+denominator stated, never silently re-based (`permissive but consistent`).
+
+| old counter | what it counted | replacement | what it counts | honest comparison |
+|---|---|---|---|---|
+| `pairs` | (declaration, σ) value pairs | `decls` | declarations walked | 2891 → 1645; a ratio, not a loss |
+| `constEv` | pairs whose typing carries evidence | `declEv` | declarations whose one typing carries evidence, unconditional and `∀u⃗∈ω`-quantified counted apart | 26 → 10; **rates 0.90 % → 0.61 %**, so a real 32 % relative loss sits inside the denomination change and must be reported as such |
+| `fired ≥ 80` | ι sites computed, over 2891 pairs | `fired` over `decls` | ι sites computed | 92 → 43; rates 3.18 % → 2.61 % |
+| `stored ≥ 26` | typings stored, over 2891 pairs | `stored` over `decls` | typings stored | 26 → 10; see `declEv` |
+| `hit ≥ 1308` | store answers | `hit` | store answers | 1329 → 117. **This one is mostly a real loss, not denomination**: 483 of it is blocker 3's cross-level boundary and is attributed there; the rest follows `stored` |
+| `gapped`, `unsealed` | — | unchanged | — | unchanged |
+
+The rule the table obeys is the one this branch already set with `TNotImax`
+and `TGuardDrift` → `TBridge`: the new row records both old names, and where
+a rate moved as well as a denominator, the rate is printed. A re-based counter
+with no explanation is indistinguishable from a hidden regression, and three
+of these moved for reasons that are *not* the re-basing.
+
+#### Acceptance invariance, on the far side
+
+Exit 0 and the same declarations in every state now measured — scheduled,
+staged, and **staged with the vocabulary unified** — plus the arena corpus at
+`152 matched, 0 mismatched, 2 declined, 0 waived` in the switched-over state.
+That is the claim that makes a deletion this large reviewable, and it now
+holds on the far side of the switchover's first clause rather than only on the
+near one. Flag off is bit-identical with the new switch set or unset:
 init-prelude at the untouched 15542 gaps / 2257 escapes.
 
-**Mini is untouched by this tranche** and remains blocker 4 in full: its
-evidence pipeline is `(declaration, σ)`-shaped end to end and none of §5.3
-steps 1–2 is built. Nothing here changed that, and nothing here made it
-easier.
+#### What is actually left
+
+Not blockers 1–2, and not blocker 3 *as a precondition*. What is left is:
+
+* **The rung-shaped typing rules, re-pointed at the `Srt` kit** — the ten rows
+  above, 2511 firings. Engineering; the `Srt` facts exist; sized.
+* **The store answering cross-level uses** (§1.6). Unifying `interp_sort`
+  leaves all 483 cross-level misses in place, because the store key is
+  `(name, ⟦levels⟧)` and the vocabulary switch does not make a use spelled
+  `f.{0}` find an entry stored at `f`'s parameter variable. §5.5 used to
+  describe the switchover as one commit that dissolves blocker 3; the
+  measurement says it is **two independent mechanisms**, the vocabulary
+  unification and the instantiation of the stored `∀u⃗` at the use's own
+  levels, and only the first has been run. `declar_typings_poly`'s consumer
+  exists but opens at the *generic point*, which answers only uses at the
+  declaration's own parameter variables — a population measured at **zero**.
+* **Mini** — blocker 4, below, the largest of the three.
+
+None of these is blocked on mathematics, and none of them is a level problem
+except the second.
+
+#### Mini, sized
+
+`ground.rs` is **141 lines** and `ConstKey` is narrower than the module count
+suggests: **80 occurrences in 4 files** (63 in `interp.rs`, 15 in `dump.rs`,
+one each in `zoneb.rs` and `nested_splice.rs`), with **50 `ground::` call
+sites**. `ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
+`(name, ground levels)`, its module doc says so in the first thirty lines) and
+`dump.rs`'s schedule enumeration ("this dump **enumerates the schedule, not the
+store**") are the three named consumers, and each states its σ-dependence in
+its own header. Nothing here was built this tranche; the sizing is so that
+blocker 4 is a number rather than an adjective.
 
 ## 6. What is deliberately not claimed
 
@@ -1097,11 +1334,20 @@ Named so nothing is hidden behind the verdict. As of this branch:
   reassociation are **not** built. They are counted, not assumed away.
 * **The store schema for `∀u⃗∈ω` certificates** is built on the checker side
   (`Shared::declar_typings_poly`, §5.3 step-5 status) and pinned by fixture;
-  its *cross-level* consumption (a ground use answered by `ax_inst` at a
-  numeral plus the §1.2 bridges) is not built — §5.4 blocker 3 — and mini's
-  side is untouched.
+  its *cross-level* consumption is not built — §5.4 blocker 3 — and mini's
+  side is untouched. Two things measured since: the store's input population
+  is **empty** in every state, including the staged one the §5.3 status line
+  predicted would fill it; and its consumer opens the `∀u⃗` at the **generic
+  point**, so even a full store would answer only uses at the declaration's
+  own parameter variables — a population measured at zero, against 483 uses at
+  numerals. The missing piece is `ax_inst` at the *use's* levels, and unifying
+  `interp_sort` does not supply it.
 * **Performance of quantified checking is unmeasured**, because the pipeline
   is not rewritten; what is measured is the construction cost of the new
   apparatus and the invariance of today's counters (§4). No claim is made
-  either way about end-to-end speed; the owner has said a regression would
-  not stop this line, and nothing here needed that allowance yet.
+  either way about end-to-end speed. The one thing now measured is *negative
+  and useful*: the quantified sort itself is not what costs anything
+  (+0.5 %, §5.5), so the +177 % is attributable to the Undet-`Π` clause and
+  the level bridge and to nothing structural in the design. The owner has said
+  a regression would not stop this line, and the branch has not been slowed to
+  chase one.
