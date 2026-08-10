@@ -185,8 +185,11 @@ declaration, and declines with `nested model name taken`.
 A nested or mutual model's proofs need `Eq`, the quotient, `Quot.sound` and
 `funext`. A `--prim-models` model needs `Eq` and whichever basis primitives it
 actually uses, and **no axiom at all** — the construction stopped needing
-`funext` when the `False`-Π pad was replaced by `PULiftP ⊤`, whose uniqueness
-is definitional. If the input lacks anything a model needs it is **spliced
+`funext` when the `False`-Π pad was replaced by `PULiftP ⊤`, every element of
+which is definitionally the canonical one (`MODELGEN.md` §8.1 narrows what
+that does and does not mean: it is eta against a literal constructor
+application, not a collapse of two opaque inhabitants).
+If the input lacks anything a model needs it is **spliced
 in** — `funext` is *derived* from `Quot.sound`, never asserted as an axiom —
 and only when a model is actually being generated, so a file with nothing to
 model comes back byte-identical.

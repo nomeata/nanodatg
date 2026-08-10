@@ -2516,10 +2516,28 @@ There is no transport between them: structure eta on `PULiftP` gives
 That is also why the pads improved. A pad at a level `dsingOk` cannot build —
 a bare parameter in the gap, `PULift`'s shape — used to be the `False`-Π
 singleton `(h : False) → False.rec (fun _ => Sort ℓ) h`, whose uniqueness is
-`funext` at a pointwise `False.rec`. It is now `PULiftP.{ℓ} ⊤`, which is a
-**definitional** singleton at every level (structure eta plus proof
-irrelevance on `⊤`), so the destructor transports nothing and the model
-splices no axiom.
+`funext` at a pointwise `False.rec`. It is now `PULiftP.{ℓ} ⊤`, every element
+of which is **defeq to the canonical one** at every level — structure eta
+expands the element against the literal `up` that the canonical element is,
+and proof irrelevance closes the `⊤` payload — so the destructor transports
+nothing and the model splices no axiom.
+
+**That is narrower than "a definitional singleton", and the difference is
+load-bearing.** Eta-for-structures fires only against a side that is already
+a constructor application, so `t ≡ canon` holds and `x ≡ y` for two *opaque*
+inhabitants does not — the kernel refuses it even when forced past the
+unifier with `@Eq.refl _ x`. It is refused as a *conversion* only: `x = y` is
+provable with no axiom by routing through `up (down ·)`, where every step is
+a redex, so the conversion is simply not transitive at this shape. Every use
+in the construction is at a redex — the pad against `unitAtCanon`, the
+maybe-zero carrier against `up (down t)` — and none compares two opaque
+inhabitants, so nothing rests on the claim that fails.
+`scripts/inductive-basis/PULiftPEta.lean` compiles all of it, with the two
+refusals pinned by `#guard_msgs`, and records the two generator-side
+mutations: routing the lift pad through its propositional transport instead
+is **green** (so that branch is a working alternative nothing reaches), and
+routing the `D` pad through the *lift's* transport is **red** at `Tri`,
+`Opt`, `Dec` and `Big` (so the flag carries real information).
 
 **The strong-induction fold.** A small-eliminating `Prop` that is indexed or
 recursive cannot use the plain fold: a minor premise wants
@@ -2601,9 +2619,11 @@ asking about visibility, and nothing in the tree counted them before.
 The run splices exactly two basis members, `PSigma` and `PULiftP`. It
 splices **no `funext`, no `Quot.sound` and no quotient**, and no model waits
 on the input's quotient any more: the `False`-Π singleton's uniqueness was
-`funext` at a pointwise `False.rec`, and `PULiftP`'s is *definitional* —
-structure eta on a single-constructor index-free inductive, plus proof
-irrelevance on `⊤`. That retired both axioms and two spliced declarations
+`funext` at a pointwise `False.rec`, and `PULiftP`'s is *definitional* against
+the canonical element — structure eta on a single-constructor index-free
+inductive, plus proof irrelevance on `⊤`, at a redex (§8.1's narrowing: not
+between two opaque inhabitants, which the construction never needs). That
+retired both axioms and two spliced declarations
 (`PUnit`'s model went from 7 declarations to 4, `PULift`'s from 5 to 4).
 
 Filtering the output again with the flag on declines 131 times at the name

@@ -54,10 +54,17 @@ destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`Modelgen.dsingAt`]); at any other level — a bare parameter in the gap,
   `PULift`'s shape — it is `PULiftP.{ℓ} ⊤` ([`Modelgen.unitAt`]), which
-  exists at *every* level. **Both are definitionally canonical**: structure
-  eta on `PULiftP` plus proof irrelevance on `⊤` collapses every element
-  onto the canonical one, so no pad costs a transport. The `False`-Π
-  singleton this replaced was not canonical and cost a `funext`.
+  exists at *every* level. **Both are definitionally canonical**, in the one
+  sense the construction needs: every element is *defeq to the canonical
+  one*, because the canonical one is a literal constructor application and
+  eta-for-structures expands the other side against it. So no pad costs a
+  transport. This is **not** the stronger claim that two *opaque* inhabitants
+  collapse, which is false as a conversion — nothing eta-expands a variable
+  on speculation, so the kernel refuses `x ≡ y` for two variables even though
+  `x = y` is provable without an axiom.
+  `scripts/inductive-basis/PULiftPEta.lean` pins both and the gap between
+  them. The `False`-Π singleton this replaced was not canonical in *either*
+  sense and cost a `funext`.
 * **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's level
   is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an `imax` under
   a `max` — what collapses it is a never-`Prop` codomain, so the field is
@@ -345,13 +352,24 @@ on it — `t ≡ up (down t)` for every `t`, at every level, `Prop` or not. So
 this is `Eq.refl`, not a recursor call, and it is here only so that the one
 place that needs an *equation* rather than a conversion has one.
 
-Two consequences the construction leans on. `PULiftP ⊤` is a **definitional
-singleton** at every level (eta collapses `x` onto `up (down x)`, proof
-irrelevance collapses `down x` onto `⊤`'s inhabitant), so a pad built from it
-needs no transport — which is what makes it a strict improvement on the
+**The rule fires on a redex, and only on one.** Eta-for-structures expands one
+side when the *other* is already a constructor application. So `t ≡ up (down
+t)` holds for an opaque `t`, and `t ≡ canon` holds for a literal `canon = up
+h`, but `x ≡ y` for two opaque inhabitants does **not** — the kernel refuses it
+even when forced past the unifier with `@Eq.refl _ x`, because neither side
+gets expanded. It is refused as a *conversion* only: `x = y` is provable, with
+no axiom, by routing through `up (down ·)` where every step is a redex, so the
+conversion is simply not transitive at this shape.
+`scripts/inductive-basis/PULiftPEta.lean` pins all of it.
+
+Two consequences the construction leans on, **both at a redex**. Every element
+of `PULiftP ⊤` is defeq to [`Modelgen.unitAtCanon`], which is a literal `up`,
+so a pad built from it needs no transport — the strict improvement on the
 `False`-Π pad, whose uniqueness was `funext`. And `motive (up (down t))` and
 `motive t` are convertible, so the maybe-zero route's recursor is the `Prop`
-route's with `up`/`down` at the ends and nothing in between. -/
+route's with `up`/`down` at the ends and nothing in between. Nowhere does the
+construction compare two opaque inhabitants, so nothing rests on the claim
+that fails. -/
 def puliftEta (eqi : EqInfo) (ℓ : Level) (p t : Expr) : Expr :=
   eqi.refl' ℓ (puliftT ℓ p) t
 
@@ -411,12 +429,18 @@ carriers at such a sort, not one: `PULiftP ⊤` (the singleton, below) and
 `PULiftP ⊥` ([`Modelgen.emptyAt`]), and `PEmpty` is no longer out of reach.
 
 Like [`Modelgen.dsingAt`]'s pads the singleton **is** definitionally
-canonical — structure eta on `PULiftP` plus proof irrelevance on `⊤` — so
+canonical — *every element is defeq to [`Modelgen.unitAtCanon`]*, by structure
+eta on `PULiftP` against that literal `up` plus proof irrelevance on `⊤` — so
 wherever one is destructed the applied minor already has the target type and
-no transport rides along. This is where the
-`False`-Π singleton cost a `funext`. In fact the lift's eta is *definitional*
-(structure eta on `PULiftP`), so the destructor needs no transport at all and
-ι is `Eq.refl` with nothing to erase. -/
+no transport rides along. This is where the `False`-Π singleton cost a
+`funext`, and it is why the destructor needs no transport at all and ι is
+`Eq.refl` with nothing to erase.
+
+**Read "canonical" narrowly.** What holds is `t ≡ canon`, where one side is a
+constructor application and eta expands the other. What does *not* hold is
+`x ≡ y` for two opaque inhabitants: no side is a redex, so the kernel refuses
+it — see [`Modelgen.puliftEta`] and `scripts/inductive-basis/PULiftPEta.lean`.
+Every use below is of the first kind. -/
 
 /-- The singleton at exactly `Sort ℓ`: the lift of `⊤`. -/
 def unitAt (ℓ : Level) : Expr := puliftT ℓ trueP
@@ -427,7 +451,18 @@ def unitAtCanon (ℓ : Level) : Expr := puliftUp ℓ trueP trueI
 /-- `Eq canon t` for `t : unitAt ℓ`. [`Modelgen.puliftEta`] proves
 `Eq (up (down t)) t`, and `up (down t)` is *definitionally* the canonical
 element: both components are proofs of `⊤`, and proof irrelevance closes it.
-No `funext`. -/
+No `funext`.
+
+**Nothing reaches this today.** [`Modelgen.padsAt`] marks both pad families
+`canonical := true`, because `t ≡ canon` is a conversion the kernel performs
+(the canonical element is a literal `up`, so eta expands `t` against it), so
+[`Modelgen.chainDestruct`] takes its no-transport branch for the lift pad as
+well as for the `D` pad. It is kept because it is the shape a caller would
+need if a future pad family were canonical only *propositionally*, and it is
+measured rather than assumed: forcing the lift pad through here by setting
+`canonical := false` leaves every `prim_shapes` occupant modelling, and
+forcing the `D` pad through here — where the proof is about the wrong type —
+is red at `Tri`, `Opt`, `Dec` and `Big`. -/
 def unitAtUniq (eqi : EqInfo) (ℓ : Level) (t : Expr) : Expr :=
   puliftEta eqi ℓ trueP t
 
@@ -462,11 +497,15 @@ partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
   | _ => badShape s!"no pad at Sort {ℓ}"
 
 /-- A chain's pad: its type, its type's level, and its canonical element.
-`canonical` says which of the two pad families it is: a [`Modelgen.dsingAt`]
-pad, every element **defeq** to `canon` so no uniqueness proof rides along —
-or, at a level `dsingOk` cannot build (a bare parameter in the gap —
-`PULift`'s shape), the [`Modelgen.unitAt`] lift, whose uniqueness is
-propositional and whose destruction transports along it. -/
+
+`canonical` says whether every element is **defeq** to `canon`, in which case
+no uniqueness proof rides along. **Both families set it**: the
+[`Modelgen.dsingAt`] pad by `PSigma` structure eta and proof irrelevance, and
+the [`Modelgen.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
+parameter in the gap, `PULift`'s shape — by `PULiftP` structure eta against
+the literal `up` that `canon` is. The `false` case is therefore unreached
+today; [`Modelgen.unitAtUniq`] is the transport it would take, and the
+measurement that says so is in that docstring. -/
 structure Pad where
   ty : Expr
   lv : Level
@@ -957,10 +996,15 @@ structure CPlan where
   deriving Inhabited
 
 /-- The pads of every constructor at the given parameter scope, `none` where
-the plan needs none. A `dsingOk` level gets the definitionally-canonical
-[`Modelgen.dsingAt`] pad; any other level — a bare parameter in the gap,
-`PULift`'s shape — gets the [`Modelgen.unitAt`] lift, which exists at every
-level and is discharged by transport instead. -/
+the plan needs none. A `dsingOk` level gets the [`Modelgen.dsingAt`] pad; any
+other level — a bare parameter in the gap, `PULift`'s shape — gets the
+[`Modelgen.unitAt`] lift, which exists at every level.
+
+**Both are marked `canonical`**, and that is the measured fact rather than a
+symmetry: each family's canonical element is a literal constructor
+application, so the kernel converts an opaque element onto it and neither pad
+costs a transport. What the lift does *not* give is a conversion between two
+opaque elements; nothing here asks for one. -/
 def padsAt (plans : Array CPlan) :
     GenM (Array (Option Pad)) := do
   plans.mapM fun plan => do
