@@ -4271,12 +4271,15 @@ of*.
   not implemented.
 * **`Prop`-valued and small-eliminating targets** are a different construction,
   unchanged from `WFromPaths.lean`.
-* **Universe polymorphism** is not exercised: the targets are `Type`-valued at
-  a literal level. The carrier is a `PSigma` over the skeleton, so it lands at
-  `max 1 w 0`, and whether that is `w` on the nose at every never-zero `w` the
-  corpus carries is the same level question the Type route's pads already
-  answer — but it is *that* question again and not a new one, and it has not
-  been asked here.
+* **Universe polymorphism is not exercised at the targets**, which are
+  `Type`-valued at a literal level. The one level question the *carrier*
+  raises is asked and answered: the carrier is `PSigma (fun s : S => good s x)`
+  with `S : Sort w` and `good … : Prop`, so it lands at `Sort (max 1 w 0)`, and
+  the prototype pins that Lean sees that as `w` on the nose at every never-zero
+  shape a carrier has — `succ u`, `max 1 u`, `max 1 u v`, and `imax u (v+1)`.
+  So the carve layer adds **no** level obligation of its own. The skeleton's
+  own model still meets the Type route's pads and boxes, which is that route's
+  existing business and not a new one.
 * **An index telescope whose later index types depend on earlier ones** uses
   the same `PSigma` packing and I expect no new content, but only the
   independent case is tested (`Bal`).

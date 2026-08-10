@@ -517,3 +517,21 @@ run_cmd do
       throwError "{bad} is reachable: this arm has acquired one of W's dependencies"
   let names := (inds.toList.map toString).toArray.qsort (fun a b => decide (a < b))
   logInfo m!"{names.size} reachable inductives: {String.intercalate ", " names.toList}"
+
+/-! ############################################################
+    ## The carrier's level, at every never-zero shape.
+    ##
+    ## The model must land at EXACTLY `Sort w`, and the carrier is
+    ## `PSigma (fun s : S => good s x)` with `S : Sort w` and `good … : Prop`,
+    ## i.e. `Sort (max 1 w 0)`.  Whether Lean sees that as `w` is not obvious
+    ## for every `w` a never-zero carrier can have, and getting it wrong is the
+    ## shape of decline §8.6 is about, so it is asked rather than assumed.  All
+    ## four typecheck, `imax` included -- so the carve layer adds no level
+    ## obligation.  (The skeleton's OWN model still meets the Type route's pads
+    ## and boxes; that is unchanged and is not this arm's.)
+    ############################################################ -/
+
+example (S : Type u) (P : S → Prop) : Type u := PSigma P
+example (S : Sort (max 1 u)) (P : S → Prop) : Sort (max 1 u) := PSigma P
+example (S : Sort (max 1 u v)) (P : S → Prop) : Sort (max 1 u v) := PSigma P
+example (S : Sort (imax u (v + 1))) (P : S → Prop) : Sort (imax u (v + 1)) := PSigma P
