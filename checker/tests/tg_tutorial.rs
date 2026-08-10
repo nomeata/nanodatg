@@ -2156,3 +2156,81 @@ fn route_ii_translates_a_type_valued_field_in_the_staged_state() {
         "057 stopped being fully derived in the staged state:\n{text}"
     );
 }
+
+/// **The Undet `Π` is wired: `ite0` interpretation and `pi_imax_dep` typing**
+/// — `LEVELPOLY.md` §5.4 blocker 1, on its own fixture.
+///
+/// `test_resources/UndetPi/export` is three universe-polymorphic definitions
+/// and one axiom, each `Π` falling under **neither** clause of §6.2 at the
+/// declaration's own parameters (`Clause::Undet` for a parameter, all three —
+/// the `Π types under neither clause … a universe parameter` row is pinned at
+/// 3 so the fixture cannot silently drift onto a decided clause):
+///
+/// * `piu.{u} : Sort (imax (u+1) u) := ∀ (α : Sort u), α` — the minimal
+///   atom: guard `û` read through a `Local`'s binder type, zero skeleton
+///   holes, and the rule's `û`/`v̂` arms *distinct* (`succ û` against `û`),
+///   so an instantiation that swapped them fails the typing guard rather
+///   than passing by coincidence.
+/// * `pdep.{u,v} : Sort (imax (u+1) v) := ∀ (α : Sort u), ax0.{v}` — the
+///   guard read through a `Const`'s declared type, **two** level parameters
+///   (the `u ∈ ω` hypothesis list has two members whose positions the
+///   conjunction projections must find), and one skeleton hole.
+/// * `pnest.{u,v} := fun (α : Sort u) => ∀ (x : α), ax0.{v}` — the wired
+///   `Π` under a binder: its `A ∈ srt(û)` premise is the *enclosing
+///   lambda's own guard*, so the λ boundary discharges it — the uniform
+///   typing invariant showing through — and the certificate that leaves the
+///   declaration is conditional on level memberships and the fibres
+///   conjunct only.
+///
+/// Flag **on**, staged: all three typing sites are answered by the wired rule
+/// (`by ty_pi_undet` = 3) and the no-evidence row is absent. Flag **off**,
+/// staged — the wedge's bit-identity promise doubling as this fixture's red
+/// state: the same three sites are `no evidence: ty_pi_undet` and the wired
+/// row is zero.
+#[test]
+fn the_undet_pi_is_wired_in_the_staged_state() {
+    let export = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_resources/UndetPi/export");
+    let run = |flag: &str| -> String {
+        let cfg_path = tmp_cfg(&format!("upi{flag}"), &export);
+        let cfg = format!(
+            r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true, "print_success_message": false}}"#,
+            serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+        );
+        std::fs::write(&cfg_path, cfg).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
+            .arg(&cfg_path)
+            .env("NANODATG_LEVELPOLY", flag)
+            .env("NANODATG_NO_SCHEDULE", "1")
+            .output()
+            .expect("spawn");
+        let _ = std::fs::remove_file(&cfg_path);
+        assert!(out.status.success(), "the UndetPi fixture must be accepted (flag={flag})");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    const WIRED: &str = "by ty_pi_undet";
+    const MISSED: &str = "no evidence: ty_pi_undet";
+    const UNDET_PARAM: &str = "a universe parameter: neither clause";
+
+    let on = run("1");
+    assert_eq!(
+        rows_totalling(&on, UNDET_PARAM),
+        3,
+        "the fixture's Πs stopped being Undet — the atoms have drifted onto a decided clause:\n{on}"
+    );
+    assert_eq!(
+        rows_totalling(&on, WIRED),
+        3,
+        "the wired Undet rule answered {} sites, expected all 3:\n{on}",
+        rows_totalling(&on, WIRED)
+    );
+    assert_eq!(rows_totalling(&on, MISSED), 0, "a wired site still reports no evidence:\n{on}");
+
+    let off = run("0");
+    assert_eq!(rows_totalling(&off, WIRED), 0, "flag off must be bit-identical: nothing wired");
+    assert_eq!(
+        rows_totalling(&off, MISSED),
+        3,
+        "the red state moved — the fixture no longer exercises the gap the wiring closes:\n{off}"
+    );
+}

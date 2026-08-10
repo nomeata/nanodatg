@@ -2615,6 +2615,11 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// `Π` is registered here exactly when its guard level was recoverable
     /// and the `ite0` term was built, there otherwise.
     undet_poly_sites: HashMap<ExprPtr<'t>, Rc<UndetPolySite>>,
+    /// [`TgBackend::undet_body_level`]'s memo — for [`TgBackend::body_clause`]'s
+    /// reason exactly: the walk descends both children of a `Π`, and Lean
+    /// expressions are DAGs, so an unmemoised walk is exponential in the
+    /// sharing depth (measured: the staged prelude did not finish).
+    undet_levels: HashMap<ExprPtr<'t>, Option<LevelPtr<'t>>>,
     /// Where each **proof `λ`** sits — §6.2's other lambda clause, whose
     /// interpretation is `•` and so carries no graph. See [`PropLamSite`].
     prop_lam_sites: HashMap<ExprPtr<'t>, PropLamSite<'t>>,
@@ -3577,6 +3582,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             prop_sites: HashMap::new(),
             undet_sites: HashMap::new(),
             undet_poly_sites: HashMap::new(),
+            undet_levels: HashMap::new(),
             prop_lam_sites: HashMap::new(),
             props: HashMap::new(),
             terms: HashMap::new(),
@@ -4539,6 +4545,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The body is not opened, exactly as there: a level cannot mention a
     /// term.
     fn undet_body_level(&mut self, ctx: &mut TcCtx<'t, 'p>, b: ExprPtr<'t>) -> Option<LevelPtr<'t>> {
+        if let Some(l) = self.undet_levels.get(&b) {
+            return *l
+        }
+        let out = self.undet_body_level_uncached(ctx, b);
+        self.undet_levels.insert(b, out);
+        out
+    }
+
+    /// The uncached body of [`Self::undet_body_level`].
+    fn undet_body_level_uncached(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        b: ExprPtr<'t>,
+    ) -> Option<LevelPtr<'t>> {
         match ctx.read_expr(b) {
             // `Sort u : Sort (u+1)`.
             Expr::Sort { level, .. } => Some(ctx.succ(level)),
@@ -4726,8 +4746,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         body: ExprPtr<'t>,
     ) -> Option<Term> {
         let lp = self.lp()?;
+        // The walk's level is used **raw**, not canonicalised: the typing
+        // obligation's target is `srt(ℓ̂)` built from the raw arms of the
+        // *obligation's* canonical level, and the walk reproduces inference's
+        // own spelling of the body's sort — so raw-to-raw is what agrees.
+        // Canonicalising here while the obligation's right arm stays raw was
+        // measured to disagree on exactly the levels canon reshapes
+        // (`imax u u` under a `succ`), and a disagreement is a counted miss.
         let l = self.undet_body_level(ctx, body)?;
-        let l = self.canon_level(ctx, l);
         let guard = self.omega_term(ctx, l, &lp);
         let kit = self.pi_poly_kit(sk, holes.len())?;
         let mut args: Vec<Term> = holes.to_vec();
