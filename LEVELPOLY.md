@@ -790,7 +790,9 @@ THREADING-CENSUS §2).
    sentence above is only half the constraint: `PolyLedger::is_clean` also
    refuses to excuse `zoneB`, and **64 of the 89 files contain an `inductive`,
    `mutual` or `Quot`**. The reachable ceiling for every zone-A clause put
-   together is 25 files. See the step-5 status below.
+   together was 25 files. The zone-B clause retired that ceiling by putting
+   those declarations on the route — the denominator is 89 again and the
+   number against it is 22. See the step-5 status below.
 
    The other is `typesOk` 76 against `typeEv` 68. Before the `Π` clause those
    two were equal — every type that interpreted also certified — and they are
@@ -934,12 +936,16 @@ THREADING-CENSUS §2).
      verified this tranche, and still the primary gate.
    * **B — the de-scheduled route.** The `polyledger`/`polyblocked`/`polyev`
      rows over the same 91 exports, as a **ratchet and not an identity**:
-     `typesOk`, `typeEv`, `valuesOk`, `valueEv` may only rise; `open` must stay
-     **0**; `declars` and `zoneB` may not move without a stated reason. The
-     numbers above are its first baseline.
+     `typesOk`, `typeEv`, `valuesOk`, `valueEv`, `zoneBOk` may only rise;
+     `open` must stay **0**; `declars`, `zoneB` and the two denominators
+     (`valuesOk`'s and `zoneBOk`'s) may not move without a stated reason. The
+     numbers above are its first baseline. The `polyzoneb` row joined it with
+     the zone-B clause; strip the new columns and diff, which is how that
+     clause showed every pre-existing column byte-identical per file.
 
    Gate B is what the strand's verdict is measured against:
-   `PolyLedger::is_clean` — which refuses to excuse `zoneB` — is folded into
+   `PolyLedger::is_clean` — which refuses to excuse zone B, now as
+   `zone_b_ok == zone_b_consts` rather than as `zone_b == 0` — is folded into
    `Outcome::fully_certified`, so `mini --poly` exits 4 today and exits 0 when
    the de-scheduled route works.
 
@@ -960,12 +966,13 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 20 as of the const clause, of a
-   # ceiling of 25 — `is_clean` refuses to excuse `zoneB` and 64 of the 89
-   # files have one.
+   # de-scheduled route certifies end to end. 22 as of the zone-B clause, and
+   # **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
+   # `$?` must be its own statement: `echo "$(basename $f) $?"` reports
+   # `basename`'s exit status, which reads as 89 clean files.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 20 × 0, 69 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 22 × 0, 67 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1126,18 +1133,19 @@ it took forcing the fallback back on to see the two move together.
 
 Third column of the same table, taken the same way:
 
-| | caller only | + the `Π` clause | **+ the const clause** |
-|---|---|---|---|
-| declarations attempted (`def`/`axiom`) | 147 | 147 | 147 |
-| zone B skipped (`inductive`/`mutual`/`Quot`) | 108 | 108 | 108 |
-| `⟦ty⟧` produced | 56 | 76 | **102** |
-| `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | 56 | 68 | **74** |
-| `⟦val⟧` produced | 83 / 146 | 89 / 146 | **111** / 146 |
-| `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 | 65 | 65 |
-| generic points **stored** | — | — | **111** |
-| `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)` sealed | — | — | **42** |
-| **escaped assumptions (`open`)** | **0** | **0** | **0** |
-| whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 | **20 of 89** |
+| | caller only | + the `Π` clause | + the const clause | **+ zone B** |
+|---|---|---|---|---|
+| declarations attempted (`def`/`axiom`) | 147 | 147 | 147 | 147 |
+| zone-B declarations (`inductive`/`mutual`/`Quot`) | 108 skipped | 108 skipped | 108 skipped | **108 attempted** |
+| zone-B **constants** interpreted at their own levels | — | — | — | **119 / 362** |
+| `⟦ty⟧` produced | 56 | 76 | **102** | 102 |
+| `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | 56 | 68 | **74** | 74 |
+| `⟦val⟧` produced | 83 / 146 | 89 / 146 | **111** / 146 | 111 / 146 |
+| `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 | 65 | 65 | 65 |
+| generic points **stored** | — | — | **111** | 111 |
+| `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)` sealed | — | — | **42** | 42 |
+| **escaped assumptions (`open`)** | **0** | **0** | **0** | **0** |
+| whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 | 20 of 89 | **22 of 89** |
 
 `valueEv` is the one column that did not move, and it did not move *by
 construction*: it counts the value's typing at the type inference assigned it,
@@ -1197,7 +1205,100 @@ owe only certificates.
 So the honest reading of the strand's verdict line: **zone A is nearly done
 per-file and the per-file number is now a zone-B measurement.** Putting zone B
 on the de-scheduled route is the next clause group and it is where the other 64
-files are.
+files are. The next subsection is that tranche, and the first thing it did was
+retire the 25.
+
+#### The zone-B clause: the route reaches the other 64 files, and the frontier moves to the eliminator
+
+`poly_run::zone_b`. For every `inductive` / `mutual` / `Quot`, one
+`zoneb::ensure` per constant the declaration owns, **at that constant's own
+universe parameters** instead of at every ground σ the schedule predicted. The
+constant list is `ledger::fill_declaration`'s, read the same way — including
+the nested case, where the splice's `NestedRecord::constants` names every
+recursor a declaration owns and `T.rec` names only the first.
+
+`PolyLedger::is_clean`'s zone-B conjunct widens from `zone_b == 0` to
+`zone_b_ok == zone_b_consts`, and **that is not a weakening**: no zone-B
+declaration means no zone-B constant, so the two agree on every file the old
+one accepted, and a file with an inductive now has to earn it one constant at a
+time. `a_file_with_no_zone_b_is_clean_exactly_as_before` is the control.
+
+**The denominator is 89 again.** The 25 was the skip's ceiling, not the
+design's.
+
+| | |
+|---|---|
+| zone-B constants owed | **362** |
+| interpreted at their own levels | **119** |
+| `symbolic-level` | 240 |
+| `ind-spec(…: parameter reduction)` | 3 |
+| whole exports certified | 20 → **22 of 89** |
+
+Every pre-existing poly column is **byte-identical per file** — the clause is
+purely additive on this corpus, which also says the zone-A route was not
+waiting on `⟦Bool⟧` being in the store.
+
+**No new mathematics, and the header says so rather than dressing it up.** A
+declaration with no universe parameter has no rung to vary: its own
+instantiation is the empty vector, which is the same vector the scheduled route
+passes, so the 119 are the scheduled route's own translations reached by a
+different caller. What the clause buys is that the other 243 are now
+*measured* instead of skipped.
+
+##### The finding: a parameter-free declaration still owes a polymorphic eliminator
+
+The 240 `symbolic-level` split — measured with a temporary role tag on the
+histogram key, then reverted so `polyzoneb` keeps pure `Ledger::key` reasons:
+
+| role | at 1 own level | 2 | 3 | total |
+|---|---|---|---|---|
+| type formers | 43 | 12 | — | **55** |
+| constructors | 62 | 12 | — | **74** |
+| eliminators | 51 | 50 | 10 | **111** |
+
+The 51 in the eliminator row's first column are the finding. `Bool` has no
+universe parameter and translates; **`Bool.rec.{u}` carries the motive's level
+whatever `Bool` does**, so a declaration this route interprets completely still
+cannot be certified. That is why only two files flipped rather than the
+thirteen a zone-A reading predicts.
+
+**Eight tutorial files are clean but for exactly those**: `033_empty`,
+`034_boolType`, `035_twoBool`, `036_andType`, `041_natDef`,
+`056_typeWithTypeField`, `078_And.right`, `097_aNatLit` — zone A clean, and
+every zone-B refusal on the file a lone-motive-level eliminator. **The next
+clause is the eliminator at a symbolic motive level over a parameter-free
+declaration, and it is worth eight files on its own.** Nothing in it needs a
+construction `derived/src/levels/` does not have *as far as this tranche can
+see* — the motive's level enters as `⟦Sort u⟧ = srt(û)`, which `Interp::sort_of`
+already answers at any level — but that is a prediction and this strand's
+briefs have been wrong about size five times running.
+
+The remaining eleven zone-A-clean files are blocked on something else and are
+named so the next tranche does not size them together: `037_prodType`,
+`038_pprodType`, `039_pUnitType`, `052_reduceCtorParam.mk`, `084_projProp1`,
+`086_projProp3`, `094_ruleK`, `098_natLitEq`, `113_reduceCtorParamRefl.mk`,
+`114_reduceCtorParamRefl2.mk`, `118_accRecReduction`. Three of them
+(`052`, `113`, `114`) owe an `ind-spec(…: parameter reduction)` that is **not a
+level gap at all**.
+
+##### What the boundary costs, sized
+
+`zoneb::ensure` takes `inst: &[u32]`, and that is the whole frontier: a
+constant can be asked about only at numerals, so at its own parameters only a
+constant with none. Retyping it to `&[Level]` is §5.3 step 2 for zone B and it
+is **75 `: &[u32]` signatures across 28 files** (`zoneb.rs` 16, `recursor.rs`
+6, the `rec_*`/`class_*`/`iota_*` groups the rest) — mechanical, but not one
+commit. The genuinely non-mechanical interior is much smaller: outside its
+tests `zoneb.rs` calls `ground::as_numeral` **four** times (the `Prop` test at
+the truncation branch, the resultant sort, the ctor-index numerals, the field
+level) and `ground::subst_ground` **three** (the declaration's type, its
+constructors' types, and the Lean type the recursor is stated against). Those
+seven are where a zone-B clause would first need something new, and none of
+them has been attempted.
+
+**No fundamental blocker was found in this tranche either.** Nothing the
+ω-vocabulary could not state came up; what came up is a boundary type and an
+eliminator whose motive level nobody had counted.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

@@ -64,15 +64,33 @@
 //! is an inductive type, a constructor or a recursor (`Quot`, `Prod`, `Eq`,
 //! `RBTree`, `List`, `Acc`, `Bool.rec`). Not one is a zone-A `def` or `axiom`.
 //!
+//! # Zone B, and where its frontier actually is
+//!
+//! `inductive`, `mutual` and `Quot` are **attempted** — [`zone_b`], one call to
+//! `zoneb::ensure` per constant the declaration owns, at that constant's own
+//! universe parameters instead of at every ground σ the schedule predicted.
+//! This section used to be a bullet under "what is not here yet" reading
+//! "counted and skipped", and the skip is what capped the per-file verdict at
+//! 25 of the 89 tutorial files: 64 contain a zone-B declaration and no zone-A
+//! clause could touch them. **The denominator is 89 again.**
+//!
+//! What the attempt measures, over the corpus: **119 of 362** zone-B constants
+//! interpret at their own parameters. The other 243 are 240 `symbolic-level`
+//! and 3 `ind-spec(…: parameter reduction)`, and the 240 split — measured, not
+//! predicted — into **55 type formers, 74 constructors and 111 eliminators**.
+//! The frontier is one predicate: `zoneb::ensure` takes `inst: &[u32]`, so a
+//! constant can be asked about only at numerals, and at a constant's *own*
+//! parameters that means only a constant with none.
+//!
+//! **The finding worth carrying: a declaration with no universe parameter still
+//! owes a polymorphic eliminator.** `Bool.rec.{u}` carries the motive's level
+//! whatever `Bool` does, and 51 of the 111 blocked eliminators are exactly that
+//! shape — a lone motive level over a parameter-free declaration. Eight
+//! tutorial files are clean but for those, so that is the next clause and it is
+//! worth eight files on its own.
+//!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
-//! * **Zone B is not on this route.** `inductive`, `mutual` and `Quot` are
-//!   counted in [`PolyLedger::zone_b`] and skipped. Their clauses are
-//!   `zoneb.rs`'s 23 `Gap::SymbolicLevel` sites and are a later clause group.
-//!   Since the const clause landed this is the *whole* of what the census
-//!   shows, and — because [`PolyLedger::is_clean`] refuses to excuse
-//!   `zone_b` — it is also what caps the per-file verdict at 25 of the 89
-//!   tutorial files: 64 of them contain a zone-B declaration.
 //! * **A ground use of a poly constant pays the §1.2 bridge — and does not
 //!   yet cost anything here.** The instantiation is unconditional and derives
 //!   a true typing, but at the ω spelling `srt(n̄)` where the use site's own
@@ -84,6 +102,10 @@
 //!   corpus that bucket is empty**: the poly constants that reach the store
 //!   are used at parametric levels, so the bridge is real, demonstrated, and
 //!   not on the critical path. Retired by the switchover (§5.5) all the same.
+//! * **Every zone-B constant the frontier refuses** is in
+//!   [`PolyLedger::zone_b_blocked`] with the reason `zoneb::ensure` gave, never
+//!   a stand-in — and `zone_b_ok` plus that histogram is `zone_b_consts`,
+//!   which `tests::owed_is_met_or_explained` pins.
 //!
 //! Both are counted rather than silently passed over, because a pass that
 //! reports `declars=N` while having attempted a third of them is the shape of
@@ -110,9 +132,34 @@ use crate::ledger::Ledger;
 pub struct PolyLedger {
     /// `axiom` / `def` / `theorem` declarations this route attempted.
     pub declarations: usize,
-    /// `inductive` / `mutual` / `Quot`, counted and skipped — see the module
-    /// header. Not a gap: this route has not been pointed at zone B yet.
+    /// `inductive` / `mutual` / `Quot` declarations this route **attempted**.
+    ///
+    /// It used to say "counted and skipped". Since the zone-B clause it is an
+    /// attempt count like [`PolyLedger::declarations`], and the two axes a
+    /// zone-B declaration is judged on are [`PolyLedger::zone_b_consts`] and
+    /// [`PolyLedger::zone_b_ok`]. The number itself is unchanged — the same
+    /// declarations are reached — which is what keeps the Gate B row readable
+    /// across the change.
     pub zone_b: usize,
+    /// The **constants** those declarations owe: a type former, each of its
+    /// constructors, and each eliminator it owns; `Quot`'s four; a `mutual`
+    /// block's members and theirs.
+    ///
+    /// Counted apart from [`PolyLedger::zone_b`] because a zone-B declaration
+    /// is not one obligation but several, and a route that reported
+    /// `zoneB=108` while owing 300 constants would be the shape of report the
+    /// module header warns about. This is the denominator
+    /// [`PolyLedger::is_clean`]'s zone-B conjunct is taken against.
+    pub zone_b_consts: usize,
+    /// Those whose `⟦c.{ℓ⃗}⟧` is in the store when the declaration is done,
+    /// at the constant's **own** universe parameters.
+    ///
+    /// The interpretation axis only, deliberately: zone B stores a typing
+    /// beside the term and `Sealed` already refuses an open one, so a stored
+    /// interpretation on this route is a certified one — but that is zone B's
+    /// invariant rather than this ledger's, and a separate certificate column
+    /// would be this module asserting it rather than reading it.
+    pub zone_b_ok: usize,
     /// Declarations whose `⟦ty⟧` was produced.
     pub types_ok: usize,
     /// Declarations whose `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` was derived **and closed**.
@@ -180,6 +227,20 @@ pub struct PolyLedger {
     /// that one is "why does this declaration have no certificate", this one is
     /// "why will every *later* use of this constant have none".
     pub const_blocked: BTreeMap<String, usize>,
+    /// Why a **zone-B constant** has no interpretation at its own universe
+    /// parameters. Its own histogram, for the same reason the three above are
+    /// three: zone B's obligations are per *constant*, and folding them into
+    /// [`PolyLedger::blocked`] would put a type former's decline in the same
+    /// bucket as a `def`'s and lose which route reported it.
+    ///
+    /// **The reason is the one `zoneb::ensure` returned, never a stand-in.**
+    /// The finding the const clause left behind — *a reason in a store is not a
+    /// leaf* — is sharper here than anywhere: zone B keeps three reason tables
+    /// of its own (`untranslated`, `ctor_untranslated`, `rec_untranslated`) and
+    /// every later use of the constant reads them, so a `Gap` guessed at this
+    /// site would be handed back at every occurrence. Nothing here synthesises
+    /// one.
+    pub zone_b_blocked: BTreeMap<String, usize>,
     /// **Where the reported gap was minted**, `file:line`, when
     /// `MINI_POLY_SITES` asked — empty otherwise.
     ///
@@ -220,19 +281,27 @@ impl PolyLedger {
     /// Nothing owed: every declaration this route attempted interpreted and
     /// certified, both halves, with nothing left open.
     ///
-    /// **`zone_b` is *not* excused.** A file whose inductives this route cannot
+    /// **Zone B is *not* excused.** A file whose inductives this route cannot
     /// reach owes them; counting the route clean on the strength of having
     /// skipped them is the "SKIP is not PASS" defect with a ledger column as
     /// the vehicle.
     ///
-    /// That conjunct is also what caps this route's *per-file* verdict, and
-    /// the cap is worth stating because a reader will otherwise size the
-    /// remaining work against 91. Measured over the tutorial corpus: **64 of
-    /// the 89 files that reach this route at all contain at least one
-    /// `inductive`, `mutual` or `Quot`**, so no clause outside zone B can make
-    /// them clean. The reachable ceiling for every zone-A clause put together
-    /// is 25 files, and that is a fact about the route's coverage rather than
-    /// about the clauses.
+    /// # The conjunct was `zone_b == 0`, and widening it is not a weakening
+    ///
+    /// It had to be, while zone B was skipped: "the file has no inductive" was
+    /// the only zone-B fact this route could establish, and any weaker test
+    /// would have excused the skip. Now that the declarations are attempted the
+    /// honest test is that every constant they owe is interpreted, and the two
+    /// **agree on every file the old one accepted** — no zone-B declaration
+    /// means no zone-B constant, so `0 == 0`. A file with an inductive still
+    /// has to earn it, one constant at a time, and can no longer be clean by
+    /// virtue of the route not having looked.
+    ///
+    /// The old conjunct is also what capped this route's per-file verdict at
+    /// **25 of the 89** files that reach it — 64 contain a zone-B declaration
+    /// and no zone-A clause could touch them. That cap is gone with the skip:
+    /// the denominator is 89 again, and the number against it is a measurement
+    /// of zone B's clauses rather than of the route's coverage.
     ///
     /// **[`PolyLedger::const_ev_ok`] is deliberately not a conjunct.** It
     /// counts what a *later* declaration will be able to do, not what this
@@ -241,7 +310,7 @@ impl PolyLedger {
     /// would call it dirty for an obligation that has no consumer.
     pub fn is_clean(&self) -> bool {
         self.apparatus
-            && self.zone_b == 0
+            && self.zone_b_ok == self.zone_b_consts
             && self.open == 0
             && self.types_ok == self.declarations
             && self.type_ev_ok == self.declarations
@@ -257,9 +326,11 @@ impl PolyLedger {
     /// `MINI_POLY_SITES` asked for one.
     pub fn rows(&self) -> Vec<String> {
         let mut head = format!(
-            "polyledger\tdeclars={}\tzoneB={}\ttypesOk={}\ttypeEv={}\tvaluesOk={}/{}\tvalueEv={}\tstored={}\tconstEv={}\topen={}",
+            "polyledger\tdeclars={}\tzoneB={}\tzoneBOk={}/{}\ttypesOk={}\ttypeEv={}\tvaluesOk={}/{}\tvalueEv={}\tstored={}\tconstEv={}\topen={}",
             self.declarations,
             self.zone_b,
+            self.zone_b_ok,
+            self.zone_b_consts,
             self.types_ok,
             self.type_ev_ok,
             self.values_ok,
@@ -285,6 +356,7 @@ impl PolyLedger {
             hist("polyblocked", &self.blocked),
             hist("polyev", &self.ev_blocked),
             hist("polyconstev", &self.const_blocked),
+            hist("polyzoneb", &self.zone_b_blocked),
         ];
         // Only when it was asked for: a bare `polysites` row on every run would
         // read as "no site was recorded" rather than "nobody asked".
@@ -344,7 +416,7 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
                 (name, lparams, ty, Some(value))
             }
             Declaration::Quot | Declaration::Inductive { .. } | Declaration::Mutual { .. } => {
-                led.zone_b += 1;
+                zone_b(env, ip, d, &mut led);
                 continue
             }
         };
@@ -530,6 +602,156 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
     led
 }
 
+/// **A zone-B declaration on the de-scheduled route** — its type former, its
+/// constructors and its eliminators, each at *its own* universe parameters.
+///
+/// `LEVELPOLY.md` §5.3, the zone-B clause group. The counterpart of
+/// [`crate::ledger::fill_declaration`] with the σ loop removed: that one asks
+/// the schedule for every ground instantiation of every constant the
+/// declaration owns and calls [`crate::zoneb::ensure`] once per pair, this one
+/// asks for the declaration's own parameters and calls it once.
+///
+/// # The obligation is per *constant*, and the list is `fill_declaration`'s
+///
+/// Deliberately the same list, read the same way — including the nested case,
+/// where the splice's `NestedRecord::constants` names every recursor a nested
+/// declaration owns and `T.rec` names only the first. Deriving a second list
+/// here would be a second answer to "what does this declaration owe", and the
+/// two would drift.
+///
+/// # Where the frontier is, and it is exactly one predicate
+///
+/// [`crate::zoneb::ensure`] takes `inst: &[u32]`, so it can be asked about a
+/// constant only at an instantiation of numerals. At a constant's *own*
+/// parameters that is the empty vector or nothing — `Level::param` is never a
+/// numeral — so today this test is `lparams.is_empty()` and nothing else. It is
+/// written as the numeral test all the same, because that is the predicate the
+/// `&[u32]` boundary actually enforces (`ground::as_numeral`, and
+/// `mini/src/ground.rs`'s header on where the groundness assumption lives), and
+/// it is the one that loosens when the boundary retypes to `&[Level]`. Every
+/// refusal is [`Gap::SymbolicLevel`] in [`PolyLedger::zone_b_blocked`], which
+/// is the census the next clause is sized from.
+///
+/// **A parameterless declaration is not a level-polymorphic result and is not
+/// claimed as one.** `Bool`, `Nat` and `And` have no universe parameter, so
+/// this route interprets them at the same empty instantiation the scheduled
+/// route uses and the mathematics is identical; what is new is that the
+/// *route* reaches them at all, which is what turns 64 skipped files into 64
+/// measured ones. Their **eliminators** are a different matter and are the
+/// finding: `Bool.rec.{u}` carries the motive's level whatever `Bool` does, so
+/// a declaration with no parameters still owes a polymorphic recursor.
+///
+/// # A `mutual` block is recorded, never attempted
+///
+/// [`crate::ledger::fill_declaration`]'s reason, unchanged and load-bearing:
+/// `zoneb::ensure` resolves a name through the environment, where a block's
+/// members look like single inductives, so calling it here would not decline.
+/// The block's members are counted and their reason is
+/// [`crate::mutual_aux::encode`]'s own.
+///
+/// The mutation was run;
+/// `tests::a_mutual_block_is_recorded_and_never_interpreted_member_by_member`
+/// records what it does, which is not what `fill_declaration` predicts.
+fn zone_b(env: &Environment, ip: &mut Interp, d: &Declaration, led: &mut PolyLedger) {
+    use crate::expr::{Level, Name};
+
+    led.zone_b += 1;
+    // The one arm that must not reach `ensure`. Counted and given the
+    // encoder's own reason — the same one the scheduled route files into the
+    // three untranslated tables — so `polyzoneb` names the shape rather than
+    // the feature.
+    if let Declaration::Mutual { types, .. } = d {
+        let why = crate::mutual_aux::encode(env, d)
+            .err()
+            .unwrap_or(crate::mutual_aux::Reason::NotABlock)
+            .label();
+        for t in types {
+            // The member, its constructors and its recursor — the same three
+            // groups `fill_declaration` keys into the three untranslated
+            // tables, counted rather than keyed because this route has no
+            // schedule to key them at.
+            for _ in 0..t.ctors.len() + 2 {
+                led.zone_b_consts += 1;
+                PolyLedger::note(&mut led.zone_b_blocked, Some(&Gap::IndSpec(t.name, why)));
+            }
+        }
+        return
+    }
+    let names: Vec<Name> = match d {
+        Declaration::Inductive { name, ctors, .. } => {
+            match ip.ind_opt().and_then(|a| a.nested.get(name)) {
+                Some(r) => r.constants.clone(),
+                None => {
+                    let mut v = Vec::with_capacity(ctors.len() + 2);
+                    v.push(*name);
+                    v.extend(ctors.iter().map(|(n, _)| *n));
+                    v.push(Name::str(name, "rec"));
+                    v
+                }
+            }
+        }
+        // `add_quot` mints all four and `convert::load` pushes one
+        // [`Declaration::Quot`] for them, so this arm names them itself — in
+        // `add_quot`'s order, which `fill_declaration` records as load-bearing.
+        Declaration::Quot => {
+            let q = Name::simple("Quot");
+            vec![q, Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
+        }
+        _ => return,
+    };
+    for n in &names {
+        led.zone_b_consts += 1;
+        // The constant's **own** parameters, off the environment rather than
+        // off the declaration: a recursor's list is one longer than its
+        // declaration's — the motive's level, prepended — and `ensure` splits
+        // the declaration's off the tail itself.
+        let Some(lps) = env.get(n).map(|ci| ci.lparams().to_vec()) else {
+            // Not a fallback: the name came from the declaration or from the
+            // splice's own list, so an environment that does not own it is a
+            // constant nothing can interpret, which is what this `Gap` says.
+            PolyLedger::note(
+                &mut led.zone_b_blocked,
+                Some(&Gap::NoInterpretation(*n, Vec::new())),
+            );
+            continue
+        };
+        let own: Vec<Level> = lps.iter().map(|u| Level::param(*u)).collect();
+        let Some(nums) = own.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
+        else {
+            PolyLedger::note(&mut led.zone_b_blocked, Some(&Gap::SymbolicLevel));
+            continue
+        };
+        // `Checker::poly` and not `Checker::threaded`, even where `lps` is
+        // empty and the two would derive the same theorems: this route's
+        // symbol numbering has to be a function of the route and not of which
+        // constructor a given arm happened to pick.
+        //
+        // With `lps` empty it opens no `uᵢ ∈ ω`, so there is nothing for
+        // `discharge_levels` to close and nothing that could reach the store
+        // open — which is why zone B has no `open` column of its own here.
+        // The moment `lps` is non-empty that stops being true, and `Sealed`
+        // inside zone B is what will refuse it rather than this loop.
+        let Some(mut c) = Checker::poly(env, ip, &lps) else {
+            unreachable!("the apparatus built at route entry")
+        };
+        let r = crate::zoneb::ensure(&mut c, n, &nums);
+        // **The store is the verdict, not the `Result`.** `ensure` answers
+        // `Ok` having filled the declaration's key, and the constant asked for
+        // is one of several it fills; reading the return value alone would
+        // count a constructor as done because its type former was.
+        let stored = c.stored_term_at(n, &own).is_some();
+        drop(c);
+        if stored {
+            led.zone_b_ok += 1;
+        } else {
+            // `ensure`'s own reason, and `Skeleton` only where it returned
+            // `Ok` and the constant is still absent — which is the store
+            // having nothing to say, and is not a reason zone B can mint.
+            PolyLedger::note(&mut led.zone_b_blocked, Some(&r.err().unwrap_or(Gap::Skeleton)));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,9 +840,21 @@ mod tests {
         assert!(first.is_clean(), "{:?}", first.rows());
     }
 
-    /// **Zone B is counted, not passed over.** An inductive is neither a
-    /// success nor a gap on this route; it is work the route has not been
-    /// pointed at, and `is_clean` must refuse it all the same.
+    /// **Zone B is owed, not excused** — and a declaration the environment does
+    /// not own owes it with nothing to show.
+    ///
+    /// The declaration here is not in the `Environment`, so `zone_b` cannot
+    /// resolve its type former or its recursor to anything: both are counted in
+    /// `zone_b_consts`, neither is met, and `is_clean` is false. That is the
+    /// conjunct's job, and it is the same job it did when the conjunct was
+    /// `zone_b == 0` — the widening to `zone_b_ok == zone_b_consts` (see
+    /// [`PolyLedger::is_clean`]) does not let this file through.
+    ///
+    /// **This is not a fixture asserting something stays broken.** An input
+    /// naming a constant nothing declares is ill-formed rather than backlogged;
+    /// no clause is scheduled to cure it, and the reason it reports —
+    /// `no-interp(·)` — is a *scope* gap, not the threading gap this strand's
+    /// clauses retire.
     ///
     /// # …and it is the only witness the pinned build point has
     ///
@@ -639,8 +873,13 @@ mod tests {
     /// belt-and-braces on a covered property — it is the *whole* coverage the
     /// pin has, and without it the mutation that deletes the pin is green.
     /// Recorded here rather than dropped, per the branch's own rule.
+    ///
+    /// The empty environment is what keeps that witness: it stops `zone_b`
+    /// before it can build a `Checker::poly`, so an apparatus present on the
+    /// way out was built by the route entry and by nothing else. Adding `T` to
+    /// the environment would interpret it and destroy the witness.
     #[test]
-    fn an_inductive_is_counted_as_zone_b_and_keeps_the_run_unclean() {
+    fn an_inductive_the_environment_does_not_own_keeps_the_run_unclean() {
         let env = Environment::empty();
         let d = Declaration::Inductive {
             name: n("T"),
@@ -652,12 +891,234 @@ mod tests {
         let mut ip = Interp::new();
         let led = run(&env, std::slice::from_ref(&d), &mut ip);
         assert_eq!((led.declarations, led.zone_b), (0, 1));
-        assert!(!led.is_clean(), "a skipped inductive is owed, not excused");
-        assert!(led.rows()[0].contains("zoneB=1"), "{:?}", led.rows());
+        // The type former and `T.rec`: owed, and neither met.
+        assert_eq!((led.zone_b_ok, led.zone_b_consts), (0, 2), "{:?}", led.rows());
+        assert!(!led.is_clean(), "an unmet zone-B constant is owed, not excused");
+        assert!(led.rows()[0].contains("zoneB=1\tzoneBOk=0/2"), "{:?}", led.rows());
         // The pin. Nothing on this file ever constructs a `Checker::poly`, so
         // an apparatus built here was built by the route and by nothing else.
         assert!(led.apparatus, "the apparatus is built at route entry, not at the first def");
         assert!(ip.levels_built().is_some(), "…and it really is on the Interp");
+    }
+
+    /// Every zone-B constant is **either interpreted or carries a reason** —
+    /// the accounting identity, and the one assertion that survives every cure.
+    ///
+    /// `zone_b_ok + Σ zone_b_blocked == zone_b_consts`. A clause that lands
+    /// moves a constant from the right-hand histogram into `zone_b_ok` and the
+    /// identity holds unchanged; what it *cannot* hold through is a constant
+    /// dropped on the floor, which is "SKIP is not PASS" at the one place this
+    /// route could still commit it. Pinning a per-bucket count instead would be
+    /// a fixture asserting the recursor stays broken, which the next clause is
+    /// scheduled to cure.
+    fn owed_is_met_or_explained(led: &PolyLedger) {
+        let blocked: usize = led.zone_b_blocked.values().sum();
+        assert_eq!(
+            led.zone_b_ok + blocked,
+            led.zone_b_consts,
+            "a zone-B constant was neither interpreted nor given a reason: {:?}",
+            led.rows()
+        );
+    }
+
+    /// `inductive T : Type` with `n` nullary constructors, in the environment.
+    fn nullary_ind(names: &[&str]) -> (Environment, Declaration) {
+        let d = Declaration::Inductive {
+            name: n("T"),
+            lparams: Vec::new(),
+            num_params: 0,
+            ty: sort(Level::zero().succ()),
+            ctors: names.iter().map(|s| (Name::str(&n("T"), s), konst(n("T"), [].into()))).collect(),
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("a nullary enumeration is accepted");
+        (env, d)
+    }
+
+    /// **A parameterless inductive is translated on the de-scheduled route** —
+    /// the first zone-B clause, at the declaration's own instantiation.
+    ///
+    /// `T : Type` with three constructors. Its own instantiation is the empty
+    /// vector, which is the *same* vector the scheduled route passes, so the
+    /// mathematics here is the scheduled route's exactly: what is new is that
+    /// the de-scheduled route reaches the declaration at all. That is the
+    /// honest content of this clause and it is worth saying rather than
+    /// dressing up — no construction in `derived/src/levels/` is spent, because
+    /// a declaration with no universe parameter has no rung to vary.
+    ///
+    /// **Three constructors, not two.** The claim is that *each* constructor is
+    /// keyed and stored under its own name, and two cannot tell that from a
+    /// list stored twice under the first name or from a pair swapped end for
+    /// end (`MEMORY`: two atoms cannot distinguish).
+    ///
+    /// The recursor is deliberately not asserted either way. `T.rec.{u}`
+    /// carries the motive's level whatever `T` does, and it is the next clause;
+    /// a count here would be this fixture asserting it stays broken. So
+    /// `zone_b_ok` is checked as a **floor** where this project's habit is to
+    /// compare a whole table for equality — the four names below are the
+    /// equality, and the floor is the one column a cure is meant to raise.
+    #[test]
+    fn a_parameterless_inductive_is_translated_at_its_own_empty_instantiation() {
+        let (env, d) = nullary_ind(&["a", "b", "c"]);
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!(led.zone_b, 1, "{:?}", led.rows());
+        // The type former, three constructors, and `T.rec`.
+        assert_eq!(led.zone_b_consts, 5, "{:?}", led.rows());
+        owed_is_met_or_explained(&led);
+        // Each under its own name, at the empty instantiation.
+        let t = n("T");
+        for name in [t, Name::str(&t, "a"), Name::str(&t, "b"), Name::str(&t, "c")] {
+            assert!(
+                ip.get_const(&(name, Vec::new())).is_some(),
+                "⟦{name}⟧ is owed at the declaration's own levels: {:?}",
+                led.rows()
+            );
+        }
+        assert!(led.zone_b_ok >= 4, "the type former and its three constructors: {:?}", led.rows());
+    }
+
+    /// **A zone-B declaration with a universe parameter of its own owes three
+    /// constants, and every one of them is accounted for.**
+    ///
+    /// `Box.{u}` is the frontier — `zoneb::ensure` takes `inst: &[u32]`, so a
+    /// declaration whose own instantiation is `[Level::param(u)]` cannot be
+    /// asked about at all — and this fixture is deliberately **not** written as
+    /// a claim about that.
+    ///
+    /// # What it does not assert, and why
+    ///
+    /// Not `symbolic-level == 3`, not `zone_b_ok == 0`, not `!is_clean()`.
+    /// Every one of those is a claim that `Box.{u}` stays uninterpreted, and
+    /// the next clause group is scheduled to cure exactly that —
+    /// `DECISIONS.md` (2026-08-10): distance in the backlog is not safety.
+    /// This branch has already gone red twice on a fixture that pinned the
+    /// frontier it was standing on.
+    ///
+    /// What is left is what a cure cannot change: the declaration owes a type
+    /// former, a constructor and a recursor whatever the route can do with
+    /// them, and `owed_is_met_or_explained` says none of the three was passed
+    /// over. `is_clean`'s refusal is covered by
+    /// `an_inductive_the_environment_does_not_own_keeps_the_run_unclean`, whose
+    /// negative is a **scope** gap on the other axis and so is unreachable from
+    /// any clause this strand will land.
+    #[test]
+    fn a_universe_parameter_of_its_own_owes_three_constants_and_accounts_for_them() {
+        let u = Level::param(n("u"));
+        let d = Declaration::Inductive {
+            name: n("Box"),
+            lparams: vec![n("u")],
+            num_params: 0,
+            ty: sort(u.succ()),
+            ctors: vec![(Name::str(&n("Box"), "mk"), konst(n("Box"), [u].into()))],
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("Box.{u} is accepted");
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!((led.zone_b, led.zone_b_consts), (1, 3), "Box, Box.mk, Box.rec: {:?}", led.rows());
+        owed_is_met_or_explained(&led);
+        // The row exists whatever the buckets in it say, so the census cannot
+        // vanish silently the way a deleted test does.
+        assert!(led.rows().iter().any(|r| r.starts_with("polyzoneb")), "{:?}", led.rows());
+    }
+
+    /// **A `mutual` block is recorded and never handed to `zoneb::ensure`** —
+    /// and this is a *soundness* guard, not a coverage one.
+    ///
+    /// `zoneb::ensure` resolves a name through the environment, where a block's
+    /// members are indistinguishable from single inductives, so deleting the
+    /// `Mutual` arm in [`zone_b`] does not produce a decline.
+    /// `crate::ledger::fill_declaration` carries the same guard for the
+    /// scheduled route and predicts the failure: an interpretation of `A` built
+    /// as though `B` did not exist.
+    ///
+    /// **Mutation run, and what it actually does is worse.** With the arm
+    /// deleted and the block's members routed through the loop below, this test
+    /// **overflows the stack** rather than returning a wrong `⟦A⟧`: `A.mk`'s
+    /// field is `B`, whose constructor's field is `A`, and `ensure` re-enters
+    /// at a declaration whose carrier is being built. The silent
+    /// mis-translation `fill_declaration` names is what a *degenerate* block —
+    /// two independent types written in one `mutual` — would get; a genuinely
+    /// recursive one does not get that far. Either way the arm is load-bearing,
+    /// and this fixture is the only thing on this route that would notice.
+    /// Recorded rather than left as a prediction, because the prediction was
+    /// not what happened.
+    ///
+    /// Not a fixture asserting something stays broken either: when the mutual
+    /// encoding lands, `mutual_aux::expand` rewrites the block *before* this
+    /// route sees it and this arm is not reached at all. What is pinned is what
+    /// happens to a block the encoder declined, which stays declined by
+    /// construction.
+    #[test]
+    fn a_mutual_block_is_recorded_and_never_interpreted_member_by_member() {
+        let (a, b) = (n("A"), n("B"));
+        // `A : Type` with `A.mk : B → A`, `B : Type` with `B.mk : A → B` — a
+        // genuine block: neither member's constructor types without the other.
+        let types = vec![
+            crate::env::IndType {
+                name: a,
+                ty: sort(Level::zero().succ()),
+                ctors: vec![(
+                    Name::str(&a, "mk"),
+                    forall(konst(b, [].into()), konst(a, [].into())),
+                )],
+            },
+            crate::env::IndType {
+                name: b,
+                ty: sort(Level::zero().succ()),
+                ctors: vec![(
+                    Name::str(&b, "mk"),
+                    forall(konst(a, [].into()), konst(b, [].into())),
+                )],
+            },
+        ];
+        let d = Declaration::Mutual { lparams: Vec::new(), num_params: 0, types };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("the block is accepted");
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        // Two members, each a type former, a constructor and a recursor.
+        assert_eq!((led.zone_b, led.zone_b_consts), (1, 6), "{:?}", led.rows());
+        assert_eq!(led.zone_b_ok, 0, "no member of a block may be interpreted alone");
+        // The second, independent witness for `is_clean`'s zone-B conjunct —
+        // on a negative that is design-stable rather than backlogged, because
+        // a block this arm records is a block the encoder declined. One
+        // witness for a guard this load-bearing is one too few.
+        assert!(!led.is_clean(), "a block nothing can interpret is owed, not excused");
+        owed_is_met_or_explained(&led);
+        for name in [a, b, Name::str(&a, "mk"), Name::str(&b, "mk")] {
+            assert!(
+                ip.get_const(&(name, Vec::new())).is_none(),
+                "⟦{name}⟧ built without the rest of its block would be a wrong theorem"
+            );
+        }
+        // The encoder's own reason, not this route's fallback.
+        assert!(
+            led.rows().iter().any(|r| r.starts_with("polyzoneb") && r.contains("ind-spec(")),
+            "{:?}",
+            led.rows()
+        );
+    }
+
+    /// **The `is_clean` widening agrees with the conjunct it replaced on every
+    /// file that conjunct accepted.**
+    ///
+    /// `zone_b == 0` implies `zone_b_consts == 0` implies
+    /// `zone_b_ok == zone_b_consts`, so a file with no inductive is clean under
+    /// both. The direction that matters is the other one, and it is the
+    /// previous three tests: a file *with* an inductive now has to earn it.
+    /// Without this control the widening could have been a weakening nobody
+    /// measured — the guard `Outcome::fully_certified` reads.
+    #[test]
+    fn a_file_with_no_zone_b_is_clean_exactly_as_before() {
+        let env = Environment::empty();
+        let d = def("d", &[], sort(Level::zero().succ()), sort(Level::zero()));
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!((led.zone_b, led.zone_b_consts, led.zone_b_ok), (0, 0, 0));
+        assert!(led.is_clean(), "{:?}", led.rows());
+        owed_is_met_or_explained(&led);
     }
 
     /// **A monomorphic declaration on this route is the scheduled one.** With
