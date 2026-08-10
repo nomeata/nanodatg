@@ -196,6 +196,17 @@ pub struct Interp {
     fibres: HashMap<Term, FibreSite>,
     /// The conditional-singleton machinery per `Prop`-valued `∀` shape.
     conds: HashMap<Term, CondSite>,
+    /// **The dependent Π kit at a *variable* level**, per fibre shape —
+    /// `LEVELPOLY.md` §5.3 step 1, the de-scheduled twin of [`Interp::fibres`].
+    ///
+    /// A memo keyed by the same skeleton [`Interp::fibre_site`] keys on, and it
+    /// must be: [`derived::levels::pi_rules::pi_rules`] mints the `cndd` symbol
+    /// and derives `pi_imax_dep` off the shared `Env`, so building it twice for
+    /// one shape would mint a second `cndd` and renumber every symbol after it.
+    ///
+    /// Empty on the σ-scheduled path, which never asks — the same way
+    /// [`Interp::lp`] is.
+    pi_kits: HashMap<Term, Rc<derived::levels::pi_rules::PiRules>>,
     /// The same three tables keyed the other way, by the symbol each site
     /// *builds* — so that an interpretation handed back can be taken apart
     /// again ([`Interp::as_lam`], [`Interp::as_pi`]).
@@ -1556,6 +1567,7 @@ impl Interp {
             lams: HashMap::new(),
             fibres: HashMap::new(),
             conds: HashMap::new(),
+            pi_kits: HashMap::new(),
             lam_by_sym: HashMap::new(),
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
@@ -2588,6 +2600,177 @@ impl Interp {
         let inst = derived::inst_all(&site.rule, &args)?;
         let out = Thm::mp(&inst, &derived::and_intro(dom_mem, fibres))?;
         let want = Formula::mem(self.dprod_term(site, dom), self.sort(n));
+        (*out.concl() == want).then_some(out)
+    }
+
+    // ───────────────────────────── the Π clause at a variable rung ──
+
+    /// **The dependent Π kit for this fibre shape**, built on first use —
+    /// [`derived::levels::pi_rules::pi_rules`], `LEVELPOLY.md` §5.3 step 1.
+    ///
+    /// # `cndd` is minted over *this* site's `b`, and that is the whole hazard
+    ///
+    /// `pi_rules` takes the Prop-clause conditional singleton **handed in**
+    /// rather than minting it — deliberately, for "the checker's lazy split",
+    /// says its header — and then **validates it by probe**: `cndd_ax` is
+    /// instantiated at fresh variables and compared against the biconditional
+    /// rebuilt from `dp.b`. So it must be the singleton over the fibre site's
+    /// own fibre symbol.
+    ///
+    /// That is not the one [`Interp::cond_site`] holds. Both call
+    /// `define_abbrev` on the same skeleton, through *separate* caches
+    /// ([`Interp::conds`] and [`Interp::fibres`]), so one body shape has two
+    /// `FnSym`s and the `chi` built over `cond_site`'s would be refused here —
+    /// silently as a `None`, which is why this is written down rather than
+    /// left to the probe. The formula is identical; only the symbol differs.
+    ///
+    /// The ground clause is unaffected: it keeps `cond_site`'s singleton,
+    /// because `Tower::cond_in_u0` is stated about whatever singleton it is
+    /// handed and never meets `dp.b`.
+    pub fn pi_kit(&mut self, site: &FibreSite) -> Option<Rc<derived::levels::pi_rules::PiRules>> {
+        if let Some(k) = self.pi_kits.get(&site.skel) {
+            return Some(k.clone())
+        }
+        let lp = self.levels()?;
+        let p = self.prelude.clone();
+        // `φ(q⃗,A) := ∀x. (x ∈ A → • ∈ b(q⃗,x))` at the canonical hole
+        // variables, exactly `pi_body_dep`'s formula — over `site.b`.
+        let xs: Vec<FreeVar> = (0..site.k).map(|i| self.hole_var(i)).collect();
+        let a_var = self.fresh_var();
+        let qts: Vec<Term> = xs.iter().map(|v| Term::var(*v)).collect();
+        let ta = Term::var(a_var);
+        let phi = {
+            let mut env = self.core.env_mut();
+            derived::levels::pi_rules::pi_body_dep(&mut env, &p.tower.sums, site.b, &qts, &ta)
+        };
+        let mut params: Vec<FreeVar> = xs.clone();
+        params.push(a_var);
+        let kit = {
+            let mut env = self.core.env_mut();
+            let (cndd, cndd_ax) =
+                derived::prop::conditional_singleton(&mut env, &p.tower.sums, &params, &phi)?;
+            derived::levels::pi_rules::pi_rules(
+                &mut env,
+                &lp.r,
+                &lp.i,
+                &lp.ord,
+                &lp.ut,
+                &lp.s,
+                &lp.ru,
+                &p.tower,
+                &site.dp,
+                &site.rule,
+                cndd,
+                &cndd_ax,
+            )?
+        };
+        let kit = Rc::new(kit);
+        self.pi_kits.insert(site.skel.clone(), kit.clone());
+        Some(kit)
+    }
+
+    /// `⟦Π x:A. B⟧` at a level that still mentions a parameter:
+    /// `ite0(ℓ̂₂, cndd(q⃗,⟦A⟧), dprod(q⃗,⟦A⟧))`.
+    ///
+    /// **§1.4's conditional, and the reason the de-scheduled arm has no clause
+    /// to choose.** The scheduled `Π` decides `Prop` from `l2 == 0` — a numeral
+    /// it cannot read at a parameter, and `INTERP-AUDIT.md` L1's unwitnessed
+    /// decision besides. Here the two clauses are one term: the conditional
+    /// *is* the case split, evaluated inside the model rather than by the
+    /// translator, and `Ite0`'s `when_zero`/`when_nonzero` are what collapse it
+    /// at a numeral.
+    pub fn pi_term_of(
+        &mut self,
+        site: &FibreSite,
+        kit: &derived::levels::pi_rules::PiRules,
+        dom: Term,
+        l2: &Level,
+        vars: &LevelVars,
+    ) -> Option<Term> {
+        let v = self.level_term(l2, vars)?;
+        let lp = self.levels()?;
+        let mut args = site.holes.clone();
+        args.push(dom.clone());
+        let cndd = self.mk(kit.cndd, args);
+        let dprod = self.dprod_term(site, dom);
+        Some(lp.i.at(v, cndd, dprod))
+    }
+
+    /// Move `Γ ⊢ t ∈ ⟦Sort ℓ⟧` to `Γ ⊢ t ∈ srt(ℓ̂)` — the **bridge the mixed
+    /// case needs**, and the identity where the level is already symbolic.
+    ///
+    /// [`Interp::sort_of`] answers a numeral with `Uₙ` and a parameter with
+    /// `srt(ℓ̂)`, deliberately (moving the ground spelling would move every
+    /// certificate in the ledger). `pi_imax_dep` states *both* its premises
+    /// over `srt(·)`, so a `Π` with one numeral level and one parameter —
+    /// `Sort 0 → Sort u`, and every `∀`-over-a-`Prop` in the corpus — arrives
+    /// with one premise in the wrong spelling. [`Interp::rung_bridge`] is
+    /// exactly `⊢ srt(n̄) = Uₙ`; this is that equation used in the direction
+    /// the rule wants.
+    ///
+    /// So the two spellings meet here, at one function, rather than at each
+    /// clause — which is what §5.5's switchover eventually deletes.
+    pub fn mem_at_srt(&mut self, l: &Level, vars: &LevelVars, mem: &Thm) -> Option<Thm> {
+        let Some(n) = crate::ground::as_numeral(l) else {
+            // Already `srt(ℓ̂)`: `sort_of` built it that way. Checked rather
+            // than assumed, so a caller that passed the wrong membership gets
+            // a `None` here instead of a mismatch three steps later.
+            let want = self.sort_of(l, vars)?;
+            let (_, set) = mem.concl().as_mem()?;
+            return (set == want).then(|| mem.clone())
+        };
+        let bridge = self.rung_bridge(n)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &bridge)?;
+        self.retarget_set(mem, &back)
+    }
+
+    /// **`⊢ ⟦Π x:A. B⟧ ∈ ⟦Sort (imax ℓ₁ ℓ₂)⟧` at a variable rung** —
+    /// `derived::levels::pi_rules::PiRules::pi_imax_dep`, instantiated.
+    ///
+    /// The de-scheduled twin of [`Interp::dprod_typing`], and **simpler than
+    /// it in two ways that are worth naming**, because both were expected to be
+    /// work and are not:
+    ///
+    /// * *No cumulativity lift.* `dprod_typing` demands both premises already
+    ///   raised to `max(n1,n2)` and makes its caller spend `raise_in_gamma`
+    ///   twice. `pi_imax_dep` takes them at `srt(u)` and `srt(v)` as they come
+    ///   and raises the fibres pointwise inside its own derivation.
+    /// * *No clause to choose.* The target is `ite0(v, cndd, dprod)`, so the
+    ///   `Prop` and `Type` cases are one theorem — §1.4 — where the scheduled
+    ///   path needs `pi_evidence` to branch on `l2 == 0` first.
+    ///
+    /// The premise association is the header's exactly:
+    /// `((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ fib(q⃗,A,srt(v))))`. The conclusion is
+    /// compared against [`Interp::sort_of`] at `imax ℓ₁ ℓ₂` rather than
+    /// trusted, which is what makes a level whose spelling does not line up —
+    /// `imax ℓ 3`, where Lean's own normalisation has already turned the
+    /// `ite0` into a `max` — a `None` here instead of a wrong theorem.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pi_typing_of(
+        &mut self,
+        site: &FibreSite,
+        kit: &derived::levels::pi_rules::PiRules,
+        dom: Term,
+        l1: &Level,
+        l2: &Level,
+        vars: &LevelVars,
+        dom_mem: &Thm,
+        fibres: &Thm,
+    ) -> Option<Thm> {
+        let u = self.level_term(l1, vars)?;
+        let v = self.level_term(l2, vars)?;
+        let u_om = self.level_in_omega(l1, vars)?;
+        let v_om = self.level_in_omega(l2, vars)?;
+        let mut args = site.holes.clone();
+        args.push(u);
+        args.push(v);
+        args.push(dom.clone());
+        let inst = derived::inst_all(&kit.pi_imax_dep, &args)?;
+        let levels = derived::and_intro(&u_om, &v_om);
+        let shapes = derived::and_intro(dom_mem, fibres);
+        let out = Thm::mp(&inst, &derived::and_intro(&levels, &shapes))?;
+        let tm = self.pi_term_of(site, kit, dom, l2, vars)?;
+        let want = Formula::mem(tm, self.sort_of(&Level::imax(*l1, *l2), vars)?);
         (*out.concl() == want).then_some(out)
     }
 

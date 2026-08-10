@@ -482,29 +482,136 @@ mod tests {
         assert_eq!(t.tm, Some(ip.sort(0)), "a monomorphic Sort 0 must stay the ground rung");
     }
 
+    /// **The `Π` clause at a variable rung, end to end through the route.**
+    ///
+    /// `def d.{u} : Sort (u+1) := Sort u → Sort u` — the value is a `Π` whose
+    /// *both* levels are the declaration's own parameter, so neither the
+    /// scheduled `l2 == 0` split nor `as_numeral` can reach it. Before the
+    /// clause landed this was `polyblocked symbolic-level`; now it interprets
+    /// to `ite0(û, cndd(⟦Sort u⟧), dprod(⟦Sort u⟧))` and certifies.
+    ///
+    /// The type is `Sort (u+1)` rather than the `Π`'s real type because this
+    /// route infers the two halves independently and does not check them
+    /// against each other — see `run`.
+    #[test]
+    fn a_pi_at_a_variable_rung_interprets_and_certifies() {
+        let env = Environment::empty();
+        let u = Level::param(n("u"));
+        let arrow = forall(sort(u), sort(u));
+        let d = def("d", &["u"], sort(u.succ()), arrow);
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!(led.values_ok, 1, "⟦Π x:Sort u. Sort u⟧: {:?}", led.rows());
+        assert_eq!(led.value_ev_ok, 1, "…and its typing: {:?}", led.rows());
+        assert_eq!(led.open, 0, "the Π clause discharged everything it opened");
+        assert!(
+            !led.blocked.contains_key("symbolic-level"),
+            "the Π clause still wants a numeral: {:?}",
+            led.blocked
+        );
+    }
+
+    /// **The mixed case, which is the one the bridge exists for.**
+    ///
+    /// `Sort 0 → Sort u` has one numeral level and one parameter, so the
+    /// domain's membership arrives spelled `⟦A⟧ ∈ U₀` while `pi_imax_dep`
+    /// states its premise over `srt(0̄)`. `Interp::mem_at_srt` is what
+    /// reconciles them, and this is the shape that exercises it — a test with
+    /// two parameters and no numeral would pass with the bridge deleted.
+    ///
+    /// Both orders, because the domain's premise and the fibre's are
+    /// reconciled by two *different* calls and a bridge applied to only one of
+    /// them would pass whichever test used it.
+    #[test]
+    fn a_pi_mixing_a_numeral_level_with_a_parameter_bridges_both_ways() {
+        let env = Environment::empty();
+        let u = Level::param(n("u"));
+        let z = Level::zero();
+        for (i, body) in [forall(sort(z), sort(u)), forall(sort(u), sort(z))].into_iter().enumerate()
+        {
+            let d = def("d", &["u"], sort(u.succ()), body);
+            let mut ip = Interp::new();
+            let led = run(&env, std::slice::from_ref(&d), &mut ip);
+            assert_eq!(led.values_ok, 1, "case {i} did not interpret: {:?}", led.rows());
+            assert_eq!(led.open, 0, "case {i} left an assumption open");
+            // The certificate is the point; `mem_at_srt` returning `None` shows
+            // up here and nowhere else.
+            assert_eq!(led.value_ev_ok, 1, "case {i} lost its certificate: {:?}", led.rows());
+        }
+    }
+
+    /// **A nonzero numeral codomain needs no `ite0` collapse, measured.**
+    ///
+    /// `Checker::pi_evidence_poly`'s header predicted this case would be
+    /// declined: `imax ℓ k` for nonzero `k` was expected to arrive already
+    /// normalised by Lean to `max ℓ k`, mismatching the rule's
+    /// `srt(ite0(k̄, ∅, ℓ̂ ∪ k̄))` and waiting on `Ite0::when_nonzero`. It is
+    /// **not** normalised — `Level::imax(u, 1)` is `imax(u,(0+1))`, mini's
+    /// smart constructor keeps the node — so `sort_of` spells the target
+    /// exactly as the rule concludes it and the clause certifies.
+    ///
+    /// Kept as a test rather than deleted with the prediction, because it is
+    /// the only thing standing between that paragraph and rotting back: if a
+    /// future `Level::imax` *does* start collapsing, this goes red at the
+    /// clause rather than silently at the next tranche's measurement.
+    ///
+    /// `k = 0` is included and is a different case — `imax ℓ 0` is `0`, the
+    /// `Prop` clause — so the loop covers both sides of `ite0`'s split.
+    #[test]
+    fn a_pi_over_a_nonzero_numeral_codomain_needs_no_ite0_collapse() {
+        let env = Environment::empty();
+        let u = Level::param(n("u"));
+        for k in 0..3u32 {
+            let l2 = crate::ground::numeral(k);
+            let d = def("d", &["u"], sort(u.succ()), forall(sort(u), sort(l2)));
+            let mut ip = Interp::new();
+            let led = run(&env, std::slice::from_ref(&d), &mut ip);
+            assert_eq!(led.values_ok, 1, "Sort u → Sort {k} did not interpret: {:?}", led.rows());
+            assert_eq!(led.value_ev_ok, 1, "Sort u → Sort {k} uncertified: {:?}", led.rows());
+            assert_eq!(led.open, 0, "Sort u → Sort {k} left an assumption open");
+        }
+    }
+
     /// **The type's slot and the value's slot are the slots they came from.**
     ///
     /// A declaration whose type has no certificate and whose value does is not
-    /// a corner case: it is what `015_levelParams` does today, because the `Π`
-    /// clause still wants a numeral and the `Sort` clause does not. The two
-    /// theorems are closed in one batch, so putting them back takes an index,
-    /// and getting that wrong reported the **value's** certificate as absent
-    /// under the reason `inference-error` — a key no clause on this route can
-    /// mint, which is the only reason it was visible at all.
+    /// a corner case: it is what `015_levelParams` did when this was written.
+    /// The two theorems are closed in one batch, so putting them back takes an
+    /// index, and getting that wrong reported the **value's** certificate as
+    /// absent under the reason `inference-error` — a key no clause on this
+    /// route can mint, which is the only reason it was visible at all.
     ///
-    /// `Sort u → Sort u` for the type and `Sort u` for the value: the pair is
-    /// not well-typed and does not need to be, since this route infers the two
-    /// halves independently and nothing here checks them against each other.
+    /// # The fixture may not assert that something stays broken
+    ///
+    /// This first used `Sort u → Sort u` as the uninterpretable type, because
+    /// the `Π` clause wanted a numeral. **The `Π` clause then landed one
+    /// tranche later and this test went red on the cure** — it was asserting
+    /// `typesOk == 0` about the very clause whose purpose was to make it 1.
+    /// That is the branch's own rule, and this is the second time it has
+    /// caught something.
+    ///
+    /// A string literal is the replacement, and the choice is the point:
+    /// `Gap::StrLit` is not *waiting* on anything. Mini declines string
+    /// literals as a matter of interpretation **scope**, not of unfinished
+    /// threading (MINI-DESIGN.md §0's two axes), so no clause conversion can
+    /// cure it and this fixture cannot go red on progress a second time. The
+    /// pair is not well-typed and does not need to be — this route infers the
+    /// two halves independently and checks neither against the other.
     #[test]
     fn a_missing_type_certificate_does_not_eat_the_values() {
         let env = Environment::empty();
         let u = Level::param(n("u"));
-        let arrow = forall(sort(u), sort(u));
-        let d = def("d", &["u"], arrow, sort(u));
+        let d = def("d", &["u"], crate::expr::str_lit("not a type"), sort(u));
         let mut ip = Interp::new();
         let led = run(&env, std::slice::from_ref(&d), &mut ip);
-        assert_eq!(led.types_ok, 0, "the Π clause still wants a numeral: {:?}", led.rows());
+        assert_eq!(led.types_ok, 0, "a string literal interprets to nothing: {:?}", led.rows());
         assert_eq!(led.type_ev_ok, 0);
+        assert_eq!(
+            led.blocked.get("strLit"),
+            Some(&1),
+            "…and the reason is scope, not threading: {:?}",
+            led.blocked
+        );
         assert_eq!(led.values_ok, 1, "⟦Sort u⟧ interprets: {:?}", led.rows());
         // The assertion the misalignment failed, and the reason it minted.
         assert_eq!(led.value_ev_ok, 1, "the value's certificate went to the type's slot");
@@ -533,3 +640,4 @@ mod tests {
         }
     }
 }
+

@@ -2956,7 +2956,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         let (Some(n1), Some(n2)) =
             (crate::ground::as_numeral(l1), crate::ground::as_numeral(l2))
         else {
-            return (None, Ev::missing(Gap::SymbolicLevel))
+            // **The de-scheduled arm** (`LEVELPOLY.md` §5.3 step 1). One of the
+            // two levels still mentions a parameter, so no numeral decides the
+            // clause and none needs to: `Interp::pi_typing_of` is §1.4's `ite0`
+            // form, both clauses in one theorem, at `srt(ℓ̂)`.
+            return self.pi_evidence_poly(t1, tb, w, dom, cod, l1, l2)
         };
         if n2 == 0 {
             // **The clause is chosen from a numeral, and the witness for what
@@ -3081,6 +3085,125 @@ impl<'e, 'i> Checker<'e, 'i> {
             match self.ip().and_then(|ip| ip.dprod_typing(&site, dom, &d, &f, n)) {
                 Some(t) => Ev::Proved(t),
                 None => Ev::missing(Gap::ConvCompose("pi-dprod")),
+            }
+        });
+        (tm, ev)
+    }
+
+    /// **The `Π` clause at a variable rung** — `LEVELPOLY.md` §5.3 step 1, the
+    /// de-scheduled counterpart of the `dprod` branch above.
+    ///
+    /// # One arm where the scheduled path has two
+    ///
+    /// [`Checker::pi_evidence`] splits on `l2 == 0` and runs two entirely
+    /// different derivations: a conditional singleton into `U₀`, or a
+    /// dependent product into `U_max(n1,n2)`. Neither is available at a
+    /// parameter — the split is not decidable there, which is exactly what
+    /// `Gap::SymbolicLevel` was reporting. §1.4's answer is not to decide it
+    /// but to *move it into the term*: `⟦Π x:A. B⟧` is
+    /// `ite0(ℓ̂₂, cndd(q⃗,⟦A⟧), dprod(q⃗,⟦A⟧))` and
+    /// `PiRules::pi_imax_dep` types it in one theorem. So this arm is shorter
+    /// than the branch it replaces, and it is shorter for a reason rather than
+    /// by omission.
+    ///
+    /// It is also **cumulativity-free**. The scheduled branch spends
+    /// `raise_in_gamma` twice to lift both premises to `max(n1,n2)`, and that
+    /// is where its `Gap::SortTowerHeight` comes from — the eager table stops
+    /// at `CUMUL_HEIGHT`. `pi_imax_dep` takes its premises at `srt(u)` and
+    /// `srt(v)` unraised and does the pointwise lift inside its own
+    /// derivation, so there is no height here and no table to run out of.
+    ///
+    /// # The one reconciliation it needs, and one it was predicted to need and
+    /// does not
+    ///
+    /// `Interp::mem_at_srt` reconciles the place the two vocabularies really do
+    /// meet: a numeral level's membership arrives spelled `Uₙ`, and the rule
+    /// states its premises over `srt(n̄)`. That is live on every `Sort 0 → Sort
+    /// u`, and deleting it is a red test.
+    ///
+    /// **This paragraph predicted a second one and the prediction was wrong,
+    /// which is why it is stated here rather than quietly dropped.** It said a
+    /// conclusion at `imax ℓ k` for nonzero `k` would arrive already normalised
+    /// by Lean to `max ℓ k`, mismatch the rule's `srt(ite0(k̄, ∅, ℓ̂ ∪ k̄))`, and
+    /// have to wait for `Ite0::when_nonzero`. Measured, `Level::imax(u, 1)` is
+    /// `imax(u,(0+1))` — mini's smart constructor does **not** collapse it — so
+    /// `Interp::sort_of` spells the target the same way the rule concludes it,
+    /// and `Sort u → Sort k` certifies today for every `k` tried.
+    /// `a_pi_over_a_nonzero_numeral_codomain_needs_no_ite0_collapse` is that
+    /// measurement, kept as a test so the claim cannot rot back.
+    ///
+    /// A consequence worth naming: `Interp::pi_typing_of`'s conclusion check is
+    /// therefore **defensive rather than load-bearing**. Removing it leaves all
+    /// 91 tutorial exports' poly rows byte-identical, so nothing on the corpus
+    /// reaches it. It stays because what it prevents is a *wrong theorem* about
+    /// a sort rather than a missing one, and that is the failure this route
+    /// cannot afford to make silently.
+    // One more than [`Checker::pi_evidence`]'s seven, and the extra one is
+    // `cod`: the scheduled branch reads it out of `tb.tm` after its own
+    // destructuring, and this arm is called from inside that destructuring, so
+    // both endpoints arrive already unwrapped. Re-extracting them here to
+    // satisfy the lint would mean an `unreachable!` for a condition the caller
+    // has just checked, which trades a real invariant for a cosmetic one.
+    #[allow(clippy::too_many_arguments)]
+    fn pi_evidence_poly(
+        &mut self,
+        t1: &Typing,
+        tb: &Typing,
+        w: FreeVar,
+        dom: Term,
+        cod: Term,
+        l1: &Level,
+        l2: &Level,
+    ) -> (Option<Term>, Ev) {
+        let vars = self.level_vars();
+        if vars.is_empty() {
+            // A symbolic level with no ω-variable standing for it: the
+            // σ-scheduled path, where this is unreachable because every level
+            // has been substituted, and the shape zone, where there is no
+            // interpretation at all. Both keep the reason they always had.
+            return (None, Ev::missing(Gap::SymbolicLevel))
+        }
+        let Some(site) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
+            return (None, Ev::missing(Gap::Skeleton))
+        };
+        let Some(kit) = self.ip().and_then(|ip| ip.pi_kit(&site)) else {
+            return (None, Ev::missing(Gap::Skeleton))
+        };
+        let tm = self.ip().and_then(|ip| ip.pi_term_of(&site, &kit, dom.clone(), l2, &vars));
+        // The fibre premise sits *under* the binder, so it is put in the rule's
+        // shape there and discharged after the close; the domain's is outside.
+        // No raise on either — see the header.
+        let fibre = tb.ev.clone().and_then(|m| {
+            match self
+                .ip()
+                .and_then(|ip| ip.mem_at_srt(l2, &vars, &m))
+                .and_then(|m| self.ip().and_then(|ip| ip.to_fibre_symbol(&site, w, &m)))
+            {
+                Some(t) => Ev::Proved(t),
+                None => Ev::missing(Gap::ConvCompose("pi-poly-fibre")),
+            }
+        });
+        let closed = self.close_one();
+        let family = match (&closed, fibre) {
+            (Some(c), ev) => match c.discharge_ev(ev) {
+                Ok(e) => e,
+                Err(_) => Ev::missing(Gap::Skeleton),
+            },
+            (None, _) => Ev::missing(Gap::NoEndpoint),
+        };
+        let dom_mem = t1.ev.clone().and_then(|m| {
+            match self.ip().and_then(|ip| ip.mem_at_srt(l1, &vars, &m)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::missing(Gap::ConvCompose("pi-poly-dom")),
+            }
+        });
+        let ev = dom_mem.zip(family, |d, f| {
+            match self
+                .ip()
+                .and_then(|ip| ip.pi_typing_of(&site, &kit, dom, l1, l2, &vars, &d, &f))
+            {
+                Some(t) => Ev::Proved(t),
+                None => Ev::missing(Gap::ConvCompose("pi-poly")),
             }
         });
         (tm, ev)

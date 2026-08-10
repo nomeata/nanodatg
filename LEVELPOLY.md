@@ -638,14 +638,33 @@ turned every row's cost from an estimate into a measurement.
 ### 5.2 The hypothesis mechanism already exists
 
 The design needs `uᵢ ∈ ω` carried as an assumption through a translation.
-**Neither crate needs a new mechanism:**
+**Neither crate needs a new mechanism — one crate needed a new *form* of an
+existing one, and this section said otherwise until the route had a caller:**
 
-* mini: `Scopes::assume(φ)` (`mini/src/scope.rs:273`) takes an *arbitrary*
-  formula into the kernel sequent's Γ and discharges it with
-  `discharge_assumption` — the second of exactly two `Thm::assume` sites in
-  the program, built for `derived::acc`'s induction hypothesis. `u ∈ ω` is one
-  more such formula, opened at declaration entry and discharged (then
-  `gen`-quantified) at declaration exit.
+* mini: `Scopes::assume(φ)` (`mini/src/scope.rs`) takes an *arbitrary* formula
+  into the kernel sequent's Γ and discharges it with `discharge_assumption` —
+  the second of exactly two `Thm::assume` sites in the program, built for
+  `derived::acc`'s induction hypothesis. `u ∈ ω` is one more such formula,
+  opened at declaration entry and discharged (then `gen`-quantified) at
+  declaration exit. That much held: `Checker::poly` added nothing to
+  `scope.rs`, and `ci/check-mini-scope.sh` still finds `Thm::assume` spelled
+  only there.
+
+  **The discharge, however, was one-shot, and the claim as first written hid
+  it.** An `AssumeToken` is consumed by its discharge — that is what enforces
+  LIFO — so one call is one assumption *gone*. A declaration has more than one
+  conclusion standing over the same `u⃗` (`⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` and
+  `⊢ ⟦val⟧ ∈ ⟦ty⟧`, and the constant's own typing at step 5), and the second
+  call would have handed its argument back **unchanged, still carrying
+  `u ∈ ω`, and reported success**. `Scopes::discharge_assumption_many` is the
+  batch form that was added for it, and `discharge_assumption` is now its
+  one-conclusion wrapper.
+
+  Recorded here, at the claim, rather than as a later note: the sentence
+  "neither crate needs a new mechanism" was *checkable* only once something
+  called the route, and `mini/src/poly_run.rs` is what called it. A prediction
+  that no caller has tested is a hypothesis, and this one was 90% right in a
+  way that would have shipped an open hypothesis into the store.
 * checker: the formula-level antecedent lists (`CondEq`, the `assms`
   threading of `has_type_local`, `guard_and_generalise`) carry membership
   formulas; `Formula::mem(u, ω)` is one more.
@@ -741,56 +760,72 @@ THREADING-CENSUS §2).
 
    ### The measurement, over all 91 tutorial exports
 
-   | | |
-   |---|---|
-   | declarations attempted (`def`/`axiom`) | **147** |
-   | zone B skipped (`inductive`/`mutual`/`Quot`) | 108 |
-   | `⟦ty⟧` produced | 56 |
-   | `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | **56 — every type that interpreted also certified** |
-   | `⟦val⟧` produced | 83 / 146 |
-   | `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 |
-   | **escaped assumptions (`open`)** | **0** |
-   | **whole exports fully certified on this route** | **18** of 89 (`mini --poly` exits 0; 71 exit 4, 2 are frontend declines) |
+   Two columns, because the `Π` clause landed in the tranche after the caller
+   and this is the same measurement taken twice:
 
-   That last row is the one to read first, and it is the strongest thing this
-   branch can currently say. Eighteen whole tutorial exports are interpreted
-   and certified **at their declarations' own universe parameters**, with no σ
-   anywhere and no assumption escaping its discharge. The route is not a
-   prototype that types one hand-written `def`; it takes real files end to end.
+   | | caller only | **+ the `Π` clause** |
+   |---|---|---|
+   | declarations attempted (`def`/`axiom`) | 147 | 147 |
+   | zone B skipped (`inductive`/`mutual`/`Quot`) | 108 | 108 |
+   | `⟦ty⟧` produced | 56 | **76** |
+   | `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | 56 | **68** |
+   | `⟦val⟧` produced | 83 / 146 | **89** / 146 |
+   | `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 | **65** |
+   | **escaped assumptions (`open`)** | **0** | **0** |
+   | whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 |
 
-   And the ordering, which is the thing a `Gap::SymbolicLevel` site count
-   could not give. That variant carries no payload, so all 138 of them key to
-   one string; `MINI_POLY_SITES=1` files the **origin** off `crate::blocker`'s
-   trail instead:
+   Two rows deserve reading against each other. Every per-declaration counter
+   moved and **the per-file verdict did not move at all** — still 18 exits 0,
+   71 exits 4, 2 frontend declines. That is not a disappointment, it is the
+   const clause stated in one number: every export that is not already clean
+   contains at least one constant reference, so no amount of `Π` work can
+   finish a *file*. The eighteen that are clean are interpreted and certified
+   at their declarations' own universe parameters with no σ anywhere, which is
+   still the strongest thing this branch can say.
 
-   | site | count | the clause | the kind of work |
-   |---|---|---|---|
-   | `kernel.rs:3461` — `const_evidence`'s `ls → Vec<u32>` | **84** | `Expr::Const` at a parametric level | the **store's key** — step 5's generic point |
-   | `kernel.rs:2959` — `pi_evidence`'s `as_numeral(l1)/(l2)` | **50** | the `Π` clause | **derivation** — `derived::levels::{pi_rules, ite0, leq}` |
-   | `kernel.rs:3465` — `miss_reason` | 16 | a `no-interp(·)` store miss | downstream of the two above |
-   | `kernel.rs:775` — `scope_typing`'s empty slot | 4 | a binder whose domain had no interpretation | downstream |
+   The other is `typesOk` 76 against `typeEv` 68. Before the `Π` clause those
+   two were equal — every type that interpreted also certified — and they are
+   not any more: **8 types now interpret without a certificate**, reported as
+   `no-endpoint`. That is new debt the clause surfaced rather than created, and
+   it is named here so the next tranche does not read the +20 without it.
 
-   Two things about that table are worth stating in words, because both cut
-   against what the site counts predicted. **`zoneb.rs`'s 23 sites contribute
-   nothing**: every one of them is `c.interp().ok_or(Gap::SymbolicLevel)?`, so
-   with a thread in hand they stop firing, exactly as this section predicted —
-   but zone B is not *reached* on this route at all yet, so its 108
-   declarations are skipped rather than passing. And **the 84 is partly an
-   artifact of this caller**: `poly_run` stores nothing, so every constant
-   reference misses by construction. Even so it is real work either way, since
-   `const_evidence` must be taught to look up at a level *expression* whatever
-   fills the store — `ConstKey` already widened for it in step 2.
+   ### The ordering, and what the `Π` clause did to it
 
-   **The `Π` clause is next**, at 50, and it is the one number in the table
-   that no amount of store plumbing removes: it is pure derivation at
-   `srt(ℓ̂)`, it is what §6.2 actually asks for, and it is on the critical path
-   for the const clause too, since nearly every declaration's type is a `Π`.
+   A `Gap::SymbolicLevel` count could not give this: the variant carries no
+   payload, so every one keys to one string. `MINI_POLY_SITES=1` files the
+   **origin** off `crate::blocker`'s trail instead.
 
-   #### The `Π` clause, reconnoitred — assembly, and every argument is in hand
+   | site | before | **after** | the clause | the kind of work |
+   |---|---|---|---|---|
+   | `const_evidence`'s `ls → Vec<u32>` | 84 | **109** | `Expr::Const` at a parametric level | the **store's key** — step 5's generic point |
+   | `pi_evidence`'s `as_numeral(l1)/(l2)` | 50 | **0** | the `Π` clause | **derivation** — done |
+   | `miss_reason` | 16 | 16 | a `no-interp(·)` store miss | downstream |
+   | `scope_typing`'s empty slot | 4 | 3 | a binder whose domain had no interpretation | downstream |
 
-   Checked before it is briefed, because a brief on this strand has been wrong
-   three times. `derived::levels::pi_rules::PiRules::pi_imax_dep` is *exactly*
-   the theorem the de-scheduled arm wants, in one piece:
+   **The `Π` site is gone from the census entirely**, and `const_evidence`
+   *rose* from 84 to 109 — the cascade, and the expected one: declarations that
+   used to stop at the `Π` now get further and stop at the next thing. 109 of
+   the remaining 128 are one clause.
+
+   Two things here cut against what the site counts predicted, and both are
+   worth stating in words. **`zoneb.rs`'s 23 sites contribute nothing**: every
+   one is `c.interp().ok_or(Gap::SymbolicLevel)?`, so they stopped firing when
+   the thread arrived, exactly as this section predicted — though zone B is not
+   *reached* on this route yet, so its 108 declarations are skipped rather than
+   passing. And **the const figure is only partly an artifact of this caller**:
+   `poly_run` stores nothing, so every constant reference misses by
+   construction — but `const_evidence` reads the level vector as `Vec<u32>` and
+   would miss at a parametric level whatever the store held. `ConstKey` already
+   widened for it in step 2; the lookup did not.
+
+   **`const_evidence` is therefore the whole remaining story**, at 109 of 128,
+   and it is the next slice.
+
+   #### The `Π` clause — **built**, and it was assembly as predicted
+
+   `Checker::pi_evidence_poly`, `Interp::{pi_kit, pi_term_of, mem_at_srt,
+   pi_typing_of}`. `derived::levels::pi_rules::PiRules::pi_imax_dep` is
+   *exactly* the theorem the de-scheduled arm wanted, in one piece:
 
    ```text
    ⊢ ∀q⃗ ∀u ∀v ∀A. (((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ fib(q⃗,A,srt(v))))
@@ -813,19 +848,42 @@ THREADING-CENSUS §2).
    side names this consumer in its own header — `cndd`/`cndd_ax` are handed in
    rather than minted precisely for *"the checker's lazy split"*.
 
-   **One integration hazard, named now because the probe will otherwise find
-   it the hard way.** `cndd` must be the conditional singleton over the
-   **fibre site's** `b`. `Interp::cond_site` and `Interp::fibre_site` each call
+   **The one integration hazard, named in reconnaissance and confirmed in
+   the build.** `cndd` must be the conditional singleton over the **fibre
+   site's** `b`. `Interp::cond_site` and `Interp::fibre_site` each call
    `define_abbrev` on the same skeleton through *separate* caches (`self.conds`
    and `self.fibres`), so they hold two different `FnSym`s for one body shape;
-   `pi_rules` validates `cndd_ax` by probe against `dp.b` and would refuse the
-   one `cond_site` built. The de-scheduled arm therefore mints its own via
+   `pi_rules` validates `cndd_ax` by probe against `dp.b` and refuses the one
+   `cond_site` built — **silently, as a `None`**, which is why it was worth
+   naming ahead of time. `Interp::pi_kit` mints its own via
    `prop::conditional_singleton` at `pi_body_dep(env, sums, fibre.b, holes,
-   dom)` — which is the identical formula `cond_site` builds, over the other
-   symbol.
+   dom)`: the identical formula `cond_site` builds, over the other symbol. It
+   is memoised on the fibre skeleton, and must be — `pi_rules` mints `cndd` and
+   derives off the shared `Env`, so building it twice for one shape would
+   renumber everything after it.
 
-   No new mathematics is required, which keeps the strand's running claim
-   intact at the clause the brief said to attack first.
+   **No new mathematics was required.** One reconciliation was: a numeral
+   level's membership arrives spelled `Uₙ` while the rule states its premises
+   over `srt(n̄)`, so `Interp::mem_at_srt` uses `rung_bridge` in the direction
+   the rule wants. That is live on every `Sort 0 → Sort u` and deleting it is a
+   red test.
+
+   **A second reconciliation was predicted and does not exist — recorded
+   because the prediction was mine and it was wrong.** This section said a
+   conclusion at `imax ℓ k` for nonzero `k` would arrive already normalised by
+   Lean to `max ℓ k`, mismatch the rule's `srt(ite0(k̄, ∅, ℓ̂ ∪ k̄))`, and have to
+   wait on `Ite0::when_nonzero`. Measured: `Level::imax(u, 1)` is
+   `imax(u,(0+1))` — mini's smart constructor does not collapse the node — so
+   `sort_of` spells the target exactly as the rule concludes it, and
+   `Sort u → Sort k` certifies today for every `k` tried.
+   `a_pi_over_a_nonzero_numeral_codomain_needs_no_ite0_collapse` is the
+   measurement, kept as a test so the claim cannot rot back.
+
+   A consequence, since it is the kind of thing that otherwise gets read as
+   coverage: `pi_typing_of`'s conclusion check is **defensive, not
+   load-bearing**. Removing it leaves all 91 exports' poly rows byte-identical
+   — nothing on the corpus reaches it. It stays because what it prevents is a
+   *wrong theorem about a sort* rather than a missing one.
 
    ### What the gate becomes, now that the route is exercised
 
@@ -1766,14 +1824,20 @@ zone A at a declaration's own parameters, the `Sort` clause is converted, and
 and does it for 56 of the tutorial corpus's 147 `def`/`axiom` declarations with
 **no escaped assumption anywhere**.
 
-What remains is the other §6.2 clauses, and the order is now measured rather
-than sized: the `Π` clause (`pi_evidence`, 50 of the 138 residual
-`Gap::SymbolicLevel`) is derivation at `srt(ℓ̂)` and is next; `Expr::Const` at a
-parametric level (84) is the store's key and belongs with step 5; `zoneb.rs`'s
-23 sites contribute **nothing**, because they were all
-`c.interp().ok_or(…)` and stopped firing when the thread arrived — zone B's
-108 declarations are simply not on this route yet. §5.3 step 1 carries the
-table and the two-part gate the route is now measured against.
+**The `Π` clause is built too.** `Checker::pi_evidence_poly` types
+`⟦Π x:A. B⟧` at a variable rung through `PiRules::pi_imax_dep` — §1.4's `ite0`,
+so both clauses are one theorem and nothing decides `l2 == 0`; and
+cumulativity-free, so there is no `raise_in_gamma` and no tower height to run
+out of. It moved the route from 56 to **76** interpreted types and 56 to **68**
+certified ones, with `open` still **0**.
+
+What remains is one clause. The order is measured rather than sized, and the
+`Π` clause's own site is now **absent** from the census: `const_evidence` at a
+parametric level is **109 of the remaining 128**, and it is the store's key —
+`ConstKey` widened for it in step 2 and the *lookup* did not. `zoneb.rs`'s 23
+sites contribute **nothing**, because they were all `c.interp().ok_or(…)` and
+stopped firing when the thread arrived; zone B's 108 declarations are simply
+not on this route yet. §5.3 step 1 carries both tables and the two-part gate.
 
 ## 6. What is deliberately not claimed
 
