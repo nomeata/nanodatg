@@ -71,7 +71,10 @@
   `/proc/self/exe`.
 
   A stripped host has no `.symtab`, and then this library **aborts the process
-  with a diagnostic** rather than loading and doing nothing.  The same is true
+  with a diagnostic** rather than loading and doing nothing.  A host with no
+  Lean runtime in it at all — `timeout`, `env`, `sh`, whatever else an
+  `LD_PRELOAD` line drags in — is a different case and is left alone with a
+  note: it was never the host anyone meant to patch.  The same is true
   of a host that links `libleanshared.so` instead of static Lean: the shipped
   `libleanshared.so` is stripped of local symbols, so the kernel's level
   functions are not findable there either.  `modelgen` is statically linked and
@@ -123,6 +126,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include "level_algebra.h"
@@ -206,11 +210,6 @@ static struct {
   uintptr_t text_size;
 } H;
 
-static int lh_sym_cmp(const void *a, const void *b) {
-  uintptr_t x = ((const lh_sym *)a)->addr, y = ((const lh_sym *)b)->addr;
-  return x < y ? -1 : (x > y ? 1 : 0);
-}
-
 static int lh_phdr_cb(struct dl_phdr_info *info, size_t sz, void *data) {
   (void)sz;
   if (info->dlpi_name && info->dlpi_name[0] != '\0') return 0;
@@ -277,24 +276,14 @@ static void lh_load_symbols(void) {
     k++;
   }
   H.nsyms = k;
-  qsort(H.syms, k, sizeof(lh_sym), lh_sym_cmp);
+  /* Not sorted: every lookup here is by name, there are about ten of them, and
+     sorting ~180k entries was measurable at load. */
 }
 
 static const lh_sym *lh_find(const char *name) {
   for (size_t i = 0; i < H.nsyms; i++)
     if (strcmp(H.syms[i].name, name) == 0) return &H.syms[i];
   return NULL;
-}
-
-/* Enclosing function of a link-time address. */
-static const lh_sym *lh_owner(uintptr_t a) {
-  size_t lo = 0, hi = H.nsyms;
-  while (lo < hi) {
-    size_t mid = (lo + hi) / 2;
-    if (H.syms[mid].addr <= a) lo = mid + 1; else hi = mid;
-  }
-  if (lo == 0) return NULL;
-  return &H.syms[lo - 1];
 }
 
 /* Resolve a host function.  The symbol table read out of /proc/self/exe is
@@ -625,27 +614,35 @@ static void lh_mprotect_text(int writable) {
     lh_die("mprotect(%s) failed on .text", writable ? "rwx" : "rx");
 }
 
-/* Rewrite every rel32 call/jmp to `target_addr` whose enclosing function is in
-   `allow`.  Returns the number of sites rewritten. */
+/* Rewrite every rel32 call/jmp to `target_addr` inside one of the functions
+   named in `allow`.  Returns the number of sites rewritten.
+
+   Only the *allowed callers'* own byte ranges are scanned, not the whole 135 MB
+   of `.text`: the callers are named, and `.symtab` gives each one an address
+   and a size.  Scanning all of `.text` once per target — which is what this did
+   first — cost about 5 G instructions at load, more than doubling a short
+   `modelgen` run for no information. */
 static int lh_patch_target(const char *what, uintptr_t target_addr,
                            void *hook, lh_allow *allow, size_t nallow) {
   unsigned char *tramp = lh_tramp(hook);
   unsigned char *text = (unsigned char *)(H.base + H.text_addr);
-  size_t         n = H.text_size;
   int            patched = 0;
 
-  for (size_t i = 0; i + 5 <= n; i++) {
-    unsigned char op = text[i];
-    if (op != 0xE8 && op != 0xE9) continue;
-    int32_t disp;
-    memcpy(&disp, text + i + 1, 4);
-    uintptr_t site_link = H.text_addr + i;
-    uintptr_t tgt_link = site_link + 5 + (intptr_t)disp;
-    if (tgt_link != target_addr) continue;
-    const lh_sym *own = lh_owner(site_link);
-    if (!own) continue;
-    for (size_t j = 0; j < nallow; j++) {
-      if (strcmp(own->name, allow[j].owner) != 0) continue;
+  for (size_t j = 0; j < nallow; j++) {
+    const lh_sym *own = lh_find(allow[j].owner);
+    if (!own)
+      lh_die("caller %s not found in .symtab", allow[j].owner);
+    uintptr_t lo = own->addr, hi = own->addr + own->size;
+    if (own->size == 0) hi = lo + 0x10000; /* no size recorded: bounded guess */
+    if (lo < H.text_addr || hi > H.text_addr + H.text_size)
+      lh_die("caller %s is not inside .text", allow[j].owner);
+    for (uintptr_t a = lo; a + 5 <= hi; a++) {
+      size_t        i = a - H.text_addr;
+      unsigned char op = text[i];
+      if (op != 0xE8 && op != 0xE9) continue;
+      int32_t disp;
+      memcpy(&disp, text + i + 1, 4);
+      if (a + 5 + (intptr_t)disp != target_addr) continue;
       intptr_t nd = (intptr_t)tramp - (intptr_t)(text + i + 5);
       if (nd < INT32_MIN || nd > INT32_MAX)
         lh_die("trampoline out of rel32 range for %s", allow[j].label);
@@ -659,7 +656,6 @@ static int lh_patch_target(const char *what, uintptr_t target_addr,
       patched++;
       lh_say("[levelhack]   %-12s <- %s  (%s at %p)\n", what, allow[j].label,
              op == 0xE8 ? "call" : "jmp", (void *)(text + i));
-      break;
     }
   }
   return patched;
@@ -724,13 +720,19 @@ __attribute__((constructor)) static void lh_init(void) {
   { const char *m = getenv("NANODATG_LEVELHACK_META");
     if (m && strcmp(m, "0") == 0) lh_meta = 0; }
 
-  /* Do not inherit into children.  `Lean.findSysroot` shells out to
-     `lean --print-libdir`, and the shipped `lean` links a *stripped*
-     libleanshared.so, so this library would (correctly) refuse to run there
-     and take the child down with it.  The interposition is for this process. */
-  unsetenv("LD_PRELOAD");
-
   lh_load_symbols();
+
+  /* Is this a Lean process at all?  Under LD_PRELOAD this constructor runs in
+     whatever the shell launched — `timeout`, `env`, `sh` — and killing those
+     helps nobody.  A host with no Lean runtime is not a host that was asked to
+     be patched, so it is left alone with a note.  A host that *is* Lean and
+     still cannot be patched is the loud case, and falls through to lh_die. */
+  if (!lh_find("lean_initialize_runtime_module") &&
+      !dlsym(RTLD_DEFAULT, "lean_initialize_runtime_module")) {
+    lh_say("[levelhack] not a Lean process (%s); patched nothing.\n",
+           program_invocation_short_name);
+    return;
+  }
 
   const lh_sym *se = lh_find("_ZN4lean13is_equivalentERKNS_5levelES2_");
   const lh_sym *sg = lh_find("_ZN4lean6is_geqERKNS_5levelES2_");
@@ -786,6 +788,14 @@ __attribute__((constructor)) static void lh_init(void) {
       if (!allow_meta[j].found)
         lh_die("expected call site not found: %s -> lean_is_level_def_eq",
                allow_meta[j].label);
+
+  /* Do not inherit into children, now that this process is patched.
+     `Lean.findSysroot` shells out to `lean --print-libdir`, and the shipped
+     `lean` links a *stripped* libleanshared.so, so this library would
+     (correctly) refuse to run there and take the child down with it.  Done
+     here and not at entry, so that an `LD_PRELOAD` line that reaches this
+     process through a `timeout` or an `env` still reaches this process. */
+  unsetenv("LD_PRELOAD");
 
   lh_say("[levelhack]   %d + %d + %d call sites rewritten.\n", ne, ng, nm);
   lh_say("[levelhack] ==================================================="

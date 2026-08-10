@@ -48,6 +48,7 @@ cd modelgen && lake build
 
 .lake/build/bin/modelgen  IN.ndjson [-o OUT.ndjson|-] [--check-recursors]
                                     [--prim-models] [--quiet]
+                                    [--interpose-levels interpose/levelhack.so]
 .lake/build/bin/monomorph IN.ndjson [-o OUT.ndjson] [--mono-recursors]
                                     [--default N[,N...]] [--check] [--quiet]
 ```

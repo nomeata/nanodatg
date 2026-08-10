@@ -37,7 +37,7 @@ LD_PRELOAD=/path/to/levelhack.so some-lean-exe ...
 
 ## What is patched, exactly
 
-Six `call`/`jmp` sites, each a four-byte relative displacement, listed by the
+Nine `call`/`jmp` sites, each a four-byte relative displacement, listed by the
 banner at load. Five of them target `lean::is_equivalent`:
 
 * `lean::type_checker::quick_is_def_eq` — the `Sort =?= Sort` case, which is
@@ -49,19 +49,34 @@ banner at load. Five of them target `lean::is_equivalent`:
 * `lean_level_eqv` — the exported C API entry, which **nothing in the binary
   calls**, and is therefore used as a canary by the self-test.
 
-and one targets `lean::is_geq`:
+one targets `lean::is_geq`:
 
 * `lean::add_inductive_fn::check_constructors` — a constructor field's universe
-  against the resultant universe.
+  against the resultant universe;
 
-Deliberately **not** patched: `lean::is_geq_core -> lean::is_geq` and the calls
-into `lean::normalize`. Those are the stock algorithm's own internals, and
-`stock` has to keep meaning "what Lean's kernel does", because the replacement
-is defined as `stock(u,v) || complete(u,v)` and calls the untouched original.
+and three target `lean_is_level_def_eq`, which is `Lean.Meta.isLevelDefEqAux`
+compiled — the **elaborator's** level equality, an entirely different function
+from the kernel's:
 
-Also deliberately not affected: **Lean's elaborator**. `Lean.Level.isEquiv` is
-implemented in Lean, not in C++, and is a different function. Only the kernel
-moves.
+* `Lean.Meta.isLevelDefEq`, all three of its call sites.
+
+Deliberately **not** patched: `lean::is_geq_core -> lean::is_geq`, the calls
+into `lean::normalize`, and `Lean.Meta.solve -> lean_is_level_def_eq`. Those are
+the stock algorithms' own internals, and `stock` has to keep meaning "what Lean
+does", because the replacement is defined as `stock(u,v) || complete(u,v)` and
+calls the untouched original.
+
+### Why the elaborator too
+
+Because otherwise nothing happens. `modelgen`'s level-incompleteness decline is
+taken by its *planner*, which asks `Meta.isLevelDefEq` whether a candidate pad
+closes the gap — the kernel never gets a chance to refuse. With the kernel alone
+patched, the whole corpus comes out byte-identical. This was measured before it
+was believed. `NANODATG_LEVELHACK_META=0` reproduces that configuration.
+
+Note that `Lean.Level.isEquiv` — the Lean-level function of that name — is a
+*third* implementation again, and is not patched: nothing on the path that
+matters calls it.
 
 ## Why call sites and not the function prologue
 
@@ -105,8 +120,10 @@ clears `LD_PRELOAD` so children do not inherit it.
    *accepted only under interposition*, and *rejected by both*.
 3. **A patch that does not take kills the process.** Verified by an observed
    behaviour change — the canary flips on the §8.6 witness — not by an
-   `mprotect` return code. `modelgen --interpose-levels` adds a second check at
-   the `addDeclCore` level.
+   `mprotect` return code. `modelgen --interpose-levels` adds two more, at the
+   `addDeclCore` level and at the `Meta.isLevelDefEq` level, and refuses to run
+   unless *both* flip. (Which is why the kernel-only configuration is reachable
+   only through `LD_PRELOAD`: the flag promises both layers, so it checks both.)
 4. **The replacement can only add acceptances**, and only ones its decision
    procedure asserts; `LA_UNKNOWN` falls back to stock. Everything the real
    kernel accepts is still accepted by the real kernel's own code.

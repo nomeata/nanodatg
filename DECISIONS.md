@@ -3264,3 +3264,67 @@ tell "all checks passed" from "all checks that ran passed". That is the one
 place in this set where SKIP-is-not-PASS stops at the process boundary, and it
 is recorded rather than changed because the fix is a policy choice about what a
 machine without a Lean toolchain should do, not a defect in a check.
+
+---
+
+## 2026-08-10 — `--interpose-levels`: Lean's kernel is rewritten, and the run says so
+
+**RISK: universes.**
+
+**Chosen.** Ship `modelgen/interpose/`: a shared object that, when loaded into
+`modelgen`, rewrites nine `call`/`jmp` displacements in Lean's own machine code
+so that Lean's level comparison goes through a complete decision procedure.
+Reachable only behind `modelgen --interpose-levels SO`, plus `LD_PRELOAD` for
+diagnostics. `MODELGEN.md` §8.6.1 is the record.
+
+**Rejected.** (a) `LD_PRELOAD` symbol interposition — impossible: `lean::is_equivalent`
+and `lean::is_geq` are local symbols with no PLT indirection. (b) Overwriting the
+functions' prologues — that destroys the originals, and the whole soundness story
+here depends on the replacement being `stock(u,v) || complete(u,v)` with `stock`
+still being Lean's untouched code. (c) Rebuilding Lean's kernel with the repair —
+a much heavier dependency, and it would not be a demonstration of anything.
+(d) Porting lean4lean's `NormLevel.prune` — the case-split decision procedure is
+exact rather than "measured complete so far", and is a tenth of the code in C.
+
+**Why it is not the tenth "check reporting success having done nothing"
+(2026-08-08).** Because the failure mode was designed against, three ways.
+The flag is off by default. The load prints a banner naming every rewritten call
+site and an exit census splitting every level comparison into *accepted by
+stock*, *accepted only under interposition*, and *rejected by both* — so the two
+populations are separable in the data and not only in prose. And the load
+**refuses to return** unless both Lean's kernel and Lean's elaborator observably
+change their verdict on a witness pair: not "`mprotect` returned 0", an actual
+different answer to the same question. That refusal caught two of its own bugs
+before anything else did, one of which was a probe written as a *pure* `Bool`
+function of an `Environment` — which it is not, that being the entire point —
+that Lean's compiler duly evaluated once for both the before and the after.
+
+**The finding that changed the shape of the work.** §8.6's decline is not a
+kernel refusal. `modelgen`'s planner takes it, through the *elaborator's*
+`Lean.Meta.isLevelDefEq`, which is compiled Lean and a different function from
+the C++ kernel's `lean::is_equivalent` with different incompleteness. Patching
+the kernel alone leaves all 193 corpus exports byte-identical — measured, not
+assumed. Both layers are needed, and that is worth knowing independently of this
+tool: "Lean's level algebra" is at least three implementations, not one.
+
+**What it costs.** "Checked by Lean's kernel" becomes false under the flag for
+anything that passed only under an escape, and `modelgen/README.md` now says so
+where it makes the claim. Soundness is not argued but measured: 6,000,000 random
+pairs against a bounded semantic oracle, in-process beside the real functions,
+**zero false accepts**. A bounded oracle is a measurement and not a completeness
+proof, which is why the count that is exact (false accepts — a counterexample
+found is a counterexample) is reported separately from the one that is an upper
+bound (missed).
+
+**`nanodatg`'s own `kernel/` is untouched.** The kernel rewritten here is Lean's,
+inside the `modelgen` process, for the duration of that process. The Rust
+trusted computing base is not involved.
+
+**Consequence: lean4lean can be dropped.** Its *use* was already gone
+(`vendor-l4l/` is not in the tree); its oracle role is superseded on every axis —
+inside Lean's kernel rather than beside it, 6 M pairs rather than 33,670, and
+exercised over a real corpus, which §8.6's own second caveat said had never been
+done. The one thing it still has is a machine-checked soundness proof of the
+repair; `level_algebra.c` has a written argument and a measurement. If the repair
+should ever be *proved*, lean4lean and `scripts/inductive-basis/lean4lean-level-prune.patch`
+are where that starts.

@@ -3095,20 +3095,29 @@ the **elaborator's** level equality, compiled Lean, and it is a *different
 function* from the kernel's C++ `lean::is_equivalent` with its own
 incompleteness. So:
 
-* with the **kernel alone** patched — `lean::is_equivalent`,
-  `lean::is_geq` — the corpus does not move at all. Measured: 193 files
-  (`vendor/arena-tests` plus `modelgen/tests`), every report byte-identical to
-  the stock run, and the only escape in any run is the take-verification's own
-  probe. The kernel never gets the chance to refuse, because the planner
-  refuses first.
+* with the **kernel alone** patched — `lean::is_equivalent`, `lean::is_geq`,
+  reachable as `NANODATG_LEVELHACK_META=0` — the corpus does not move at all.
+  Measured over 193 files (`vendor/arena-tests` plus `modelgen/tests`,
+  `--prim-models`): **193 of 193 exports byte-identical**, 0 reports changed,
+  and **0 escapes** anywhere. Not merely "no decline closed": the kernel's
+  level comparison never once had an opinion the stock one lacked, because the
+  planner refuses first and the offending level never reaches `addDeclCore`.
 * with `Lean.Meta.isLevelDefEq` patched **as well**, `BoxF` is planned, and
-  then the (also patched) kernel accepts it.
+  then the (also patched) kernel accepts it — and only then do kernel escapes
+  appear at all. The kernel gap is downstream of the elaborator gap.
 
-Six call sites are rewritten for the kernel and one for the elaborator; the
+Six call sites are rewritten for the kernel and three for the elaborator; the
 banner names each. Deliberately left alone: `lean::is_geq_core`'s recursion
 into `lean::is_geq`, and `Lean.Meta.solve`'s recursion into
 `lean_is_level_def_eq`. Those are the stock algorithms' own internals and
 `stock` has to keep meaning what Lean does.
+
+Only the named callers' own byte ranges are scanned for those nine sites, not
+all 135 MB of `.text`. The first version scanned the whole section once per
+target and cost about 5 G instructions at load — it more than doubled a short
+`modelgen` run. As it stands the flag costs **+2.7 %** on `init-prelude`
+(3.465 G → 3.558 G instructions, two runs each), and that is a fixed cost:
+parsing the host's symbol table, not comparing levels.
 
 ### `BoxF`, closed
 
@@ -3126,6 +3135,58 @@ the interposition — the pad; `is_equivalent` 9 calls, **4** decided only by
 the interposition, one of which is the probe, so **3** were the model itself;
 `is_geq` 17 calls, **0** escapes.
 
+### What moves, over the whole corpus
+
+193 files (`vendor/arena-tests` plus `modelgen/tests`), `--prim-models`, stock
+against interposed, comparing the **exports byte for byte** and not only the
+report:
+
+| | |
+|---|---|
+| exports byte-identical | **189** |
+| exports differing | **4** — and they are exactly the four with a real escape |
+| reports differing | **1** — `prim_declines`, `BoxF: declined` → `BoxF: model of 4 declarations` |
+
+The other three — `init-prelude`, `perf/grind-ring-5`, `prim_shapes` — model
+and decline exactly the same declarations and produce a **smaller** export
+(`init-prelude` 4,779,318 → 4,777,140 bytes). The planner reached the same
+answer by a cheaper route: `isLevelDefEq raw w` now succeeds where stock needed
+a pad, so the padding declaration is not written.
+
+Every run also carries a floor of **2** escapes that are the take-verification's
+own two probes, one per layer; the four interesting files show 6.
+
+So `init-prelude` *does* exercise the gap. §8.6 used to say it contained no
+`BoxF`-shaped declaration and that the fixture existed precisely to hold the
+refusal path open; the first half of that was wrong. What `init-prelude`
+contains is a six-universe `imax` chain,
+
+```text
+max 1 (imax u₄ (imax u₃ (imax u₂ (imax u₅ (imax u₁ u₀)))))  (max 1 u₅ u₄ u₃ u₂ u₁ u₀)
+  ~  max 1 u₅ u₄ u₃ u₂ u₁ u₀
+```
+
+on which Lean's normaliser is incomplete for exactly the same reason. It is not
+a *decline*, because the planner has a fallback there; it is a comparison Lean
+gets wrong and the corpus absorbs.
+
+### What moves on Mathlib
+
+`pre-10000000.ndjson` (538 MB, 10 M lines), `--prim-models`:
+
+| | stock | interposed |
+|---|---|---|
+| models / declined | 1,668 / 45 | **1,668 / 45** (identical) |
+| export | 588,631,425 B | 588,575,119 B |
+| `is_equivalent` calls / escapes | — | 25,077 / **19** (1 the probe) |
+| `is_geq` calls / escapes | — | 5,101 / **0** |
+| `Meta.isLevelDefEq` calls / escapes | — | 1,437 / **7** (1 the probe) |
+
+So on a real Mathlib prefix the gap is hit **24 times**, the models get slightly
+cheaper pads for 56 KB, and **no decline closes** — because none of Mathlib's
+declines are level-arithmetic ones. The only decline this repair is known to
+close is the one `prim_declines.lean` was built to hold open.
+
 ### Soundness, measured
 
 A more complete procedure accepts strictly more, so the number that matters is
@@ -3137,30 +3198,32 @@ count is exact and the "missed" counts are upper bounds.
 Fuzz, random levels, oracle = every assignment over a bounded range, run
 in-process against the real `lean::is_equivalent` and `lean::is_geq`:
 
-| pairs | depth | vars | replacement false accepts | replacement missed | Lean `is_equivalent` missed | Lean `is_geq` missed |
+| pairs | depth | vars | replacement FALSE ACCEPTS | replacement missed | Lean `is_equivalent` missed | Lean `is_geq` missed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 2,000,000 | 4 | 3 | **0** | 0 | 1,806 | 25,950 |
-| 1,000,000 | 4 | 3 | **0** | 0 | — | — |
-| 1,000,000 | 5 | 4 | **0** | 0 | — | — |
+| 2,000,000 | 4 | 3 | **0** | 0 | 1,699 | 25,950 |
+| 1,000,000 | 4 | 3 | **0** | 0 | 828 | 12,948 |
+| 1,000,000 | 5 | 4 | **0** | 0 | 189 | 12,434 |
 | 500,000 | 6 | 3 | **0** | 0 | 205 | 9,681 |
-| 500,000 | 3 | 3 | **0** | 0 | — | — |
-| 500,000 | 6 | 5 | **0** | 0 | — | — |
-| 300,000 | 4 | 6 | **0** | 0 | — | — |
-| 200,000 | 8 | 3 | **0** | 0 | — | — |
+| 500,000 | 3 | 3 | **0** | 0 | 592 | 4,385 |
+| 500,000 | 6 | 5 | **0** | 0 | 49 | 6,951 |
+| 300,000 | 4 | 6 | **0** | 0 | 19 | 2,101 |
+| 200,000 | 8 | 3 | **0** | 0 | 70 | 4,763 |
 
-Over 6 million pairs: **zero false accepts, and zero `LA_UNKNOWN`** (the
-resource-cap answer, which falls back to stock). Lean's own two functions also
-had zero false accepts everywhere, as they must.
+**6,000,000 pairs, zero false accepts, zero `LA_UNKNOWN`** — the latter being
+the resource-cap answer, which would have fallen back to stock. Lean's own two
+functions also had zero false accepts everywhere, as they must; where they
+differ from the replacement is the two rightmost columns, and the `>=` column
+is the larger gap by an order of magnitude.
 
-Two honesty notes on that table. The `missed` column is zero only after the
-oracle is widened: at three variables an oracle over `0..4` — the one the
-lean4lean survey used — reported 99 spurious `>=` "misses" per 200,000 pairs,
-because `4 >= w` holds on `0..4` and fails at `5`; widening to `0..12` took
-them to zero. At four or more variables the oracle range has to shrink to keep
-the point count bounded, and the artifact returns: 45 spurious misses at five
+Two honesty notes on that table. The `missed` column is zero only once the
+oracle is wide enough: at three variables an oracle over `0..4` — the one §8.6's
+lean4lean fuzz used — reported 99 spurious `>=` "misses" per 200,000 pairs,
+because `4 >= w` holds on `0..4` and fails at `5`; widening to `0..12` took them
+to zero. At four or more variables the range has to shrink again to keep the
+point count bounded and the artifact returns: 45 spurious misses at five
 variables over `0..4`, **0** over `0..8`, same pairs. And: **this is a
-measurement against a bounded oracle, not a completeness proof**, which is
-worth saying twice and is said twice.
+measurement against a bounded oracle, not a completeness proof**, which is worth
+saying twice and is said twice.
 
 ### The claim this costs
 
