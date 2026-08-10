@@ -10075,16 +10075,47 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 return None
             }
             let t = args[0].clone();
+            // **The fibre position** — the third place a unified sort can hide,
+            // and the last of the six dark rules (`LEVELPOLY.md` §5.5). Here
+            // the sort is neither the subject nor the target but a *component*
+            // of the subject `dprod(t,t)`, so neither
+            // [`Self::transport_to_srt`] nor its subject twin applies: the
+            // library fact is picked at the rung and the conclusion carried
+            // back by a Leibniz step whose pattern mentions the variable
+            // **twice**, `fs(w,w) ∈ dom`, substituting both occurrences at
+            // once. Same equation, same one step, a different position — not a
+            // seventh construction.
+            let (t_rung, t_bridge) = match self.rung_of_srt(&t) {
+                Some((r, b)) => (r, Some(b)),
+                None => (t.clone(), None),
+            };
             // `⟦Prop → Prop⟧ ∈ ⟦Type 0⟧` is the one diagonal whose target is not
             // `U(t)`, since `⟦Type 0⟧` is `U(ω)` and not `U(U₀)`.
-            let at_fs = if t == self.pre.u0() && *dom == self.pre.u1() {
+            let at_fs = if t_rung == self.pre.u0() && *dom == self.pre.u1() {
                 self.pre.fs_u0_in_u1.clone()
             } else {
-                if *dom != Term::apply(self.pre.u_sym, vec![t.clone()]) {
+                if *dom != Term::apply(self.pre.u_sym, vec![t_rung.clone()]) {
                     return None
                 }
                 let fs_in_u = self.pre.fs_in_u.clone();
-                derived::inst_all(&fs_in_u, std::slice::from_ref(&t))?
+                derived::inst_all(&fs_in_u, std::slice::from_ref(&t_rung))?
+            };
+            let fs_rung = Term::apply(self.pre.fs_sym(), vec![t_rung.clone(), t_rung.clone()]);
+            (*at_fs.concl() == Formula::mem(fs_rung, dom.clone())).then_some(())?;
+            let at_fs = match t_bridge {
+                None => at_fs,
+                Some(b) => {
+                    let back = derived::eq_symm(&mut self.env_mut(), &b)?;
+                    let w = self.env_mut().fresh_var();
+                    let pat = Term::apply(self.pre.fs_sym(), vec![Term::var(w), Term::var(w)]);
+                    let leib = Thm::eq_leibniz(
+                        t_rung,
+                        t.clone(),
+                        w,
+                        Formula::mem(pat, dom.clone()),
+                    );
+                    Thm::mp(&Thm::mp(&leib, &back)?, &at_fs)?
+                }
             };
             let fs_t = Term::apply(self.pre.fs_sym(), vec![t.clone(), t.clone()]);
             (*at_fs.concl() == Formula::mem(fs_t, dom.clone())).then_some(())?;
@@ -10387,6 +10418,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // at all, since a constructor is the commonest argument there is.
         if let Some(t) = self.ind_mems.get(&(te.clone(), ty.clone())).cloned() {
             return Some((u_a1i(&t, hyp.as_ref()), HtClause::Ctor, assms.to_vec()))
+        }
+        // The same table at the rung spelling: `ind_mems` is keyed by the
+        // *target*, and a constructor's inductive type is registered when the
+        // declaration is translated — at the rung, because that is what the
+        // membership theorem concludes about. With the vocabulary unified the
+        // obligation asks at `srt(k̄)`, so the key misses. The ground bridge
+        // again, in target position. (`LEVELPOLY.md` §5.5.)
+        if let Some((rung, bridge)) = self.rung_of_srt(ty) {
+            if let Some(t) = self.ind_mems.get(&(te.clone(), rung.clone())).cloned() {
+                if let Some(t) = self.transport_to_srt(&t, &te, &rung, ty, &bridge) {
+                    return Some((u_a1i(&t, hyp.as_ref()), HtClause::Ctor, assms.to_vec()))
+                }
+            }
         }
         // The same, one level up: the inductive *type* in the sort it lives in.
         // `⟦T⟧ ∈ ⟦Sort u⟧` is what the lambda and `Π` rules keep wanting, and

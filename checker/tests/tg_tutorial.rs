@@ -2637,9 +2637,12 @@ fn rule_table(text: &str) -> std::collections::BTreeMap<String, u64> {
 /// and not `U(ω)`, `⟦Prop⟧` is `srt(0̄)` and not `U₀`. Six rules went silently
 /// to zero and three lost most of their population — 2511 firings on the
 /// staged prelude. `Srt::rung_eq` equates the two spellings and one Leibniz
-/// step per position carries the conclusion back; three guards consume it
-/// (`ind_ty_mem`, `domain_premise` on both sides, `prop_in_u0`) and the loss
-/// is down to 153.
+/// step per position carries the conclusion back. Five guards consume it —
+/// `ind_ty_mem`, `domain_premise` in *three* positions (subject, target, and
+/// the **fibre** inside a `dprod(t,t)`, where the Leibniz pattern mentions the
+/// variable twice), `prop_in_u0`, and the `ind_mems` lookup key — and on the
+/// staged prelude the two states now agree on every outcome: 10531 gaps, 1466
+/// escapes, 1624 obligations discharged, each exactly the ground path's.
 ///
 /// **The claim is that the two states answer identically**, rule by rule,
 /// asserted over the *whole* table rather than at named rows. A floor would be
@@ -2652,10 +2655,12 @@ fn rule_table(text: &str) -> std::collections::BTreeMap<String, u64> {
 /// `fs(a,a) ∈ U(a)` on the prelude, every count still correct and the report a
 /// lie.
 ///
-/// `STILL_DARK` names the rules the bridge does not yet reach. They may
-/// differ and nothing else may, so this reddens the moment a *restored* rule
-/// regresses; and it is checked non-empty, so a name left there after its rule
-/// is fixed fails too. The list cannot rot in either direction.
+/// `STILL_DARK` is now **empty**: every rule answers identically in the two
+/// states on all three files, and the whole table is compared with no
+/// exemptions. It is kept as a named, asserted-empty constant rather than
+/// deleted, because a rule that goes dark in future should have to be written
+/// down here to pass rather than merely tolerated — and writing it down is
+/// then a visible regression in review.
 ///
 /// Three files, because the rung-shaped rules do not co-occur: `093_projRed`
 /// carries `IndTy` four times (enough to catch a bridge memoised wrong after
@@ -2668,7 +2673,7 @@ fn rule_table(text: &str) -> std::collections::BTreeMap<String, u64> {
 /// `Ctor` from 2 to 0 before it even reaches `IndTy`.
 #[test]
 fn the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does() {
-    const STILL_DARK: [&str; 3] = ["ty_pi", "ty_conv", "fs(a,a) ∈ U(a)"];
+    const STILL_DARK: [&str; 0] = [];
 
     let files = ["093_projRed", "015_levelParams", "118_accRecReduction"];
     let mut restored_seen = 0u64;
@@ -2711,12 +2716,9 @@ fn the_ground_bridge_makes_the_unified_vocabulary_answer_as_the_ground_one_does(
         "the fixture set stopped firing the restored rung rules at all ({restored_seen}); \
          it can no longer witness the bridge"
     );
-    dark_seen.sort_unstable();
-    dark_seen.dedup();
     assert!(
-        !dark_seen.is_empty(),
-        "no rule in STILL_DARK differs any more — the bridge now reaches all of them and the \
-         list should be emptied, along with §5.5's remaining-work section"
+        dark_seen.is_empty(),
+        "STILL_DARK is empty, so nothing may be exempt — but {dark_seen:?} differed"
     );
 }
 
