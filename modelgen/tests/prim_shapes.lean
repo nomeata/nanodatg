@@ -17,7 +17,7 @@
    * `Sub` — a `Sort (max 1 u)` carrier with a `Sort u` field and a `Prop`
      field: the `PSigma` chain lands on the declared level exactly.
    * `Emp` — **no constructors**: the fibre is empty at every tag and the
-     recursor is `False.rec` under two destructions.
+     recursor is Church-`⊥`'s `Sort w` eliminator under two destructions.
    * `Tor` — a `Prop` with three constructors: small elimination, the Church
      fold at a `Prop` motive.
    * `Conj` — a `Prop` structure with **dependent** propositional fields:
@@ -25,11 +25,26 @@
      instantiated at the first's extraction and closed by definitional
      proof irrelevance.
    * `PU` — a **variable-sort singleton** (`PUnit`'s shape): the carrier is
-     the `False`-Π singleton at exactly `Sort u`, the recursor a transport
-     along its `funext`-derived uniqueness — this is the model that splices
-     the quotient, `Quot.sound` and `PU._model.funext`.
+     `PULiftP ⊤` at exactly `Sort u`, the recursor a transport along the
+     lift's eta.
+   * `PE` — a **variable-sort empty carrier** (`PEmpty`'s shape): the
+     carrier is `PULiftP ⊥`, and the recursor — zero minor premises — is
+     Church-`⊥`'s `Sort w` eliminator after the lift is projected away.
+     This is the shape the old basis could not reach at all.
+   * `PM` — a variable-sort carrier with **two** constructors: small
+     elimination, so the lift of the Church encoding serves both.
+   * `PT` — a variable-sort carrier with **three** constructors carrying
+     **distinguishable** field telescopes. Three atoms, not two: with three
+     nullary constructors a minor-order bug is invisible (the motive is
+     `Prop`-valued and proof irrelevance closes it), so the fields are what
+     make a permutation a type error.
+   * `PF` — a variable-sort carrier whose constructor has a **field**.
+   * `PI` — a variable-sort carrier whose field is at the **carrier's own**
+     sort (`is_geq(u,u)`, the kernel's admission at its tightest): small
+     elimination, and the model collapses the payload, which the contract
+     permits because a `Prop`-valued motive cannot discriminate.
    * `UL` — `PULift`'s shape: a carrier raised by a level (`r`) no field
-     reaches, whose pad level is not `dsingOk` — the `False`-Π pad,
+     reaches, whose pad level is not `dsingOk` — the `PULiftP ⊤` pad,
      discharged by transport in the destructor.
    * `TrL` — `Trans`'s shape: a Π-typed field at an **imax** level, stored
      **boxed** (codomain wrapped `Σ'(_ : S), D 1`) so the level collapses
@@ -37,8 +52,9 @@
      and needs no transport at all.
 
    The file declares `Eq` and nothing else of the basis, so one run splices
-   `Nat`, `PSigma` and `False` and the report names them — and, at `PU`,
-   the quotient and `Quot.sound` behind the spliced `funext`. -/
+   `Nat`, `PSigma` and `PULiftP` and the report names them. Nothing here
+   splices the quotient, `Quot.sound` or a `funext`: the lift's eta replaced
+   the one construction that needed them. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
@@ -86,6 +102,23 @@ inductive Conj (a : Prop) (b : a → Prop) : Prop where
 
 inductive PU : Sort u where
   | mk : PU
+
+inductive PE : Sort u where
+
+inductive PM : Sort u where
+  | a : PM
+  | b : PM
+
+inductive PT (p q : Prop) : Sort u where
+  | x : p → PT p q
+  | y : q → PT p q
+  | z : p → q → PT p q
+
+inductive PF : Sort u where
+  | mk : ((C : Prop) → C → C) → PF
+
+inductive PI (α : Sort u) : Sort u where
+  | mk : α → PI α
 
 inductive UL (α : Sort s) : Sort (max s r 1) where
   | up : α → UL α

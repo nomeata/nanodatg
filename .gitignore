@@ -1,6 +1,7 @@
 /target
 /.direnv
 /vendor
+/vendor-l4l
 /target-tg
 /target-prof
 

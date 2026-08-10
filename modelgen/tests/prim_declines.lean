@@ -8,21 +8,20 @@
      not implemented.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
-   * `PE` — an **empty carrier at a variable sort** (`PEmpty`'s shape):
-     not constructible over the basis — every type it builds at a
-     bare-parameter sort is the inhabited `False`-Π singleton, and a model
-     of `PE.rec` would prove `False`.
-   * `PM` — a variable-sort carrier with **two constructors**: the
-     singleton is the fragment's only type at such a sort.
-   * `PF` — a variable-sort carrier whose constructor has a **field**:
-     same boundary, from the field side.
    * `BoxF` — a field whose level keeps an `imax` even boxed: the imax
      sits on a *domain* of the field's own telescope, where wrapping the
      codomain does not reach.
 
+   The three variable-sort shapes this file used to carry — an empty
+   carrier, a two-constructor carrier and a carrier whose constructor has a
+   field — are **no longer refusals**: `PULiftP` reaches a bare `Sort u`
+   with a carrier that can be empty, and they live in `prim_shapes.lean` as
+   `PE`, `PM`, `PF`, `PT` and `PI`. `False` is no longer a refusal either;
+   it is derived, and models.
+
    The basis-primitive exemption and the name guard have their fixtures in
-   the corpus run (`Eq`, `Nat`, `False` decline as basis on `init-prelude`)
-   and in `mutual_keying`'s pattern respectively. -/
+   the corpus run (`Eq` and `Nat` decline as basis on `init-prelude`) and in
+   `mutual_keying`'s pattern respectively. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
@@ -49,15 +48,6 @@ inductive P : Type where
 
 inductive Idx : P → Prop where
   | mk : Idx P.one
-
-inductive PE : Sort u where
-
-inductive PM : Sort u where
-  | a : PM
-  | b : PM
-
-inductive PF : Sort u where
-  | mk : ((C : Prop) → C → C) → PF
 
 inductive BoxF (α : Sort u) (β : Sort v) : Sort (max 1 u v) where
   | mk : ((α → β) → β) → BoxF α β
