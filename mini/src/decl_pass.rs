@@ -68,11 +68,18 @@
 //!    construction moves to the end-of-file append point where they were
 //!    already being *emitted*. [`crate::mutual_aux::Expander`] is the split.
 //!
-//! The fourth pass over the whole file, `crate::zoneb::elim_audit`, stays a
-//! sweep and stays where it was: it is an **oracle**, not a stage. It reads the
-//! finished interpretation store and mints nothing (`run.rs` says what happened
-//! when it did), so it has no per-declaration position to occupy — and running
-//! it early is the defect its comment records.
+//! The fourth pass over the whole file, `crate::zoneb::elim_audit`, **stays a
+//! sweep, and not because it has to.** It was moved into the loop — run on each
+//! inductive right after that declaration's own walk — and the `elim` rows over
+//! all 154 arena files came out **identical, zero lines of diff**. So its
+//! comment's claim that it "reads and does not mint" is now measured rather
+//! than asserted, and the position is free.
+//!
+//! It is left outside the loop anyway, because it is an **oracle and not a
+//! stage**: it produces a `--verbose` report, no certificate and no verdict,
+//! and the loop is the place where a declaration is accepted and certified.
+//! Putting a reader of the finished store inside the walk is the shape the
+//! defect its own comment records had.
 //!
 //! # The two environments
 //!
