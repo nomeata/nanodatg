@@ -4557,7 +4557,7 @@ So the honest ceiling for the whole thrust, as it stands:
 into the tool.** The deciding argument is not the plumbing but the boundary:
 this tool's contract is *"the input is trusted; only the declarations the tool
 generates are checked, one at a time, by Lean's kernel with checking on"*.
-Compiling the core in and copying its `ConstantInfo`s would smuggle 190 of
+Compiling the core in and copying its `ConstantInfo`s would smuggle 206 of
 **our own** constants past that boundary as if they were input — trusted,
 unchecked, absent from the report. Reading them and splicing them through
 `Modelgen.addChecked` puts them on the checked side, where they belong, and
@@ -4567,8 +4567,10 @@ input replay is the same call with `false`, so the two sides are exactly one
 boolean apart and the fragment lands on the right one.
 
 `modelgen/tests/w_core.ndjson` is the fragment — what `lean4export` emits for
-`--#export WT.W WT.sup WT.Wrec WT.Wrec_iota` over `WTagged.lean`'s core: 500 KB,
-**19 inductive blocks and 2 axioms**, matching the closure count exactly.
+`--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat` over
+`WTagged.lean`'s core: 528 KB, **19 inductive blocks and 2 axioms**, matching
+the closure count exactly. The fifth root is the tag scheme's one demand on the
+fragment and is sized below; it adds no inductive, so the 19 is the same 19.
 
 **And every inductive it reaches models.** Run through `--prim-models`, the
 fragment gives 18 models and 2 declines, and the two are `Nat` and `Eq` — the
@@ -4648,12 +4650,14 @@ what `Simple.lean` already does.
 
 Measured, so the next attempt starts from a number: the tagged core's full
 constant closure — types *and* values, from `W`, `sup`, `Wrec`, `Wrec_iota` —
-is **190 constants**: 19 inductives, 24 constructors, 15 recursors, 69
-definitions, 58 theorems, 3 quotient constants and **2 axioms**, `propext` and
-`Quot.sound`. (`WFromPaths.lean`'s classical core is 252; the 62-constant
-difference is the `Classical` machinery.)
+was **195 constants**: 19 inductives, 24 constructors, 19 recursors, 69
+definitions, 58 theorems, 4 quotient constants and **2 axioms**, `propext` and
+`Quot.sound`. (`WFromPaths.lean`'s classical core is 252; the difference is the
+`Classical` machinery.) With `instDecidableEqNat` added as the fifth root it is
+**206 constants**: the same 19 inductives, 24 constructors and 19 recursors,
+now 78 definitions and 60 theorems.
 
-So the arm's shape is: get those 190 into the output once, splice-and-model the
+So the arm's shape is: get those 206 into the output once, splice-and-model the
 19 inductives among them — measured above, all of them do — and emit
 per-declaration glue against them.
 
@@ -4678,24 +4682,53 @@ has it and spliced through `addChecked` where it does not.
 
 | | |
 |---|---|
-| the fragment alone, `envprobe tests/w_core.ndjson C` | **149 records accepted, 0 rejected**, 0.097 s for the whole process |
-| onto a fixture input (`prim_carve`) | 148 records added, 1 the input already had (its `Eq`) |
-| onto a 1,000,000-line Mathlib prefix | **143 records added, 6 the input already had**, 179 constants through `addChecked`, 0 rejected |
-| the splice's own cost | **413 M instructions**, once per run — against 272 s for a Mathlib pass |
+| the fragment alone, `envprobe tests/w_core.ndjson C` | **160 records accepted, 0 rejected**, 0.107 s for the whole process |
+| onto a fixture input (`prim_carve`) | 159 records added, 203 constants through `addChecked` |
+| onto a 1,000,000-line Mathlib prefix | **154 records added, 9 the input already had or the parse folded**, 190 constants through `addChecked`, 0 rejected |
+| the splice's own cost | **845 M instructions** for the whole process from empty, once per run — against 272 s for a Mathlib pass |
 
-The four roots — `_wcore.WT.W`, `_wcore.WT.sup`, `_wcore.WT.Wrec`,
-`_wcore.WT.Wrec_iota` — are visible to `Environment.find?` afterwards, which is
-the lookup `MetaM` goes through and not the same question as the kernel map
-(§6.6). `Test.lean`'s `runWSpliceProbe` pins all of it, plus idempotence: the
-second call adds nothing, because the splice is once per run and not 149 kernel
-checks per W target.
+The five roots — `_wcore.WT.W`, `_wcore.WT.sup`, `_wcore.WT.Wrec`,
+`_wcore.WT.Wrec_iota` and `_wcore.instDecidableEqNat` — are visible to
+`Environment.find?` afterwards, which is the lookup `MetaM` goes through and not
+the same question as the kernel map (§6.6). `Test.lean`'s `runWSpliceProbe` pins
+all of it, plus idempotence: the second call adds nothing, because the splice is
+once per run and not 160 kernel checks per W target.
 
-**Two things about the splice, measured rather than assumed:**
+**The fifth root, and why the other four's closure cannot reach it.** The core
+is `{K : Type} … [DecidableEq K]` and all four roots take the instance as a
+*parameter*, so no closure of theirs contains a `DecidableEq` for any concrete
+`K`. `scripts/inductive-basis/WGeneric.lean` settles the scheme that decides
+which one is needed — `K := Nat` for every declaration, rather than an
+enumeration inductive minted per declaration whose `DecidableEq` the generator
+would have to prove and whose type `Iso.requires` would then oblige the run to
+model in turn — so `--#export` gained `instDecidableEqNat` and nothing else.
 
-* **`include_str` is free.** The 500 KB fragment is a string literal in the
-  binary's data; there is no runtime file lookup and no dependence on the build
-  tree. The alternative — locating the `.ndjson` relative to `IO.appPath` —
-  would have made the binary depend on its own build layout for no gain.
+It costs **11 ordinary declarations** and, decisively, **no new inductive**:
+`Nat.decEq` and its `match_1`, `Nat.beq`'s two soundness lemmas
+(`Nat.eq_of_beq_eq_true`, `Nat.ne_of_beq_eq_false`) with their two private match
+auxiliaries, the `Nat` and `Bool` `noConfusionType`/`noConfusion` pairs, and the
+instance itself. Because the inductive count is unchanged at 19, the
+splice-and-model claim above carries over untouched — `Test.lean`'s `w_core` row
+is the same 18 models and the same 2 basis declines. Isolated on the same
+harness, the added kernel-checking is **28.4 M instructions** (816.5 M → 845.0 M
+for the checked replay from empty, +3.5 %).
+
+**Three things about the splice, measured rather than assumed:**
+
+* **`include_str` is free at run time and unsound at build time.** The 528 KB
+  fragment is a string literal in the binary's data; there is no runtime file
+  lookup and no dependence on the build tree. The alternative — locating the
+  `.ndjson` relative to `IO.appPath` — would have made the binary depend on its
+  own build layout for no gain. **But `include_str` is not in Lake's trace for
+  `Modelgen.Model`**: re-exporting `w_core.ndjson` and running `lake build`
+  reports success and leaves the binary carrying the *previous* fragment. This
+  was measured, not inferred — the re-export above added 11 declarations and the
+  rebuilt tool still spliced the old 149 — and neither `touch` nor a newer mtime
+  forces it, because Lake hashes content and the content it hashes is
+  `Model.lean`'s. `runWSpliceProbe` therefore compares `Modelgen.wCoreText`
+  against the file on disk byte for byte. That one check is the only thing
+  between a fragment change and a silently stale tool, and every other check in
+  that function passes on a stale one.
 * **Everything gets a `_wcore` prefix except sixteen names under four roots,
   and the list above six of them was got wrong at the sizing.** The fragment's
   names are Lean core's, so splicing `List` into an input that already declares
@@ -4746,7 +4779,7 @@ checks per W target.
 
 **And the ι-rule conversion §8.16 costed is not owed.** The paragraph this
 replaces weighed renaming `Eq` (one `_wcore.Eq → Eq` conversion per ι rule)
-against not renaming it (the fragment's 190 proofs run at the input's `Eq`),
+against not renaming it (the fragment's 200-odd proofs run at the input's `Eq`),
 and recommended renaming for robustness. The axiom statements settle it the
 other way, and the robustness argument survives intact in the form that
 matters: if the input's `Eq` or `Iff` or `propext` is not Lean's, the
@@ -4815,12 +4848,13 @@ would be wrong while every constructor and ι check still passed**.
 was run and it does. The empty type is `Subtype (fun _ : PUnit => False)`,
 built from what the fragment already carries, because `PEmpty` is not in it.
 
-**What the fragment must gain: exactly one root.** A `DecidableEq Nat`.
-`w_core.ndjson` today carries `Nat.beq` and `noConfusion_of_Nat` but not the
-instance, because nothing in the closure of the four roots names it.
-Re-exporting with `instDecidableEqNat` as a fifth root is the whole change, and
-then the generator never proves a decidable equality. `Sigma.fst`, `Subtype`,
-`PUnit` and `False` are already in.
+**What the fragment had to gain: exactly one root — and it has it.** A
+`DecidableEq Nat`. `w_core.ndjson` carried `Nat.beq` and `noConfusion_of_Nat`
+but not the instance, because nothing in the closure of the other four names
+it — all four take it as a *parameter*. Re-exporting with `instDecidableEqNat`
+as a fifth root was the whole change, so the generator never proves a decidable
+equality. `Sigma.fst`, `Subtype`, `PUnit` and `False` were already in. Measured
+above: 11 added declarations, no added inductive, +28.4 M instructions.
 
 **The target is four constructors**, and the fourth is the point. Three
 *shapes* — data and no children, data and two children, a recursive field under

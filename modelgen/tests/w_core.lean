@@ -1,9 +1,19 @@
 /- The tagged W core, as a module, so that `lean4export` can emit it and
-`modelgen` can splice it. `--#export` lists the four roots and the exporter
-takes their transitive closure — which is what makes this a fragment of ~190
-declarations rather than the whole of `Init`. -/
+`modelgen` can splice it. `--#export` lists the five roots and the exporter
+takes their transitive closure — which is what makes this a fragment of ~200
+declarations rather than the whole of `Init`.
 
---#export WT.W WT.sup WT.Wrec WT.Wrec_iota
+The fifth root is not part of the construction: `instDecidableEqNat` is the
+`DecidableEq K` instance the generator needs at `K := Nat`, and **the closure of
+the other four cannot reach it**, because all four take the instance as a
+*parameter*. `scripts/inductive-basis/WGeneric.lean` settles why `K := Nat` is
+the tag type — `Nat` is already shared with the input by the splice, so it
+costs no new fragment inductive — and this line is the one thing that scheme
+asks the fragment to gain. Without it a generator would have to mint an
+enumeration inductive per declaration and prove its decidable equality, which
+`Iso.requires` would then oblige the run to model in turn. -/
+
+--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
 
 universe u v
 

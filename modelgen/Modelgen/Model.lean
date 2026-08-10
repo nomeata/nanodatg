@@ -2145,16 +2145,39 @@ is carried as an **export fragment** and spliced.
 the boundary.** `addChecked` is `addDeclCore 0 d none true` and the trusted
 input replay is the same call with `false`, so the two are one boolean apart.
 Compiling the closure in and copying its `ConstantInfo`s — the obvious
-alternative — would have put 190 of *our own* constants on the trusted side,
+alternative — would have put 206 of *our own* constants on the trusted side,
 unchecked and absent from the report. -/
 
 /-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
-WT.Wrec_iota` over `WTagged.lean`'s core. 500 KB, 149 records — 19 inductive
-blocks, 69 definitions, 58 theorems, 4 quotient records and 2 axioms.
+WT.Wrec_iota instDecidableEqNat` over `WTagged.lean`'s core. 528 KB, 163
+records over 206 names — 19 inductive blocks, 78 definitions, 60 theorems, 4
+quotient records and 2 axioms. It splices as **160** `Declaration`s, three
+fewer than the record count, because the four quotient records are one
+`Declaration.quotDecl`.
+
+**The fifth root is the tag scheme's one demand on the fragment.**
+`scripts/inductive-basis/WGeneric.lean` fixes `K := Nat` for every declaration
+rather than minting an enumeration inductive per declaration, and the core's
+`DecidableEq K` is then `instDecidableEqNat`. The closure of the other four
+roots cannot reach it — all four take the instance as a *parameter* — so it has
+to be named. It costs 11 ordinary declarations (`Nat.decEq`, `Nat.beq`'s two
+soundness lemmas, the two `noConfusion` pairs and their match auxiliaries) and
+**no new inductive**, which is what keeps `Test.lean`'s `w_core` row unchanged:
+the arm still leaves nothing unmodelled in front of a consumer.
 
 `include_str` rather than a file read: it costs nothing at run time (the string
 is in the binary's data), and the alternative — locating the `.ndjson` relative
-to `IO.appPath` — would make the binary depend on its own build layout. -/
+to `IO.appPath` — would make the binary depend on its own build layout.
+
+**And `include_str` is not in Lake's trace for this module.** Re-exporting
+`tests/w_core.ndjson` and rebuilding leaves the binary carrying the *previous*
+fragment, with no diagnostic: `lake build` reports success, and neither a
+`touch` nor a changed mtime forces the issue, because Lake hashes content and
+the content it hashes is `Model.lean`'s. Measured, not inferred — a re-export
+that added 11 declarations still spliced the old 149. `Test.lean`'s
+`runWSpliceProbe` therefore compares this string against the file on disk, and
+that comparison is the only thing standing between a fragment change and a
+silently stale tool. -/
 def wCoreText : String := include_str "../tests/w_core.ndjson"
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
@@ -2237,6 +2260,11 @@ def wCoreSup : Name := wCoreRoot ++ `WT.sup
 def wCoreRec : Name := wCoreRoot ++ `WT.Wrec
 /-- `WT.Wrec_iota` under the prefix — its one ι rule. -/
 def wCoreIota : Name := wCoreRoot ++ `WT.Wrec_iota
+/-- **The `DecidableEq K` every one of the four takes as a parameter**, at the
+one `K` the scheme uses. Prefixed like any other ordinary definition: the
+instance is not a name anything downstream keys on, unlike the axioms, and a
+`_wcore` copy of it cannot collide with an input that has its own. -/
+def wCoreDecEqNat : Name := wCoreRoot ++ `instDecidableEqNat
 
 /-- **The W core in the environment, and the declarations that had to be added
 to put it there** — `#[]` when it is already in, which is every call after the
@@ -2253,7 +2281,7 @@ Three things can happen to a fragment record:
 
 **No shared declaration is separately checked against Lean's statement, and it
 does not need to be.** If the input's `Eq` or `Iff` or `propext` is not Lean's,
-the fragment's 190 proofs are stated and proved against it and `addChecked`
+the fragment's 200-odd proofs are stated and proved against it and `addChecked`
 rejects one of them. That is a decline with a name on it rather than a silent
 wrong answer, which is the property that matters. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do

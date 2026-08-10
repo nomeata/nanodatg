@@ -436,9 +436,16 @@ def expectedPrim : List Row :=
       , ("Eq", "prim model shape: a basis primitive")
       , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
-  -- `WTagged.lean`'s four roots — the export `lean4export` emits for
-  -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota`, 19 inductive blocks and 2
-  -- axioms — and the W arm's plan is to splice it and model what it splices.
+  -- `WTagged.lean`'s five roots — the export `lean4export` emits for
+  -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat`, 19
+  -- inductive blocks and 2 axioms — and the W arm's plan is to splice it and
+  -- model what it splices.
+  --
+  -- **The fifth root is why this row is worth re-reading rather than
+  -- re-running.** It is the `DecidableEq Nat` the tag scheme needs, and it
+  -- brought 11 declarations with it — but no inductive, which is exactly why
+  -- the entries below are unchanged. Had it brought one, this row would have
+  -- had to gain a line or the arm would be emitting an unmodelled inductive.
   -- This row is what says that plan is sound: **every inductive the core
   -- reaches models**, except the two that are the basis exemption. If one of
   -- them stops modelling, the W arm would be emitting an unmodelled inductive
@@ -608,6 +615,23 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       if let .ok e := env.addDeclCore 0 dcl none false then env := e
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
+  -- **The compiled-in fragment against the one on disk.**
+  -- `Modelgen.wCoreText` is an `include_str`, and `include_str` is *not* in
+  -- Lake's trace for `Modelgen.Model`: re-exporting `tests/w_core.ndjson` and
+  -- running `lake build` reports success and leaves the binary carrying the
+  -- previous fragment. Measured — a re-export that added 11 declarations still
+  -- spliced the old 149, and neither `touch` nor an mtime forces it, because
+  -- Lake hashes content and the content is `Model.lean`'s. Every other check in
+  -- this function runs against `wCoreText`, so without this one they all pass
+  -- on a stale tool and say nothing about the fragment that was committed.
+  let onDisk ← IO.FS.readFile s!"{root}/modelgen/tests/w_core.ndjson"
+  let a := check a (onDisk == Modelgen.wCoreText)
+    s!"the compiled-in W core fragment is {Modelgen.wCoreText.length} bytes and \
+       tests/w_core.ndjson is {onDisk.length} — the fragment was re-exported and \
+       the binary was not rebuilt, which `lake build` will not tell you"
+  let nFrag := match Modelgen.parse Modelgen.wCoreText (analyse := false) with
+    | .ok x => x.decls.size
+    | .error _ => 0
   let act : MetaM (Array (Bool × String)) := do
     let mut cs : Array (Bool × String) := #[]
     match ← Modelgen.ensureWCore reserved with
@@ -615,13 +639,20 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       return #[(false, s!"the W core splice declined on prim_carve: {e.label}")]
     | .ok ds =>
       cs := cs.push (ds.size > 100,
-        s!"the W core splice added {ds.size} records, where the fragment has 149 and \
-           prim_carve supplies only its own Eq")
+        s!"the W core splice added {ds.size} records, where the fragment parses to \
+           {nFrag} and prim_carve supplies only its own Eq")
+      -- **The fifth root arrived and is visible.** The other four are the
+      -- construction; this one is the `DecidableEq Nat` the tag scheme needs
+      -- and that the other four's closure cannot reach, because all four take
+      -- the instance as a parameter.
+      cs := cs.push (((← getEnv).find? Modelgen.wCoreDecEqNat).isSome,
+        s!"{Modelgen.wCoreDecEqNat} is missing after the splice — the tag scheme \
+           has no decidable equality and every W target would have to prove one")
       for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
         cs := cs.push (((← getEnv).find? k).isSome,
           s!"{k} is not visible to Environment.find? after the splice")
       -- **Once per run.** The sentinel is what makes the splice a splice and
-      -- not 149 kernel checks per W target.
+      -- not 160 kernel checks per W target.
       match ← Modelgen.ensureWCore reserved with
       | .error _ => cs := cs.push (false, "the second W core splice declined")
       | .ok ds2 => cs := cs.push (ds2.isEmpty,

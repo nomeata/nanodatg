@@ -87,11 +87,19 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
   let act : MetaM Unit := do
     match ← Modelgen.ensureWCore reserved with
     | .ok ds =>
-      IO.println s!"W splice: {ds.size} records added, {149 - ds.size} the input already had"
+      -- The total is read off the compiled-in fragment rather than written
+      -- down, so that re-exporting `w_core.ndjson` does not leave a literal
+      -- here saying what it used to hold.
+      let nFrag := match Modelgen.parse Modelgen.wCoreText (analyse := false) with
+        | .ok x => x.decls.size
+        | .error _ => 0
+      IO.println s!"W splice: {ds.size} records added, {nFrag - ds.size} the input \
+        already had or the parse folded (the four quotient records are one Declaration)"
       let mut n := 0
       for d in ds do n := n + d.getNames.length
       IO.println s!"W splice: {n} constants, all through addChecked"
-      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
+      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota,
+                Modelgen.wCoreDecEqNat] do
         IO.println s!"  {k}: {if ((← getEnv).find? k).isSome then "present" else "MISSING"}"
     | .error e => IO.println s!"W splice DECLINED: {e.label}"
   discard <| Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)
