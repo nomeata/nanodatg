@@ -1758,7 +1758,7 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     let seen = row("declarations with a value");
     let nokey = row("…of a temporary declaration, which no store can key");
     let gap = row("…whose typing inference could not justify at all");
-    let cond = row("…derived only under antecedents (not stored)");
+    let cond = row("…derived only under antecedents");
     let from_infer = row("…carried out of inference, not searched for");
     let refused = row("…derived, but the store's own checks refused it");
     let stored = row("…stored as ⟦c⟧ ∈ ⟦T⟧");

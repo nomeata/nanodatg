@@ -16334,7 +16334,7 @@ impl Dt {
             Dt::Gap => "…whose typing inference could not justify at all (no certificate)",
             Dt::Refused => "…derived, but the store's own checks refused it",
             Dt::FromInfer => "…carried out of inference, not searched for",
-            Dt::Conditional => "…derived only under antecedents (not stored)",
+            Dt::Conditional => "…derived only under antecedents",
             Dt::CondHyp => "…the antecedents they carry, each a hoisted guarded family",
             Dt::CondNest => "…of them a family of families, which peeling declines",
             Dt::CondMem => "…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt",
