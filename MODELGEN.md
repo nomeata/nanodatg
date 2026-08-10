@@ -4871,15 +4871,73 @@ Four mutations were run against the file and all four are caught: transposing
 (`CFT.tip_inj_data`'s shape, which the brief asked to carry into the generated
 arm), and giving `alt` `leaf`'s tag.
 
+### The branch scheme — `WEmitted.lean`, and the cascade does build
+
+`WGeneric.lean` settles the **tag** scheme but picks `B'` by hand at every arm
+— `Bool` because `node` happens to have two children, `Nat` because `lim`
+happens to be `Nat`-branching. A generator has neither observation, so the
+question it hits next is whether a *uniform* branch encoding exists whose eta
+lemma can be written from a constructor telescope alone.
+`scripts/inductive-basis/WEmitted.lean` answers it, against a six-constructor
+target chosen so that every shape the scheme must handle appears once: no
+children; no data; two children; **a plain child and an infinitary one in the
+same constructor**; **data on both sides of a child**; and one arm of another's
+shape at a different tag.
+
+    D t     := Σ (a : nr₁), … Σ (a : nrₖ), PUnit        -- WVoid off the end
+    Tel t j := Σ (x : X₁), … Σ (x : Xₘ), PUnit          -- WVoid off the end
+    B' t    := Σ j : Nat, Tel t j
+
+**Both towers end in `PUnit`, and that is what makes the universes work.** The
+core fixes `A` and `B'` at the *same* `Type u`. A tower over the field types
+alone lands at `Type (max v⃗)`, which is below `u` in general and would need a
+`ULift` the fragment does not carry; ending at `PUnit.{u+1} : Type u` makes the
+max exactly `u` for free, at every arity including zero. This is the reason to
+keep the tower even at arity one, where `WGeneric.lean` writes the bare type.
+
+**Every arm of the eta lemma is `rfl`, and no `Sigma.casesOn` is needed.**
+Writing `b : B' t` as `⟨b.1, b.2⟩` is `Sigma`'s definitional eta, so it suffices
+to prove `∀ j tel, dispatch j tel = f ⟨j, tel⟩` and instantiate at `b.1, b.2`;
+at branch `j` the left side is `f ⟨j, ⟨tel.1, …, ⟨⟩⟩⟩` and the right is
+`f ⟨j, tel⟩`, definitionally equal by `Sigma` eta again and `PUnit` eta at the
+tower's end. The general form is therefore one `funext`, one `Nat.casesOn`
+cascade over the branch index, `rfl` at each real branch and `WVoid.elim` off
+the end — emittable from the telescope alone. The whole file, including the
+six-arm `rec_0`, elaborates in **0.89 s** at `[propext, Quot.sound]`.
+
+**So the brief's load-bearing doubt is refuted rather than confirmed: the
+`rec_0` cascade does build in this shape, at six arms, with mixed and
+out-of-order fields.**
+
+Seven mutations were run and all seven are caught. The placement is the
+surprise: **the junk being uninhabited is load-bearing for elaboration, not
+only for correctness.** Sending either junk — the tag tower's or the branch
+tower's — to `PUnit` does not quietly produce a `W` bigger than the target; it
+fails to elaborate at the constructors and at `rec_0`, because those junk arms
+are discharged by `WVoid.elim` and there is no such term at `PUnit`. That is
+the inverse of the hazard §8.16 warns about, and it means the scheme resists
+the failure mode structurally rather than by test. `GA.no_junk_tag` and
+`GA.no_junk_branch` still fail under the mutation, so they are not vacuous;
+what they guard is a junk arm discharged some *other* way.
+
+The one mutation with no type error behind it is a **collapsed** tag
+assignment: two constructors of the same shape sharing a tag, whose minors have
+the same type, so `GC.leaf n` and `GC.alt n` simply become the same term. It is
+caught at `GC.iota_alt` — three errors, and the narrowest of the seven. This
+corrects §8.16's account above, which credits `CTT.leaf_ne_alt`: the
+inequality is *false* under the mutation rather than unproven, and does not
+report only because Lean propagates the ι rule's error first. The ι rule is the
+pin; the inequality is the statement that says why it matters.
+
 **What this settles and what it does not.** It settles the tag scheme, the
-label and branch encodings, the junk-tag hazard, the fragment's one missing
-root, and the shape of the emitted `rec_0` — a `Nat.casesOn` cascade whose
-motive must be well-typed at *every* tag, with the eta `funext` inside each
-arm and the junk arm discharged from emptiness. It does **not** generate
-anything: `Modelgen.primIso` still has no W arm, and what remains is
-`Expr`-building `D`, `B'`, `A`, `tg`, the constructors, that cascade and the ι
-theorems from a declaration's constructor telescopes, plus `Iso.requires` over
-every inductive the arm leaves behind. The cascade is the piece with no
-precedent in `Simple.lean`: arm C's largest emitted term is a `PSigma` and an
-`Eq.rec`, and this is a dependent motive over a `Nat` scrutinee with one arm
-per constructor and a `funext` in each.
+label and branch encodings, both junk hazards, the universe argument, the
+fragment's one missing root, and the shape of the emitted `rec_0` — a
+`Nat.casesOn` cascade whose motive must be well-typed at *every* tag, with the
+eta `funext` inside each arm and the junk arm discharged from emptiness. It
+does **not** generate anything: `Modelgen.primIso` still has no W arm, and what
+remains is `Expr`-building `D`, `Tel`, `B'`, `A`, `tg`, the constructors, that
+cascade and the ι theorems from a declaration's constructor telescopes, plus
+`Iso.requires` over every inductive the arm leaves behind. The cascade is still
+the piece with no precedent in `Simple.lean` — arm C's largest emitted term is
+a `PSigma` and an `Eq.rec` — but it is now a *transcription* rather than a
+design question, and `WEmitted.lean` is the thing to transcribe.
