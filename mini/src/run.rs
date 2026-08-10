@@ -100,6 +100,22 @@ pub struct Options {
     /// module header says why the two differ and what happens on a machine
     /// with no Lean toolchain.
     pub modelgen: crate::modelgen::Filter,
+    /// **Take the de-scheduled route** — [`crate::poly_run`], `LEVELPOLY.md`
+    /// §5.3 step 1. One interpretation per *declaration* at its own universe
+    /// parameters, instead of one per `(declaration, σ)`.
+    ///
+    /// **It replaces the scheduled pass rather than joining it**, and
+    /// [`crate::poly_run`]'s header carries the argument: the two mint into one
+    /// [`crate::interp::Interp`] and `level_poly` declares symbols off the
+    /// shared `Env`, so a run that did both would renumber the second pass's
+    /// symbols and the byte-identical scheduled rows this branch lands against
+    /// would stop being reproducible. Off by default, so the default route is
+    /// the route it has always been.
+    ///
+    /// The acceptance axis is untouched: the file is kernel-checked exactly as
+    /// before and the [`Verdict`] is the same one. Only the interpretation pass
+    /// differs, and [`Outcome::poly`] is where its report goes.
+    pub poly: bool,
 }
 
 pub struct Outcome {
@@ -115,7 +131,14 @@ pub struct Outcome {
     /// What `⟦·⟧` actually reached, per `(declaration, σ)`, attributed by
     /// cause. `None` when the file was declined or rejected: a gap ledger for
     /// a file mini did not accept would mix the two axes.
+    ///
+    /// **Also `None` under [`Options::poly`]**, where the scheduled pass did
+    /// not run at all and [`Outcome::poly`] is the report instead. The two are
+    /// exclusive by construction and never both `Some`.
     pub ledger: Option<Ledger>,
+    /// The **de-scheduled** pass's report — [`crate::poly_run`] — when
+    /// [`Options::poly`] asked for one, and `None` otherwise.
+    pub poly: Option<crate::poly_run::PolyLedger>,
     /// The stored-context dump, when [`Options::dump`] asked for one.
     ///
     /// A `String`, and rendered inside the worker, for the reason
@@ -155,8 +178,20 @@ impl Outcome {
 
     /// **Nothing owed on the certification axis** — both halves. The condition
     /// for exit 0 on an accepted file.
+    ///
+    /// **On the de-scheduled route the poly ledger is the axis**, and it is
+    /// conjoined rather than substituted. `uncertified` and `untranslated` both
+    /// read [`Outcome::ledger`], which is `None` under [`Options::poly`] — so
+    /// without this conjunct `mini --poly` would exit 0 on every file by virtue
+    /// of having run no scheduled pass, which is `DECISIONS.md`'s "SKIP is not
+    /// PASS" with an exit code as the vehicle. [`crate::poly_run::PolyLedger::is_clean`]
+    /// is what the de-scheduled route owes, and it is false today by a wide
+    /// margin; when the route works it becomes true, and *that* is the verdict
+    /// this strand was asked for.
     pub fn fully_certified(&self) -> bool {
-        self.uncertified().is_clean() && self.untranslated().is_clean()
+        self.uncertified().is_clean()
+            && self.untranslated().is_clean()
+            && self.poly.as_ref().is_none_or(crate::poly_run::PolyLedger::is_clean)
     }
 }
 
@@ -199,6 +234,7 @@ pub fn check_file_with_interp(
                     census: Census::default(),
                     elim_audit: Vec::new(),
                     ledger: None,
+                    poly: None,
                     dump: None,
                 },
                 ip,
@@ -234,6 +270,7 @@ pub fn check_file_with_interp(
                         census,
                         elim_audit: Vec::new(),
                         ledger: None,
+                        poly: None,
                         dump: None,
                     },
                     ip,
@@ -246,6 +283,7 @@ pub fn check_file_with_interp(
                     census,
                     elim_audit: Vec::new(),
                     ledger: None,
+                    poly: None,
                     dump: None,
                 },
                 ip,
@@ -271,6 +309,7 @@ pub fn check_file_with_interp(
                 census,
                 elim_audit: Vec::new(),
                 ledger: None,
+                poly: None,
                 dump: None,
             },
             ip,
@@ -343,6 +382,33 @@ pub fn check_file_with_interp(
     facts.mutual_blocks = ex.blocks;
     facts.mutual_encoded = ex.encoded;
     facts.mutual_rules = ex.rules;
+    // **The de-scheduled route takes the whole pass or none of it** —
+    // `LEVELPOLY.md` §5.3 step 1, and [`crate::poly_run`]'s header is the
+    // argument for the exclusivity. The same `ex.decls` in the same order, so
+    // the two reports name the same population; only the inner σ loop is gone,
+    // which is the entire point.
+    //
+    // `elim_audit` and `dump` do not run beside it, and that is not an
+    // oversight: both are instruments of the *scheduled* store —
+    // `dump::render` is handed `ex.schedule` and `elim_audit` reads
+    // interpretations keyed at ground σ — so pointing them at a pass that
+    // filled neither would print emptiness as though it were a finding.
+    if opts.poly {
+        let led = crate::poly_run::run(&ex.env, &ex.decls, &mut ip);
+        crate::blocker::arm(false);
+        return (
+            Outcome {
+                verdict: Verdict::Accepted { declars: accepted },
+                facts,
+                census,
+                elim_audit: Vec::new(),
+                ledger: None,
+                poly: Some(led),
+                dump: None,
+            },
+            ip,
+        )
+    }
     let mut led = Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip);
     crate::blocker::arm(false);
     // **After the pass, not before**, and the order is a consequence of
@@ -376,6 +442,7 @@ pub fn check_file_with_interp(
             census,
             elim_audit,
             ledger: Some(led),
+            poly: None,
             dump,
         },
         ip,

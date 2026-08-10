@@ -93,6 +93,7 @@ pub mod mono_name;
 pub mod nat_clause;
 pub mod nested;
 pub mod nested_splice;
+pub mod poly_run;
 pub mod proj_data;
 pub mod proj_prop;
 pub mod quot;

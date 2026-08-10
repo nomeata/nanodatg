@@ -701,20 +701,55 @@ impl<'e, 'i> Checker<'e, 'i> {
     }
 
     /// Discharge the `uᵢ ∈ ω` assumptions [`Checker::poly`] opened, innermost
-    /// first: from `{u⃗ ∈ ω} ⊢ ψ` to `⊢ u₁ ∈ ω → … → uₖ ∈ ω → ψ`.
+    /// first: from `{u⃗ ∈ ω} ⊢ ψⱼ` to `⊢ u₁ ∈ ω → … → uₖ ∈ ω → ψⱼ`, **for
+    /// every conclusion the declaration produced**.
     ///
     /// The declaration-exit half of §5.2. Generalising the variables
     /// afterwards (§5.3 step 5's `∀u⃗`) is the switchover's business and is not
     /// done here: a theorem that is merely *closed* is already enough to be
     /// `Sealed`, and quantifying it needs the store's key to be the generic
     /// point, which is step 5.
-    pub fn discharge_levels(&mut self, thm: &Thm) -> Thm {
-        let Some(th) = self.th.as_mut() else { return thm.clone() };
-        let mut out = thm.clone();
+    ///
+    /// # It takes a slice, and that is a correction the first caller forced
+    ///
+    /// This was `discharge_levels(&Thm) -> Thm` when it landed with
+    /// [`Checker::poly`], and the shape was wrong in a way nothing could
+    /// notice while [`Checker::poly`] had no caller in anger. Each
+    /// [`crate::scope::AssumeToken`] is consumed by its discharge — that is
+    /// what enforces LIFO — so the loop below **drains** `level_tokens`, and a
+    /// second call on the same [`Checker`] would find none and hand its
+    /// argument back *unchanged and still open*, reporting success. A
+    /// declaration has two conclusions to close (`⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` and
+    /// `⊢ ⟦val⟧ ∈ ⟦ty⟧`) and will have a third (the constant's own typing at
+    /// step 5), so the singular form could not survive
+    /// [`crate::poly_run`] — which is the caller that found it.
+    ///
+    /// Discharging every conclusion **against the same assumptions in one
+    /// pass** is also the only shape that is *true*: the two theorems are
+    /// stated over the same `uᵢ`, and closing one of them while the other is
+    /// still live would leave the second carrying a hypothesis whose token is
+    /// gone.
+    ///
+    /// Order is preserved, so `out[j]` is `thms[j]` closed. With no thread
+    /// (the shape zone) or no parameters (the scheduled path) this is the
+    /// identity, and that is the σ-scheduled case rather than a degenerate
+    /// one.
+    pub fn discharge_levels(&mut self, thms: &[Thm]) -> Vec<Thm> {
+        let Some(th) = self.th.as_mut() else { return thms.to_vec() };
+        let mut out = thms.to_vec();
         while let Some(tok) = th.level_tokens.pop() {
-            out = th.scopes.discharge_assumption(tok, &out);
+            out = th.scopes.discharge_assumption_many(tok, &out);
         }
         out
+    }
+
+    /// [`Checker::discharge_levels`] for a caller holding exactly one
+    /// conclusion. **Still drains**, so it is declaration exit for that
+    /// declaration; a caller with two conclusions wants the slice form and the
+    /// header above says why.
+    pub fn discharge_levels_one(&mut self, thm: &Thm) -> Thm {
+        let mut out = self.discharge_levels(std::slice::from_ref(thm));
+        out.pop().expect("one in, one out")
     }
 
     /// `⟦bvar i⟧`, or `None` when the binder's domain had no interpretation.
@@ -1308,7 +1343,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     Some(ts)
                                 });
                             let inst: Option<Vec<u32>> =
-                                ls.iter().map(|l| crate::ground::as_numeral(l)).collect();
+                                ls.iter().map(crate::ground::as_numeral).collect();
                             // **A nested declaration's rules are its model's
                             // theorems**, and the membership that says so is
                             // the same one `zoneb::ensure` routes its
@@ -1759,7 +1794,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // constructor has the declaration's level parameters, so
                     // this is the key `IndApparatus::decls` holds it under.
                     let cinst: Option<Vec<u32>> =
-                        cls.iter().map(|l| crate::ground::as_numeral(l)).collect();
+                        cls.iter().map(crate::ground::as_numeral).collect();
                     // The subject's reduction certificate, from the one
                     // reduction above. A subject that is already the
                     // constructor application needs no equation, which is the
@@ -1954,7 +1989,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (Ev::missing(Gap::NoEndpoint), None)
         }
         let Some(inst) =
-            ls.iter().map(|l| crate::ground::as_numeral(l)).collect::<Option<Vec<u32>>>()
+            ls.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
         else {
             return (Ev::missing(Gap::SymbolicLevel), None)
         };
@@ -3421,7 +3456,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
         let Some(inst) =
-            ls.iter().map(|l| crate::ground::as_numeral(l)).collect::<Option<Vec<u32>>>()
+            ls.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
         else {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
@@ -6078,7 +6113,7 @@ mod tests {
         assert_eq!(vars.len(), 3, "one ω-variable per parameter");
         let t = c.infer_type(&sv).expect("infer Sort v");
         let thm = t.ev.thm().expect("Sort v is certified at a variable rung").clone();
-        let closed = c.discharge_levels(&thm);
+        let closed = c.discharge_levels_one(&thm);
         drop(c);
 
         let want_tm = ip.sort_of(&Level::param(us[1]), &vars).expect("srt(v̂)");
@@ -6094,6 +6129,58 @@ mod tests {
         assert_eq!(thm.hyps().len(), 1, "only the parameter it mentions is assumed");
         // Discharged, it is closed — which is what `Sealed` will demand.
         assert!(closed.hyps().is_empty(), "discharge_levels closes every assumption");
+    }
+
+    /// **A declaration has more than one conclusion, and one call closes all of
+    /// them.**
+    ///
+    /// `discharge_levels` landed taking a single `&Thm`, and the shape was
+    /// wrong in a way nothing could see while [`Checker::poly`] had no caller:
+    /// each [`crate::scope::AssumeToken`] is *consumed* by its discharge, so
+    /// the loop drains, and a second call handed its argument straight back —
+    /// **unchanged, still carrying `u ∈ ω`, and reporting success**. A real
+    /// declaration has two conclusions to close (`⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` and
+    /// `⊢ ⟦val⟧ ∈ ⟦ty⟧`), so `crate::poly_run` could not have used it.
+    ///
+    /// Three parameters and three distinct conclusions, so the two mutations
+    /// that a smaller case would pass — closing only the first, and closing
+    /// the same one three times — are both visible. `Sort w` is asked for last
+    /// so that an implementation reusing one theorem shows up in the
+    /// conclusions rather than only in the hypothesis counts.
+    #[test]
+    fn every_conclusion_of_one_declaration_is_closed_by_one_call() {
+        let env = env();
+        let us: Vec<Name> = ["u", "v", "w"].iter().map(|n| Name::simple(n)).collect();
+        let mut ip = Interp::new();
+        let mut c = Checker::poly(&env, &mut ip, &us).expect("the ω-vocabulary builds");
+        let open: Vec<Thm> = us
+            .iter()
+            .map(|u| {
+                let t = c.infer_type(&sort(Level::param(*u))).expect("infer");
+                t.ev.thm().expect("certified at a variable rung").clone()
+            })
+            .collect();
+        for (u, t) in us.iter().zip(&open) {
+            assert_eq!(t.hyps().len(), 1, "Sort {u} assumes exactly its own parameter");
+        }
+        let closed = c.discharge_levels(&open);
+        drop(c);
+
+        assert_eq!(closed.len(), 3, "one closed conclusion per conclusion handed in");
+        for (i, t) in closed.iter().enumerate() {
+            assert!(t.hyps().is_empty(), "conclusion {i} escaped its discharge: {:?}", t.hyps());
+        }
+        // **Order is preserved and the three are three.** A discharge that
+        // closed one theorem and copied it would pass every assertion above.
+        let concls: std::collections::HashSet<_> =
+            closed.iter().map(|t| format!("{:?}", t.concl())).collect();
+        assert_eq!(concls.len(), 3, "the three conclusions collapsed onto one");
+        for (o, cl) in open.iter().zip(&closed) {
+            assert!(
+                format!("{:?}", cl.concl()).contains(&format!("{:?}", o.concl())),
+                "a conclusion was closed onto a different theorem's body"
+            );
+        }
     }
 
     /// **A numeral inside a polymorphic declaration is still the ground rung.**

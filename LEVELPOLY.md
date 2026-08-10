@@ -719,9 +719,135 @@ THREADING-CENSUS §2).
    itself, at route entry, before any judgement, and `Interp::levels` is
    idempotent so a per-declaration route still builds it exactly once.
 
-   What is left is the rest of the §6.2 clauses at `srt(ℓ̂)` — derivation work
-   in `zoneb.rs` (23 sites) and `kernel.rs` (21) first — and a caller that
-   drives `Checker::poly` over a whole file. Nothing calls it in anger yet.
+   **The caller exists, and it turned the remaining list into a
+   measurement.** `mini/src/poly_run.rs` (`mini --poly`) drives
+   `Checker::poly` over a whole file: one interpretation per *declaration* at
+   its own universe parameters, no σ, no `subst_ground`, no schedule. It
+   replaces the scheduled pass rather than joining it — the two mint into one
+   `Interp` and `level_poly` declares symbols off the shared `Env`, so a run
+   that did both would renumber the second pass's symbols — and it is off by
+   default, which is why the scheduled rows are still byte-identical.
+
+   The first real caller found a defect in the API it called, which is what a
+   caller is for. `Checker::discharge_levels` took a single `&Thm` and
+   **drained** its `AssumeToken`s: a declaration has two conclusions to close
+   (`⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` and `⊢ ⟦val⟧ ∈ ⟦ty⟧`) and the second call would have
+   handed its argument back unchanged, still carrying `u ∈ ω`, reporting
+   success. It now takes a slice and closes every conclusion against the same
+   assumptions in one pass, over a new `Scopes::discharge_assumption_many`.
+   That is a **correction to §5.2's "no new mechanism was needed"**: the
+   hypothesis mechanism was indeed already there, but its discharge was
+   one-shot and the batch form had to be added.
+
+   ### The measurement, over all 91 tutorial exports
+
+   | | |
+   |---|---|
+   | declarations attempted (`def`/`axiom`) | **147** |
+   | zone B skipped (`inductive`/`mutual`/`Quot`) | 108 |
+   | `⟦ty⟧` produced | 56 |
+   | `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | **56 — every type that interpreted also certified** |
+   | `⟦val⟧` produced | 83 / 146 |
+   | `⊢ ⟦val⟧ ∈ ⟦valTy⟧` derived and closed | 59 |
+   | **escaped assumptions (`open`)** | **0** |
+   | **whole exports fully certified on this route** | **18** of 89 (`mini --poly` exits 0; 71 exit 4, 2 are frontend declines) |
+
+   That last row is the one to read first, and it is the strongest thing this
+   branch can currently say. Eighteen whole tutorial exports are interpreted
+   and certified **at their declarations' own universe parameters**, with no σ
+   anywhere and no assumption escaping its discharge. The route is not a
+   prototype that types one hand-written `def`; it takes real files end to end.
+
+   And the ordering, which is the thing a `Gap::SymbolicLevel` site count
+   could not give. That variant carries no payload, so all 138 of them key to
+   one string; `MINI_POLY_SITES=1` files the **origin** off `crate::blocker`'s
+   trail instead:
+
+   | site | count | the clause | the kind of work |
+   |---|---|---|---|
+   | `kernel.rs:3461` — `const_evidence`'s `ls → Vec<u32>` | **84** | `Expr::Const` at a parametric level | the **store's key** — step 5's generic point |
+   | `kernel.rs:2959` — `pi_evidence`'s `as_numeral(l1)/(l2)` | **50** | the `Π` clause | **derivation** — `derived::levels::{pi_rules, ite0, leq}` |
+   | `kernel.rs:3465` — `miss_reason` | 16 | a `no-interp(·)` store miss | downstream of the two above |
+   | `kernel.rs:775` — `scope_typing`'s empty slot | 4 | a binder whose domain had no interpretation | downstream |
+
+   Two things about that table are worth stating in words, because both cut
+   against what the site counts predicted. **`zoneb.rs`'s 23 sites contribute
+   nothing**: every one of them is `c.interp().ok_or(Gap::SymbolicLevel)?`, so
+   with a thread in hand they stop firing, exactly as this section predicted —
+   but zone B is not *reached* on this route at all yet, so its 108
+   declarations are skipped rather than passing. And **the 84 is partly an
+   artifact of this caller**: `poly_run` stores nothing, so every constant
+   reference misses by construction. Even so it is real work either way, since
+   `const_evidence` must be taught to look up at a level *expression* whatever
+   fills the store — `ConstKey` already widened for it in step 2.
+
+   **The `Π` clause is next**, at 50, and it is the one number in the table
+   that no amount of store plumbing removes: it is pure derivation at
+   `srt(ℓ̂)`, it is what §6.2 actually asks for, and it is on the critical path
+   for the const clause too, since nearly every declaration's type is a `Π`.
+
+   #### The `Π` clause, reconnoitred — assembly, and every argument is in hand
+
+   Checked before it is briefed, because a brief on this strand has been wrong
+   three times. `derived::levels::pi_rules::PiRules::pi_imax_dep` is *exactly*
+   the theorem the de-scheduled arm wants, in one piece:
+
+   ```text
+   ⊢ ∀q⃗ ∀u ∀v ∀A. (((u ∈ ω ∧ v ∈ ω) ∧ (A ∈ srt(u) ∧ fib(q⃗,A,srt(v))))
+         → ite0(v, cndd(q⃗,A), dprod(q⃗,A)) ∈ srt(imax(u,v)))
+   ```
+
+   Two things about it make the de-scheduled arm **simpler than the scheduled
+   one**, which is not what the site count suggested. It is §1.4's `ite0`, so
+   the arm does not have to *decide* `l2 == 0` — the two clauses `pi_evidence`
+   splits on a numeral are merged inside the target term. And it takes its two
+   premises at `srt(u)` and `srt(v)` directly and raises the fibres pointwise
+   itself, so the de-scheduled arm has **no `raise_in_gamma`**: the scheduled
+   one's cumulativity lift to `max(n1,n2)` disappears into the theorem.
+
+   Every argument `pi_rules(env, r, i, ord, ut, s, ru, tower, dp, pair, cndd,
+   cndd_ax)` takes is already in mini's hands: `r`/`i`/`ord`/`ut`/`s`/`ru` off
+   `LevelPoly`, `tower` off the prelude, and `dp`/`pair` are **literally the
+   `dp` and `rule` fields `Interp::fibre_site` already builds** for the ground
+   path (`DProdN::new` and `dprod_in_universe_pair_n`, same stack). The derived
+   side names this consumer in its own header — `cndd`/`cndd_ax` are handed in
+   rather than minted precisely for *"the checker's lazy split"*.
+
+   **One integration hazard, named now because the probe will otherwise find
+   it the hard way.** `cndd` must be the conditional singleton over the
+   **fibre site's** `b`. `Interp::cond_site` and `Interp::fibre_site` each call
+   `define_abbrev` on the same skeleton through *separate* caches (`self.conds`
+   and `self.fibres`), so they hold two different `FnSym`s for one body shape;
+   `pi_rules` validates `cndd_ax` by probe against `dp.b` and would refuse the
+   one `cond_site` built. The de-scheduled arm therefore mints its own via
+   `prop::conditional_singleton` at `pi_body_dep(env, sums, fibre.b, holes,
+   dom)` — which is the identical formula `cond_site` builds, over the other
+   symbol.
+
+   No new mathematics is required, which keeps the strand's running claim
+   intact at the clause the brief said to attack first.
+
+   ### What the gate becomes, now that the route is exercised
+
+   Until this commit the byte-identity of the scheduled rows was free: nothing
+   built a `poly` checker, so the new arm was unreachable. It is **still**
+   byte-identical and it is **no longer free** — it is maintained by the
+   exclusivity above, and that is the deliberate trade. The gate is therefore
+   two-part from here:
+
+   * **A — the scheduled route.** All 91 tutorial exports'
+     `ledger`/`evidence`/`untranslated` rows byte-identical. Unchanged,
+     verified this tranche, and still the primary gate.
+   * **B — the de-scheduled route.** The `polyledger`/`polyblocked`/`polyev`
+     rows over the same 91 exports, as a **ratchet and not an identity**:
+     `typesOk`, `typeEv`, `valuesOk`, `valueEv` may only rise; `open` must stay
+     **0**; `declars` and `zoneB` may not move without a stated reason. The
+     numbers above are its first baseline.
+
+   Gate B is what the strand's verdict is measured against:
+   `PolyLedger::is_clean` — which refuses to excuse `zoneB` — is folded into
+   `Outcome::fully_certified`, so `mini --poly` exits 4 today and exits 0 when
+   the de-scheduled route works.
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
@@ -1611,11 +1737,20 @@ its own header.
 
 **Steps 1 and 2 are built** — see §5.3's step-1 and step-2 statuses. The
 vocabulary exists in `interp.rs`, `Checker::poly` threads an `Interp` through
-zone A at a declaration's own parameters, and the `Sort` clause is converted:
-mini certifies `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧` at a variable rung, above the tower's
-built height. What remains is the other §6.2 clauses at `srt(ℓ̂)` module by
-module — `zoneb.rs` (23) and `kernel.rs` (21) first — and a caller that drives
-the route over a whole file, each landing at byte-identical ledger rows.
+zone A at a declaration's own parameters, the `Sort` clause is converted, and
+`mini/src/poly_run.rs` drives the route over a whole file: mini certifies
+`⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧` at a variable rung above the tower's built height,
+and does it for 56 of the tutorial corpus's 147 `def`/`axiom` declarations with
+**no escaped assumption anywhere**.
+
+What remains is the other §6.2 clauses, and the order is now measured rather
+than sized: the `Π` clause (`pi_evidence`, 50 of the 138 residual
+`Gap::SymbolicLevel`) is derivation at `srt(ℓ̂)` and is next; `Expr::Const` at a
+parametric level (84) is the store's key and belongs with step 5; `zoneb.rs`'s
+23 sites contribute **nothing**, because they were all
+`c.interp().ok_or(…)` and stopped firing when the thread arrived — zone B's
+108 declarations are simply not on this route yet. §5.3 step 1 carries the
+table and the two-part gate the route is now measured against.
 
 ## 6. What is deliberately not claimed
 

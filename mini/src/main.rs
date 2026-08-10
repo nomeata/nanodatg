@@ -82,6 +82,13 @@ fn main() {
     // another type's constructors that no acceptance-side check justifies.
     // `mini/src/nested.rs`'s header says which is which.
     let nested = flags.iter().any(|f| f == "--nested");
+    // **The de-scheduled route** — `mini::poly_run`, `LEVELPOLY.md` §5.3
+    // step 1. It *replaces* the scheduled interpretation pass rather than
+    // joining it; the module header carries the argument, and the acceptance
+    // axis is untouched either way. Its rows print under `--verbose` beside
+    // the scheduled ones' slot, and its debt reaches exit 4 through
+    // `Outcome::fully_certified` like any other.
+    let poly = flags.iter().any(|f| f == "--poly");
     // Named for the call site: a run that only cares whether the file was
     // accepted says so, and gets `Main.lean`'s three codes and no fourth.
     let acceptance_only = flags.iter().any(|f| f == "--acceptance-only");
@@ -115,13 +122,16 @@ fn main() {
     if paths.len() != 1 {
         eprintln!(
             "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] [--nested] \
-             [--no-modelgen] [--modelgen=<path>] \
+             [--poly] [--no-modelgen] [--modelgen=<path>] \
              [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual, nested, modelgen });
+    let out = mini::run::check_file_deep_with(
+        &path,
+        mini::run::Options { block, dump, mutual, nested, modelgen, poly },
+    );
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     // The certification axis, both halves, computed once: they decide the
     // verdict line's certification columns *and* the exit code, and the two
@@ -192,6 +202,13 @@ fn main() {
             println!("{}", l.conv_row());
             println!("{}", l.frame_row());
         }
+        // The de-scheduled route's rows, in the slot the scheduled ones would
+        // have taken — the two are exclusive, so exactly one block prints.
+        if let Some(l) = &out.poly {
+            for row in l.rows() {
+                println!("{row}");
+            }
+        }
     }
     // Before the blocker, which exits: a blocked run has a store too, and its
     // contents are exactly what a reader wants when asking why it blocked.
@@ -209,11 +226,15 @@ fn main() {
         // contract for an unsupported feature at file level, and a file with
         // one untranslated inductive is still a file mini accepted.
         // `--acceptance-only` opts out of `4` and only `4`.
-        mini::run::Verdict::Accepted { .. }
-            if !(unc.is_clean() && notrans.is_clean()) && !acceptance_only =>
-        {
-            4
-        }
+        //
+        // **`fully_certified` and not the two halves inline**, because under
+        // `--poly` there is no scheduled ledger for those halves to read and
+        // both are vacuously clean: the de-scheduled route would have exited 0
+        // on every file by virtue of not having run the scheduled pass. The
+        // third conjunct lives on `Outcome` so that one predicate answers for
+        // every route; `mini::run::Outcome::fully_certified` carries the
+        // argument.
+        mini::run::Verdict::Accepted { .. } if !out.fully_certified() && !acceptance_only => 4,
         mini::run::Verdict::Accepted { .. } => 0,
         mini::run::Verdict::Rejected { .. } => 1,
         mini::run::Verdict::Declined { .. } => 2,

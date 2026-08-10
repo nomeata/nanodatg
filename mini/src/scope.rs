@@ -282,6 +282,36 @@ impl Scopes {
     /// No generalisation: an assumption has no variable to bind, which is the
     /// whole difference from [`Closed::discharge`].
     pub fn discharge_assumption(&mut self, tok: AssumeToken, thm: &Thm) -> Thm {
+        let mut out = self.discharge_assumption_many(tok, std::slice::from_ref(thm));
+        out.pop().expect("one in, one out")
+    }
+
+    /// [`Scopes::discharge_assumption`] over **several conclusions at once**:
+    /// from `Γ ∪ {φ} ⊢ ψᵢ` produce `Γ ⊢ φ → ψᵢ`, for every `i`, popping `φ`
+    /// exactly once.
+    ///
+    /// # Why the batch form is the primitive and the singular one is the
+    /// wrapper
+    ///
+    /// The token is deliberately not `Clone` and the pop is what enforces
+    /// LIFO, so *one call is one assumption gone*. That is right, and it makes
+    /// the singular form quietly wrong for any caller holding more than one
+    /// theorem under the same hypothesis: the second call would either trip
+    /// the assertion or — worse, where the assumption was the outermost —
+    /// hand back a theorem that still carries `φ` while reporting success.
+    ///
+    /// **This was found by the first real caller and not by review.**
+    /// `LEVELPOLY.md` §5.3 step 1's `Checker::discharge_levels` closes a
+    /// declaration's `uᵢ ∈ ω` assumptions at declaration exit, and a
+    /// declaration has *two* conclusions to close — `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` and
+    /// `⊢ ⟦val⟧ ∈ ⟦ty⟧` — plus, later, the constant's own typing. Until
+    /// [`crate::poly_run`] existed there was one conclusion and the defect was
+    /// not reachable.
+    ///
+    /// A conclusion that does **not** carry `φ` is weakened to `φ → ψ` all the
+    /// same, which is sound and is what `implies_intr` does; nothing here
+    /// inspects the hypothesis set to decide.
+    pub fn discharge_assumption_many(&mut self, tok: AssumeToken, thms: &[Thm]) -> Vec<Thm> {
         assert_eq!(
             tok.depth + 1,
             self.assumed.len(),
@@ -291,7 +321,7 @@ impl Scopes {
             self.assumed.len()
         );
         let a = self.assumed.pop().expect("token implies an assumption");
-        Thm::implies_intr(&a.hyp, thm)
+        thms.iter().map(|t| Thm::implies_intr(&a.hyp, t)).collect()
     }
 
     /// Pop. The token forces pairing; the assertion forces LIFO order.
