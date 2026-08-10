@@ -4929,6 +4929,45 @@ inequality is *false* under the mutation rather than unproven, and does not
 report only because Lean propagates the ι rule's error first. The ι rule is the
 pin; the inequality is the statement that says why it matters.
 
+### The target list, measured — and the 99 is two jobs, not one
+
+The residue was re-measured on the full corpus at this commit:
+**6,707 models / 109 declines / 16,948 statements compared, none differing.**
+Classifying the 109 by the reason the tool itself prints, and by the
+`B factors through the tag` flag `Modelgen.tagFactored` already appends to it:
+
+| | count | what it is |
+|---|---|---|
+| branching constructor, non-indexed | **46** | `recSlotOf`: two recursive fields, the tuple tower's spine is one `Nat` |
+| infinitary field, non-indexed | **1** | `Turing.PartrecToTM2.Λ'.read` — a recursive field under a binder |
+| indexed family, **branching erasure** | **52** | declines at the `.type` route guard, *before* arm C |
+| not tag-factored | **4** | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
+| basis exemption | **3** | `Eq`, `Nat`, `PSigma` |
+| other | **3** | `Lean.Syntax…tag` (name taken), `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+
+99 + 4 + 6 = 109, so §8.16's arithmetic is confirmed. What it does **not** show
+is that the 99 are two separate jobs:
+
+* **47 are a W arm and nothing else** — the 46 branching constructors plus
+  `Turing.PartrecToTM2.Λ'`, whose one awkward field is an infinitary one and so
+  is exactly `WEmitted.lean`'s `mix` arm. These are non-indexed and go straight
+  through `primIso`.
+* **52 need a second change first.** They are indexed families whose *index
+  erasure* branches, and `armC` is guarded by `erasureLinear`
+  (`Simple.lean`'s `armC := route matches .type && ni > 0 && erasureLinear`), so
+  the run declines at the route guard **before** arm C splices anything. A W arm
+  alone does not reach them: the guard has to be relaxed so the branching
+  erasure is spliced, and the prim descent then hands *it* to W, with
+  `Iso.requires` withdrawing the whole model if it does not take. That is
+  §8.15's splice-and-model machinery reused unchanged, but it is a second
+  edit and a second set of fixtures, and it is where the arm's composition
+  with arm C is actually decided.
+
+The 4 not-tag-factored are the irreducible remainder and are unchanged: their
+branching arity is a datum of the node, so there is no tag to factor through
+and the classical route — `Classical.choice` on every constant — is the only
+one that reaches them.
+
 **What this settles and what it does not.** It settles the tag scheme, the
 label and branch encodings, both junk hazards, the universe argument, the
 fragment's one missing root, and the shape of the emitted `rec_0` — a
