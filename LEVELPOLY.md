@@ -456,12 +456,21 @@ target, named so it can be checked off):
 
 ### 5.1 Where groundness is assumed
 
+Re-taken 2026-08-10 at `a7b0c6a`. **The seven sites are still seven.** In
+particular `a7b0c6a`'s expression-derived binder levels (`open_level`,
+`dbj_level_counter`) are about *de Bruijn* levels — the binder-depth axis —
+and touch none of the universe-level groundness below; no census row was
+dissolved by the 32 master commits. What did change: the sort seam and the
+`(name, levels)` keying now have their quantified halves **built** on this
+branch (rows 3 and 5; §5.3 step-5 status), and the staged rehearsal (§5.4)
+turned every row's cost from an estimate into a measurement.
+
 | site | what assumes it | quantified replacement |
 |---|---|---|
 | `checker/src/instantiations.rs` (511 lines; `Inst = Vec<u32>`, `DEFAULT_LEVELS`, the published `SCHEDULE`) | the whole pre-pass exists to answer "which ground σ must this declaration be checked at" | retired as the *checking* driver; survives (optionally) as the instantiation engine that specialises the final `∀u⃗∈ω` theorems to the σ a downstream consumer asks about |
 | `TcCtx::sigma` / `under_sigma` (`checker/src/util.rs:304,354`; 5 call sites) | substitute numerals, then `simplify` | substitution becomes identity; `interp_level`'s `Param` arm becomes the *main* arm |
-| `interp_sort`'s `_` arm (`tg.rs:3853`) | `Max`/`IMax`/`Param` fall to an opaque `sort(t)` with no facts | `srt(ℓ̂)` (§1.2) with the §1.3 fact kit |
-| `Clause::{Prop,Type,Undet}` dispatch (`tg.rs:9583 clause_after`, `tc.rs:1043 infer_pi`) | reads the level shape after σ; `Undet` = axiom-free symbol + `TyGap::PiUndet` | `Undet` becomes the `ite0` clause (§1.4); the 12 residual `PiUndet` typing sites on `init-prelude` are the first live beneficiaries |
+| `interp_sort`'s `_` arm (`tg.rs:4128`) | `Max`/`IMax`/`Param` fall to an opaque `sort(t)` with no facts | `srt(ℓ̂)` (§1.2) with the §1.3 fact kit — **built** (the wedge), now over per-name free variables |
+| `Clause::{Prop,Type,Undet}` dispatch (`tg.rs:10449 clause_after`, `tc.rs:1059 infer_pi`) | reads the level shape after σ; `Undet` = axiom-free symbol + `TyGap::PiUndet` | `Undet` becomes the `ite0` clause (§1.4); 12 residual `PiUndet` sites under σ, **2407 without it** (§5.4 blocker 1) |
 | const/ind/ctor tables keyed `(name, interpreted levels)` (`Shared::*`, `TgBackend::{ind_syms, ctor_rules, …}`, mini's `ConstKey = (Name, Vec<u32>)`) | one entry per ground instantiation | one entry per *declaration*, keyed by canonical level *expressions*; ground keys become the numeral instances |
 | mini `ground::eval` → `Gap::SymbolicLevel` (~40 mint sites), `Interp::sort(n: u32)`, `CUMUL_HEIGHT = 8` | a symbolic level is a sanctioned dead end; the tower is consulted at a `usize` | the dead end becomes the entry point; `srt(ℓ̂)` has no height limit (`CUMUL_HEIGHT` retires — the internal ladder is ω-long) |
 | `zoneb`'s `provably_nonzero` / eliminator trichotomy | already **per-declaration, not per-σ** — the module doc insists on it | unchanged: this is the one part of the pipeline that is already level-polymorphic in spirit |
