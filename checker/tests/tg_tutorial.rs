@@ -2034,3 +2034,63 @@ fn the_declaration_boundary_quantifier_stores_and_answers() {
     assert_eq!(rows_totalling(&off, STORED), 0, "flag off must be bit-identical: nothing stored");
     assert_eq!(rows_totalling(&off, HIT), 0, "flag off must be bit-identical: nothing answered");
 }
+
+/// **The ω-prefix lets a polymorphic inductive's nest build at its own
+/// parameters** — `LEVELPOLY.md` §5.4 blocker 2, first slice.
+///
+/// `037_prodType` is `Prod.{u,v} : Type u → Type v → Type (max u v)` — the
+/// corpus's own two-parameter polymorphic inductive, and two parameters
+/// matter: a one-parameter pin passes under a prefix that mishandles order
+/// (the same two-atoms lesson as `mypair` above). In the staged state its
+/// parameter domains interpret to `srt(u)`/`srt(v)` at *variable* levels, so
+/// before the prefix landed `gen_ty_nest`'s `define_abbrev(xs = params)`
+/// refused the whole nest (`…declined: the parameter nest refused`, 60 on
+/// `init-prelude`), the constructor got no rule, and the declaration did not
+/// translate. With the ω-variables threaded as leading arguments of every
+/// body symbol and graph, the nest builds and the file is fully derived.
+///
+/// Mutation run against this test (red, then reverted): returning an empty
+/// prefix from `omega_prefix` reproduces the refusal — translated reads 0,
+/// constructor rules read 0, and the gap total is nonzero.
+#[test]
+fn the_omega_prefix_builds_the_polymorphic_nest_in_the_staged_state() {
+    let f = corpus().join("good/tutorial/037_prodType.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let cfg_path = tmp_cfg("omga", &f);
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true, "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&f.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
+        .arg(&cfg_path)
+        .env("NANODATG_LEVELPOLY", "1")
+        .env("NANODATG_NO_SCHEDULE", "1")
+        .output()
+        .expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    assert!(out.status.success(), "037_prodType must be accepted in the staged state");
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        rows_totalling(&text, "…declined: the parameter nest refused"),
+        0,
+        "the ω-prefix stopped covering Prod's parameter domains:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "declarations translated"),
+        1,
+        "Prod did not translate at its own parameters:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "constructors given a term and a typing rule"),
+        2,
+        "Prod.mk's rule population moved:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "TOTAL gaps"),
+        0,
+        "037_prodType stopped being fully derived in the staged state:\n{text}"
+    );
+}

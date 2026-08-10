@@ -7576,6 +7576,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         let np = vars.len();
         let bottom = gi.ind.ty_of(vars.iter().map(|v| Term::var(*v)).collect());
+        // The ω-prefix (see [`Self::omega_prefix`]): level variables the
+        // domains or the carrier mention, threaded as leading arguments of
+        // every body symbol and graph in the nest so `define_abbrev`'s
+        // free-variable guard is satisfied by naming them rather than by
+        // declining the nest.
+        let omega = self.omega_prefix(doms.iter().chain(std::iter::once(&bottom)));
+        let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
 
         // ── The nest, innermost first — [`Self::gen_ctor_nest`]'s loop ──────
         let mut betas: Vec<Thm> = Vec::with_capacity(np);
@@ -7583,13 +7590,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut inner: Option<Term> = None;
         for k in (0..np).rev() {
             let body = inner.unwrap_or_else(|| bottom.clone());
-            let xs: Vec<FreeVar> = vars[..=k].to_vec();
+            let mut xs: Vec<FreeVar> = omega.clone();
+            xs.extend_from_slice(&vars[..=k]);
             let (tk, tk_def) = derived::define_abbrev(&mut self.env_mut(), &xs, &body)?;
             let (lamk, lamk_ax) = lambda_n(&mut self.env_mut(), &ap, tk)?;
             let betak = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)?;
             betas.push(betak);
             t_defs.push(tk_def);
-            let mut args: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            let mut args: Vec<Term> = wts.clone();
+            args.extend(vars[..k].iter().map(|v| Term::var(*v)));
             args.push(doms[k].clone());
             inner = Some(Term::apply(lamk, args));
         }
@@ -7601,7 +7610,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let prems: Vec<Formula> =
             (0..np).map(|i| Formula::mem(Term::var(vars[i]), doms[i].clone())).collect();
         let (spine, spine_eq) =
-            self.nest_spine_eq(&head, &head_ax, &betas, &t_defs, &vars, &doms, &prems)?;
+            self.nest_spine_eq(&head, &head_ax, &betas, &t_defs, &omega, &vars, &doms, &prems)?;
         // The guard: the chain must land on `ind(p⃗)` under exactly `H_p`, or it
         // is not the bridge the constructor rules and the ι rule will use.
         let claim = Formula::eq(spine.clone(), bottom);
@@ -7859,19 +7868,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         // ── The nest, innermost first — `rec_nest`'s loop with a new bottom ─
+        //
+        // With the ω-prefix of [`Self::omega_prefix`], as in
+        // [`Self::gen_ty_nest`]: a field or parameter domain at a variable
+        // level would otherwise make `define_abbrev` refuse the whole
+        // constructor.
+        let omega = self.omega_prefix(doms.iter().chain(std::iter::once(&bottom)));
+        let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
         let depth = np + nf;
         let mut betas: Vec<Thm> = Vec::with_capacity(depth);
         let mut t_defs: Vec<Thm> = Vec::with_capacity(depth);
         let mut inner: Option<Term> = None;
         for k in (0..depth).rev() {
             let body = inner.unwrap_or_else(|| bottom.clone());
-            let xs: Vec<FreeVar> = vars[..=k].to_vec();
+            let mut xs: Vec<FreeVar> = omega.clone();
+            xs.extend_from_slice(&vars[..=k]);
             let (tk, tk_def) = derived::define_abbrev(&mut self.env_mut(), &xs, &body)?;
             let (lamk, lamk_ax) = lambda_n(&mut self.env_mut(), &ap, tk)?;
             let betak = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)?;
             betas.push(betak);
             t_defs.push(tk_def);
-            let mut args: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            let mut args: Vec<Term> = wts.clone();
+            args.extend(vars[..k].iter().map(|v| Term::var(*v)));
             args.push(doms[k].clone());
             inner = Some(Term::apply(lamk, args));
         }
@@ -7890,7 +7908,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         // ── `⊢ H → spine = ctor_i(y⃗,r⃗)` ───────────────────────────────────
         let (spine, spine_eq) =
-            self.nest_spine_eq(&ct, &ct_ax, &betas, &t_defs, &vars, &doms, &prems)?;
+            self.nest_spine_eq(&ct, &ct_ax, &betas, &t_defs, &omega, &vars, &doms, &prems)?;
 
         // ── `⊢ H → H_mem`, atom by atom, in the order `Ctor::mem` states ────
         //
@@ -8093,17 +8111,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `k` the premise is literally `prems[k]`, because the nest's domain at
     /// level `k` *is* the field's stated type.
     #[allow(clippy::too_many_arguments)]
+    /// The ω-vocabulary parameter variables free in `terms`, sorted and
+    /// deduplicated — the abstraction prefix a nest's body symbols carry
+    /// (`LEVELPOLY.md` §5.4 blocker 2). A `Type u` parameter's domain
+    /// interprets to `srt(u)` at the *variable* `u`, so a nest body mentions
+    /// `u` free, and `define_abbrev`'s free-variable guard rightly refuses it
+    /// unless the prefix names it. Sorting makes the prefix a function of the
+    /// terms, so every backend building over the same terms builds the same
+    /// symbol arities — the canonicity the shared nest stores require.
+    fn omega_prefix<'a>(&self, terms: impl Iterator<Item = &'a Term>) -> Vec<FreeVar> {
+        let mut fvs = Vec::new();
+        for t in terms {
+            t.free_vars(&mut fvs);
+        }
+        fvs.sort();
+        fvs.dedup();
+        fvs.retain(|v| self.is_param_omega_var(*v));
+        fvs
+    }
+
+    /// `nest_spine_eq`'s betas and body definitions are `∀`-closed over the
+    /// ω-prefix **and then** the graph parameters (`define_abbrev` and
+    /// `beta_conditional_n` quantify every argument position), so the
+    /// instantiation lists here lead with the ω terms. The membership
+    /// premises `H_p` stay about the Lean parameters alone: an ω variable is
+    /// a *level*, and its `u ∈ ω` fact is the quantified store's business
+    /// (§5.3 step 5), not a spine premise.
+    #[allow(clippy::too_many_arguments)]
     fn nest_spine_eq(
         &mut self,
         ct: &Term,
         ct_ax: &Thm,
         betas: &[Thm],
         t_defs: &[Thm],
+        omega: &[FreeVar],
         vars: &[FreeVar],
         doms: &[Term],
         prems: &[Formula],
     ) -> Option<(Term, Thm)> {
         let app = self.pre.ap.app;
+        let wts: Vec<Term> = omega.iter().map(|v| Term::var(*v)).collect();
         let h = derived::conj_of(prems);
         let hr = h.as_ref();
         let mut acc = u_a1i(ct_ax, hr);
@@ -8111,14 +8158,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         for k in 0..vars.len() {
             let x = Term::var(vars[k]);
             acc = self.u_app_cong(&acc, &x, hr)?;
-            let mut inst: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            let mut inst: Vec<Term> = wts.clone();
+            inst.extend(vars[..k].iter().map(|v| Term::var(*v)));
             inst.push(doms[k].clone());
             inst.push(x.clone());
             let cond = derived::inst_all(&betas[k], &inst)?;
             let prem = derived::conj_proj(prems, k)?;
             let beta = u_mp(&u_a1i(&cond, hr), &prem, hr)?;
             acc = self.u_eq_trans(&acc, &beta, hr)?;
-            let inst_t: Vec<Term> = vars[..=k].iter().map(|v| Term::var(*v)).collect();
+            let mut inst_t: Vec<Term> = wts.clone();
+            inst_t.extend(vars[..=k].iter().map(|v| Term::var(*v)));
             let td = derived::inst_all(&t_defs[k], &inst_t)?;
             acc = self.u_eq_trans(&acc, &u_a1i(&td, hr), hr)?;
             spine = self.mk(app, vec![spine, x]);
