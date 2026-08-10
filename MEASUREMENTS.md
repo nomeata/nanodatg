@@ -7440,9 +7440,17 @@ originating failures.** In the baseline,
 |---|---:|
 | trans over an admitted premise | 8 457 |
 | pi congruence over an admitted body premise | 1 147 |
+| congruence over an admitted premise | 636 |
 | symm over an admitted premise | 487 |
+| lam congruence over an admitted premise | 179 |
 | pi congruence over an admitted domain premise | 137 |
-| **"over an admitted premise", total** | **10 228 of 15 734 (65 %)** |
+| **"over an admitted premise", by row name** | **11 043 of 15 734 (70 %)** |
+
+*Corrected: this table first read 10 228 (65 %), having missed the `congruence`
+and `lam congruence` rows. Counting by **row name** is in any case an
+approximation of the real partition — the next section measures it off the
+premises instead and gets 11 111, because 68 gaps whose reason string reads like
+an origin are relays.*
 
 Two thirds of the ledger is a rule that received a gap as a premise and reported
 one in turn. Closing a clause that originates gaps therefore buys, at best, the
@@ -7475,3 +7483,144 @@ whole ledger, *then* decide whether there is a construction to write. Judged by
 residue size, the domain premise (6 170) and the reduct row (9 306) were the two
 largest items at this frontier; judged by the ledger they are worth zero and
 fifteen.
+
+## Which clause originates the gap, and the sub-tree it feeds — 2026-08-10
+
+*The ranking the thrust has been missing. Every census this stage has counted a
+clause's own declines; none has asked which clauses **originate** and how large
+a sub-tree each one's closure removes. Instrument:
+`scripts/gap-provenance.diff`. It ends with the first tranche this stage has
+produced that has a measured payoff.*
+
+### Provenance, not row names
+
+`TgCert::Admitted` carries a bitmask. A rule that fails on its own merits mints
+a bit — it **originates**. A rule that fails because a premise was already a gap
+inherits the union of its premises' bits — it **relays**. A relayed gap naming
+exactly one origin is charged to that origin's sub-tree; one naming two or more
+is charged to a `MULTI` bucket, because closing either alone would not remove
+it. `origin_mask` reads that off the premises' certificates *before* `consume`,
+so the partition is a fact about the derivation rather than about the reason
+string — which matters, because **68 gaps whose reason string reads like an
+origin are in fact relays**.
+
+### The partition, exact and total
+
+| | | |
+|---|---:|---:|
+| **originated** — a rule failed on its own merits | **2 391** | 15.2 % |
+| **relayed**, attributable to exactly one origin | 10 366 | 65.9 % |
+| **relayed**, naming two or more origins | 745 | 4.7 % |
+| **escaped** — an assumption survived to the boundary | 2 232 | 14.2 % |
+| **total** | **15 734** | |
+
+Only one gap in seven is an originating failure. The ledger is a list of
+reports, and six of every seven relay someone else's.
+
+### The ranking
+
+`sub-tree = own + solely-attributed relays`, ordered by sub-tree. This is the
+column a tranche should be chosen on, and no census before this one produced it.
+
+| origin | own | relayed | **sub-tree** |
+|---|---:|---:|---:|
+| **iota: this recursor has no curried interpretation** | 792 | 4 725 | **5 517** |
+| **iota: the major premise is not a constructor** | 486 | 2 800 | **3 286** |
+| **proj_reduce** | 659 | 1 808 | **2 467** |
+| eq_cache | 287 | 562 | 849 |
+| pi congruence: the body certificate is not about the binder bodies | 33 | 258 | 291 |
+| nat_reduce | 32 | 79 | 111 |
+| nat_eq | 44 | 22 | 66 |
+| pi congruence: two Πs of undetermined sort over differently shaped bodies | 22 | 33 | 55 |
+| lam congruence: the body certificate is not the graphs' pointwise equation | 19 | 30 | 49 |
+| eta_struct | 6 | 18 | 24 |
+| beta: the lambda has no function-graph interpretation | 7 | 14 | 21 |
+| proof_irrel | 3 | 14 | 17 |
+| def_eq_proj | 1 | 3 | 4 |
+
+**Three origins account for 11 270 of 15 734 — 71.6 % of the ledger**, and only
+745 relays (4.7 %) need more than one closure. The ranking is nothing like the
+ranking by row size: `trans over an admitted premise` is the largest row in the
+ledger at 8 457 and originates **nothing**.
+
+### The ranking, validated by deletion
+
+Acquiring the ι equation as an antecedent — `⊢ (⟦r⟧ = ⟦r'⟧) → (⟦r⟧ = ⟦r'⟧)`, a
+real `imp_refl`, with the antecedent going into the certificate where the escape
+ledger charges for it — deletes the top two origins:
+
+| | baseline | ι acquired |
+|---|---:|---:|
+| **gaps** | 15 734 | **7 654** |
+| escapes | 2 232 | 2 952 |
+| derived (real kernel `Thm`) | 159 803 | **168 603** |
+| obligations asked / discharged | 40 060 / 6 389 | 40 060 / 6 389 |
+| trans over an admitted premise | 8 457 | 1 800 |
+| pi congruence over an admitted body premise | 1 147 | 667 |
+| congruence over an admitted premise | 636 | 464 |
+| symm over an admitted premise | 487 | 337 |
+| relays naming two or more origins | 745 | 454 |
+
+**Gaps fall by 8 080 — 51.4 % of the entire ledger — and 8 800 more real kernel
+theorems appear.** Predicted 8 803, measured 8 080; the 723 difference is relays
+re-attributing one place down, `proj_reduce`'s sub-tree growing 2 467 → 2 754 as
+ι stops claiming them. **So the provenance column predicts a deletion to within
+8 % from a single side-effect-free run**, and the ranking can be trusted without
+one deletion per origin.
+
+Two honest caveats. The +720 escapes are the acquisition's own cost and a real ι
+derivation would not pay them. And the typing counter — 40 060 asked, 6 389
+discharged — does **not** move: this is half the def-eq certificate ledger, not
+a typing win.
+
+### Is the top origin reachable? Bounded, and named
+
+The 792 are **109 distinct recursors**, which is a list, not a phenomenon:
+
+| recursor | firings |
+|---|---:|
+| `Lean.ParserDescr.rec` | 169 |
+| `Decidable.rec` | 81 |
+| `Lean.Syntax.rec` | 66 |
+| `Lean.Syntax.rec_1` | 22 |
+| `EStateM.Result.rec`, `Except.rec`, `Lean.Syntax.Preresolved.rec`, `Lean.Syntax.rec_2` | 12 each |
+| `Eq.rec` | 6 |
+| ~100 more (`Add.rec`, `AndOp.rec`, `Append.rec`, `Array.rec`, `BEq.rec`, …) | 4 each |
+
+The head is mutual and nested families (`Lean.Syntax` and its three companion
+recursors, `Lean.ParserDescr`) plus large elimination (`Decidable.rec`,
+`Eq.rec`); the tail is ~100 **structure** recursors at four firings each,
+one-constructor classes that should be the easiest case there is.
+
+The second origin is even sharper: of its 486, **485 are a major premise whose
+head is a constant that is not a constructor** — it did not reduce — and exactly
+1 is a projection. No lambdas, no literals, no locals. One delta step short of
+the rule firing.
+
+**This is the tenth measured verdict and the first that is not a dead end.**
+Eight routes were chosen by residue size and two frontier rows were deleted for
+zero and fifteen; this one is worth 8 080 gaps and is a bounded list of names.
+
+### The convergence, stated as one finding
+
+Two routes, neither derived from the other, arrived in the same window at one
+statement: **the constraint is the supply of originating facts, not the reach of
+any rule that consumes them.**
+
+* *This route.* Two frontier rows of `has_type_target_beta` — beta's own domain
+  premise (6 170 declines) and the reduct's typing (9 306) — deleted outright,
+  worth zero and fifteen gaps between them. Then the ledger partitioned: 15.2 %
+  originated, 70.6 % relayed, and three originating clauses carrying 71.6 % of
+  the total.
+* *The `checker/` seat's route.* The within-declaration cascade is `ty_conv`'s
+  subject (8 045) plus `ty_app`'s argument (4 693), with **four zeros** saying
+  the structural rules never lack their premise; `ty_premise_missing` 2 667 of
+  2 667; and it is a **wall, not a bootstrap** — 1 040 declarations have nothing
+  blocking them and fail anyway, and ten base cases move the ready set by 86.
+
+A later reader meeting either half alone will underrate it. The first says every
+*consuming* rule measured at this frontier is worth nothing when unblocked; the
+second says the *producing* side has no supply and cannot be bootstrapped from
+within a declaration. Together they say the work is on the supply side and
+nowhere else — and the ranking above is the first thing produced this stage that
+names where on the supply side to start.
