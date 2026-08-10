@@ -18,6 +18,7 @@ pub mod parser;
 pub mod pretty_printer;
 pub mod quot;
 pub(crate) mod reduct;
+pub mod routed;
 pub mod scope;
 pub mod sealed;
 pub mod stepcount;

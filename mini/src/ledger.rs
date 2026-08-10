@@ -643,15 +643,7 @@ impl Ledger {
         ip: &mut Interp,
     ) -> Ledger {
         let mut led = Ledger::default();
-        if crate::blocker::is_armed() {
-            // The terms a report is most likely to have to name, named once.
-            for n in 0..=crate::interp::CUMUL_HEIGHT as u32 {
-                let s = ip.sort(n);
-                ip.set_label(&s, format!("⟦Sort {n}⟧"));
-            }
-            let pt = ip.point();
-            ip.set_label(&pt, "•");
-        }
+        Self::arm_labels(ip);
         // **The conversion census, while the run is still alive.** `conv_row`
         // prints once, at the end, which is exactly when a run that exhausts
         // memory has nothing to print: an aborted experiment yielded pass/fail
@@ -685,6 +677,48 @@ impl Ledger {
                     ip.convs.gapped
                 );
             }
+            if led.walk_decl(env, d, schedule, ip) {
+                return led
+            }
+        }
+        led.finish(ip);
+        led
+    }
+
+    /// The armed-blocker labels — the terms a report is most likely to have
+    /// to name, named once, before any walk. A no-op unless
+    /// [`crate::blocker::is_armed`]; split from [`Ledger::run`] so the routed
+    /// driver ([`crate::route`], ENV-UNIFY.md §5 track D) starts its
+    /// interleaved walk from the same state.
+    pub(crate) fn arm_labels(ip: &mut Interp) {
+        if crate::blocker::is_armed() {
+            for n in 0..=crate::interp::CUMUL_HEIGHT as u32 {
+                let s = ip.sort(n);
+                ip.set_label(&s, format!("⟦Sort {n}⟧"));
+            }
+            let pt = ip.point();
+            ip.set_label(&pt, "•");
+        }
+    }
+
+    /// One declaration of the walk — the loop body of [`Ledger::run`],
+    /// factored out verbatim so the routed driver can interleave the two
+    /// engines per declaration. Counters accumulate on `self` exactly as
+    /// `run`'s loop accumulated them on its local ledger.
+    ///
+    /// Returns `true` when the armed blocker stopped the run:
+    /// [`Ledger::first_blocker`] is then set and the counters are partial by
+    /// design — this is `run`'s early return, carried as a flag the caller
+    /// honours by walking nothing further.
+    pub(crate) fn walk_decl(
+        &mut self,
+        env: &Environment,
+        d: &Declaration,
+        schedule: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
+        ip: &mut Interp,
+    ) -> bool {
+        {
+            let led = self;
             let (name, lparams, ty, val) = match d {
                 Declaration::Axiom { name, lparams, ty } => (name, lparams, ty, None),
                 Declaration::Def { name, lparams, ty, value, .. } => {
@@ -701,7 +735,7 @@ impl Ledger {
                 | Declaration::Mutual { .. } => {
                     led.declarations += 1;
                     fill_declaration(env, ip, schedule, d);
-                    continue
+                    return false
                 }
             };
             led.declarations += 1;
@@ -807,7 +841,7 @@ impl Ledger {
                 if ip.get_const(&key).is_some() {
                     if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
                         led.first_blocker = Some(pv.blocker(ip, o));
-                        return led
+                        return true
                     }
                     continue
                 }
@@ -970,24 +1004,30 @@ impl Ledger {
                     // the verdict line a blocked run prints before the report
                     // is not a *false* "everything translated".
                     led.untranslated = Untranslated::of(ip);
-                    return led
+                    return true
                 }
                 ip.put_const(key, entry);
             }
             if all_ok {
                 led.fully_interpreted += 1;
             }
+            false
         }
-        led.convs = ip.convs.clone();
+    }
+
+    /// The end-of-run tallies read off the `Interp` while it is still alive —
+    /// [`Ledger::run`]'s epilogue, split out for the routed driver, which
+    /// finishes the ledger after its own interleaved walk.
+    pub(crate) fn finish(&mut self, ip: &Interp) {
+        self.convs = ip.convs.clone();
         // Read on the worker thread, which is the only one that ran a
         // `Checker`; the counter is thread-local and does not cross the join.
-        led.frame_cache = crate::census::frame_cache();
-        led.lazy_fills = ip.lazy_fills;
+        self.frame_cache = crate::census::frame_cache();
+        self.lazy_fills = ip.lazy_fills;
         // **The certification axis's second half**, read off where `ip` is: an
         // absence that opened no obligation is invisible in every counter
         // above, and `113_reduceCtorParamRefl` is the file that proves it.
-        led.untranslated = Untranslated::of(ip);
-        led
+        self.untranslated = Untranslated::of(ip);
     }
 
     /// **What this run left uncertified** — see [`Uncertified`] for which

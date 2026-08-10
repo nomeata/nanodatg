@@ -112,6 +112,7 @@ pub mod rec_s_ix;
 pub mod rec_trunc;
 pub mod rec_trunc_ix;
 pub mod recursor;
+pub mod route;
 pub mod run;
 pub mod scope;
 pub mod unit_like;

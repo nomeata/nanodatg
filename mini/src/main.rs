@@ -106,6 +106,22 @@ fn main() {
             }
         }
     };
+    // **The routing flag** (ENV-UNIFY.md §5 track D, `mini::route`):
+    // `--route=split` is the owner's split — inductive constructions to mini,
+    // defs and theorems to the checker, both over one kernel `Env`;
+    // `--route=mini` / `--route=checker` force one engine for everything, so
+    // the historical single-engine runs stay reachable and comparable. No
+    // flag is the historical mini-only run, untouched.
+    let route = match val("--route") {
+        None => None,
+        Some("split") => Some(mini::route::Mode::Split),
+        Some("mini") => Some(mini::route::Mode::ForceMini),
+        Some("checker") => Some(mini::route::Mode::ForceChecker),
+        Some(other) => {
+            eprintln!("--route={other}: expected split, mini or checker");
+            std::process::exit(2);
+        }
+    };
     let only = val("--dump-only").map(str::to_string);
     let sigma = val("--dump-sigma").map(|s| {
         s.split(',').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect::<Vec<u32>>()
@@ -115,13 +131,16 @@ fn main() {
     if paths.len() != 1 {
         eprintln!(
             "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] [--nested] \
-             [--no-modelgen] [--modelgen=<path>] \
+             [--no-modelgen] [--modelgen=<path>] [--route=split|mini|checker] \
              [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual, nested, modelgen });
+    let out = mini::run::check_file_deep_with(
+        &path,
+        mini::run::Options { block, dump, mutual, nested, modelgen, route },
+    );
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     // The certification axis, both halves, computed once: they decide the
     // verdict line's certification columns *and* the exit code, and the two
@@ -191,6 +210,16 @@ fn main() {
             println!("{}", l.untranslated.row());
             println!("{}", l.conv_row());
             println!("{}", l.frame_row());
+        }
+    }
+    // The routed run's own rows, printed whenever `--route` asked for one:
+    // the routing ledger, the shared store's crossing report, and (verbose)
+    // the checker's global evidence report.
+    if let Some(r) = &out.route {
+        println!("{}", r.row());
+        println!("{}", r.cross);
+        if verbose {
+            println!("{}", r.tg);
         }
     }
     // Before the blocker, which exits: a blocked run has a store too, and its

@@ -100,6 +100,13 @@ pub struct Options {
     /// module header says why the two differ and what happens on a machine
     /// with no Lean toolchain.
     pub modelgen: crate::modelgen::Filter,
+    /// **Route each declaration group to one engine** (ENV-UNIFY.md §5
+    /// track D, [`crate::route`]): `None` is the historical mini-only run;
+    /// `Some(mode)` replaces the evidence pass with the interleaved routed
+    /// driver, both engines over this run's one core. A routed run installs
+    /// the core as the checker's per-thread signature, so it owns its thread:
+    /// one routed file per thread, which [`check_file_deep_with`] provides.
+    pub route: Option<crate::route::Mode>,
 }
 
 pub struct Outcome {
@@ -123,6 +130,11 @@ pub struct Outcome {
     /// cross the thread join, so the only place it can be read is where it
     /// lives.
     pub dump: Option<String>,
+    /// The routing ledger, when [`Options::route`] asked for a routed run:
+    /// who got what, the counted fallbacks, the stray sweep, and the shared
+    /// store's crossing report. `None` on an unrouted run and on a file that
+    /// was declined or rejected before the evidence pass.
+    pub route: Option<crate::route::RouteReport>,
 }
 
 impl Outcome {
@@ -200,6 +212,7 @@ pub fn check_file_with_interp(
                     elim_audit: Vec::new(),
                     ledger: None,
                     dump: None,
+                    route: None,
                 },
                 ip,
             )
@@ -235,6 +248,7 @@ pub fn check_file_with_interp(
                         elim_audit: Vec::new(),
                         ledger: None,
                         dump: None,
+                        route: None,
                     },
                     ip,
                 )
@@ -247,6 +261,7 @@ pub fn check_file_with_interp(
                     elim_audit: Vec::new(),
                     ledger: None,
                     dump: None,
+                    route: None,
                 },
                 ip,
             )
@@ -272,6 +287,7 @@ pub fn check_file_with_interp(
                 elim_audit: Vec::new(),
                 ledger: None,
                 dump: None,
+                route: None,
             },
             ip,
         )
@@ -343,7 +359,19 @@ pub fn check_file_with_interp(
     facts.mutual_blocks = ex.blocks;
     facts.mutual_encoded = ex.encoded;
     facts.mutual_rules = ex.rules;
-    let mut led = Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip);
+    // **The routing seam** (ENV-UNIFY.md §5 track D). Unrouted, the evidence
+    // pass is the one call it has always been. Routed, `crate::route`'s
+    // interleaved driver replaces it: same declarations, same schedule, same
+    // `Interp` — each group walked by the engine the policy picks, the
+    // checker driven over the same core in the same walk.
+    let (mut led, route_report) = match opts.route {
+        None => (Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip), None),
+        Some(mode) => {
+            let (led, rep) =
+                crate::route::run_routed(path, &ex.env, &ex.decls, &ex.schedule, &mut ip, mode);
+            (led, Some(rep))
+        }
+    };
     crate::blocker::arm(false);
     // **After the pass, not before**, and the order is a consequence of
     // [`crate::ledger::Ledger::run`] filling the store from the schedule.
@@ -377,6 +405,7 @@ pub fn check_file_with_interp(
             elim_audit,
             ledger: Some(led),
             dump,
+            route: route_report,
         },
         ip,
     )
