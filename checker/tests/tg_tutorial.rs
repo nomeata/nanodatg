@@ -2234,3 +2234,126 @@ fn the_undet_pi_is_wired_in_the_staged_state() {
         "the red state moved — the fixture no longer exercises the gap the wiring closes:\n{off}"
     );
 }
+
+/// **The wired Undet-`Π` clause's outcome rows are a partition** — the
+/// instrument `LEVELPOLY.md` §5.4 blocker 1's remaining population is measured
+/// with, pinned against a counter that knows nothing about it.
+///
+/// The decomposition is only worth anything if the rows *add up*: a reason
+/// counted twice, a `?` that returns without noting one, or a slot collision
+/// in [`PiPoly::slot`] would each shift the shares while leaving every row
+/// individually plausible, and the whole point of the instrument is to choose
+/// the next edit by share. So the typing rows are summed and checked against
+/// `by ty_pi_undet` + `no evidence: ty_pi_undet`, which come from
+/// `certify.rs`'s gap ledger — a counter incremented on a different code path,
+/// for a different purpose, that cannot be kept in step by accident.
+///
+/// **`118_accRecReduction`, deliberately**: staged, it populates **three**
+/// outcome rows at once — the rule firing (2), the `Π` that was never wired
+/// (9) and the level bridge refusing (1). Three atoms is this project's floor
+/// for pinning a split, and a file with one populated row would pass the sum
+/// check under a mutation that dropped either of the other two. The
+/// individual rows are pinned too, so a *reason* silently moving from one row
+/// to another — the failure a sum alone cannot see — is caught as well.
+///
+/// It also pins the bridge's own arms at the same site: `∅ ⊆ x` once,
+/// `succ(∅) ⊆ b` twice, and seven sub-levels whose images already coincide.
+/// Those are the three `≤` arms the corpus leans on hardest, and a bridge that
+/// stopped taking one of them while still closing this file's two sites would
+/// otherwise be invisible here.
+///
+/// Mutations run against this test (each made the cell red, then was
+/// reverted): dropping `note_pipoly` from the `TBridge` exit takes the sum to
+/// 11 against a ledger reading 12; giving `TNoLeftArm` and `TBridge` the same
+/// slot leaves the sum right and moves the two rows to 0/1; and — the one that
+/// tests the *mathematics* rather than the bookkeeping — instantiating
+/// `imax_absorb` at `(v̂, û)` instead of `(û, v̂)` takes the fired row to 0,
+/// because the absorbed side is the `imax`'s **right** arm and nothing else.
+/// The last is the argument-order bug this branch has already hit once, in a
+/// place where the two arms coincided and no test could see it.
+#[test]
+fn the_undet_pi_outcome_rows_partition_the_obligations() {
+    let f = corpus().join("good/tutorial/118_accRecReduction.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = staged_poly_report(&f, "1");
+
+    let rows: [(&str, u64); 8] = [
+        ("typing: pi_imax_dep fired", 2),
+        ("…missed: the Π was not wired", 9),
+        ("…missed: the obligation's type is not a Sort", 0),
+        ("…missed: the guard walk spelled no domain sort level", 0),
+        ("…missed: the level bridge refused", 1),
+        ("…missed: the per-skeleton rule chain refused", 0),
+        ("…missed: the ω-membership recursion disagreed", 0),
+        ("…missed: a structural step did not match its shape", 0),
+    ];
+    let mut sum = 0;
+    for (label, want) in rows {
+        let got = rows_totalling(&text, label);
+        assert_eq!(got, want, "the row {label:?} reads {got}, expected {want}:\n{text}");
+        sum += got;
+    }
+    let ledger =
+        rows_totalling(&text, "by ty_pi_undet") + rows_totalling(&text, "no evidence: ty_pi_undet");
+    assert_eq!(
+        sum, ledger,
+        "the outcome rows sum to {sum} but the gap ledger counted {ledger} PiUndet obligations \
+         — the decomposition is not a partition:\n{text}"
+    );
+    // Non-vacuity: a run where the clause never engaged would satisfy `0 == 0`.
+    assert!(sum >= 3, "the fixture stopped exercising the clause at all:\n{text}");
+
+    for (label, want) in [
+        ("level bridge — bridge: two sub-levels whose ω-images already coincide", 7),
+        ("level bridge — ≤: ∅ ⊆ x", 1),
+        ("level bridge — ≤: succ(∅) ⊆ b, under b ≠ ∅", 2),
+    ] {
+        let got = rows_totalling(&text, label);
+        assert_eq!(got, want, "the bridge arm {label:?} reads {got}, expected {want}:\n{text}");
+    }
+}
+
+/// **Flag off, the instrument is silent and every obligation is unanswered** —
+/// the wedge's standing bit-identity promise, at the report block and the
+/// clause this tranche added.
+#[test]
+fn the_undet_pi_decomposition_is_absent_with_the_flag_off() {
+    let f = corpus().join("good/tutorial/118_accRecReduction.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = staged_poly_report(&f, "0");
+    assert!(
+        !text.contains("the wired Undet-Π clause"),
+        "the decomposition block printed with the flag off:\n{text}"
+    );
+    assert_eq!(
+        rows_totalling(&text, "no evidence: ty_pi_undet"),
+        12,
+        "flag off must be bit-identical: all 12 PiUndet obligations stay unanswered:\n{text}"
+    );
+    assert_eq!(rows_totalling(&text, "by ty_pi_undet"), 0, "flag off wired something:\n{text}");
+}
+
+/// One staged run of `export`, at the given `NANODATG_LEVELPOLY` setting,
+/// returning the report.
+fn staged_poly_report(export: &Path, flag: &str) -> String {
+    let cfg_path = tmp_cfg(&format!("upipart{flag}"), export);
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin"))
+        .arg(&cfg_path)
+        .env("NANODATG_LEVELPOLY", flag)
+        .env("NANODATG_NO_SCHEDULE", "1")
+        .output()
+        .expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    assert!(out.status.success(), "the fixture must be accepted in the staged state (flag={flag})");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}

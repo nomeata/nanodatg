@@ -157,7 +157,14 @@ interpretation must be provably equal to each member's). The kit:
 
 A certified mirror of the checker's `leq` decision procedure (recursing
 exactly where the Rust decision procedure recurses, emitting these lemmas) is
-the clean architecture; it is **designed, not built** (§5).
+the clean architecture. Its **first slice is built** —
+`derived::levels::leq` (§3) plus the checker-side recursion
+`TgBackend::level_bridge`, carrying the one identity `imax(a,b) = b` when
+`a ≤ b` and the `⊆` facts that discharge it. That slice was chosen by
+measurement, not by design order: it is 72 % of what blocker 1 had left
+(§5.4). The rest of the mirror — the strict order `succ(x) ⊆ b`, the
+parameter case split, `max` reassociation — is still designed, not built, and
+each missing arm is a counted row rather than a silent refusal.
 
 ### 1.6 Constants: the `(name, levels)` key becomes application
 
@@ -331,6 +338,23 @@ landed and green, [ ] not landed.
   pinned as the tower's `U₁`), and refuse a pair theorem for a foreign fibre
   stack; two mutations were run red and reverted (recorded in the test
   header).
+* [x] **`leq`** (`leq.rs`, tests `levels_leq.rs`) — the certified `≤`-kit at
+  the width the corpus demands: `∅ ⊆ x`, `x ⊆ x`, `succ(∅) ⊆ v` under
+  `v ≠ ∅`, the two `⊆`-introductions for `∪` and `ite0`, and the flagship
+
+  ```text
+  ⊢ ∀u ∀v. (((u ∈ ω ∧ v ∈ ω) ∧ (¬(v = ∅) → u ⊆ v)) → ite0(v, ∅, u ∪ v) = v)
+  ```
+
+  — **`imax(u,v) = v` when `u ≤ v`**, the one identity the raw-versus-canon
+  bridge spends (§5.4 blocker 1). `sub_refl` re-exports `cumul::subset_refl`
+  and the absorption step reuses `order.rs`'s `union_absorb_one`, promoted to
+  `pub(crate)`: one construction per fact. This is **not** §1.5's full
+  certified `leq` mirror and the file's header says which arms are missing.
+* [ ] **the full level-defeq mirror** (§1.5) — `leq.rs` is its first slice.
+  Not built: `succ(x) ⊆ b` for `x ≠ ∅` (the strict order), the parameter case
+  split against an unequal level, `max` reassociation. The checker counts
+  every refusal by arm, so the next construction is named by the report.
 
 ## 4. The checker prototype, and what it costs
 
@@ -379,13 +403,35 @@ rebase exactly.
   for the three new declaration-ledger rows (quantified-store rows), each
   printed and each **0**.
 * **Cost** (`perf stat -e instructions`, single runs, init-prelude, debug +
-  `tg`, at this head): flag off **222.18 G**, flag on **221.67 G** — the
-  wedge's former +0.24% became **−0.23%** at the rebased base: the −54
-  vacuous discharges and −29 `ty_pi` derivations it declines to build now
-  outweigh the apparatus construction. The staged deletion
-  (`NANODATG_NO_SCHEDULE=1`, flag on) runs **142.79 G**, −36% — one
-  interpretation pass per declaration instead of one per scheduled σ — which
-  is the size of the prize the deletion is holding.
+  `tg`). Instructions, never wall time: this box is shared and wall time has
+  been wrong by 2× from contention. Two heads, because the Undet-`Π` wiring
+  (§5.4 blocker 1) moved every figure and the old ones must not be quoted:
+
+  | state | at `0ab4ce7` (pre-wiring) | at this head |
+  |---|---:|---:|
+  | flag off, scheduled | 222.18 G | **222.75 G** |
+  | flag on, scheduled | 221.67 G | **247.08 G** (+10.9 %) |
+  | flag on, staged deletion | 142.79 G (−36 %) | **616.53 G** (+177 %) |
+
+  Flag off is unmoved (+0.26 %), as the bit-identity promise requires — the
+  clause, the bridge and their counters are unreachable with the flag unset.
+  Both flag-on states moved, and the honest reading is that **the deletion is
+  no longer a saving at all**: it was −36 % before the `ite0` clause existed,
+  −12.4 % once the clause was wired at 304 sites, and is +177 % now that the
+  level bridge closes 1466. The work is real derivation the checker was
+  previously not doing — 16073 `Π`s interpreted through `upi`, 494
+  per-skeleton rule chains, 1466 conditional `pi_imax_dep` certificates and
+  everything downstream that consuming them creates — and it is not overhead;
+  but the "−36 % prize" is a stale number twice over and quoting it would be
+  quoting a measurement of a checker that no longer exists. §5.4 blocker 1
+  names the one identified reduction (deriving the level equation under the
+  level-only antecedent so it can be shared across sites), untried.
+
+  The scheduled state is untouched by the bridge: under σ all 12 `PiUndet`
+  obligations land on `Π`s the interpretation never wired, so `pi_imax_dep`
+  fires **zero** times and every bridge row reads 0. Its +10.9 % is the
+  wiring's own (2119 `Π`s do take the `ite0` clause at interpretation), not
+  this tranche's.
 * **The honest surprise — the old encoding was already discharging the
   variable sort rule, vacuously.** Under the opaque arm,
   `⟦Sort (u+1)⟧ = U(⟦Sort u⟧)` by the `Succ` climb, so the obligation
@@ -395,15 +441,30 @@ rebase exactly.
   `U₀` and no ω-structure. The report diff shows exactly this trade:
   `by x ∈ U(x)` drops 1399 → 1345 (−54) and those 54 sites move to
   conditional certificates under real `u ∈ ω` assumptions or (3 sites, where
-  canonicalisation reshaped `succ ℓ`) to counted misses; `ty_pi` derivations
-  fall 823 → 794, the same loss one rule downstream (a `srt`-shaped domain is
-  not `U`-shaped); derived typings fall 14387 → 14003 with +352 more
-  conditional. TOTAL gaps 15542 → 15562 (+20); escapes 2257 → 2275 (+18);
-  `eq_cache` 260 → 262 (+2). **The counter regression is the semantic
-  upgrade made visible**, and the +20 decomposes exactly: +18 conditional
-  certificate copies the checker consumed as answers or parked in caches
-  (the escape ledger's deliberate over-report direction), +2 union edges
-  that used to carry a vacuous unconditional certificate and now carry none.
+  canonicalisation reshaped `succ ℓ`) to counted misses.
+
+  **Re-measured at this head**, where the Undet-`Π` clause is wired and so
+  changes the scheduled interpretation too: TOTAL gaps 15542 → **15568**
+  (+26); escapes 2257 → **2263** (+6). The +26 decomposes exactly, and the
+  rows are not the ones the pre-wiring wedge moved:
+
+  | row | flag off | flag on | Δ |
+  |---|---:|---:|---:|
+  | escapes (`⟦arg⟧ ∈ ⟦binder domain⟧` at the boundary) | 2257 | 2263 | +6 |
+  | pi congruence: two `Π`s of undetermined sort, differently shaped bodies | 59 | 69 | +10 |
+  | lam congruence over an admitted premise | 179 | 184 | +5 |
+  | lam congruence: the body certificate is not the graphs' pointwise equation | 19 | 24 | +5 |
+  | `eq_cache` | 260 | 262 | +2 |
+  | pi congruence over an admitted body premise | 1147 | 1146 | −1 |
+  | pi congruence: the body certificate is not about the binder bodies | 33 | 32 | −1 |
+
+  The +10 is new and is the wiring's own signature: a skeleton interpreted
+  through `upi` on one side of a congruence and through the axiom-free symbol
+  on the other is two differently-shaped bodies, and the row counts exactly
+  that. **The counter regression is the semantic upgrade made visible**, but
+  the earlier reading of it (+18 conditional certificate copies, +2 union
+  edges) described the pre-wiring wedge and no longer holds; this table is
+  what the flag-on state costs today.
 * **The step-5 hypothesis this section used to state is refuted by
   measurement.** This section previously said the declaration-boundary
   quantifier "is where `gen` would turn them into `∀u∈ω`-theorems" and §4.2
@@ -427,10 +488,16 @@ rebase exactly.
 * Acceptance is unchanged in both directions and in the staged state
   (exit 0, same declarations) — as it must be: σ selects which set a `Π` is
   interpreted as, never whether a declaration is accepted (`TcCtx::sigma`).
-* **Gate results at head.** Flag **off**: the whole `tg` suite passes.
-  Flag **on**: everything passes except
+* **Gate results at head.** Flag **off**: the whole `tg` suite passes — 113
+  test binaries, 0 failures, re-run at this head with the decomposition, the
+  bridge and `leq` in the tree. Flag **on**: everything passes except
   `the_general_iota_rule_computes_on_the_prelude`, the total-gap/escape
-  ratchet, tripping on precisely the +20/+18 this section decomposes.
+  ratchet, tripping on the +26/+6 the table above decomposes. That gate is
+  **still red flag-on and is still deferred**, and the switchover must not
+  inherit it: §5.4's condition is unchanged, and its cause has now moved (it
+  is no longer the 18 certificate copies §4.2 used to attribute it to — the
+  largest single row is the +10 congruence split between wired and opaque
+  Undet `Π`s, which the switchover removes by making every Undet `Π` wired).
 * The arena corpus gate ran green on this branch
   (`152 matched, 0 mismatched, 2 declined, 0 waived (of 154)` — the same two
   declines as master). `mini` never builds the `tg` backend (the
@@ -677,9 +744,148 @@ at this branch's head:
     confirmed at 304/2407 wired and not yet refuted; note the `T-policy`
     row's only decline site is the level-independent no-nullary-constructor
     gate (`gen_rec_bottom`), which blocker 1's machinery cannot move —
-    what could move is `no curried`/ι, unadjudicated until the unwired
-    2103 (guard-walk misses, dominated by the `undet_unknown` flavour and
-    canonicalisation drift) are decomposed.
+    what could move is `no curried`/ι.
+  * **The 2103, decomposed — measured, not guessed.** A counter per refusal
+    reason now sits at both ends of the clause (`PiPoly`, reported as *the
+    wired Undet-Π clause, by outcome*), and its typing rows are a **partition
+    of the obligations**: they sum to `by ty_pi_undet` + `no evidence:
+    ty_pi_undet`, a total kept by `certify.rs`'s gap ledger on an unrelated
+    code path. Staged, init-prelude, flag on:
+
+    | typing outcome | count | share of 2103 |
+    |---|---:|---:|
+    | `pi_imax_dep` fired (conditional) | 304 | — |
+    | the canonical level is **not an `IMax`** | 1005 | 47.8 % |
+    | the `Π` was **not wired** at interpretation | 588 | 28.0 % |
+    | **canonicalisation drift** (guard ≠ the `IMax`'s right arm) | 510 | 24.2 % |
+    | the obligation's type is not a `Sort` | 0 | — |
+    | the rule chain refused / ω-recursion disagreed / a structural step | 0 | — |
+
+    Three named candidates, three real populations, and **nothing else**: the
+    per-skeleton rule chain never refused once (494 skeletons built, 0
+    refused), the ω-membership recursion never disagreed, and no structural
+    step ever missed its shape. The clause's *machinery* is not what is
+    losing; its *level algebra* is.
+
+    Interpretation side, same run: 15998 `Π`s took the `ite0` clause and 6097
+    refused, **all** of them at the guard walk — the head's type not reaching
+    a `Sort` after its arguments (4772), an application head that is neither
+    `Local`, `Const` nor `λ` (741), and a `Var`/`Proj`/literal (584). The `λ`
+    and unreadable-`Const` arms are **zero**, and so is the inert-fibre row.
+    Only 588 of those 6097 are ever asked for a typing.
+
+    Two of the three briefed candidates are therefore **one** problem. Taking
+    the raw-versus-canon shapes off the same run:
+
+    * the `IMax`-destructure miss is 999/1005 the *bare parameter* case —
+      canon `u`, raw `imax(0,u)` (313), `imax(1,u)` (112), and nested
+      `imax`-chains ending in `u`;
+    * drift's largest rows are the same identity one level down — canon
+      `imax(s(u), imax(u,u))` against a site guard built from raw
+      `imax(u,u)`, and so on.
+
+    Both are the single algebraic fact **`imax(a, b) = b` when `a ≤ b`**,
+    which the target must *prove* because `⟦Sort ℓ⟧` is built from the
+    canonical representative while the rule is instantiated at the site's raw
+    arms. That is §1.5's kit, at the width the corpus demands — and the same
+    bridge blocker 3 needs, so it is on the switchover's critical path rather
+    than beside it. It closes **1515 of 2103 (72 %)** if it lands complete.
+  * **The level bridge — built, and it closes 1162 of the 2103.** The two
+    algebraic rows are gone, replaced by one honest row.
+
+    *The mathematics*, `derived/src/levels/leq.rs` (new; `order.rs`'s
+    `union_absorb_one` promoted to `pub(crate)` and reused rather than
+    re-derived, `cumul::subset_refl` re-exported):
+
+    ```text
+    ⊢ ∀x. ∅ ⊆ x                                                    [Leq::empty_sub]
+    ⊢ ∀x. x ⊆ x                                                    [Leq::sub_refl]
+    ⊢ ∀v. ((v ∈ ω ∧ ¬(v = ∅)) → succ(∅) ⊆ v)                       [Leq::one_sub_nonzero]
+    ⊢ ∀p ∀q ∀v. ((p ⊆ v ∧ q ⊆ v) → (p ∪ q) ⊆ v)                    [Leq::union_sub]
+    ⊢ ∀p ∀q ∀v. ((p ⊆ v ∧ q ⊆ v) → ite0(q, ∅, p ∪ q) ⊆ v)          [Leq::imax_sub]
+    ⊢ ∀u ∀v. (((u ∈ ω ∧ v ∈ ω) ∧ (¬(v = ∅) → u ⊆ v))
+                → ite0(v, ∅, u ∪ v) = v)                           [Leq::imax_absorb]
+    ```
+
+    **The guard on `imax_absorb`'s premise is the content, not decoration.**
+    `imax(1, u) = u` holds at every `u ∈ ω` *including* `u = ∅`, where
+    `1 ⊆ ∅` is false; the premise is only ever needed in the branch where
+    `v ≠ ∅`, and stating it as `¬(v = ∅) → u ⊆ v` is what makes the lemma
+    usable at the 112 corpus sites of exactly that shape. An unguarded premise
+    would be a strictly weaker lemma the dominant shape could not use. One
+    honest note from the derivation: `imax_absorb`'s `(u ∈ ω ∧ v ∈ ω)`
+    conjunct is **never consumed** — the identity holds for all sets — and is
+    kept only because the consumer has the facts in hand anyway.
+
+    *The consumer*, `TgBackend::level_bridge`/`level_absorb`/`level_le`: the
+    rule is now instantiated at the **site's own raw arms** (the real domain
+    and body sort levels, so its two mathematical premises stay dischargeable)
+    and the conclusion's target is transported to the obligation's canonical
+    spelling by one proved equation and one Leibniz step. Congruence is tried
+    before absorption — `imax(u+1, u)` against `imax(u+1, imax(u,u))` differs
+    only in an arm's spelling — and each shape is an independent attempt, so a
+    sub-bridge that refuses falls through instead of sinking the call.
+
+    *The measurement* (staged, init-prelude, flag on):
+
+    | | before the bridge | after |
+    |---|---:|---:|
+    | `by ty_pi_undet` (conditional certificates) | 304 | **1466** |
+    | `no evidence: ty_pi_undet` | 2103 | **941** |
+    | `by ty_lam` | 872 | 1217 |
+    | typings conditional on the ambient locals | 19993 | 21500 |
+    | TOTAL gaps | 10531 | 10531 |
+    | escapes | 1466 | 1466 |
+
+    **1162 obligations moved from having no evidence at all to carrying a real
+    conditional kernel certificate, and the total-gap counter cannot see it** —
+    both states are "a gap", which is why the decomposition above had to exist
+    before the work was worth doing. The +345 on `by ty_lam` is the same
+    movement one rule downstream: a λ whose Π premise now exists becomes
+    derivable.
+
+    What is left of the 941: **588** `Π`s never wired at interpretation (the
+    guard walk, untouched by this tranche), **6** with no domain sort level,
+    **347** where the bridge refused. The bridge's own arm counters name the
+    next two constructions rather than leaving them to be guessed at:
+    `succ(x) ⊆ b` for `x ≠ ∅` (the strict order, 1081 refusals) and a bare
+    parameter against an unequal level (63). Neither is in `leq.rs`, and the
+    file's header says so.
+
+    **The cost is real and is not hidden.** Staged instructions go
+    195.02 G → **616.53 G** (3.16×). Memoising the level-to-ω map bought 1.5 %
+    of it, so the bulk is the 1162 new certificates and the downstream work
+    that consuming them creates — `ty_pi_undet_poly` and the bridge together
+    are 17 % + 9.5 % of cycles under `perf record`, the rest is elsewhere in
+    the pipeline. This is derivation the checker was previously not doing at
+    all, not overhead; but it is a 3× and the switchover's economics section
+    (§4.2) has to carry it.
+
+    The identified reduction, **named and not built**: the bridge proves a
+    *level* equation, which depends only on the `uᵢ ∈ ω` hypotheses and not on
+    the site's two mathematical premises — yet it is currently derived under
+    the full antecedent `H`, which makes every intermediate formula carry two
+    conjuncts it never reads and makes the result uncacheable (H differs per
+    site). Derived under the level-only antecedent and weakened to `H` in one
+    step at the end, the same equation becomes shareable across every site
+    with the same `(from, to)` pair and the same parameter set — and on this
+    corpus that is a small number of distinct pairs against 1466 sites. This
+    is a measurement-shaped guess and is written here as one; it has not been
+    tried.
+  * **The instrument's own fixture.** `118_accRecReduction` staged populates
+    three outcome rows at once (2 fired, 9 not wired, 1 bridge refused), so
+    the partition is pinned there against the independent gap ledger and
+    against each row separately, together with the three `≤` arms the bridge
+    leans on — `the_undet_pi_outcome_rows_partition_the_obligations`. Three
+    mutations run red and reverted: dropping the `note_pipoly` on the bridge
+    exit (sum 11 against a ledger reading 12), giving two reasons one slot
+    (sum right, rows moved 0/1), and — the one that tests the mathematics
+    rather than the bookkeeping — instantiating `imax_absorb` at `(v̂, û)`
+    instead of `(û, v̂)`, which takes the fired row to 0 because the absorbed
+    side is the `imax`'s **right** arm and nothing else. `derived`'s own
+    `levels_leq.rs` carries two more (the guard dropped from `imax_absorb`;
+    `p`/`q` swapped in `imax_sub`) and computes both sides of the guard at
+    ground numerals, three atoms for the two `⊆`-introduction rules.
 * **Blocker 2 — ι and the nests at a symbolic eliminating universe.**
   **First slice built** (the ω-prefix, commit `b6d93fa`): `gen_ty_nest` and
   `gen_ctor_nest` thread the level variables free in their domains as
@@ -799,7 +1005,11 @@ Named so nothing is hidden behind the verdict. As of this branch:
   its checker-side consumption: the interpretation of an Undet-`Π` as the
   `ite0` term and the typing rule that spends `pi_imax_dep` (§5.4 blocker 1's
   other half).
-* **The certified level-`leq` mirror (§1.5)** is designed, not built.
+* **The certified level-`leq` mirror (§1.5)** is built only in the slice the
+  corpus demanded — `derived::levels::leq` and `TgBackend::level_bridge`,
+  §3 and §5.4 blocker 1. The strict-order arm (`succ(x) ⊆ b` for `x ≠ ∅`,
+  1081 refusals staged), the parameter case split (63) and `max`
+  reassociation are **not** built. They are counted, not assumed away.
 * **The store schema for `∀u⃗∈ω` certificates** is built on the checker side
   (`Shared::declar_typings_poly`, §5.3 step-5 status) and pinned by fixture;
   its *cross-level* consumption (a ground use answered by `ax_inst` at a

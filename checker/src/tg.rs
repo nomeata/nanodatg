@@ -953,6 +953,28 @@ fn u_eq_symm(env: &mut Env, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
     u_mp(&step, &u_a1i(&Thm::eq_refl(a), h), h)
 }
 
+/// From `⊢ [H →] a = b` infer `⊢ [H →] T(a) = T(b)`, for a caller-supplied
+/// term context `T`.
+///
+/// [`u_congr_arg`]'s general form: `T` is an arbitrary Rust closure rather than
+/// one argument position of one head symbol, which is what a level's ω-image
+/// needs — `imax`'s is `ite0(b̂, ∅, â ∪ b̂)`, two nested applications with the
+/// right argument appearing twice.
+fn u_leib_term(
+    env: &mut Env,
+    ab: &Thm,
+    h: Option<&Formula>,
+    mk: impl Fn(Term) -> Term,
+) -> Option<Thm> {
+    let (a, b) = u_as_eq(ab, h)?;
+    let x = env.fresh_var();
+    let ta = mk(a.clone());
+    // ⊢ a = b → (T(a) = T(a) → T(a) = T(b))
+    let leib = Thm::eq_leibniz(a, b, x, Formula::eq(ta.clone(), mk(Term::var(x))));
+    let step = u_mp(&u_a1i(&leib, h), ab, h)?;
+    u_mp(&step, &u_a1i(&Thm::eq_refl(ta), h), h)
+}
+
 /// Congruence in one argument, under an assumption. `derived::congr_arg`.
 fn u_congr_arg(env: &mut Env, f: FnSym, args: &[Term], idx: usize, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
     let (a, b) = u_as_eq(ab, h)?;
@@ -1457,7 +1479,7 @@ struct PropSite {
 /// `explore/level-poly-target`'s `ite0` clause (`LEVELPOLY.md` §1.4, §5.4
 /// blocker 1). Registered by [`TgBackend::interp_pi_undet_poly`] and consumed
 /// by the typing rule ([`TgBackend::ty_pi_undet_poly`]) and by `Π` congruence.
-struct UndetPolySite {
+struct UndetPolySite<'t> {
     /// Key into [`Shared::pi_infos`] **and** [`Shared::pi_poly`] — the body
     /// skeleton, shared with both decided clauses.
     key: Term,
@@ -1465,11 +1487,28 @@ struct UndetPolySite {
     holes: Vec<Term>,
     /// `⟦binder_type⟧`.
     dom: Term,
-    /// The guard `v̂` — the ω-vocabulary interpretation of the body's
-    /// canonical sort level. The term's `ite0` was built at exactly this
-    /// guard, and the typing rule refuses unless the obligation's level
-    /// agrees.
+    /// The guard `v̂` — the ω-vocabulary interpretation of the body's **raw**
+    /// sort level. The term's `ite0` was built at exactly this guard.
     guard: Term,
+    /// The Lean levels the guard and the rule's left arm are the ω-images of:
+    /// the *domain's* sort level `u` and the *body's* `v`, both raw. Kept as
+    /// levels, not only as terms, because the ω-membership evidence
+    /// ([`TgBackend::omega_level_rec`]) and the level bridge
+    /// ([`TgBackend::level_bridge`]) both recurse on the Lean level, not on
+    /// its image.
+    ///
+    /// **Why the site's own arms and not the obligation's.** `⟦Sort ℓ⟧` is
+    /// built from `ℓ`'s *canonical representative*, whose sub-levels are
+    /// whichever spelling happened to be seen first, while the rule has to be
+    /// instantiated at the arms whose premises the checker can actually
+    /// discharge — the real domain and body sorts. Reading `û`/`v̂` off the
+    /// representative was measured to cost 1515 of 2103 remaining misses
+    /// (`LEVELPOLY.md` §5.4 blocker 1): 1005 where the representative is not
+    /// an `IMax` at all and 510 where it is one whose right arm is a
+    /// different spelling. The two are one problem, and the bridge is where
+    /// it is paid, once.
+    u_raw: Option<LevelPtr<'t>>,
+    v_raw: LevelPtr<'t>,
 }
 
 /// The **interpretation half** of a wired Undet-`Π` skeleton: the two clause
@@ -2650,12 +2689,16 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// `NANODATG_LEVELPOLY=1`. Disjoint from [`Self::undet_sites`]: an Undet
     /// `Π` is registered here exactly when its guard level was recoverable
     /// and the `ite0` term was built, there otherwise.
-    undet_poly_sites: HashMap<ExprPtr<'t>, Rc<UndetPolySite>>,
+    undet_poly_sites: HashMap<ExprPtr<'t>, Rc<UndetPolySite<'t>>>,
     /// [`TgBackend::undet_body_level`]'s memo — for [`TgBackend::body_clause`]'s
     /// reason exactly: the walk descends both children of a `Π`, and Lean
     /// expressions are DAGs, so an unmemoised walk is exponential in the
     /// sharing depth (measured: the staged prelude did not finish).
-    undet_levels: HashMap<ExprPtr<'t>, Option<LevelPtr<'t>>>,
+    /// [`TgBackend::omega_term`]'s memo — see there.
+    omega_terms: HashMap<LevelPtr<'t>, Term>,
+    /// The memo carries the refusal's [`GuardWhy`] as well as the level, so a
+    /// replayed miss is counted under its own cause.
+    undet_levels: HashMap<ExprPtr<'t>, Result<LevelPtr<'t>, GuardWhy>>,
     /// Where each **proof `λ`** sits — §6.2's other lambda clause, whose
     /// interpretation is `•` and so carries no graph. See [`PropLamSite`].
     prop_lam_sites: HashMap<ExprPtr<'t>, PropLamSite<'t>>,
@@ -3618,6 +3661,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             prop_sites: HashMap::new(),
             undet_sites: HashMap::new(),
             undet_poly_sites: HashMap::new(),
+            omega_terms: HashMap::new(),
             undet_levels: HashMap::new(),
             prop_lam_sites: HashMap::new(),
             props: HashMap::new(),
@@ -4544,7 +4588,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// spelling with no evidence built. The two must agree term-for-term,
     /// which they do by construction: each arm builds through the same
     /// [`derived::levels::apparatus::LevelPoly`] formers.
+    /// **Memoised**, and not as a micro-optimisation: the level bridge
+    /// (`LEVELPOLY.md` §5.4 blocker 1) asks for a level's image once per node
+    /// of every recursion it runs, and unmemoised that re-walks the same
+    /// levels thousands of times per obligation. Keyed on the level pointer,
+    /// which is interned, so the memo is a function of the level exactly as
+    /// the map is.
     fn omega_term(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        l: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+    ) -> Term {
+        if let Some(t) = self.omega_terms.get(&l) {
+            return t.clone()
+        }
+        let out = self.omega_term_uncached(ctx, l, lp);
+        self.omega_terms.insert(l, out.clone());
+        out
+    }
+
+    /// The uncached body of [`Self::omega_term`].
+    fn omega_term_uncached(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         l: LevelPtr<'t>,
@@ -4580,7 +4645,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// when `b = 0`, which is why `body_clause` never needed the left arm).
     /// The body is not opened, exactly as there: a level cannot mention a
     /// term.
-    fn undet_body_level(&mut self, ctx: &mut TcCtx<'t, 'p>, b: ExprPtr<'t>) -> Option<LevelPtr<'t>> {
+    /// A refusal carries its **leaf** cause ([`GuardWhy`]) so the site counters
+    /// can decompose the population — see [`PiPoly`]'s two denominations. The
+    /// memo stores the cause too: it has to, or a memoised refusal would be
+    /// reported under whichever reason the *next* miss happened to have.
+    fn undet_body_level(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        b: ExprPtr<'t>,
+    ) -> Result<LevelPtr<'t>, GuardWhy> {
         if let Some(l) = self.undet_levels.get(&b) {
             return *l
         }
@@ -4594,25 +4667,34 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         b: ExprPtr<'t>,
-    ) -> Option<LevelPtr<'t>> {
+    ) -> Result<LevelPtr<'t>, GuardWhy> {
         match ctx.read_expr(b) {
             // `Sort u : Sort (u+1)`.
-            Expr::Sort { level, .. } => Some(ctx.succ(level)),
+            Expr::Sort { level, .. } => Ok(ctx.succ(level)),
             Expr::Pi { binder_type, body, .. } => {
-                let da = self.undet_body_level(ctx, binder_type)?;
-                let db = self.undet_body_level(ctx, body)?;
-                Some(ctx.imax(da, db))
+                // The `via` counters are node-denominated: the reason handed on
+                // is the child's leaf, and what is recorded here is that the
+                // recursion, not a leaf, is where this node lost.
+                let da = self.undet_body_level(ctx, binder_type).inspect_err(|_| {
+                    note_guard(GuardWhy::ViaPiDom);
+                })?;
+                let db = self.undet_body_level(ctx, body).inspect_err(|_| {
+                    note_guard(GuardWhy::ViaPiBody);
+                })?;
+                Ok(ctx.imax(da, db))
             }
             // A `λ`'s type is a `Π`, never a `Sort` — `body_clause` answers
             // `Type`; there is no level to spell and no Undet to wire.
-            Expr::Lambda { .. } => None,
+            Expr::Lambda { .. } => Err(note_guard(GuardWhy::Lambda)),
             Expr::Let { val, body, .. } => {
                 let expansion = ctx.inst(body, &[val]);
                 self.undet_body_level(ctx, expansion)
             }
             Expr::Local { binder_type, .. } => self.undet_level_after(ctx, binder_type, 0),
             Expr::Const { name, levels, .. } => {
-                let t = self.declared_ty(ctx, name, levels)?;
+                let Some(t) = self.declared_ty(ctx, name, levels) else {
+                    return Err(note_guard(GuardWhy::NoDeclTy))
+                };
                 self.undet_level_after(ctx, t, 0)
             }
             Expr::App { .. } => {
@@ -4622,7 +4704,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         self.undet_level_after(ctx, binder_type, args.len())
                     }
                     Expr::Const { name, levels, .. } => {
-                        let t = self.declared_ty(ctx, name, levels)?;
+                        let Some(t) = self.declared_ty(ctx, name, levels) else {
+                            return Err(note_guard(GuardWhy::NoDeclTy))
+                        };
                         self.undet_level_after(ctx, t, args.len())
                     }
                     Expr::Lambda { body, .. } => {
@@ -4630,10 +4714,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         let red = ctx.foldl_apps(red, args[1..].iter().copied());
                         self.undet_body_level(ctx, red)
                     }
-                    _ => None,
+                    _ => Err(note_guard(GuardWhy::OpaqueHead)),
                 }
             }
-            _ => None,
+            _ => Err(note_guard(GuardWhy::Other)),
         }
     }
 
@@ -4645,14 +4729,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         ty: ExprPtr<'t>,
         k: usize,
-    ) -> Option<LevelPtr<'t>> {
+    ) -> Result<LevelPtr<'t>, GuardWhy> {
         let mut cur = ty;
         for _ in 0..k {
-            let p = self.expose_pi(ctx, cur)?;
-            let Expr::Pi { body, .. } = ctx.read_expr(p) else { return None };
+            let Some(p) = self.expose_pi(ctx, cur) else {
+                return Err(note_guard(GuardWhy::NotSort))
+            };
+            let Expr::Pi { body, .. } = ctx.read_expr(p) else {
+                return Err(note_guard(GuardWhy::NotSort))
+            };
             cur = body;
         }
-        self.expose_sort(ctx, cur)
+        self.expose_sort(ctx, cur).ok_or_else(|| note_guard(GuardWhy::NotSort))
     }
 
     /// The [`PiInfo`] for a skeleton, built and registered if absent — the
@@ -4685,6 +4773,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return s.clone()
         }
         let built = self.pi_poly_syms_build(sk, holes_len);
+        note_pipoly_sk(built.is_some());
         self.shared.borrow_mut().pi_poly_syms.insert(sk.clone(), built.clone());
         built
     }
@@ -4836,6 +4925,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// `None` — the guard was not recoverable, the kit refused — falls back
     /// to the axiom-free symbol, a counted gap exactly as before.
+    ///
+    /// Every exit is counted, by reason, at the site — see [`PiPoly`].
     fn interp_pi_undet_poly(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -4843,9 +4934,33 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         dom: &Term,
         sk: &Term,
         holes: &[Term],
+        binder_type: ExprPtr<'t>,
         body: ExprPtr<'t>,
     ) -> Option<Term> {
-        let lp = self.lp()?;
+        match self.interp_pi_undet_poly_why(ctx, e, dom, sk, holes, binder_type, body) {
+            Ok(t) => {
+                note_pipoly(PiPoly::IWired);
+                Some(t)
+            }
+            Err(w) => {
+                note_pipoly(w);
+                None
+            }
+        }
+    }
+
+    /// [`Self::interp_pi_undet_poly`]'s body, with the refusal reason spelled.
+    fn interp_pi_undet_poly_why(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        dom: &Term,
+        sk: &Term,
+        holes: &[Term],
+        binder_type: ExprPtr<'t>,
+        body: ExprPtr<'t>,
+    ) -> Result<Term, PiPoly> {
+        let lp = self.lp().ok_or(PiPoly::INoLp)?;
         // The walk's level is used **raw**, not canonicalised: the typing
         // obligation's target is `srt(ℓ̂)` built from the raw arms of the
         // *obligation's* canonical level, and the walk reproduces inference's
@@ -4853,18 +4968,284 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Canonicalising here while the obligation's right arm stays raw was
         // measured to disagree on exactly the levels canon reshapes
         // (`imax u u` under a `succ`), and a disagreement is a counted miss.
-        let l = self.undet_body_level(ctx, body)?;
+        let l = self.undet_body_level(ctx, body).map_err(PiPoly::IGuard)?;
         let guard = self.omega_term(ctx, l, &lp);
-        let syms = self.pi_poly_syms(sk, holes.len())?;
+        let syms = self.pi_poly_syms(sk, holes.len()).ok_or(PiPoly::ISyms)?;
         let mut args: Vec<Term> = holes.to_vec();
         args.push(dom.clone());
         args.push(guard.clone());
         let term = self.mk(syms.upi, args);
+        // The *domain's* sort level, by the same walk — the rule's left arm
+        // `û`. Optional on purpose: a domain whose level the walk cannot spell
+        // is no reason to refuse the interpretation, which needs only the
+        // guard; it costs the typing rule its site-side left arm, which is
+        // counted at the far end ([`PiPoly::TNoLeftArm`]) rather than here.
+        let u_raw = self.undet_body_level(ctx, binder_type).ok();
         self.undet_poly_sites.insert(
             e,
-            Rc::new(UndetPolySite { key: sk.clone(), holes: holes.to_vec(), dom: dom.clone(), guard }),
+            Rc::new(UndetPolySite {
+                key: sk.clone(),
+                holes: holes.to_vec(),
+                dom: dom.clone(),
+                guard,
+                u_raw,
+                v_raw: l,
+            }),
         );
-        Some(term)
+        Ok(term)
+    }
+
+    /// **`⊢ [H →] ω(from) = ω(to)`** for two Lean levels the checker's own
+    /// algebra has already identified — `LEVELPOLY.md` §1.5's kit at the width
+    /// the corpus demands, and the seam blocker 1's remaining 72 % is behind.
+    ///
+    /// # Why a bridge is needed at all
+    ///
+    /// `⟦Sort ℓ⟧` is `srt(ℓ̂)` built from `ℓ`'s **canonical representative**
+    /// ([`Self::canon_level`]), because the interpretation has to be a function
+    /// of the level's *class*. The Π rule, on the other hand, has to be
+    /// instantiated at the site's **raw** arms — the real domain and body sort
+    /// levels — or its two mathematical premises (`A ∈ srt(û)` and the fibres
+    /// conjunct) are about sorts the checker never establishes and can never be
+    /// discharged. The two spellings are equal levels and *unequal terms*, and
+    /// the target theory has to be shown the equality.
+    ///
+    /// # What it covers, and what it does not
+    ///
+    /// One identity, applied recursively: **`imax(a, b) = b` when `a ≤ b`**
+    /// ([`derived::levels::leq::Leq::imax_absorb`]). Measured on
+    /// `init-prelude`, that is 999 of the 1005 not-an-`IMax` misses and the
+    /// bulk of the 510 drift misses — the raw level is an `imax`-chain whose
+    /// left arms are all below the tail. It is **not** the full certified `leq`
+    /// mirror: `max`-versus-`max` reassociation, `succ` monotonicity and
+    /// anything needing trichotomy at a genuinely incomparable pair are not
+    /// here, and refuse rather than guess. [`PiPoly::TBridge`] counts what is
+    /// left, so the uncovered arms stay visible.
+    fn level_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        from: LevelPtr<'t>,
+        to: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+        hyps: &[Formula],
+        h: Option<&Formula>,
+        fuel: u32,
+    ) -> Option<Thm> {
+        if fuel == 0 {
+            return None
+        }
+        let tf = self.omega_term(ctx, from, lp);
+        let tt = self.omega_term(ctx, to, lp);
+        if tf == tt {
+            note_le(LeArm::BridgeRefl);
+            return Some(u_a1i(&Thm::eq_refl(tf), h))
+        }
+        // **Congruence first**, then absorption. The two are different
+        // failures — `imax(u+1, u)` against `imax(u+1, imax(u,u))` differs only
+        // in an arm's *spelling*, where `imax(0, u)` against `u` differs in
+        // shape — and trying absorption on a pair whose arms merely disagree
+        // would refuse a bridge that congruence closes in two steps. Each arm
+        // is an independent attempt: a sub-bridge that refuses falls through to
+        // the next shape rather than sinking the whole call.
+        let cong = match (ctx.read_level(from), ctx.read_level(to)) {
+            (Level::IMax(a, b, _), Level::IMax(c, d, _)) => {
+                self.level_bridge_imax(ctx, (a, b), (c, d), lp, hyps, h, fuel, true)
+            }
+            (Level::Max(a, b, _), Level::Max(c, d, _)) => {
+                self.level_bridge_imax(ctx, (a, b), (c, d), lp, hyps, h, fuel, false)
+            }
+            (Level::Succ(a, _), Level::Succ(c, _)) => {
+                match self.level_bridge(ctx, a, c, lp, hyps, h, fuel - 1) {
+                    Some(e) => u_leib_term(&mut self.env_mut(), &e, h, |w| lp.succ_of(w)),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        if cong.is_some() {
+            return cong
+        }
+        // `from = imax(a, b)` with `a ≤ b`: absorb, then bridge the tail.
+        if let Level::IMax(a, b, _) = ctx.read_level(from) {
+            if let Some(step) = self.level_absorb(ctx, a, b, lp, hyps, h) {
+                if let Some(rest) = self.level_bridge(ctx, b, to, lp, hyps, h, fuel - 1) {
+                    return u_eq_trans(&mut self.env_mut(), &step, &rest, h)
+                }
+            }
+        }
+        // The same on the right, then reversed.
+        if let Level::IMax(c, d, _) = ctx.read_level(to) {
+            if let Some(step) = self.level_absorb(ctx, c, d, lp, hyps, h) {
+                if let Some(rest) = self.level_bridge(ctx, from, d, lp, hyps, h, fuel - 1) {
+                    let back = u_eq_symm(&mut self.env_mut(), &step, h)?;
+                    return u_eq_trans(&mut self.env_mut(), &rest, &back, h)
+                }
+            }
+        }
+        note_le(LeArm::BridgeRefused);
+        None
+    }
+
+    /// Arm-wise congruence for a two-argument level former: from
+    /// `⊢ [H →] ω(a) = ω(c)` and `⊢ [H →] ω(b) = ω(d)`, conclude
+    /// `⊢ [H →] ω(f(a,b)) = ω(f(c,d))` for `f` either `imax` or `max`.
+    ///
+    /// Substituted one arm at a time, because `imax`'s ω-image
+    /// `ite0(b̂, ∅, â ∪ b̂)` mentions its **right** argument twice: a single
+    /// Leibniz step at `b̂` replaces both occurrences at once, which is exactly
+    /// what is wanted and exactly what an argument-position congruence rule
+    /// over the head symbol could not do.
+    #[allow(clippy::too_many_arguments)]
+    fn level_bridge_imax(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        (a, b): (LevelPtr<'t>, LevelPtr<'t>),
+        (c, d): (LevelPtr<'t>, LevelPtr<'t>),
+        lp: &derived::levels::apparatus::LevelPoly,
+        hyps: &[Formula],
+        h: Option<&Formula>,
+        fuel: u32,
+        imax: bool,
+    ) -> Option<Thm> {
+        let e1 = self.level_bridge(ctx, a, c, lp, hyps, h, fuel - 1)?;
+        let e2 = self.level_bridge(ctx, b, d, lp, hyps, h, fuel - 1)?;
+        let tb = self.omega_term(ctx, b, lp);
+        let tc = self.omega_term(ctx, c, lp);
+        // `f(a,b) = f(c,b)`, then `f(c,b) = f(c,d)`.
+        let mk = |x: Term, y: Term| if imax { lp.imax(x, y) } else { lp.max(x, y) };
+        let s1 = u_leib_term(&mut self.env_mut(), &e1, h, |w| mk(w, tb.clone()))?;
+        let s2 = u_leib_term(&mut self.env_mut(), &e2, h, |w| mk(tc.clone(), w))?;
+        u_eq_trans(&mut self.env_mut(), &s1, &s2, h)
+    }
+
+    /// `⊢ [H →] ite0(b̂, ∅, â ∪ b̂) = b̂` — one application of
+    /// [`derived::levels::leq::Leq::imax_absorb`], whose `a ≤ b` premise is
+    /// established by [`Self::level_le`] and is **guarded by `b ≠ ∅`**. The
+    /// guard is not decoration: `imax(1, u) = u` holds at every `u ∈ ω`
+    /// including `u = 0`, where `1 ⊆ 0` is false, and 112 corpus sites are
+    /// exactly that shape.
+    fn level_absorb(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: LevelPtr<'t>,
+        b: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+        hyps: &[Formula],
+        h: Option<&Formula>,
+    ) -> Option<Thm> {
+        let le = self.level_le(ctx, a, b, lp, hyps, h)?;
+        let (ta, tb) = (self.omega_term(ctx, a, lp), self.omega_term(ctx, b, lp));
+        let (_, pa) = self.omega_level_rec(ctx, a, lp, hyps, h)?;
+        let (_, pb) = self.omega_level_rec(ctx, b, lp, hyps, h)?;
+        let cl = derived::inst_all(&lp.lq.imax_absorb, &[ta, tb])?;
+        let k12 = u_and_intro(&pa, &pb, h)?;
+        let k = u_and_intro(&k12, &le, h)?;
+        u_syl(&k, &cl, h)
+    }
+
+    /// `⊢ [H →] (¬(b̂ = ∅) → â ⊆ b̂)` — the `≤` half of the bridge.
+    ///
+    /// The recursion runs under the **flattened** antecedent `H ∧ ¬(b̂ = ∅)`
+    /// and curries once at the end ([`derived::uncurry`], which `rules.rs`
+    /// documents as the way out of exactly this shape): every hypothesis-form
+    /// combinator concludes `⊢ H → φ`, so a nested `⊢ H → (Q → φ)` is reached
+    /// by working under `H ∧ Q` throughout. Note `b` is **fixed** across the
+    /// whole recursion — only `a` shrinks — which is what makes one flattened
+    /// antecedent serve every step.
+    fn level_le(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: LevelPtr<'t>,
+        b: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+        hyps: &[Formula],
+        h: Option<&Formula>,
+    ) -> Option<Thm> {
+        let tb = self.omega_term(ctx, b, lp);
+        let q = Formula::not(Formula::eq(tb, lp.zero()));
+        let mut hqs = hyps.to_vec();
+        hqs.push(q.clone());
+        let hq = conj_of(&hqs)?;
+        let flat = self.level_le_flat(ctx, a, b, lp, &hqs, &hq, LEVEL_BRIDGE_FUEL)?;
+        match h {
+            // No level hypotheses: `H ∧ Q` collapsed to `Q`, which is already
+            // the shape asked for.
+            None => Some(flat),
+            Some(_) => derived::uncurry(&flat),
+        }
+    }
+
+    /// [`Self::level_le`]'s recursion, under the flattened antecedent:
+    /// `⊢ (H ∧ ¬(b̂ = ∅)) → â ⊆ b̂`.
+    ///
+    /// Five arms, and every one of them is counted when it refuses
+    /// ([`note_le`]) so that an unbuilt arm is a row in the report rather than
+    /// a silent share of `TBridge`.
+    fn level_le_flat(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: LevelPtr<'t>,
+        b: LevelPtr<'t>,
+        lp: &derived::levels::apparatus::LevelPoly,
+        hqs: &[Formula],
+        hq: &Formula,
+        fuel: u32,
+    ) -> Option<Thm> {
+        if fuel == 0 {
+            return None
+        }
+        let hs = Some(hq);
+        let (ta, tb) = (self.omega_term(ctx, a, lp), self.omega_term(ctx, b, lp));
+        // `x ⊆ x`, whatever `x` is — the arm every chain bottoms out on.
+        if ta == tb {
+            note_le(LeArm::Refl);
+            let cl = derived::inst_all(&lp.lq.sub_refl, &[ta])?;
+            return Some(u_a1i(&cl, hs))
+        }
+        match ctx.read_level(a) {
+            Level::Zero => {
+                note_le(LeArm::Zero);
+                let cl = derived::inst_all(&lp.lq.empty_sub, &[tb])?;
+                Some(u_a1i(&cl, hs))
+            }
+            // `1 ⊆ b` for any nonzero `b ∈ ω` — the arm the `b ≠ ∅` guard
+            // exists for. Only `succ(∅)` is handled: `succ(x) ⊆ b` in general
+            // is `x < b`, which is the mirror this kit does not build.
+            Level::Succ(x, _) if self.omega_term(ctx, x, lp) == lp.zero() => {
+                note_le(LeArm::One);
+                let cl = derived::inst_all(&lp.lq.one_sub_nonzero, &[tb])?;
+                let (_, p_omega) = self.omega_level_rec(ctx, b, lp, hqs, hs)?;
+                let p_q = conj_proj(hqs, hqs.len() - 1)?;
+                let both = derived::hyp_and(&p_omega, &p_q)?;
+                derived::syl(&both, &cl)
+            }
+            Level::Max(p, r, _) => {
+                note_le(LeArm::Max);
+                let pa = self.level_le_flat(ctx, p, b, lp, hqs, hq, fuel - 1)?;
+                let pb = self.level_le_flat(ctx, r, b, lp, hqs, hq, fuel - 1)?;
+                let (tp, tr) = (self.omega_term(ctx, p, lp), self.omega_term(ctx, r, lp));
+                let cl = derived::inst_all(&lp.lq.union_sub, &[tp, tr, tb])?;
+                let both = derived::hyp_and(&pa, &pb)?;
+                derived::syl(&both, &cl)
+            }
+            Level::IMax(p, r, _) => {
+                note_le(LeArm::IMax);
+                let pa = self.level_le_flat(ctx, p, b, lp, hqs, hq, fuel - 1)?;
+                let pb = self.level_le_flat(ctx, r, b, lp, hqs, hq, fuel - 1)?;
+                let (tp, tr) = (self.omega_term(ctx, p, lp), self.omega_term(ctx, r, lp));
+                let cl = derived::inst_all(&lp.lq.imax_sub, &[tp, tr, tb])?;
+                let both = derived::hyp_and(&pa, &pb)?;
+                derived::syl(&both, &cl)
+            }
+            Level::Succ(..) => {
+                note_le(LeArm::SuccGeneral);
+                None
+            }
+            Level::Param(..) => {
+                note_le(LeArm::Param);
+                None
+            }
+        }
     }
 
     /// The typing rule of a **wired** Undet `Π`:
@@ -4879,7 +5260,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// `None` — no wired site, an obligation whose level is not an `imax`,
     /// a guard that canonicalisation reshaped — falls through to the
-    /// ordinary miss, a counted gap.
+    /// ordinary miss, a counted gap. **Every exit is counted by reason**
+    /// ([`PiPoly`]): the `no evidence: ty_pi_undet` population is exactly the
+    /// `T*` misses that `domain_premise` then also declines, and a bare total
+    /// says nothing about which of the three candidate causes to work on.
     fn ty_pi_undet_poly(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -4888,19 +5272,43 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         te: &Term,
         tt: &Term,
     ) -> Option<TgTyping> {
-        let lp = self.lp()?;
-        let site = self.undet_poly_sites.get(&e)?.clone();
-        let Expr::Sort { level, .. } = ctx.read_expr(ty) else { return None };
-        let l = self.canon_level(ctx, level);
-        let Level::IMax(la, lb, _) = ctx.read_level(l) else { return None };
-        // The guard the term was built at must be the obligation's right arm,
-        // or the rule instance would be about a different `ite0`.
-        let v_hat = self.omega_term(ctx, lb, &lp);
-        if v_hat != site.guard {
-            return None
+        match self.ty_pi_undet_poly_why(ctx, e, ty, te, tt) {
+            Ok(t) => {
+                note_pipoly(PiPoly::TFired);
+                Some(t)
+            }
+            Err(w) => {
+                note_pipoly(w);
+                None
+            }
         }
-        let u_hat = self.omega_term(ctx, la, &lp);
-        let kit = self.pi_poly_kit(&site.key, site.holes.len())?;
+    }
+
+    /// [`Self::ty_pi_undet_poly`]'s body, with the refusal reason spelled.
+    fn ty_pi_undet_poly_why(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: ExprPtr<'t>,
+        te: &Term,
+        tt: &Term,
+    ) -> Result<TgTyping, PiPoly> {
+        let lp = self.lp().ok_or(PiPoly::INoLp)?;
+        let site = self.undet_poly_sites.get(&e).ok_or(PiPoly::TNoSite)?.clone();
+        let Expr::Sort { level, .. } = ctx.read_expr(ty) else { return Err(PiPoly::TNotSort) };
+        let l = self.canon_level(ctx, level);
+
+        // **The rule is instantiated at the site's own arms**, never at the
+        // obligation's canonical representative — see [`UndetPolySite::u_raw`]
+        // for the measurement that forced this. `v_raw` is the level the
+        // interpretation's `ite0` guard was built from, so the term and the
+        // rule agree by construction and the guard can no longer drift.
+        let u_raw = site.u_raw.ok_or(PiPoly::TNoLeftArm)?;
+        let v_raw = site.v_raw;
+        let u_hat = self.omega_term(ctx, u_raw, &lp);
+        let v_hat = self.omega_term(ctx, v_raw, &lp);
+        debug_assert_eq!(v_hat, site.guard, "ty_pi_undet_poly: the site's guard is not its own body level");
+        let kit = self.pi_poly_kit(&site.key, site.holes.len()).ok_or(PiPoly::TKit)?;
 
         // The rule instance, and its antecedent taken apart:
         // `((û∈ω ∧ v̂∈ω) ∧ (A ∈ srt(û) ∧ fib)) → ite0(…) ∈ srt(imax(û,v̂))`.
@@ -4908,10 +5316,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         inst_args.push(u_hat.clone());
         inst_args.push(v_hat.clone());
         inst_args.push(site.dom.clone());
-        let inst = derived::inst_all(&kit.rules.pi_imax_dep, &inst_args)?;
-        let (k, _goal) = inst.concl().as_imp()?;
-        let (_k12, k34) = as_and(&k)?;
-        let (a_in, fib) = as_and(&k34)?;
+        let inst =
+            derived::inst_all(&kit.rules.pi_imax_dep, &inst_args).ok_or(PiPoly::TShape)?;
+        let (k, _goal) = inst.concl().as_imp().ok_or(PiPoly::TShape)?;
+        let (_k12, k34) = as_and(&k).ok_or(PiPoly::TShape)?;
+        let (a_in, fib) = as_and(&k34).ok_or(PiPoly::TShape)?;
         debug_assert_eq!(
             a_in,
             Formula::mem(site.dom.clone(), lp.srt_at(u_hat.clone())),
@@ -4919,50 +5328,88 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         );
 
         // The hypothesis list: the level parameters' `uᵢ ∈ ω` first (their
-        // positions are what `omega_level_rec`'s Param arm projects), then
-        // the two acquired premises.
+        // positions are what `omega_level_rec`'s Param arm projects), then the
+        // two acquired premises. Collected from the **obligation's** level and
+        // from both site arms: the canonical representative can drop a
+        // parameter the raw arms still mention (`imax(v, 0)` canonicalises to
+        // `0`), and a hypothesis missing from the list is a projection the
+        // recursion cannot find.
         let omega = lp.omega();
         let mut hyps = Vec::new();
         self.collect_level_params(ctx, l, &omega, &mut hyps);
+        self.collect_level_params(ctx, u_raw, &omega, &mut hyps);
+        self.collect_level_params(ctx, v_raw, &omega, &mut hyps);
         hyps.push(a_in);
         hyps.push(fib);
         let h = conj_of(&hyps);
 
         // `⊢ H → û∈ω`, `⊢ H → v̂∈ω` — rebuilt through the same recursion the
         // sort seam uses, under the *full* antecedent.
-        let (u_hat2, pa) = self.omega_level_rec(ctx, la, &lp, &hyps, h.as_ref())?;
-        let (v_hat2, pb) = self.omega_level_rec(ctx, lb, &lp, &hyps, h.as_ref())?;
+        let (u_hat2, pa) =
+            self.omega_level_rec(ctx, u_raw, &lp, &hyps, h.as_ref()).ok_or(PiPoly::TOmega)?;
+        let (v_hat2, pb) =
+            self.omega_level_rec(ctx, v_raw, &lp, &hyps, h.as_ref()).ok_or(PiPoly::TOmega)?;
         if u_hat2 != u_hat || v_hat2 != v_hat {
-            return None
+            return Err(PiPoly::TOmega)
         }
         let n = hyps.len();
-        let p_ain = conj_proj(&hyps, n - 2)?;
-        let p_fib = conj_proj(&hyps, n - 1)?;
-        let k12_thm = derived::hyp_and(&pa, &pb)?;
-        let k34_thm = derived::hyp_and(&p_ain, &p_fib)?;
-        let k_thm = derived::hyp_and(&k12_thm, &k34_thm)?;
-        let thm = derived::syl(&k_thm, &inst)?;
+        let p_ain = conj_proj(&hyps, n - 2).ok_or(PiPoly::TShape)?;
+        let p_fib = conj_proj(&hyps, n - 1).ok_or(PiPoly::TShape)?;
+        let k12_thm = derived::hyp_and(&pa, &pb).ok_or(PiPoly::TShape)?;
+        let k34_thm = derived::hyp_and(&p_ain, &p_fib).ok_or(PiPoly::TShape)?;
+        let k_thm = derived::hyp_and(&k12_thm, &k34_thm).ok_or(PiPoly::TShape)?;
+        let thm = derived::syl(&k_thm, &inst).ok_or(PiPoly::TShape)?;
+
+        // The rule concludes into `srt(imax(û,v̂))`; the obligation is about
+        // `srt(ℓ̂)` at the canonical representative. Bridge the two levels —
+        // one equation, one Leibniz step — and refuse honestly when the
+        // bridge's arms do not reach.
+        let l_hat = self.omega_term(ctx, l, &lp);
+        if *tt != lp.srt_at(l_hat.clone()) {
+            return Err(PiPoly::TShape)
+        }
+        let rule_lvl = lp.imax(u_hat, v_hat.clone());
+        let thm = if rule_lvl == l_hat {
+            note_le(LeArm::NoBridgeNeeded);
+            thm
+        } else {
+            let raw = ctx.imax(u_raw, v_raw);
+            let bridge = self
+                .level_bridge(ctx, raw, l, &lp, &hyps, h.as_ref(), LEVEL_BRIDGE_FUEL)
+                .ok_or(PiPoly::TBridge)?;
+            let (subj, _) = u_concl(&thm, h.as_ref()).ok_or(PiPoly::TShape)?.as_mem().ok_or(PiPoly::TShape)?;
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(
+                rule_lvl,
+                l_hat,
+                w,
+                Formula::mem(subj, lp.srt_at(Term::var(w))),
+            );
+            let step = u_syl(&bridge, &leib, h.as_ref()).ok_or(PiPoly::TShape)?;
+            u_mp(&step, &thm, h.as_ref()).ok_or(PiPoly::TShape)?
+        };
 
         // The rule concludes about the `ite0` spelling; the interpretation is
         // the abbreviation `upi(h⃗,A,v̂)`. Ride the defining equation back —
         // one Leibniz step, under the same antecedent.
-        let syms = self.pi_poly_syms(&site.key, site.holes.len())?;
+        let syms = self.pi_poly_syms(&site.key, site.holes.len()).ok_or(PiPoly::ISyms)?;
         let mut uargs = site.holes.clone();
         uargs.push(site.dom.clone());
-        uargs.push(v_hat.clone());
-        let upi_eq = derived::inst_all(&syms.upi_def, &uargs)?;
-        let (upi_t, ite0_t) = upi_eq.concl().as_eq()?;
-        let (subj, tgt) = u_concl(&thm, h.as_ref())?.as_mem()?;
+        uargs.push(v_hat);
+        let upi_eq = derived::inst_all(&syms.upi_def, &uargs).ok_or(PiPoly::TShape)?;
+        let (upi_t, ite0_t) = upi_eq.concl().as_eq().ok_or(PiPoly::TShape)?;
+        let (subj, tgt) =
+            u_concl(&thm, h.as_ref()).ok_or(PiPoly::TShape)?.as_mem().ok_or(PiPoly::TShape)?;
         if subj != ite0_t {
-            return None
+            return Err(PiPoly::TShape)
         }
-        let back = derived::eq_symm(&mut self.env_mut(), &upi_eq)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &upi_eq).ok_or(PiPoly::TShape)?;
         let w = self.env_mut().fresh_var();
         let leib =
             Thm::eq_leibniz(ite0_t, upi_t, w, Formula::mem(Term::var(w), tgt.clone()));
-        let step = Thm::mp(&leib, &back)?;
-        let thm = u_syl(&thm, &step, h.as_ref())?;
-        Some(self.typing(crate::certify::TyGap::PiUndet, te, tt, thm, hyps))
+        let step = Thm::mp(&leib, &back).ok_or(PiPoly::TShape)?;
+        let thm = u_syl(&thm, &step, h.as_ref()).ok_or(PiPoly::TShape)?;
+        Ok(self.typing(crate::certify::TyGap::PiUndet, te, tt, thm, hyps))
     }
 
     /// twice: the pre-pass's schedule is keyed on exactly this, and the audit
@@ -5628,6 +6075,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         dom: Term,
         bt: Term,
         v: Option<FreeVar>,
+        binder_type: ExprPtr<'t>,
         body: ExprPtr<'t>,
     ) -> Option<Term> {
         let mut holes = Vec::new();
@@ -5640,7 +6088,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
         };
         if levelpoly_enabled() {
-            if let Some(t) = self.interp_pi_undet_poly(ctx, e, &dom, &sk, &holes, body) {
+            if let Some(t) = self.interp_pi_undet_poly(ctx, e, &dom, &sk, &holes, binder_type, body) {
                 return Some(t)
             }
         }
@@ -5744,7 +6192,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             self.props.insert(e, clause);
             return match clause {
                 Clause::Prop => self.interp_pi_prop(e, dom, b, None),
-                Clause::Undet => self.interp_pi_undet(ctx, e, dom, b, None, body),
+                Clause::Undet => self.interp_pi_undet(ctx, e, dom, b, None, binder_type, body),
                 // The constant fibre: the body is hole 0 entire and the
                 // skeleton is the bare hole variable — one table entry
                 // corpus-wide, shared with every arrow whatever its codomain.
@@ -5760,7 +6208,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // depth-independence, no counter and no close.
         let level = self.open_level(ctx, e);
         let local = ctx.remake_dbj_level(binder_name, binder_style, binder_type, level);
-        self.interp_pi_at(ctx, e, level, local, dom, body)
+        self.interp_pi_at(ctx, e, level, local, dom, binder_type, body)
     }
 
     /// The body of [`Self::interp_pi`], at its opened binder.
@@ -5771,6 +6219,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         level: u16,
         local: ExprPtr<'t>,
         dom: Term,
+        binder_type: ExprPtr<'t>,
         body: ExprPtr<'t>,
     ) -> Option<Term> {
         // See `interp_lambda_open`: the variable comes from `interp` so it is
@@ -5795,7 +6244,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.props.insert(e, clause);
         match clause {
             Clause::Prop => return self.interp_pi_prop(e, dom, bt, Some(v)),
-            Clause::Undet => return self.interp_pi_undet(ctx, e, dom, bt, Some(v), body_open),
+            Clause::Undet => return self.interp_pi_undet(ctx, e, dom, bt, Some(v), binder_type, body_open),
             Clause::Type => {}
         }
 
@@ -17151,6 +17600,337 @@ fn undet_unknown() -> Clause {
     Clause::Undet
 }
 
+// ── The wired Undet-`Π` clause: every refusal, by reason ─────────────────────
+//
+// `LEVELPOLY.md` §5.4 blocker 1 wired the `ite0` clause and moved
+// `no evidence: ty_pi_undet` from 2407 to 2103 staged. What the 2103 *are* was
+// unknown, and three candidate causes were named without proportions: the
+// guard walk's `None`s, canonicalisation drift between the term's guard and the
+// obligation's, and ty-side `IMax`-destructure misses. Guessing which is
+// largest is how a seat spends a tranche on the smallest one, so the rule here
+// is the project's: count first, and let the numbers choose the next edit.
+//
+// Two denominations, kept apart because they answer different questions:
+//
+// * **[`PiPoly`] is site-denominated.** Its interpretation rows partition every
+//   call of [`TgBackend::interp_pi_undet_poly`] (one per Undet-`Π`
+//   interpretation, memo replays excluded — the interpretation itself is
+//   memoised upstream), and its typing rows partition every call of
+//   [`TgBackend::ty_pi_undet_poly`] (one per `PiUndet` typing obligation under
+//   the flag). Each family sums to its call count, so a row is a *share* of the
+//   population the gap counter reports and can be compared with it directly.
+// * **[`GuardWhy`] is node-denominated where it is reported on its own row**
+//   (the `via` rows): the guard walk recurses, and a `Π` whose body arm failed
+//   is a different fact from the leaf that failed. The leaf reason is what
+//   propagates to the site, so the site rows above carry it; the `via` rows say
+//   how much of the walk was structural recursion over a failure below.
+//
+/// Why [`TgBackend::undet_body_level`] could not spell a body's sort level.
+///
+/// Propagated to the *site* as the leaf cause (a `Π` arm hands its child's
+/// reason on unchanged), and also counted at the node that produced it — see
+/// [`PiPoly`]'s two denominations.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GuardWhy {
+    /// A `λ`: its type is a `Π`, never a `Sort`, so there is no level to spell.
+    /// [`TgBackend::body_clause`] answers `Type` here and no Undet arises, so a
+    /// site reaching this is a body under a `Π`/`Let` that reduced to one.
+    Lambda,
+    /// A `Const` head whose declared type the backend could not read.
+    NoDeclTy,
+    /// The type was there but [`TgBackend::undet_level_after`] did not reach a
+    /// `Sort` after the head's arguments — too few `Π`s, or a tail that delta
+    /// alone does not expose.
+    NotSort,
+    /// An application whose head is neither a `Local`, a `Const`, nor a `λ`.
+    OpaqueHead,
+    /// A `Var`, a `Proj`, a literal — the arms the walk does not follow at all.
+    /// This is [`Undet::Unknown`]'s population seen from the level side.
+    Other,
+    /// A `Π` whose **domain** arm failed. Never propagated (the leaf is), only
+    /// counted at the node.
+    ViaPiDom,
+    /// A `Π` whose **body** arm failed. Never propagated, only counted.
+    ViaPiBody,
+}
+
+const N_GUARD: usize = 7;
+
+impl GuardWhy {
+    const fn name(self) -> &'static str {
+        match self {
+            GuardWhy::Lambda => "a λ (its type is a Π, so no sort level)",
+            GuardWhy::NoDeclTy => "a Const whose declared type did not read",
+            GuardWhy::NotSort => "the head's type did not reach a Sort after its arguments",
+            GuardWhy::OpaqueHead => "an application head that is neither Local, Const nor λ",
+            GuardWhy::Other => "a Var, a Proj, a literal — an arm the walk does not follow",
+            GuardWhy::ViaPiDom => "(via) a Π whose domain arm failed below",
+            GuardWhy::ViaPiBody => "(via) a Π whose body arm failed below",
+        }
+    }
+    const ALL: [GuardWhy; N_GUARD] = [
+        GuardWhy::Lambda,
+        GuardWhy::NoDeclTy,
+        GuardWhy::NotSort,
+        GuardWhy::OpaqueHead,
+        GuardWhy::Other,
+        GuardWhy::ViaPiDom,
+        GuardWhy::ViaPiBody,
+    ];
+}
+
+static GUARD_WHY: [std::sync::atomic::AtomicU64; N_GUARD] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_GUARD];
+
+/// One guard-walk node that produced a failure, counted at the arm that
+/// produced it. Node-denominated; see [`PiPoly`].
+fn note_guard(w: GuardWhy) -> GuardWhy {
+    GUARD_WHY[w as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    w
+}
+
+/// The outcome of one wired-Undet-`Π` site, on either side of the clause.
+///
+/// Site-denominated: the `I*` rows partition the interpretation attempts, the
+/// `T*` rows partition the typing obligations.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PiPoly {
+    /// **Interpreted as `upi(h⃗, A, v̂)`** — the `ite0` clause was built.
+    IWired,
+    /// The guard walk refused; the leaf cause is the payload.
+    IGuard(GuardWhy),
+    /// The guard was there, but the skeleton has no usable fibre — the `PiInfo`
+    /// is the inert one, so there is no `cndd` to condition on and no `dprod`
+    /// with a defining axiom. Skeleton-denominated detail on its own row below.
+    ISyms,
+    /// The apparatus itself was unavailable (no prelude tower on this thread).
+    INoLp,
+    /// **The typing rule fired** — a conditional `pi_imax_dep` certificate.
+    TFired,
+    /// No wired site for this expression: the interpretation refused, so the
+    /// `Π` carries the axiom-free symbol. This row is the interpretation side's
+    /// refusals seen again at typing time, and is the one row whose cause is
+    /// *entirely* in the `I*` rows above.
+    TNoSite,
+    /// The obligation's type is not a `Sort` at all.
+    TNotSort,
+    /// The site has no left arm: the guard walk spelled the *body's* sort
+    /// level but not the *domain's*, so there is no `û` to instantiate at.
+    /// (The interpretation is still wired — the term needs only the guard.)
+    TNoLeftArm,
+    /// **The level bridge refused.** The rule concludes into
+    /// `srt(imax(û, v̂))` and the obligation is about `srt(ℓ̂)` at the
+    /// canonical representative; the two levels are equal and the terms are
+    /// not, and [`TgBackend::level_bridge`]'s arms did not reach. This row
+    /// replaces the retired `TNotImax` and `TGuardDrift`, which counted the
+    /// two *symptoms* of exactly this one cause and are named here so the
+    /// comparison across the change is traceable — see `LEVELPOLY.md` §5.4.
+    TBridge,
+    /// The per-skeleton rule chain refused to build.
+    TKit,
+    /// The ω-membership recursion did not reproduce the arms it was asked for.
+    TOmega,
+    /// A structural step — instantiation, antecedent projection, the Leibniz
+    /// ride back along `upi_def` — did not match its expected shape.
+    TShape,
+}
+
+const N_PIPOLY: usize = 4 + N_GUARD + 8;
+
+impl PiPoly {
+    /// The row's index. `IGuard`'s payload spreads over `N_GUARD` slots so that
+    /// the interpretation rows stay a partition with the leaf cause visible.
+    const fn slot(self) -> usize {
+        match self {
+            PiPoly::IWired => 0,
+            PiPoly::ISyms => 1,
+            PiPoly::INoLp => 2,
+            PiPoly::IGuard(w) => 3 + w as usize,
+            PiPoly::TFired => 3 + N_GUARD,
+            PiPoly::TNoSite => 4 + N_GUARD,
+            PiPoly::TNotSort => 5 + N_GUARD,
+            PiPoly::TNoLeftArm => 6 + N_GUARD,
+            PiPoly::TBridge => 7 + N_GUARD,
+            PiPoly::TKit => 8 + N_GUARD,
+            PiPoly::TOmega => 9 + N_GUARD,
+            PiPoly::TShape => 10 + N_GUARD,
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            PiPoly::IWired => "interpreted as the ite0 clause (upi)".into(),
+            PiPoly::ISyms => "…refused: the skeleton has no fibre (inert PiInfo)".into(),
+            PiPoly::INoLp => "…refused: no level apparatus on this thread".into(),
+            PiPoly::IGuard(w) => format!("…refused: no guard level — {}", w.name()),
+            PiPoly::TFired => "typing: pi_imax_dep fired (conditional)".into(),
+            PiPoly::TNoSite => "…missed: the Π was not wired (see the rows above)".into(),
+            PiPoly::TNotSort => "…missed: the obligation's type is not a Sort".into(),
+            PiPoly::TNoLeftArm => "…missed: the guard walk spelled no domain sort level".into(),
+            PiPoly::TBridge => "…missed: the level bridge refused (canon spelling ≠ imax(û,v̂))".into(),
+            PiPoly::TKit => "…missed: the per-skeleton rule chain refused".into(),
+            PiPoly::TOmega => "…missed: the ω-membership recursion disagreed".into(),
+            PiPoly::TShape => "…missed: a structural step did not match its shape".into(),
+        }
+    }
+
+    /// Every row, in report order: interpretation first, then typing.
+    fn all() -> Vec<PiPoly> {
+        let mut v = vec![PiPoly::IWired];
+        v.extend(GuardWhy::ALL.map(PiPoly::IGuard));
+        v.push(PiPoly::ISyms);
+        v.push(PiPoly::INoLp);
+        v.extend([
+            PiPoly::TFired,
+            PiPoly::TNoSite,
+            PiPoly::TNotSort,
+            PiPoly::TNoLeftArm,
+            PiPoly::TBridge,
+            PiPoly::TKit,
+            PiPoly::TOmega,
+            PiPoly::TShape,
+        ]);
+        v
+    }
+}
+
+/// Which arm of the **level bridge** was taken, or refused.
+///
+/// A different denomination from [`PiPoly`] — one row per *recursive step*,
+/// not per site — and reported separately for that reason. Its job is to keep
+/// the two arms this kit does **not** build visible: a `succ` of anything but
+/// `∅` (which is `x < b`, the strict order this kit has no mirror for) and a
+/// bare parameter against an unequal one (genuinely incomparable, and no
+/// amount of algebra settles it). If either row grows, the next arm to build
+/// is named by the report rather than guessed at.
+#[derive(Clone, Copy)]
+enum LeArm {
+    /// The rule's own `imax(û,v̂)` already *was* the obligation's spelling, so
+    /// the bridge was never entered.
+    NoBridgeNeeded,
+    /// Inside the bridge: two sub-levels whose ω-images already coincide.
+    BridgeRefl,
+    /// `x ⊆ x`, in the `≤` recursion.
+    Refl,
+    /// `∅ ⊆ x`.
+    Zero,
+    /// `succ(∅) ⊆ b`, under the `b ≠ ∅` guard.
+    One,
+    /// `p ∪ q ⊆ b` from both sides.
+    Max,
+    /// `ite0(q,∅,p∪q) ⊆ b` from both sides.
+    IMax,
+    /// **Not built**: `succ(x) ⊆ b` for `x` other than `∅`.
+    SuccGeneral,
+    /// **Not built**: a bare parameter against an unequal level.
+    Param,
+    /// The bridge gave up on a pair: no arm's shape applied.
+    BridgeRefused,
+}
+
+const N_LEARM: usize = 10;
+
+impl LeArm {
+    const fn name(self) -> &'static str {
+        match self {
+            LeArm::NoBridgeNeeded => "no bridge needed (the rule's imax was the canonical spelling)",
+            LeArm::BridgeRefl => "bridge: two sub-levels whose ω-images already coincide",
+            LeArm::Refl => "≤: x ⊆ x",
+            LeArm::Zero => "≤: ∅ ⊆ x",
+            LeArm::One => "≤: succ(∅) ⊆ b, under b ≠ ∅",
+            LeArm::Max => "≤: p ∪ q ⊆ b, from both sides",
+            LeArm::IMax => "≤: ite0(q,∅,p∪q) ⊆ b, from both sides",
+            LeArm::SuccGeneral => "≤ NOT BUILT: succ(x) ⊆ b for x ≠ ∅",
+            LeArm::Param => "≤ NOT BUILT: a bare parameter against an unequal level",
+            LeArm::BridgeRefused => "the bridge gave up: no arm's shape applied to the pair",
+        }
+    }
+    const ALL: [LeArm; N_LEARM] = [
+        LeArm::NoBridgeNeeded,
+        LeArm::BridgeRefl,
+        LeArm::Refl,
+        LeArm::Zero,
+        LeArm::One,
+        LeArm::Max,
+        LeArm::IMax,
+        LeArm::SuccGeneral,
+        LeArm::Param,
+        LeArm::BridgeRefused,
+    ];
+}
+
+static LEARM: [std::sync::atomic::AtomicU64; N_LEARM] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_LEARM];
+
+fn note_le(a: LeArm) { LEARM[a as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// How deep the bridge and the `≤` recursion may go. A Lean level is a finite
+/// tree and both recursions descend into a strict subterm, so this is a belt
+/// rather than a bound; it is here because a memo-free recursion over a DAG
+/// that turned out not to shrink would hang the run rather than report a gap.
+const LEVEL_BRIDGE_FUEL: u32 = 64;
+
+static PIPOLY: [std::sync::atomic::AtomicU64; N_PIPOLY] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_PIPOLY];
+
+/// Record one wired-Undet-`Π` site outcome.
+fn note_pipoly(p: PiPoly) { PIPOLY[p.slot()].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Skeleton-denominated: how many distinct body skeletons the interpretation
+/// half could and could not build symbols for. `ISyms` above is the *site*
+/// count over the refused skeletons; this says how many skeletons that is.
+static PIPOLY_SK: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+fn note_pipoly_sk(built: bool) {
+    PIPOLY_SK[usize::from(built)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The wired Undet-`Π` clause's decomposition, or the empty string when the
+/// clause never ran (flag off — where every row is zero by construction, and a
+/// block of zeros would only dilute the report).
+fn pipoly_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let rows: Vec<(String, u64)> =
+        PiPoly::all().into_iter().map(|p| (p.name(), PIPOLY[p.slot()].load(Relaxed))).collect();
+    let guard: Vec<(String, u64)> = GuardWhy::ALL
+        .iter()
+        .map(|w| (format!("guard-walk nodes — {}", w.name()), GUARD_WHY[*w as usize].load(Relaxed)))
+        .collect();
+    let (sk_no, sk_yes) = (PIPOLY_SK[0].load(Relaxed), PIPOLY_SK[1].load(Relaxed));
+    if rows.iter().all(|(_, n)| *n == 0) && sk_no + sk_yes == 0 {
+        return String::new()
+    }
+    let width = rows
+        .iter()
+        .chain(guard.iter())
+        .map(|(n, _)| n.chars().count())
+        .max()
+        .unwrap_or(40)
+        .max(48)
+        + 2;
+    let mut s = String::from("  the wired Undet-Π clause (NANODATG_LEVELPOLY), by outcome:\n");
+    // Every row prints, zero included: these are a partition, and a partition
+    // with rows missing cannot be checked against the population it claims to
+    // decompose.
+    for (label, n) in rows {
+        s.push_str(&format!("    {label:<width$}  {n:>10}\n"));
+    }
+    s.push_str(&format!(
+        "    {:<width$}  {:>10}\n",
+        "body skeletons: symbols built / refused",
+        format!("{sk_yes} / {sk_no}")
+    ));
+    for (label, n) in guard {
+        s.push_str(&format!("    {label:<width$}  {n:>10}\n"));
+    }
+    for a in LeArm::ALL {
+        let n = LEARM[a as usize].load(Relaxed);
+        s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("level bridge — {}", a.name())));
+    }
+    s
+}
+
 // ── The proof split ──────────────────────────────────────────────────────────
 //
 // §6.2 splits three constructors, and the `Prop` side of two of them collapses
@@ -17688,6 +18468,7 @@ pub fn global_report() -> String {
     s.push_str(&ty_report());
     s.push_str(&split_report());
     s.push_str(&gen_report());
+    s.push_str(&pipoly_report());
     s.push_str(&inst_report());
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
