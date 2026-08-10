@@ -496,9 +496,11 @@ rebase exactly.
   interpreted as, never whether a declaration is accepted (`TcCtx::sigma`).
 * **Gate results at head.** Flag **off**: the whole `tg` suite passes — 113
   test binaries, 0 failures, re-run at this head with the decomposition, the
-  bridge and `leq` in the tree. Flag **on**: everything passes except
-  `the_general_iota_rule_computes_on_the_prelude`, the total-gap/escape
-  ratchet, tripping on the +26/+6 the table above decomposes. That gate is
+  bridge and `leq` in the tree. Flag **on**: the `tg_tutorial` gate binary is
+  **34 passed, 1 failed** — the one failure is
+  `the_general_iota_rule_computes_on_the_prelude`, on exactly the line the
+  ratchet guards (`init-prelude: 15568 gaps, ratchet 15542`), i.e. the +26 the
+  table above decomposes. That gate is
   **still red flag-on and is still deferred**, and the switchover must not
   inherit it: §5.4's condition is unchanged, and its cause has now moved (it
   is no longer the 18 certificate copies §4.2 used to attribute it to — the
