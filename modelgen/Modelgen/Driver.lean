@@ -360,8 +360,26 @@ composition (the single inductives the other two constructions emit).
 quotient name the replay has not reached ([`Modelgen.Decline.isFxWait`]) then
 comes back as `true` in the second component — recorded nowhere, generated
 later — instead of a decline. The composition and the end-of-file drain pass
-`false`: there, nothing more is coming. -/
-def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
+`false`: there, nothing more is coming.
+
+**And then models for whatever that model had to splice.**
+
+The second half closes a structural hole rather than adding a convenience.
+`ensurePrim` and friends put a spliced inductive into the environment and into
+the output, and nothing ever ran the third construction over it — so layer 3
+was **unable to model anything it introduced**, and no coverage figure could
+show it, because a spliced declaration was never a candidate to begin with.
+`MODELGEN.md` §8.13 records what the earlier figures were therefore measuring.
+
+Only *non-basis* splices are modelled: the four on
+[`Modelgen.primBasis`] are the exemption that makes the construction
+well-founded and must stay unmodelled. That is also what bounds the recursion
+— a model's own splices are basis members or already present.
+
+**Ordering is safe.** A spliced inductive is pushed to the output before the
+model that needed it, and its own model is appended after; the export only
+requires a declaration to precede its uses. -/
+partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr)) (reserved : Std.HashSet Name) (canWait : Bool)
     (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
     MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Bool) := do
@@ -381,7 +399,19 @@ def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    return ((out, rep, pending.push (#[tname], np, is)), false)
+    let mut st2 := (out, rep, pending.push (#[tname], np, is))
+    for n in is.spliced do
+      if primBasis.contains n then continue
+      let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
+      -- the block's own name only, and only a simple one
+      unless iv.all == [n] && iv.numNested == 0 do continue
+      -- already modelled (a second declaration spliced the same thing)
+      if (← getEnv).constants.contains (Name.str (Name.str n "_model") "self") then continue
+      let mut cts : Array (Name × Expr) := #[]
+      for cn in iv.ctors do
+        if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
+      st2 := (← genPrim n iv.levelParams iv.numParams iv.type cts reserved false st2).1
+    return (st2, false)
 
 /-- **The composition's third step**: the single inductives a mutual model
 just emitted — `T._model.tag` and `T._model.aux` — are declarations of the

@@ -392,6 +392,11 @@ A version that asked for `funext` per *arm* rather than per *shape* would make
 `prim_graph_pre` is the same arm on an input that declares `PSigma`,
 `Nonempty` and `Classical.choice` itself: nothing of those is spliced, and
 `Nonempty`'s own model beside them is what says it is not a basis primitive.
+In `prim_graph` `Nonempty` is *spliced* rather than declared, and it is
+modelled there too — that row is the splice-and-model fix (§8.13), and it is
+the fixture that would go red if layer 3 went back to being unable to model
+what it introduces. It appears exactly once despite two shapes needing it,
+which is the re-modelling guard.
 `Inf` in `prim_declines` was a refusal until this arm landed and is now a
 model; `Inf.below` is not, and neither are the other `.below` declarations
 Lean mints for these shapes — their index is `T.mk a` rather than one of the
@@ -406,7 +411,7 @@ def expectedPrim : List Row :=
        ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
       [ ("Eq", "prim model shape: a basis primitive")])
-  , ("prim_declines", [("P", 9), ("Idx", 4), ("Inf", 14)],
+  , ("prim_declines", [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4)],
       [ ("Eq", "prim model shape: a basis primitive")
       , ("Branch", "prim model shape: Branch.node has two recursive fields")
       , ("MixI", "prim model shape: MixI.mk has an index-variable field")
@@ -415,8 +420,8 @@ def expectedPrim : List Row :=
       , ("BoxF", "prim model shape: BoxF.mk's fields reach Sort imax")
       , ("SvIx", "prim model shape: SvIx.mk has an index-variable field")])
   , ("prim_graph",
-      [("G1", 15), ("G4", 15), ("Ac", 13), ("N", 8), ("G3", 13), ("G2", 13),
-       ("G5", 13)],
+      [("G1", 15), ("Nonempty", 4), ("G4", 15), ("Ac", 13), ("N", 8),
+       ("G3", 13), ("G2", 13), ("G5", 13)],
       [ ("Eq", "prim model shape: a basis primitive")
       , ("G4.below", "prim model shape: G4.below.mk's index 1 is not one of its own")
       , ("BadC", "prim model shape: BadC.mk's index 0 is not one of its own")

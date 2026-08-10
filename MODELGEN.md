@@ -3633,3 +3633,66 @@ from the input's duplicate privates. They do not appear at the 30M prefix on
 the current binary. Whether they survive at full scale is a question for stage
 4, and it is flagged here so the re-run looks for it rather than counting
 PANICs in aggregate.
+
+## 8.13 Splice-and-model: layer 3 could not model what it introduced
+
+**The hole.** `Modelgen.genPrim` — the entry that runs the third construction
+over a declaration — was reachable from exactly two places: the replay of an
+*input* declaration, and `primCompose` over the single inductives layers 1 and
+2 emit. `ensurePrim` and its siblings put a **spliced** inductive into the
+environment and into the output and nothing ever ran the construction over it.
+So layer 3 was structurally **unable to model anything it introduced**.
+
+This is the failure shape this project has hit repeatedly: not a wrong number,
+but a check that reports success having done nothing. No coverage figure could
+have shown it, because a spliced declaration was never a *candidate* — it
+appeared in neither the numerator nor the denominator.
+
+**What the earlier figures were measuring, so they stay readable.** Every
+coverage figure in §8.2, §8.9 and §8.12 counts input candidates plus composed
+ones. None of them counted splices, and **none of them moves with this fix**:
+on `init-prelude` the only splices are `PSigma` and `PULiftP`, both on
+`primBasis` and therefore exempt by design, so the corpus numbers — 122 of 125,
+280 statements, 2344 replayed — are unchanged and the output is unaffected.
+
+**Where it did bite is the contract, not the coverage.** Arm G splices
+`Nonempty` when the input lacks one, and `modelgen/README.md` tells a consumer
+it needs the four primitives and nothing else. A spliced-but-unmodelled
+`Nonempty` put a fifth inductive in front of that consumer. The
+`Modelgen.nonemptyDecl` docstring admitted the cost at the time — "what a
+spliced `Nonempty` costs is one unmodelled inductive in that run's output" —
+which made it honest, and still wrong. It is now modelled, and the claim holds
+without a caveat.
+
+**The fix**, in `genPrim`'s success branch: for each name it spliced, if the
+name is not on `primBasis`, is a simple inductive block, and does not already
+have a model, run `genPrim` on it. Three properties hold it down.
+
+* **The basis stays unmodelled.** `primBasis` members are skipped, which is
+  also what **bounds the recursion**: a model's own splices are basis members
+  or already present, so the descent terminates. `genPrim` is `partial` for
+  that reason and the reason is written at the definition.
+* **Once, not once per consumer.** The guard is the presence of
+  `X._model.self`. In `prim_graph.lean` two shapes need `Nonempty` and it is
+  modelled exactly once.
+* **Ordering is safe.** A spliced inductive is emitted before the model that
+  needed it and its own model is appended after; the export only requires a
+  declaration to precede its uses.
+
+**Fixtures.** `prim_graph.lean` gains a `Nonempty` row — it is *spliced* there
+rather than declared, so that row is red the moment layer 3 goes back to being
+unable to model what it introduces. `prim_declines.lean` gains one too, from
+`Inf`. `prim_graph_pre.lean` is the control: `Nonempty` is in the input, so it
+is modelled by the ordinary path and not by this one, and it still appears
+exactly once. `lake exe test` 397/0, `init-prelude` byte-unchanged.
+
+**On Mathlib the expected delta is +1 model per run** — arm G fires there and
+splices one `Nonempty`, guarded to a single model. The full-file census
+reported in §8.14 was taken with a binary that predates this fix, and that is
+the one number in it this would move.
+
+**This is also what unblocks W.** `init-prelude` declares no `Acc`, and the W
+arm's construction names `Acc` (§8.11's dependency list). Without
+splice-and-model, splicing `Acc` would have put an unmodelled fifth inductive
+in the output; with it, `Acc` is spliced and then modelled by arm G, and the
+consumer's obligation stays at four.
