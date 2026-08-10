@@ -256,3 +256,13 @@ theorem Down'.iota {motive : ∀ x, Down' lt x → Sort w}
       = minor x f (fun y hy => Down'.elim lt minor (f y hy)) := rfl
 
 end Instance
+
+-- ── Axiom audit: the CONSTRUCTION is axiom-free; the refutation PROOF picks
+--    up propext/Quot.sound through the omega/simp machinery it is stated
+--    with, which is incidental to its content ───────────────────────────────
+/-- info: 'AccPhi.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms AccPhi.elim
+/-- info: 'Down'.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms Down'.elim
+/-- info: 'literal_has_no_rec' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms literal_has_no_rec

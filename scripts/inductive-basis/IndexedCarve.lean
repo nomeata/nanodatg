@@ -103,3 +103,7 @@ theorem X'.iota_double {motive : ∀ i, X' i → Sort w}
     (md : ∀ n x, motive n x → motive (2 * n) (.double n x))
     (n : Nat) (x : X' n) :
     X'.elim m1 md (.double n x) = md n x (X'.elim m1 md x) := rfl
+
+-- ── Axiom audit ────────────────────────────────────────────────────────────
+/-- info: 'X'.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms X'.elim

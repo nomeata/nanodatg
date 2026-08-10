@@ -245,3 +245,13 @@ theorem R1'.iota {motive : R1'.{u} → Prop}
     (m : ∀ f : PU.{u} → R1'.{u}, (∀ x, motive (f x)) → motive (.mk f))
     (f : PU.{u} → R1'.{u}) :
     R1'.elim m (.mk f) = m f (fun x => R1'.elim m (f x)) := rfl
+
+-- ── Axiom audit: the constructions are axiom-free ──────────────────────────
+/-- info: 'PE.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms PE.elim
+/-- info: 'PU.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms PU.elim
+/-- info: 'EqS.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms EqS.elim
+/-- info: 'R1'.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms R1'.elim

@@ -207,3 +207,10 @@ theorem List'.iota_cons {α : Type u} {motive : List' α → Sort w}
 noncomputable example : ∀ {α : Type u} {motive : List' α → Sort w},
     motive .nil → (∀ a l, motive l → motive (.cons a l)) →
     ∀ l, motive l := @List'.elim
+
+-- ── Axiom audit: the constructions are axiom-free (in particular: no
+--    funext, despite List's recursor) ────────────────────────────────────────
+/-- info: 'PSum'.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms PSum'.elim
+/-- info: 'List'.elim' does not depend on any axioms -/
+#guard_msgs in #print axioms List'.elim
