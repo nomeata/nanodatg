@@ -7,6 +7,10 @@
 //! Interp::new()                                  -> Interp
 //! ip.sort(n)                                     -> Term          ⟦Sort n⟧
 //! ip.sort_typing(n)                              -> Thm           ⊢ ⟦Sort n⟧ ∈ ⟦Sort (n+1)⟧
+//! ip.sort_of(&l, &vars)                          -> Term          ⟦Sort ℓ⟧, at any level
+//! ip.level_term(&l, &vars)                       -> Term          ℓ̂  (LEVELPOLY §1.1)
+//! ip.level_in_omega(&l, &vars)                   -> Thm           ⊢ ℓ̂ ∈ ω
+//! ip.rung_bridge(n)                              -> Thm           ⊢ srt(n̄) = ⟦Sort n⟧
 //! ip.app(f, a)                                   -> Term          ⟦f a⟧
 //! ip.abbrev(&body)                               -> Option<(Term, Thm)>
 //! ip.opaque()                                    -> Term
@@ -35,13 +39,26 @@
 //! is to show the design correct without them. Everything stored keeps the
 //! certificate that produced it beside the result.
 //!
-//! # Ground levels only
+//! # Levels: the ground path, and the ω-vocabulary beside it
 //!
-//! Every level reaching this module is a numeral, because the checker runs once
-//! per ground instantiation σ (§3). `⟦Sort u⟧` is therefore always exactly one
-//! clause, and `PiUndet` — nanoda's "this `Π` is a proposition at `v := 0` and
-//! a function space otherwise" — cannot arise. The declaration-shape zone (§9
-//! zone A) runs at symbolic levels and simply has no `Interp` at all.
+//! Every level reaching this module **on the scheduled path** is a numeral,
+//! because the checker runs once per ground instantiation σ (§3). `⟦Sort u⟧` is
+//! there always exactly one clause, and `PiUndet` — nanoda's "this `Π` is a
+//! proposition at `v := 0` and a function space otherwise" — cannot arise. The
+//! declaration-shape zone (§9 zone A) runs at symbolic levels and has no
+//! `Interp` at all.
+//!
+//! That was the module's founding invariant and it is now a property of *one
+//! caller* rather than of this module. `LEVELPOLY.md` §5.3 step 1: [`LevelVar`],
+//! [`Interp::level_term`], [`Interp::level_in_omega`], [`Interp::sort_of`] and
+//! [`Interp::rung_bridge`] interpret a level that still mentions a parameter,
+//! over `derived::levels` — the same apparatus the checker's `tg` backend
+//! consumes, at mini's own tower. Nothing on the scheduled path reaches any of
+//! them: [`Interp::sort_of`] answers a numeral with [`Interp::sort`], term for
+//! term, and never builds the apparatus, so a ground run mints no symbol it did
+//! not mint before and its certificates are the certificates it had. The two
+//! spellings are reconciled, not merely coexistent — [`Interp::rung_bridge`] is
+//! `⊢ srt(n̄) = Uₙ` — and the switchover (§5.5) is where they become one.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -54,8 +71,73 @@ use derived::skeleton;
 use derived::tower::Cumul;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
+use derived::levels::apparatus::LevelPoly;
+
 use crate::ev::{Gap, Sealed};
-use crate::expr::{Level, Name};
+use crate::expr::{Level, LevelView, Name};
+
+/// **What a universe parameter stands for in the ω-vocabulary**
+/// (`LEVELPOLY.md` §1.1): the term that is `û`, and the theorem `⊢ u ∈ ω` that
+/// every fact about `srt(û)` takes as its premise.
+///
+/// The two travel together because neither is usable without the other, and
+/// separating them is how a derivation ends up with a term from one parameter
+/// and a membership from another. The theorem is normally a *hypothesis* —
+/// [`crate::scope::Scopes::assume`], opened at declaration entry and discharged
+/// at exit (§5.2) — so the sequent machinery, not this type, is what keeps the
+/// assumption honest.
+#[derive(Debug, Clone)]
+pub struct LevelVar {
+    /// `û`, a kernel free variable's term.
+    pub tm: Term,
+    /// `⊢ u ∈ ω`, under whatever hypotheses opened it.
+    pub in_omega: Thm,
+}
+
+/// A declaration's universe parameters in the ω-vocabulary, by name.
+pub type LevelVars = HashMap<Name, LevelVar>;
+
+/// `ℓ̂`, over an apparatus already in hand. See [`Interp::level_term`].
+fn level_term_over(lp: &LevelPoly, l: &Level, vars: &LevelVars) -> Option<Term> {
+    Some(match l.view() {
+        LevelView::Zero => lp.zero(),
+        LevelView::Succ(a) => lp.succ_of(level_term_over(lp, &a, vars)?),
+        LevelView::Max(a, b) => {
+            lp.max(level_term_over(lp, &a, vars)?, level_term_over(lp, &b, vars)?)
+        }
+        LevelView::IMax(a, b) => {
+            lp.imax(level_term_over(lp, &a, vars)?, level_term_over(lp, &b, vars)?)
+        }
+        LevelView::Param(n) => vars.get(&n)?.tm.clone(),
+    })
+}
+
+/// `⊢ ℓ̂ ∈ ω`, over an apparatus already in hand. See
+/// [`Interp::level_in_omega`].
+///
+/// One clause per level former, each a single `mp` against the closure theorem
+/// the apparatus carries: `succ`-closure from the Peano core, `max_in_omega`
+/// from the order kit, and `LevelPoly::imax_in_omega` — the one fact the
+/// apparatus derives itself, because `imax`'s `ite0` needs a case split on
+/// `ℓ̂' = ∅` that neither of the other two does.
+fn level_in_omega_over(lp: &LevelPoly, l: &Level, vars: &LevelVars) -> Option<Thm> {
+    let binary = |a: &Level, b: &Level, rule: &Thm, lp: &LevelPoly| -> Option<Thm> {
+        let (ta, tb) = (level_term_over(lp, a, vars)?, level_term_over(lp, b, vars)?);
+        let (ra, rb) = (level_in_omega_over(lp, a, vars)?, level_in_omega_over(lp, b, vars)?);
+        Thm::mp(&derived::inst_all(rule, &[ta, tb])?, &derived::and_intro(&ra, &rb))
+    };
+    match l.view() {
+        LevelView::Zero => Some(lp.r.core().zero_mem.clone()),
+        LevelView::Succ(a) => {
+            let ta = level_term_over(lp, &a, vars)?;
+            let ra = level_in_omega_over(lp, &a, vars)?;
+            Thm::mp(&derived::inst_all(&lp.r.core().succ_closed, &[ta])?, &ra)
+        }
+        LevelView::Max(a, b) => binary(&a, &b, &lp.ord.max_in_omega, lp),
+        LevelView::IMax(a, b) => binary(&a, &b, &lp.imax_in_omega, lp),
+        LevelView::Param(n) => vars.get(&n).map(|v| v.in_omega.clone()),
+    }
+}
 
 /// A constant at one instantiation, keyed by the **level expressions** its
 /// universe parameters stand for.
@@ -187,6 +269,12 @@ pub struct Interp {
     /// apparatus because `Acc` takes [`crate::direct::clause_for`] and must not
     /// build a `Wtype` for one abbreviation.
     pub(crate) rec_acc_elims: HashMap<ConstKey, Rc<RecAccElim>>,
+    /// The ω-vocabulary (`LEVELPOLY.md` §5.3 step 1), built on **its** own
+    /// first use — see [`Interp::levels`] for why the laziness is load-bearing
+    /// rather than an economy.
+    lp: Option<Rc<LevelPoly>>,
+    /// Why it could not be built, if it could not.
+    lp_failed: bool,
     /// The inductive-translation apparatus (§9 zone B), built on first use.
     ///
     /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
@@ -1486,6 +1574,8 @@ impl Interp {
             quotient_failed: false,
             eta: None,
             eta_failed: false,
+            lp: None,
+            lp_failed: false,
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),
@@ -1702,6 +1792,135 @@ impl Interp {
         let t = self.sort(n);
         let out = derived::inst_all(&self.prelude.mem_u, std::slice::from_ref(&t))?;
         (*out.concl() == Formula::mem(t.clone(), self.sort(n + 1))).then_some(out)
+    }
+
+    // ──────────────────────────────────────────── the ω-vocabulary ──
+
+    /// The level-polymorphic apparatus over **this** `Interp`'s own tower,
+    /// built on first use — `LEVELPOLY.md` §5.3 step 1.
+    ///
+    /// Lazily, and here that is not an optimisation detail but the reason the
+    /// ground path is untouched: [`level_poly`] declares symbols off the shared
+    /// `Env`, so an eager build would renumber every symbol every later
+    /// declaration mints. Nothing on the σ-scheduled path reaches this — a
+    /// numeral level never asks for it, see [`Interp::sort_of`] — so a run over
+    /// a ground schedule builds no apparatus and mints no symbol, and its terms
+    /// are the terms it had.
+    ///
+    /// The tower is the prelude's own, for the same reason
+    /// [`Interp::ind_apparatus`] insists on it: `srt(·)`'s equations speak about
+    /// `r`'s `∅`/`succ`/`ω`/`app` and the tower's `U(·)`, and a second `U(·)` is
+    /// a *different symbol* whose theorems would be true of a set that is not
+    /// this hierarchy.
+    pub fn levels(&mut self) -> Option<Rc<LevelPoly>> {
+        if self.lp.is_none() && !self.lp_failed {
+            let pre = self.prelude.clone();
+            let built = {
+                let mut env = self.core.env_mut();
+                derived::levels::apparatus::level_poly(&mut env, &pre.tower).map(Rc::new)
+            };
+            self.lp = built;
+            self.lp_failed = self.lp.is_none();
+        }
+        self.lp.clone()
+    }
+
+    /// The apparatus **if one has already been built**, and never a reason to
+    /// build one — [`Interp::ind_built`]'s distinction, for the same reason.
+    /// A test that asserts the ground path stays ground asks this.
+    pub fn levels_built(&self) -> Option<&Rc<LevelPoly>> { self.lp.as_ref() }
+
+    /// `ℓ̂` — a level *expression* as a term of the set theory
+    /// (`LEVELPOLY.md` §1.1), with each universe parameter standing for the
+    /// term `vars` gives it:
+    ///
+    /// ```text
+    /// 0̂ = ∅      (succ ℓ)̂ = succ ℓ̂      (max ℓ ℓ')̂ = ℓ̂ ∪ ℓ̂'
+    /// (imax ℓ ℓ')̂ = ite0(ℓ̂', ∅, ℓ̂ ∪ ℓ̂')      ûᵢ = vars[uᵢ]
+    /// ```
+    ///
+    /// `max` needs no conditional — von Neumann maximum *is* binary union on
+    /// the naturals — and `imax` needs exactly one. This is the total map the
+    /// ground path has only at numerals: `crate::ground::as_numeral` is `None`
+    /// at a parameter and this is `Some`, which is the whole of the
+    /// de-scheduling in one sentence.
+    pub fn level_term(&mut self, l: &Level, vars: &LevelVars) -> Option<Term> {
+        let lp = self.levels()?;
+        level_term_over(&lp, l, vars)
+    }
+
+    /// `⊢ ℓ̂ ∈ ω` — every level expression's interpretation is a natural
+    /// number, given that its parameters are.
+    ///
+    /// The parameters' own memberships arrive as *hypotheses* in `vars`
+    /// (`LEVELPOLY.md` §5.2: in mini, [`crate::scope::Scopes::assume`]), and
+    /// the kernel's sequents carry them through `Thm::mp` for free, so the
+    /// conclusion here holds under exactly the union of the hypotheses the
+    /// parameters it actually mentions were opened with. A **closed** level
+    /// therefore comes back unconditionally, which is why a ground use of a
+    /// quantified theorem costs nothing extra.
+    ///
+    /// This is the closure fact `srt(ℓ̂)`'s every law needs as its premise:
+    /// `Srt::sort_in_sort`, `Srt::mono_mem` and the two `Π` rules are each
+    /// `∀n. (n ∈ ω → …)`.
+    pub fn level_in_omega(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        let lp = self.levels()?;
+        level_in_omega_over(&lp, l, vars)
+    }
+
+    /// **`⟦Sort ℓ⟧` at any level** — the ground rung at a numeral, `srt(ℓ̂)`
+    /// at a level that still mentions a parameter.
+    ///
+    /// The numeral branch is [`Interp::sort`] *exactly*, term for term, and
+    /// that is deliberate rather than incidental. `srt(n̄)` and `Uₙ` are
+    /// provably equal ([`Interp::rung_bridge`]) and are **not** the same term,
+    /// so spelling a ground rung the new way would move every certificate in
+    /// the ledger for no gain, on a path where the old spelling is right.
+    /// What this function adds is the branch that used to be
+    /// [`crate::ev::Gap::SymbolicLevel`]: the dead end becomes the entry point.
+    ///
+    /// The switchover (`LEVELPOLY.md` §5.5) is where the two branches become
+    /// one; until then they meet at the bridge.
+    pub fn sort_of(&mut self, l: &Level, vars: &LevelVars) -> Option<Term> {
+        if let Some(n) = crate::ground::as_numeral(l) {
+            return Some(self.sort(n))
+        }
+        let t = self.level_term(l, vars)?;
+        Some(self.levels()?.srt_at(t))
+    }
+
+    /// **The ground bridge: `⊢ srt(n̄) = ⟦Sort n⟧`.**
+    ///
+    /// `derived::levels::srt::Srt::rung_eq`, checked against *this* module's
+    /// own rung term rather than taken on trust — the two ladders are seeded
+    /// differently at the bottom (`srt(0̄) = U₀` by the `ite0` guard, not by the
+    /// ladder; `srt(1̄) = U(ω)`, not `U(U₀)`), and a bridge that concluded about
+    /// some other tower's `U(·)` would compose with nothing here.
+    ///
+    /// This is what makes the two spellings [`Interp::sort_of`] hands out one
+    /// vocabulary: a `derived` theorem stated over a rung is transported to
+    /// `srt(ℓ̂)` by this equation and one Leibniz step, in either direction.
+    pub fn rung_bridge(&mut self, n: u32) -> Option<Thm> {
+        let want = Formula::eq(self.srt_numeral(n)?, self.sort(n));
+        let lp = self.levels()?;
+        let lu = self.prelude.tower.space.lu;
+        let out = {
+            let mut env = self.core.env_mut();
+            lp.s.rung_eq(&mut env, &lp.r, &lp.ut, lu, n as usize)?
+        };
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `srt(n̄)` — the ω-vocabulary's spelling of a *closed* rung, which is the
+    /// left-hand side of [`Interp::rung_bridge`] and not what
+    /// [`Interp::sort_of`] hands back at a numeral.
+    pub fn srt_numeral(&mut self, n: u32) -> Option<Term> {
+        let lp = self.levels()?;
+        let mut t = lp.zero();
+        for _ in 0..n {
+            t = lp.succ_of(t);
+        }
+        Some(lp.srt_at(t))
     }
 
     // ────────────────────────────────────────────────────── application ──
@@ -3505,5 +3724,196 @@ mod tests {
         // level ladder — the one thing the widening could have moved for free.
         assert_eq!(crate::ground::show_levels(&sigmas[2].1), "[1]");
         assert_eq!(crate::ground::show_levels(&sigmas[0].1), "[u]");
+    }
+
+    // ───────────────────────────────── the ω-vocabulary (LEVELPOLY §5.3.1) ──
+
+    fn p(s: &str) -> Level { Level::param(Name::simple(s)) }
+
+    /// Three universe parameters as ω-variables, each under its own `u ∈ ω`
+    /// hypothesis — [`crate::scope::Scopes::assume`]'s shape, minus the stack.
+    ///
+    /// Three, not two, and always in this order: a construction that dropped a
+    /// parameter, transposed two, or read the same one twice passes at arity
+    /// two under half the mutations that matter.
+    fn omega_vars(ip: &mut Interp) -> (Rc<LevelPoly>, LevelVars) {
+        let lp = ip.levels().expect("the ω-vocabulary builds over the prelude's own tower");
+        let omega = lp.omega();
+        let mut vars = LevelVars::new();
+        for n in ["u", "v", "w"] {
+            let tm = Term::var(ip.fresh_var());
+            let in_omega =
+                crate::scope::test_support::assume(Formula::mem(tm.clone(), omega.clone()));
+            vars.insert(Name::simple(n), LevelVar { tm, in_omega });
+        }
+        (lp, vars)
+    }
+
+    /// **The byte-identity argument, as a test.** A level the schedule
+    /// produces is answered by [`Interp::sort`] term for term, and the
+    /// apparatus is never built — so a ground run mints no symbol it did not
+    /// mint before, and no certificate in the ledger can have moved.
+    ///
+    /// The second assertion is the load-bearing one and it is not about speed:
+    /// `level_poly` *declares symbols off the shared `Env`*, so an apparatus
+    /// built halfway through a run would renumber every symbol every later
+    /// declaration mints.
+    #[test]
+    fn the_scheduled_path_gets_the_ground_rung_and_builds_no_apparatus() {
+        let mut ip = Interp::new();
+        let vars = LevelVars::new();
+        for n in 0..6u32 {
+            let l = crate::ground::numeral(n);
+            assert_eq!(
+                ip.sort_of(&l, &vars),
+                Some(ip.sort(n)),
+                "⟦Sort {n}⟧ must be the rung term it has always been"
+            );
+        }
+        // A level that is *closed* without being spelled as a numeral — the
+        // schedule substitutes, it does not canonicalise — takes the same
+        // branch: `imax(2, 3)` is 3 and `imax(2, 0)` is 0.
+        for (l, n) in [
+            (Level::imax(crate::ground::numeral(2), crate::ground::numeral(3)), 3),
+            (Level::imax(crate::ground::numeral(2), Level::zero()), 0),
+            (Level::max(crate::ground::numeral(1), crate::ground::numeral(4)), 4),
+        ] {
+            assert_eq!(ip.sort_of(&l, &vars), Some(ip.sort(n)), "{l} is rung {n}");
+        }
+        assert!(
+            ip.levels_built().is_none(),
+            "the ground path asked for no ω-vocabulary and must have been given none"
+        );
+    }
+
+    /// **`⊢ srt(n̄) = Uₙ`**, checked at four rungs against *this* module's own
+    /// rung terms, with both spellings present and distinct.
+    ///
+    /// Four, because the two ladders are seeded differently and the
+    /// discontinuities are at the bottom: `srt(0̄) = U₀` comes from the `ite0`
+    /// guard rather than from the ladder, `srt(1̄) = U(ω)` and *not* `U(U₀)`,
+    /// and only from rung 2 up is it the plain step. A bridge tested at 0 and 1
+    /// alone would not have seen the generic case.
+    #[test]
+    fn the_rung_bridge_equates_two_spellings_that_are_not_the_same_term() {
+        let mut ip = Interp::new();
+        let mut srts = Vec::new();
+        for n in 0..4u32 {
+            let srt = ip.srt_numeral(n).unwrap_or_else(|| panic!("srt({n}̄)"));
+            let ground = ip.sort(n);
+            // Provably equal…
+            let br = ip.rung_bridge(n).unwrap_or_else(|| panic!("no bridge at rung {n}"));
+            assert!(br.hyps().is_empty(), "a numeral's bridge needs no hypothesis");
+            assert_eq!(*br.concl(), Formula::eq(srt.clone(), ground.clone()));
+            // …and not the same term, which is why the bridge is needed and
+            // why `sort_of` keeps the ground spelling on the ground path.
+            assert_ne!(srt, ground, "srt({n}̄) and U{n} would not need a bridge");
+            srts.push(srt);
+        }
+        // The ladder does not collapse: four rungs, four terms.
+        for i in 0..srts.len() {
+            for j in 0..i {
+                assert_ne!(srts[i], srts[j], "srt({i}̄) = srt({j}̄)");
+            }
+        }
+    }
+
+    /// `LEVELPOLY.md` §1.1, clause for clause, against the apparatus' own
+    /// formers — including that `max` is plain binary union and `imax` is the
+    /// one conditional.
+    #[test]
+    fn a_level_expression_reads_as_the_five_omega_clauses() {
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let t = |n: &str| vars[&Name::simple(n)].tm.clone();
+        let cases: Vec<(Level, Term)> = vec![
+            (Level::zero(), lp.zero()),
+            (p("u"), t("u")),
+            (p("v").succ(), lp.succ_of(t("v"))),
+            (Level::max(p("u"), p("v")), lp.max(t("u"), t("v"))),
+            (Level::imax(p("u"), p("v")), lp.imax(t("u"), t("v"))),
+            // Nested, with all three atoms, so a clause that ignored an
+            // argument or transposed a pair is visible.
+            (
+                Level::max(Level::imax(p("u"), p("v")), p("w").succ()),
+                lp.max(lp.imax(t("u"), t("v")), lp.succ_of(t("w"))),
+            ),
+        ];
+        for (l, want) in &cases {
+            assert_eq!(ip.level_term(l, &vars).as_ref(), Some(want), "{l}");
+        }
+        // Argument order is pinned, not incidental: both binary formers are
+        // asymmetric in the interpretation as they are in Lean.
+        assert_ne!(ip.level_term(&Level::max(p("u"), p("v")), &vars).unwrap(), lp.max(t("v"), t("u")));
+        assert_ne!(
+            ip.level_term(&Level::imax(p("u"), p("v")), &vars).unwrap(),
+            ip.level_term(&Level::imax(p("v"), p("u")), &vars).unwrap()
+        );
+        // A parameter with no variable has no interpretation — it is not
+        // silently zero, which would read `Sort x` as `Prop`.
+        assert_eq!(ip.level_term(&p("x"), &vars), None);
+    }
+
+    /// `⊢ ℓ̂ ∈ ω` at every former, and **the hypotheses are exactly the
+    /// parameters the level mentions** — the §5.2 claim that the sequent
+    /// machinery, not a side channel, carries `uᵢ ∈ ω`.
+    ///
+    /// The closed cases matter as much as the open ones: they come back
+    /// unconditional, which is why a ground use of a quantified theorem costs
+    /// nothing extra.
+    #[test]
+    fn a_level_is_a_natural_number_under_exactly_its_own_parameters() {
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let omega = lp.omega();
+        let hyp = |n: &str| Formula::mem(vars[&Name::simple(n)].tm.clone(), omega.clone());
+        let cases: Vec<(Level, Vec<&str>)> = vec![
+            (Level::zero(), vec![]),
+            (crate::ground::numeral(3), vec![]),
+            (p("u"), vec!["u"]),
+            (p("w").succ().succ(), vec!["w"]),
+            (Level::max(p("u"), p("v")), vec!["u", "v"]),
+            (Level::imax(p("u"), p("v")), vec!["u", "v"]),
+            (Level::max(Level::imax(p("u"), p("v")), p("w").succ()), vec!["u", "v", "w"]),
+            // `imax(u, u)` mentions one parameter twice: one hypothesis, not two.
+            (Level::imax(p("u"), p("u")), vec!["u"]),
+        ];
+        for (l, want_hyps) in &cases {
+            let th = ip.level_in_omega(l, &vars).unwrap_or_else(|| panic!("{l} ∈ ω"));
+            let tm = ip.level_term(l, &vars).unwrap();
+            assert_eq!(*th.concl(), Formula::mem(tm, omega.clone()), "{l}");
+            let got: std::collections::BTreeSet<String> =
+                th.hyps().iter().map(|h| format!("{h:?}")).collect();
+            let wanted: std::collections::BTreeSet<String> =
+                want_hyps.iter().map(|n| format!("{:?}", hyp(n))).collect();
+            assert_eq!(got, wanted, "{l} carries the wrong assumptions");
+        }
+    }
+
+    /// **The gap that becomes an entry point.** At a level that still mentions
+    /// a parameter the ground path mints `Gap::SymbolicLevel`; `sort_of` hands
+    /// back `srt(ℓ̂)`, and it is not any rung in disguise.
+    #[test]
+    fn a_sort_at_a_parameter_is_srt_and_is_no_ground_rung() {
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let t = |n: &str| vars[&Name::simple(n)].tm.clone();
+        for (l, want) in [
+            (p("u"), lp.srt_at(t("u"))),
+            (p("v").succ(), lp.srt_at(lp.succ_of(t("v")))),
+            (Level::imax(p("u"), p("w")), lp.srt_at(lp.imax(t("u"), t("w")))),
+        ] {
+            let got = ip.sort_of(&l, &vars).unwrap_or_else(|| panic!("⟦Sort {l}⟧"));
+            assert_eq!(got, want, "⟦Sort {l}⟧ is srt of its level");
+            // The ground schedule can never name it: `CUMUL_HEIGHT` is 8 and
+            // this is not one of those rungs, nor of any rung at all.
+            for n in 0..=CUMUL_HEIGHT as u32 {
+                assert_ne!(got, ip.sort(n), "⟦Sort {l}⟧ collapsed onto rung {n}");
+            }
+            // And it is not the *closed* spelling of a rung either.
+            for n in 0..4u32 {
+                assert_ne!(got, ip.srt_numeral(n).unwrap(), "⟦Sort {l}⟧ collapsed onto srt({n}̄)");
+            }
+        }
     }
 }

@@ -659,6 +659,42 @@ THREADING-CENSUS §2).
 1. **Level interpretation**: params to fresh free variables under `u ∈ ω`
    (via `Scopes::assume`); `0̂/succ/max/imax` per §1.1; `Interp::sort` takes
    the ω-term instead of a `u32`.
+
+   **Step-1 status (2026-08-10): the vocabulary exists in mini, and nothing
+   consumes it yet.** `mini/src/interp.rs` carries `LevelVar`
+   (`(û, ⊢ u ∈ ω)` — the two travel together because neither is usable
+   without the other), `Interp::levels` (a lazily built
+   `derived::levels::apparatus::LevelPoly` over the *prelude's own* tower),
+   `level_term` (§1.1, clause for clause), `level_in_omega`
+   (`⊢ ℓ̂ ∈ ω`, one `mp` per former against `succ_closed` /
+   `Order::max_in_omega` / `LevelPoly::imax_in_omega`), `sort_of`
+   (**`⟦Sort ℓ⟧` at any level**) and `rung_bridge` (`⊢ srt(n̄) = Uₙ`,
+   `Srt::rung_eq` checked against mini's own rung term rather than trusted).
+   This is the predicted **second consumption of the checker's own
+   construction**: mini imported `derived::levels` for the first time and
+   wrote no mathematics.
+
+   Two properties make it landable ahead of the switchover, and both are
+   tested rather than argued. `sort_of` answers a numeral with `Interp::sort`
+   **term for term** — `srt(n̄)` and `Uₙ` are provably equal and are not the
+   same term, so spelling a ground rung the new way would move every ledger
+   certificate for no gain. And the numeral branch **never builds the
+   apparatus**, which matters beyond economy: `level_poly` declares symbols off
+   the shared `Env`, so an apparatus built mid-run would renumber every symbol
+   every later declaration mints. A ground run therefore mints exactly the
+   symbols it did before, and the `ledger`/`evidence`/`untranslated` rows over
+   all 91 tutorial exports are byte-identical.
+
+   **And the `.sort(` half of this step is an order of magnitude smaller than
+   §5.5's decomposition says, because that table counts test code.** Re-measured
+   by splitting each file at its `mod tests`: of the 69 `.sort(` consumers, **27
+   are production** and 42 are tests, and `interp.rs`'s headline "36 of 69" is
+   **7 production sites and 29 test ones**. None of the seven has a `Level` in
+   hand — each takes a rung `u32` from its caller — so converting them is a
+   signature fan-out through the consumer modules, not work inside `interp.rs`.
+   The genuine volume of step 1 is the other column: **139 production
+   `Gap::SymbolicLevel` sites** (only 3 of the 142 are in tests), led by
+   `zoneb.rs` 24, `kernel.rs` 22, `proj_data.rs` 11, `minor_ix.rs` 9.
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
    `canon_level` discipline, unchanged in spirit). Every `IndApparatus` table
@@ -1486,22 +1522,31 @@ not mathematics.
 picks by size rather than by the order the compiler happens to complain in. It
 is not a live-firing count and is not offered as one:
 
+**Production sites only.** The first cut of this table counted whole files and
+was wrong about which half of step 1 is the big one: 42 of the 69 `.sort(`
+consumers and 3 of the 142 `SymbolicLevel` sites are **test code**, and
+`interp.rs`'s headline "36 of 69" was 7 production sites and 29 test ones.
+Re-measured 2026-08-10 by splitting each file at its `mod tests`:
+
 | module | `SymbolicLevel` | `.sort(` | what it is |
 |---|---:|---:|---|
-| `zoneb.rs` | 24 | 6 | zone B: the declaration-shape translation and the pre-ensure |
-| `kernel.rs` | 24 | 4 | mini's `Checker` — `whnf`, `assert_def_eq`, the const/proj arms |
-| `interp.rs` | — | **36** | the store itself; `Interp::sort` and everything that spells a rung |
-| `proj_data.rs` / `proj_prop.rs` | 11 / 6 | — | the two projection clauses |
-| `minor_ix.rs` | 9 | — | indexed minor premises |
-| the `rec_*` / `iota_*` family | 28 | 4 | eight modules, recursors and their ι rules |
-| `quot*.rs`, `conv.rs`, `direct.rs`, `class_s*.rs`, … | 21 | 15 | the rest, none above 4 |
+| `zoneb.rs` | 24 | 2 | zone B: the declaration-shape translation and the pre-ensure |
+| `kernel.rs` | 22 | 2 | mini's `Checker` — `whnf`, `assert_def_eq`, the const/proj arms |
+| `proj_data.rs` / `proj_prop.rs` | 11 / 6 | — / 1 | the two projection clauses |
+| `minor_ix.rs` | 9 | 1 | indexed minor premises |
+| the `rec_*` / `iota_*` family | 32 | 7 | eleven modules, recursors and their ι rules |
+| `interp.rs` | 1 | 7 | the store itself; `Interp::sort` and the ω-vocabulary beside it |
+| `quot*.rs`, `conv.rs`, `direct.rs`, `class_s*.rs`, … | 34 | 7 | the rest, none above 4 |
+| **total** | **139** | **27** | across 40 of 56 files |
 
-The two columns are the two halves of step 1 and they are not the same job:
-`.sort(` is *where a rung is spelled* and is concentrated in `interp.rs` (36 of
-69), so `Interp::sort` taking an ω-term is one module's change with a wide but
-mechanical fan-out. `SymbolicLevel` is *where the ground path gives up*, and it
-is spread — `zoneb` and `kernel` are a third of it between them and no other
-module is above eleven.
+The two columns are the two halves of step 1 and they are not the same job, but
+not in the proportion first reported. `.sort(` is *where a rung is spelled*, and
+at 27 production sites it is the **small** half; none of `interp.rs`'s seven has
+a `Level` in hand — each takes a rung `u32` from its caller — so converting them
+is a signature fan-out through the consumer modules rather than work inside
+`interp.rs`. `SymbolicLevel` is *where the ground path gives up*, and it is both
+the bulk and the spread: `zoneb` and `kernel` are a third of it between them and
+no other module is above eleven.
 
 `ledger.rs`'s per-σ pair walk, `zoneb`'s pre-ensure (keyed
 `(name, ground levels)`, its module doc says so in the first thirty lines) and
@@ -1509,7 +1554,10 @@ module is above eleven.
 store**") remain the three named consumers, and each states its σ-dependence in
 its own header.
 
-**Step 2 is built** (this tranche) — see §5.3's step-2 status.
+**Steps 1 and 2 are built** — see §5.3's step-1 and step-2 statuses. Step 1's
+vocabulary exists in `interp.rs` and nothing consumes it yet; what remains of
+step 1 is the 139 `SymbolicLevel` sites and the 27 `.sort(` signatures, module
+by module, each landing at byte-identical ledger rows.
 
 ## 6. What is deliberately not claimed
 
