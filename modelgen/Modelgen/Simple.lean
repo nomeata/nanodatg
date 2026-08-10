@@ -32,9 +32,16 @@ The Σ is **`PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
 Sort (max 1 u v)` — because `Subtype`, structures with `Prop` fields, and
 every `Prop`-fibred pair in the constructions below need a Σ over `Sort`,
 which a `Type`-only `Sigma` cannot give without `PLift`, a sixth inductive.
-`Acc` is in the basis for the recursive `Type`-valued construction, which is
-not implemented here, and is therefore not yet spliced: the prelude splice's
-rule is "only what a model actually needs".
+`Acc` is in the basis for the subsingleton-recursive **large** eliminator —
+the one grant the kernel makes to a *declaration* that an emitted `def` does
+not inherit — and for the recursive `Type`-valued construction that will
+consume it. Neither is implemented here, so `Acc` is never spliced: the
+prelude splice's rule is "only what a model actually needs". It is also, as
+of `scripts/inductive-basis/AccFromChoice.lean`, **derivable rather than
+primitive**: the Church encoding plus `Classical.choice` at the recursion's
+*graph* gives `Acc.rec`'s exact type, with ι a theorem instead of `rfl`. That
+would take the basis to four; the arm is not wired, so the list below is
+still five and this is a note about where it is going.
 
 ## The three routes, by the carrier's sort
 
@@ -127,10 +134,12 @@ both sides of every ι equation are proofs of one proposition.
 * **indexed at a never-zero sort** (the composed `T._model.aux`) — thesis
   §5.2's skeleton-plus-`good`; `scripts/inductive-basis/IndexedCarve.lean`
   compiles it on the thesis's own example.
-* **a recursive subsingleton** (`Inf`) — the `AccPhi` carrier of
-  INDUCTIVE-BASIS §3.2, which is where `Acc` finally earns its place.
-  `scripts/inductive-basis/AccPhi.lean` compiles it, *and* refutes the
-  thesis's own `accφ` reduction at thesis.txt:1838.
+* **a recursive subsingleton** (`Inf`) — INDUCTIVE-BASIS §3.2's carrier.
+  `scripts/inductive-basis/AccPhi.lean` compiles it over a primitive `Acc`,
+  *and* refutes the thesis's own `accφ` reduction at thesis.txt:1838;
+  `AccFromChoice.lean` then derives the large eliminator itself from the
+  Church encoding and `Classical.choice`, by the graph route, so wiring this
+  arm would take `Acc` out of the basis rather than put it to work.
 * **indices or recursion at a maybe-zero sort** — neither is threaded
   through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
@@ -1126,12 +1135,23 @@ def primIso (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
       badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
         not threaded through the lift"
   | PrimRoute.prop =>
-    -- The subsingleton (large-eliminating) arm has no strong induction: a
-    -- recursive subsingleton needs the `AccPhi` carrier of INDUCTIVE-BASIS §3.2,
-    -- and the packed-`Eq` model below is its degenerate `r := ⊥` case.
+    -- The subsingleton (large-eliminating) arm has no strong induction. Arm F
+    -- below is this shape's degenerate `r := ⊥` case (indexed, non-recursive);
+    -- the recursive case needs the **graph route** of
+    -- `scripts/inductive-basis/AccFromChoice.lean`, which is where the arm
+    -- stops today. That route is fully worked out and tactic-free: the carrier
+    -- and the `Prop`-motive recursor are already what the Church route and
+    -- [`Modelgen.pairArm`] emit, and what is missing is the large eliminator —
+    -- `Graph`, `Graph.mk`, `GraphInv`, `Graph.inv`, `Graph.unique`,
+    -- `Graph.exists`, `rec'`, `rec'_graph` and a **propositional** ι. Wiring it
+    -- takes `Acc` out of `primBasis` rather than putting it to use, and costs
+    -- `Classical.choice` on the recursor and `Quot.sound` on ι.
+    -- Do **not** try choice at a bare `Nonempty (motive a t)` instead: that
+    -- recursor is provably blind to its step function and its ι rule derives
+    -- `False`, compiled as a refutation in the same file.
     if isRec && large then
-      badShape "a recursive subsingleton proposition (the AccPhi carrier of \
-        INDUCTIVE-BASIS §3.2 is not implemented)"
+      badShape "a recursive subsingleton proposition (the graph route of \
+        scripts/inductive-basis/AccFromChoice.lean is not wired up)"
 
 
   let (eqi, eqDecls) ← ensureEq reserved

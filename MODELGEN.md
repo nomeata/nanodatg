@@ -2779,9 +2779,59 @@ construction: **branching** recursion at a never-zero sort (above); an
 indexed **subsingleton**
 (`HEq` — the packed-index-equation model, `PropArms.lean`'s `HEq'`, one
 `Eq.rec` at a `PSigma`-packed index telescope, ι by `rfl`, resting on
-`PSigma` structure eta); and a recursive subsingleton (`AccPhi.lean`, which
-is where `Acc` finally earns its place in the basis, and which also refutes
-and repairs the thesis's own `accφ` reduction at thesis.txt:1838). The
+`PSigma` structure eta); and a recursive subsingleton — `AccPhi.lean`
+compiles that one over a primitive `Acc`, and also refutes and repairs the
+thesis's own `accφ` reduction at thesis.txt:1838.
+
+**`Acc` no longer has to be primitive for it.**
+`scripts/inductive-basis/AccFromChoice.lean` derives `Acc.rec`'s exact type
+over no inductive primitive at all, by defining the recursion's **graph** as
+an impredicative `Prop`, proving it total and single-valued by the free
+`Prop`-motive recursor, and extracting the value *packaged with its graph
+proof* using `Classical.choice`. Uniqueness turns ι into a theorem —
+propositional rather than `rfl`, which the owner's ruling on axioms permits.
+Axioms: `rec'` spends `[Classical.choice]`, ι additionally `[Quot.sound]`
+via `funext` in uniqueness, and the encoding, its `intro`, its `Prop`-motive
+recursor and both adequacy directions spend none. The naive route — choice
+at a bare `Nonempty (motive a t)` — is compiled *as a refutation* in the same
+file: the value is provably blind to the step function, so its ι rule derives
+`False`, and that path must not be re-attempted. So the basis is **four plus
+choice** as a design (`INDUCTIVE-BASIS.md` §4), and five in this tool until
+the arm is wired; `Acc` is still `Modelgen.primBasis`'s fourth member and the
+recursive subsingleton still declines.
+
+**And the recipe is uniform, which is what makes wiring it mechanical rather
+than exploratory.** Two compiled shapes are not enough to conclude that a
+generator can emit this for an *arbitrary* recursive subsingleton, so
+`scripts/inductive-basis/AccArmShapes.lean` carries the same nine steps
+through three more, each pinned twice — once as a transcription of the
+kernel's recursor type applied to the Church carrier, once applied to the
+real inductive, so the transcription is checked against Lean and not
+trusted. It is uniform in the *number* of recursive fields, in recursive
+fields with and without binders, in non-recursive proof fields before,
+between and after the recursion, in the presence and absence of a data field
+that is literally the index, and in indices and parameters generally. Exactly
+**two lines are shape-sensitive**, both mechanical: `Graph.unique`'s
+congruence must be n-ary in the recursive fields (one `congrArg` factor
+each — a single `congrArg (step x h)` is what breaks at two), and the
+`funext` chain inside it runs per *binder* of a recursive field.
+
+That second one produces a result worth having on its own: **the axiom cost
+is per shape, not per arm.** A recursive field with no binders needs no
+`funext`, so the degenerate shape `I1 : Prop | mk : I1 → I1` has an ι costing
+`[Classical.choice]` and **no `Quot.sound`**. Totality never needs `funext`
+in any shape, so `rec'` is `[Classical.choice]` uniformly and only ι ever
+pays. The shapes also *discriminate*: swapping the two recursive fields of
+the two-field shape, and swapping the two non-recursive proof fields that
+straddle the recursion in the three-field shape, are each a type error — so
+a field-order bug in the eventual arm would be caught, which it would not be
+against fields of equal type or fields on only one side.
+
+What remains not uniform is unchanged: constructor arguments that are *data*
+occurring inside the conclusion's index *expression* where the index does not
+determine them. Lean's subsingleton rule admits only variables there, and a
+variable is recovered by inversion, so the gap is not reachable from this
+class. The
 variable-sort carriers, the bare-parameter pad, the `imax`-leveled field and
 the indexed and recursive `Prop`s are constructions now, not gaps; the
 `imax`-on-a-domain field is a *level-incompleteness* decline and §8.6

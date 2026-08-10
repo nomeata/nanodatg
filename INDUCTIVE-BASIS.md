@@ -22,6 +22,25 @@ not a type former but a choice: either a level-constrained lift `ULift≤`
 equality is complete rather than Lean's normal-form comparison. Under the
 second option the basis is exactly the five constants.
 
+**Four, if the checker carries `Classical.choice`:**
+
+    Eq   PSigma   Nat   PULiftP          (+ Classical.choice)
+
+`Acc` is in the five for exactly one reason — it is the only
+subsingleton-recursive **large** eliminator, a grant the kernel makes to the
+*declaration* that an emitted `def` does not inherit — and §4 now records
+that grant as *derivable* rather than primitive.
+`scripts/inductive-basis/AccFromChoice.lean` compiles `Acc.rec`'s exact type
+from the impredicative Church encoding by defining the recursion's **graph**
+and extracting the value, packaged with its graph proof, using
+`Classical.choice`; uniqueness turns ι into a theorem (propositional, not
+`rfl`). The same file compiles the refutation of the naive route, so the
+packaging is not a stylistic choice. This project's owner has ruled the
+standard axioms freely available, which makes **four** the operative number
+for the design. It is not yet the number for the tool: `modelgen` has not
+wired the arm, so `Modelgen.primBasis` is still five and the recursive
+subsingleton still declines.
+
 Four findings reshape the question as posed, all **compiled**:
 
 1. **The "maybe-zero" landscape is governed by two different rules, and the
@@ -387,16 +406,42 @@ stated as such.
   constructively — but no model refutation is given. Since `PULiftP`
   subsumes `PEmpty` (`PULiftP CFalse`) and self-models, taking the lift is
   strictly the better member.
-* **`Acc` — necessary absent choice; unknown with choice.** Small-eliminating
-  Acc is free (impredicative Church; owner's premise re-confirmed by §3.1),
-  so `Acc` earns its place solely through SS-recursive large elimination.
-  `CHURCH-BASIS.md` §6 compiled the direct failure (`AccLarge.lean`) and
-  showed the classical graph route consumes `choose` — witness extraction
-  this project does not carry, and *whose availability is itself
-  Subtype-mediated*. No derivation from
-  `{Π, Eq, PSigma, Nat, PULiftP}` is known; no impossibility proof either
-  (§9). The thesis keeps `acc` primitive for the same reason: truncation
-  destroys large elimination (thesis.txt:1826–1828).
+* **`Acc` — necessary absent choice; DERIVABLE with choice, and that cell is
+  now closed.** Small-eliminating Acc is free (impredicative Church; owner's
+  premise re-confirmed by §3.1), so `Acc` earns its place solely through
+  SS-recursive large elimination. `CHURCH-BASIS.md` §6 compiled the direct
+  failure (`AccLarge.lean`) and read the classical graph route as consuming
+  `choose` — witness extraction this project does not carry, and *whose
+  availability is itself Subtype-mediated*. **That reading was wrong about
+  what the graph route needs.**
+  `scripts/inductive-basis/AccFromChoice.lean` compiles the derivation over
+  **no inductive primitive at all**: the carrier is the impredicative Church
+  encoding, the recursion is defined by its *graph* (an impredicative `Prop`),
+  totality and single-valuedness are proved by the free `Prop`-motive
+  recursor, and the value is extracted with **`Classical.choice` at
+  `Nonempty (PSigma val (Graph … val))`** — never `choose`, and no `Subtype`.
+  Packaging the value *with its graph proof* is the whole difference: choice
+  at a bare `Nonempty (motive a t)` yields a recursor provably blind to its
+  step, which the same file compiles as a refutation
+  (`naive_value_indep` is `rfl`, so `naive_iota_false` derives `False` from
+  that ι rule — the arm is not merely unproved, it is inconsistent).
+  `CAcc.rec'` has `Acc.rec`'s **exact** type, uniform in the relation's type
+  and in both universes including `u = 0` and `v = 0`; ι is a theorem rather
+  than `rfl`, which the owner's ruling on axioms permits. Axioms spent:
+  `rec'` `[Classical.choice]`, ι additionally `[Quot.sound]` (via `funext`,
+  in uniqueness); the Church encoding, its `intro`, its `Prop`-motive
+  recursor and both adequacy directions spend none.
+  So the thesis's reason for keeping `acc` primitive — truncation destroys
+  large elimination (thesis.txt:1826–1828) — is exactly right and exactly
+  sidestepped: the graph is not a truncation of the value, it is a
+  *relation* to it.
+
+  **What this does and does not settle.** It settles the basis question: a
+  checker willing to carry `Classical.choice` needs **four**, `{Eq, PSigma,
+  Nat, PULiftP}`. It does **not** yet settle `modelgen`, where the arm is not
+  wired — `Acc` remains in `Modelgen.primBasis` and the recursive
+  subsingleton still declines. Until the arm lands, the tool's basis is five
+  and this entry is a statement about derivability, not about the generator.
 * **`Eq` — necessary in practice; the missing term is named.** What cannot
   be built from the others is large transport,
   `∀ α (a b : α), CEq a b → ∀ C : α → Sort w, C a → C b` with `CEq` the
@@ -427,8 +472,16 @@ Dropping any of `Eq`, `PSigma`, `Acc`, `Nat`, `PULiftP` therefore loses,
 respectively: index transport (and the contract's own language); dependent
 pairing; SS-recursive large elimination; infinity and tags; the entire
 maybe-zero territory. The first two impossibilities are argued from known
-compiled refutations, the third from compiled evidence modulo choice, the
-last two from model arguments (asserted, §9).
+compiled refutations, the last two from model arguments (asserted, §9).
+
+**`Acc` is the exception, and it is no longer an impossibility at all.**
+Dropping it loses SS-recursive large elimination *only for a checker that
+declines `Classical.choice`*. With choice the eliminator is derived — the
+graph route, compiled — so the honest verdict is a **basis of four plus an
+axiom**, `{Eq, PSigma, Nat, PULiftP}` + `Classical.choice`, against a basis
+of five and no axiom. This project's owner has ruled the standard axioms
+freely available, which makes four the operative number for the *design*;
+`modelgen` still ships five because the arm is not wired.
 
 ## 5. The level story, in one place
 
@@ -592,9 +645,17 @@ Unmeasured / argued-only, exhaustively:
   compiled for representatives (and, for W, for the gist's closure), not
   for the arbitrary-telescope schema. This is the same gap the thesis's
   §5.4 leaves, narrowed but not closed.
-* `Acc` with choice (`CHURCH-BASIS.md` §7's open cell) — if that cell
-  opened, the basis could shrink by one for a checker willing to carry
-  choice; nothing here depends on it either way.
+* ~~`Acc` with choice (`CHURCH-BASIS.md` §7's open cell)~~ — **closed**, and
+  in the affirmative: `scripts/inductive-basis/AccFromChoice.lean` derives
+  `Acc.rec`'s exact type from the Church encoding plus `Classical.choice` by
+  the graph route (§4). For a checker willing to carry choice the basis is
+  **four**, `{Eq, PSigma, Nat, PULiftP}`. What remains open here is not the
+  derivation but its *generality as a schema*: the file compiles the recipe
+  for `Acc`'s own shape and for one indexed shape with an extra proof
+  argument, and `AccArmShapes.lean` extends it to further constructor
+  shapes; neither is the arbitrary-telescope schema, which is the same gap
+  the two entries above have. `modelgen` has not wired the arm, so the
+  *tool's* basis is still five.
 * Impossibility proofs for `PSigma`, for `Eq`-transport, for
   `PULiftP`-over-`PEmpty`, and for the sixth item: none exist; each is
   classified at its honest grade in §4.
