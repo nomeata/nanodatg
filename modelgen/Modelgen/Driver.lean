@@ -64,41 +64,6 @@ structure Report where
   unreplayable : Option String := none
   deriving Inhabited
 
-def hintsOf : ReducibilityHints → EHints
-  | .abbrev => .abbrev
-  | .opaque => .opaque
-  | .regular h => .regular h.toNat
-
-def hintsTo : EHints → ReducibilityHints
-  | .abbrev => .abbrev
-  | .opaque => .opaque
-  | .regular h => .regular h.toUInt32
-
-def safetyOf : String → DefinitionSafety
-  | "unsafe" => .unsafe
-  | "partial" => .partial
-  | _ => .safe
-
-/-- An export record as a kernel declaration. `none` for the three `quot`
-records that `Declaration.quotDecl` already covers. -/
-def toDeclaration (env : Environment) : EDecl → Option Declaration
-  | .ax n lp t u => some <| .axiomDecl { name := n, levelParams := lp, type := t, isUnsafe := u }
-  | .defn n lp t v h sf _ => some <| .defnDecl
-      { name := n, levelParams := lp, type := t, value := v
-        hints := hintsTo h, safety := safetyOf sf }
-  | .thm n lp t v _ => some <| .thmDecl { name := n, levelParams := lp, type := t, value := v }
-  | .opaq n lp t v u _ => some <| .opaqueDecl
-      { name := n, levelParams := lp, type := t, value := v, isUnsafe := u }
-  | .quot .. => if env.constants.contains `Quot then none else some .quotDecl
-  | .induct ts cs _ =>
-    let its := ts.map fun t =>
-      ({ name := t.name, type := t.type
-         ctors := (cs.filter (·.induct == t.name)).map fun c =>
-           ({ name := c.name, type := c.type } : Constructor) } : InductiveType)
-    match ts with
-    | [] => none
-    | t :: _ => some <| .inductDecl t.levelParams t.numParams its t.isUnsafe
-
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
 def indEDecl (names : Array Name) : MetaM EDecl := do

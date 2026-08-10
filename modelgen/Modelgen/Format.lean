@@ -106,6 +106,52 @@ def names : EDecl → List Name
 
 end EDecl
 
+/-! ## A record as a kernel declaration
+
+The one function that turns a parsed record into something the kernel takes,
+and the two hint/safety translations it needs. **It lives here rather than
+beside its callers because it has three of them at three different heights of
+the import graph**: the input replay in `Modelgen.Driver`, the replay in
+`Modelgen.Mono` — which deliberately does not import `Driver` — and the
+fragment splice in `Modelgen.Simple`, which sits *below* `Driver`. `Format` is
+the shared floor, and the function is pure in its argument, so nothing but the
+name resolution moves. -/
+
+def hintsOf : ReducibilityHints → EHints
+  | .abbrev => .abbrev
+  | .opaque => .opaque
+  | .regular h => .regular h.toNat
+
+def hintsTo : EHints → ReducibilityHints
+  | .abbrev => .abbrev
+  | .opaque => .opaque
+  | .regular h => .regular h.toUInt32
+
+def safetyOf : String → DefinitionSafety
+  | "unsafe" => .unsafe
+  | "partial" => .partial
+  | _ => .safe
+
+/-- An export record as a kernel declaration. `none` for the three `quot`
+records that `Declaration.quotDecl` already covers. -/
+def toDeclaration (env : Environment) : EDecl → Option Declaration
+  | .ax n lp t u => some <| .axiomDecl { name := n, levelParams := lp, type := t, isUnsafe := u }
+  | .defn n lp t v h sf _ => some <| .defnDecl
+      { name := n, levelParams := lp, type := t, value := v
+        hints := hintsTo h, safety := safetyOf sf }
+  | .thm n lp t v _ => some <| .thmDecl { name := n, levelParams := lp, type := t, value := v }
+  | .opaq n lp t v u _ => some <| .opaqueDecl
+      { name := n, levelParams := lp, type := t, value := v, isUnsafe := u }
+  | .quot .. => if env.constants.contains `Quot then none else some .quotDecl
+  | .induct ts cs _ =>
+    let its := ts.map fun t =>
+      ({ name := t.name, type := t.type
+         ctors := (cs.filter (·.induct == t.name)).map fun c =>
+           ({ name := c.name, type := c.type } : Constructor) } : InductiveType)
+    match ts with
+    | [] => none
+    | t :: _ => some <| .inductDecl t.levelParams t.numParams its t.isUnsafe
+
 /-! ## Renaming a generated declaration's root, on the way out
 
 `Iso.emitAs?`'s renaming, applied to the export records rather than to the

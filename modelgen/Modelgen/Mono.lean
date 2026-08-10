@@ -1118,30 +1118,11 @@ def declCount : EDecl → Nat
 
 /-! ## The driver -/
 
-/-- An export record as a kernel declaration, for the replay. A trimmed copy of
-`Modelgen.toDeclaration`: this module deliberately does not import
-`Modelgen.Driver`, whose transitive `Modelgen.Model` is under active
-development by other work. The shared layer is `Modelgen.Format`. -/
-def toDeclaration (env : Environment) : EDecl → Option Declaration
-  | .ax n lp t u => some <| .axiomDecl { name := n, levelParams := lp, type := t, isUnsafe := u }
-  | .defn n lp t v h sf _ => some <| .defnDecl
-      { name := n, levelParams := lp, type := t, value := v
-        hints := (match h with
-          | .abbrev => .abbrev | .opaque => .opaque | .regular k => .regular k.toUInt32)
-        safety := (match sf with
-          | "unsafe" => .unsafe | "partial" => .partial | _ => .safe) }
-  | .thm n lp t v _ => some <| .thmDecl { name := n, levelParams := lp, type := t, value := v }
-  | .opaq n lp t v u _ => some <| .opaqueDecl
-      { name := n, levelParams := lp, type := t, value := v, isUnsafe := u }
-  | .quot .. => if env.constants.contains `Quot then none else some .quotDecl
-  | .induct ts cs _ =>
-    let its := ts.map fun t =>
-      ({ name := t.name, type := t.type
-         ctors := (cs.filter (·.induct == t.name)).map fun c =>
-           ({ name := c.name, type := c.type } : Constructor) } : InductiveType)
-    match ts with
-    | [] => none
-    | t :: _ => some <| .inductDecl t.levelParams t.numParams its t.isUnsafe
+/-! The replay's `EDecl → Declaration` is
+[`Modelgen.toDeclaration`], in `Modelgen.Format`. This module used to carry a
+trimmed copy of it because the original lived in `Modelgen.Driver`, which it
+deliberately does not import; the function has since moved down to the shared
+floor and the copy is gone. -/
 
 /-- One record, at one instantiation. Always **mode A**: mode B is a pure
 post-pass over this ([`foldElim`]), which is what makes "B is A with the
