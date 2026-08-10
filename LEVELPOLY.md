@@ -335,21 +335,37 @@ behaviour), the `tg` backend on this branch:
   the existing `hyps` channel of `TgTyping::Derived`, counted by the existing
   conditional-typing counters, and never silently dropped.
 
-What the wedge deliberately does **not** do: the `ite0`-Π clause
-(`interp_pi_undet` still mints the axiom-free symbol — the mathematics for
-its replacement is `levels::rules`, the wiring is §5.3 step 3), constants,
-inductives, and the store schema. It is a prototype of the *seam*, named as
-such.
+Since the rebase the wedge also carries the step-5 kit (§5.3 status note):
+parameters as free variables in the ω-vocabulary, `f̂(u⃗)`-shaped constant and
+inductive abbreviations, the declaration-boundary quantifier and its
+quantified store with two consumers. What the wedge still deliberately does
+**not** do: the `ite0`-Π clause (`interp_pi_undet` still mints the axiom-free
+symbol — the mathematics for its replacement is `levels::rules`, the wiring
+is §5.3 step 3), the nests at a symbolic eliminating universe (§5.4 blocker
+2), and the cross-vocabulary bridges (§5.4 blocker 3). It is a prototype of
+the *seam*, named as such.
 
-### 4.2 Measurements (init-prelude, `nanoda_bin` debug + `tg`, this branch)
+### 4.2 Measurements (init-prelude, `nanoda_bin` debug + `tg`, this branch, rebased onto master `a7b0c6a`)
 
-* **Flag off is bit-for-bit today's behaviour**: the full `tg` suite (72 + 6
-  + 28 tests) passes with the wedge code in the tree and the flag unset.
-* **Cost**: 227,607,726,315 instructions flag-off vs 228,162,815,272 flag-on
-  — **+0.24%**, which prices the whole apparatus construction (trichotomy,
-  recursion theorem at `U`, `srt` laws) *plus* the per-level evidence
-  building. Single runs of a deterministic counter (`perf stat -e
-  instructions`); wall time not quoted, per project rule.
+The branch was rebased onto master `a7b0c6a` (2026-08-10; `dprod`-Π,
+`EnvCore`, expression-derived binder levels, `LocalKey`), and every number in
+this section was re-taken at that base. Master's own flag-off baseline moved
+to **15542** total gaps / **2257** escapes; the flag-on deltas survived the
+rebase exactly.
+
+* **Flag off is bit-for-bit today's behaviour**: the full `tg` suite passes
+  with the wedge code in the tree and the flag unset, and the whole
+  init-prelude report is **diff-identical** to the pre-wedge tree's except
+  for the three new declaration-ledger rows (quantified-store rows), each
+  printed and each **0**.
+* **Cost** (`perf stat -e instructions`, single runs, init-prelude, debug +
+  `tg`, at this head): flag off **222.18 G**, flag on **221.67 G** — the
+  wedge's former +0.24% became **−0.23%** at the rebased base: the −54
+  vacuous discharges and −29 `ty_pi` derivations it declines to build now
+  outweigh the apparatus construction. The staged deletion
+  (`NANODATG_NO_SCHEDULE=1`, flag on) runs **142.79 G**, −36% — one
+  interpretation pass per declaration instead of one per scheduled σ — which
+  is the size of the prize the deletion is holding.
 * **The honest surprise — the old encoding was already discharging the
   variable sort rule, vacuously.** Under the opaque arm,
   `⟦Sort (u+1)⟧ = U(⟦Sort u⟧)` by the `Succ` climb, so the obligation
@@ -359,43 +375,84 @@ such.
   `U₀` and no ω-structure. The report diff shows exactly this trade:
   `by x ∈ U(x)` drops 1399 → 1345 (−54) and those 54 sites move to
   conditional certificates under real `u ∈ ω` assumptions or (3 sites, where
-  canonicalisation reshaped `succ ℓ`) to counted misses; escaped assumptions
-  rise 2138 → 2156 (+18) because the prototype has no declaration-boundary
-  quantifier yet (§5.3 step 5 is where `gen` would turn them into
-  `∀u∈ω`-theorems); TOTAL gaps 15423 → 15443 (+20). **The counter regression
-  is the semantic upgrade made visible**: a certificate that used to say
-  "some set is in its least universe" now says "for every natural `u`, rung
-  `u` is in rung `u+1`", and the counters price the fact that nothing above
-  the seam consumes the stronger form yet.
-* Acceptance is unchanged in both directions (exit 0, same declarations).
-* **Gate results at head.** Flag **off**: the whole `tg` suite passes
-  (72 + 0 + 6 + 28 + 8-ignored), the full `derived` suite passes (103 green
-  result lines, two consecutive sweeps, zero failures), boundary and
-  mini-scope checks clean. Flag **on**: 27 of `tg_tutorial`'s 28 pass; the
-  one failure is `the_general_iota_rule_computes_on_the_prelude`, which is a
-  **total-gap ratchet** (`init-prelude: 15443 gaps, ratchet 15423 — the
-  general ι path regressed`) tripping on precisely the +20 gaps this section
-  explains — the 54 vacuous discharges the wedge declines to make plus the
-  assumptions that escape for want of the declaration-boundary quantifier.
-  The ι path itself did not regress; the ratchet measures total gaps and is
-  doing its job on a prototype that knowingly trades vacuous certificates
-  for honest conditional ones. The step that retires this failure is §5.3
-  step 5 (quantify the escaping `u ∈ ω` assumptions at the declaration
-  boundary), not a fix to ι.
+  canonicalisation reshaped `succ ℓ`) to counted misses; `ty_pi` derivations
+  fall 823 → 794, the same loss one rule downstream (a `srt`-shaped domain is
+  not `U`-shaped); derived typings fall 14387 → 14003 with +352 more
+  conditional. TOTAL gaps 15542 → 15562 (+20); escapes 2257 → 2275 (+18);
+  `eq_cache` 260 → 262 (+2). **The counter regression is the semantic
+  upgrade made visible**, and the +20 decomposes exactly: +18 conditional
+  certificate copies the checker consumed as answers or parked in caches
+  (the escape ledger's deliberate over-report direction), +2 union edges
+  that used to carry a vacuous unconditional certificate and now carry none.
+* **The step-5 hypothesis this section used to state is refuted by
+  measurement.** This section previously said the declaration-boundary
+  quantifier "is where `gen` would turn them into `∀u∈ω`-theorems" and §4.2
+  attributed the +18 to its absence. The quantifier is now **built** (§5.3
+  step 5 status below) and it fires **zero** times on the scheduled prelude
+  — necessarily: under the σ-schedule a definition is only ever interpreted
+  at ground levels, so no value typing ever reaches the boundary with a
+  `u ∈ ω` antecedent. The +18 are definitional-equality certificate copies,
+  not declaration typings, and no boundary rule sees them. What retires the
+  +20 is the schedule deletion itself (at which point the sort rule's
+  conditional form becomes the only form and the ratchet is re-derived), not
+  a wedge-stage fix; until then the flag-on ι-gate failure stands, at +20,
+  fully decomposed above.
+* The wedge's k-ary constants (§1.6, built): a body mentioning ω-vocabulary
+  parameter variables costs 20 inductive translations at their own
+  parameters flag-on (283 → 263; `…declined: the parameter nest refused`
+  +60, `…declined: field type depends on a recursive field` +20): the
+  general nest's `define_abbrev(xs = params)` refuses a free level variable.
+  That is census row 7's work item made precise, and the same change is what
+  turns the *staged* state's canonicity declines 16/11/6 → 1/1/0 (§5.4).
+* Acceptance is unchanged in both directions and in the staged state
+  (exit 0, same declarations) — as it must be: σ selects which set a `Π` is
+  interpreted as, never whether a declaration is accepted (`TcCtx::sigma`).
+* **Gate results at head.** Flag **off**: the whole `tg` suite passes.
+  Flag **on**: everything passes except
+  `the_general_iota_rule_computes_on_the_prelude`, the total-gap/escape
+  ratchet, tripping on precisely the +20/+18 this section decomposes.
 * The arena corpus gate ran green on this branch
   (`152 matched, 0 mismatched, 2 declined, 0 waived (of 154)` — the same two
   declines as master). `mini` never builds the `tg` backend (the
   feature-inert guard in `ci/check.sh` enforces it) and `derived`'s changes
-  are purely additive modules, so the flag cannot reach the mini gates; a
-  re-run of arena and mini-vs-nanoda at the final head is still owed and
-  named here rather than assumed.
+  are purely additive modules, so the flag cannot reach the mini gates.
 
 ## 5. The checker-side map
 
 A full census of where "levels are ground at translation time" is load-bearing
-was taken on this branch (2026-08-09, against `f1925ae`). The short form, with
-the integration consequence for each. "Checker" is `nanoda_lib`'s `tg`
-backend; "mini" is the evidence-threaded port that is the live driver.
+was taken on this branch against `f1925ae` and **re-taken 2026-08-10 against
+`a7b0c6a`** after the rebase; §5.4 adds the *measured* deletion rehearsal. The
+short form, with the integration consequence for each. "Checker" is
+`nanoda_lib`'s `tg` backend; "mini" is the evidence-threaded port that is the
+live driver.
+
+**What "the ground level scheduling code" is, precisely** (the deletion
+target, named so it can be checked off):
+
+* `checker/src/instantiations.rs` — **511 lines**: `Inst`, `DEFAULT_LEVELS`,
+  `Instantiations::compute` (the worklist fixpoint), `publish`/
+  `was_predicted` (the audit channel), `eval`.
+* `checker/src/tc.rs` — the schedule driver: `check_declar_all`, the
+  `schedule` parameter threading through `check_all_declars{,_serial,_par}`
+  and the `publish(compute(...))` call (~45 lines), plus the `PropAt::Sigma`
+  evidence-side reading.
+* `checker/src/util.rs` — the σ plumbing: `TcCtx::sigma`, `set_sigma`,
+  `nat_level`, `under_sigma` (~80 lines with their doc comments).
+* `checker/src/tg.rs` — the σ reads: four `under_sigma` call sites
+  (`canon_level`, `interp_level`, `audit_instantiation`, one sort-shape
+  probe), `audit_instantiation` (24 lines), `inst_report` + `InstAudit`
+  (~60 lines).
+* `mini/src/ground.rs` — **141 lines** (`eval`, `numeral`, `ground_env`,
+  `ground_levels`, `subst_ground`), plus `mini/src/convert.rs`'s
+  `Instantiations::compute(ef)` and schedule field, `ledger.rs`'s per-σ pair
+  walk, `zoneb`'s per-σ pre-ensure loop, and `dump.rs`'s
+  schedule-enumeration reporting. **This half is mini's evidence
+  architecture itself** — the (declaration, σ) pair is its unit of account
+  (`pairs`, `constEv`, the dump's row identity) — and is load-bearing for a
+  reason §5.3 steps 1–2 describe and this branch has not built. The checker
+  half above is deletable once §5.4's three blockers close; the mini half is
+  the remaining §5.3 volume, and `instantiations.rs` survives as mini's
+  pre-pass either way until it does.
 
 ### 5.1 Where groundness is assumed
 
@@ -447,10 +504,75 @@ THREADING-CENSUS §2).
    stored `∀`-theorems at numeral terms plus the §1.2 bridge equations.
 
 Steps 1–2 are mechanical but wide (every `ConstKey` consumer). Steps 3–4 are
-where the new mathematics is consumed. Step 5 is the payoff. **None of this is
-done on this branch beyond the prototype named in §3**; the volume estimate,
-not any mathematical step, is what stands between this branch and a variant
-passing today's suites.
+where the new mathematics is consumed. Step 5 is the payoff.
+
+**Step-5 status (2026-08-10, checker side): the boundary quantifier is
+built.** Level parameters now interpret, in the ω-vocabulary, to kernel
+**free variables** (`Shared::param_vars`, per name, exactly so `Thm::gen`
+can close over them); constant and inductive abbreviations abstract over the
+variables free in their bodies (§1.6's `f̂(u⃗)`, via `define_abbrev`'s prefix)
+and hand back the defining equation at the generic point;
+`store_declar_typing` quantifies a value typing whose every antecedent is
+`uᵢ ∈ ω` into `⊢ ∀u⃗. ⋀(uᵢ∈ω) → ⟦c⟧ ∈ ⟦T⟧` (`store_poly_typing`), and
+`ty_const`/`has_type_const` answer later uses from that store by re-opening
+the implication at the generic point, the `uᵢ ∈ ω` assumptions riding the
+caller's own antecedent channel (§5.2, exactly as predicted). The fixture
+`checker/test_resources/LevelPoly` pins all of it in the staged state — four
+declarations quantified, two uses answered, a different-parameter-name use
+*missing* — with two mutations verified red (a one-parameter fixture stayed
+green under the gen-order mutation; the two-parameter `mypair` atom is what
+made it observable). On the **scheduled** prelude the quantifier fires zero
+times, structurally: a definition under σ is only ever interpreted at ground
+levels (§4.2). Its live population arrives with the deletion.
+
+### 5.4 The deletion, rehearsed and measured — and what still blocks it
+
+`NANODATG_NO_SCHEDULE=1` (the staging switch in `check_declar_all`,
+committed on this branch, deleted together with the schedule at the end)
+checks every declaration exactly once at its own universe parameters — the
+schedule-deleted control flow, runnable today. On `init-prelude`, wedge on,
+at this branch's head:
+
+* **Acceptance is unchanged** (exit 0, same declarations) — in both flag
+  states. The deletion cannot move a verdict; every movement below is
+  evidence-side.
+* The census halves: 2891 (declaration, σ) value pairs → 1645 declarations;
+  typing obligations asked 39951 → 21569; TOTAL gaps 15562 → 10710; escapes
+  2275 → 1465; derived kernel theorems 149934 → 87108.
+* **Blocker 1 — the Π clause (step 3).** `no evidence: ty_pi_undet`
+  12 → 2407; Π-under-neither-clause for a parameter reason 1588 → 6005. The
+  undetermined clause is *rare under σ and structural without it*. The
+  mathematics for the `ite0` clause exists (`levels::rules`, the flagship)
+  for the constant-fibre/`fs` form; the dependent `dprod` form at a variable
+  rung is underived (§6), and master's `⟦Π⟧` is a `dprod` at every codomain.
+* **Blocker 2 — ι and the nests at a symbolic eliminating universe.** ι
+  sites computed 92 → 37; declarations translated 283 → 236; the T-policy
+  and S/P-ambiguity declines rise. `gen_ty_nest`'s per-parameter
+  `define_abbrev(xs = value params)` refuses a body whose domain interps
+  mention a free level variable (`…declined: the parameter nest refused`),
+  and threading the ω-variables through `lambda_n`/`beta_conditional_n`/the
+  spine equations is the unbuilt piece — census row 7 made concrete. The
+  k-ary abbreviations *did* close most of the staged state's canonicity
+  declines (16/11/6 → 1/1/0 on the three pinned-zero rows).
+* **Blocker 3 — evidence consumption across the vocabulary switch.**
+  Typing obligations discharged 5373 → 1624; declaration-typing store
+  answers 1329 → 117. A ground use's interpretation (tower rungs) and a
+  quantified theorem's instance (`srt(n̄)`) are provably equal, **not
+  identical**, so every literal-formula guard misses across the boundary;
+  consuming the `∀`-store at ground instances needs the §1.2 bridge
+  equations rewritten through the terms — designed, not built. This is also
+  why the wedge could not be consumed incrementally: **§1.6's cross-level
+  payoff needs the schedule gone, and the no-regression deletion needs
+  blockers 1–2 closed first. The end of §5.3 is a switchover, not a
+  ratchet.**
+* **Blocker 4 — mini** (§5.1's last row): its evidence pipeline is
+  (declaration, σ)-shaped end to end, and none of §5.3 steps 1–2 is built.
+
+The tg-suite rows that would go red under the deletion today are exactly the
+blockers' rows: `fired ≥ 80` (reads 37), `stored ≥ 26` (reads 10),
+`hit ≥ 1308` (reads 117), and the per-file zero-gap pins on polymorphic
+tutorial declarations. Those are coverage losses, not honest-conditional
+re-baselines, and they are why the schedule is still in the tree.
 
 ## 6. What is deliberately not claimed
 
@@ -468,9 +590,11 @@ Named so nothing is hidden behind the verdict. As of this branch:
   `Tower::family`'s per-fibre scheme the same way and is not derived on this
   branch.
 * **The certified level-`leq` mirror (§1.5)** is designed, not built.
-* **The store schema for `∀u⃗∈ω` certificates** (what replaces
-  `(name, Vec<u32>)`-keyed sealed theorems) is designed (§1.6, §5.3), not
-  built.
+* **The store schema for `∀u⃗∈ω` certificates** is built on the checker side
+  (`Shared::declar_typings_poly`, §5.3 step-5 status) and pinned by fixture;
+  its *cross-level* consumption (a ground use answered by `ax_inst` at a
+  numeral plus the §1.2 bridges) is not built — §5.4 blocker 3 — and mini's
+  side is untouched.
 * **Performance of quantified checking is unmeasured**, because the pipeline
   is not rewritten; what is measured is the construction cost of the new
   apparatus and the invariance of today's counters (§4). No claim is made
