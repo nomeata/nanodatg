@@ -878,6 +878,38 @@ stage 6"):
   stop opening telescopes at unique locals — a change to the acceptance path
   this document has just argued should stay.
 
+* **B6** — the first authoritative inductive consumer — **landed for `Nat`**
+  (2026-08-11). The declaration loop still dispatches each declaration once:
+  mini alone handles the `Nat` group; TG alone handles the following
+  definitions and theorems. What changed is the semantic handoff. `Nat`,
+  `Nat.zero`, `Nat.succ`, and `Nat.rec` are read from B4's mini-owned entries;
+  the two engines share one `NatClause` on `EnvCore`; and TG contracts the
+  mini-published successor and recursor nests through B5's `LamStore` beta/body
+  certificates. There is no TG Nat carrier, no TG Nat recursor nest, no
+  fallback validation pass, and no abbreviation equation invented to bridge
+  two interpretations.
+
+  `nat_char_equations.ndjson`, before → after: checker-visible store slots
+  **21 → 30**, mini typings adopted by TG **0 → 15**, declined typings
+  **16 → 3**, stored definition typings **0 → 9**, and `ty_const`'s no-evidence
+  row **116 → 59**. A deliberately incomplete intermediate implementation
+  adopted the carriers but retained TG's abbreviation-only iota path: it made
+  all 23 Nat iota sites fail and raised total TG gaps **172 → 291**. Consuming
+  the shared graph certificates restores **10 zero + 13 successor** iota
+  derivations and the total to **172**. Thus the aggregate is neutral while
+  real typing evidence moves across the seam; the remaining 172 gaps have the
+  same pre-existing provenance rather than being paid for by a second checker.
+
+  The mutation ratchet in `checker/tests/unified_cli.rs` cuts the fixture at
+  the declaration boundaries after `recAdd`, `recAddZero`, and `recAddSucc`.
+  Their TG totals are **0 / 1 / 7**; the latter two compute **1 zero / 1
+  successor** iota site and contain neither "constructor has no defining
+  equation" nor "inductive has no defining equation". The next blocker is
+  therefore not Nat ownership: it is the TG typing residue around `Eq.refl`
+  and conditional lambda/application premises (`ty_premise_missing`, then
+  `nat_eq`). Level-polymorphic store reuse remains the separately queued
+  tranche; `Nat.ble` synthesis and projections are explicitly outside B6.
+
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
 `checker/src/routed.rs`, the checker's half). The policy function is

@@ -3,6 +3,7 @@
 
 #![cfg(feature = "tg")]
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -19,6 +20,35 @@ fn run_on(name: &str, args: &[&str]) -> Output {
 }
 
 fn run(args: &[&str]) -> Output { run_on("nat_char_equations.ndjson", args) }
+
+/// Run a declaration-boundary prefix of `nat_char_equations`. The three
+/// boundaries below are deliberate mutations of one fixture: after `recAdd`,
+/// after its zero theorem, and after its successor theorem. Keeping them as
+/// prefixes avoids three copied exports drifting apart.
+fn run_nat_prefix(lines: usize, args: &[&str]) -> Output {
+    let source = fs::read_to_string(fixture("nat_char_equations.ndjson")).expect("read Nat fixture");
+    let mut prefix = source.lines().take(lines).collect::<Vec<_>>().join("\n");
+    prefix.push('\n');
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target").join("test-prefixes");
+    fs::create_dir_all(&dir).expect("create target/test-prefixes");
+    let path = dir.join(format!("nat-{lines}-{}.ndjson", std::process::id()));
+    fs::write(&path, prefix).expect("write Nat fixture prefix");
+    let out = Command::new(env!("CARGO_BIN_EXE_checker"))
+        .args(args)
+        .arg(&path)
+        .output()
+        .expect("spawn unified checker on Nat prefix");
+    fs::remove_file(path).expect("remove Nat fixture prefix");
+    out
+}
+
+fn report_count(stdout: &str, label: &str) -> u64 {
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(label))
+        .unwrap_or_else(|| panic!("no report row `{label}` in:\n{stdout}"));
+    line.split_whitespace().last().expect("report count").parse().expect("numeric report count")
+}
 
 #[test]
 fn split_is_default_naive_is_explicit_and_tg_gaps_are_debt() {
@@ -72,4 +102,44 @@ fn default_checks_every_axiom_while_naive_keeps_its_ignore_rule() {
     let stdout = String::from_utf8_lossy(&naive.stdout);
     assert_eq!(naive.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("ignored axioms: badAx"), "{stdout}");
+}
+
+/// Mini owns `Nat`'s declaration and publishes its carrier, constructors and
+/// recursor. TG checks each following declaration once, consuming those exact
+/// terms and the shared lambda certificates. These declaration-boundary
+/// mutations make a parallel TG Nat nest, or a return to abbreviation-only
+/// iota, fail at the first affected equation rather than hiding in the full
+/// fixture's aggregate debt.
+#[test]
+fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
+    let rec_add = run_nat_prefix(75, &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&rec_add.stdout);
+    assert_eq!(rec_add.status.code(), Some(0), "recAdd stopped certifying:\n{stdout}");
+    assert!(stdout.contains("route\tmode=Split\ttoMini=1\ttoChecker=1\tunclaimed=0"), "recAdd was not checked by exactly one dispatch:\n{stdout}");
+    assert!(stdout.contains("adoptedByCheckerTyping=4"), "TG did not consume all four Nat typings:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 0, "recAdd acquired TG debt:\n{stdout}");
+
+    let zero = run_nat_prefix(139, &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&zero.stdout);
+    assert_eq!(zero.status.code(), Some(4), "the unrelated Eq typing debt moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 1, "the zero prefix's debt moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 1, "recAddZero did not consume mini's zero carrier:\n{stdout}");
+    assert!(!stdout.contains("iota: the constructor has no defining equation"), "TG demanded its retired Nat.zero abbreviation:\n{stdout}");
+
+    let succ = run_nat_prefix(152, &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&succ.stdout);
+    assert_eq!(succ.status.code(), Some(4), "the successor prefix's unrelated debt moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 7, "the successor prefix's debt moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 1, "the zero ratchet regressed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 1, "recAddSucc did not consume the shared successor and recursor graphs:\n{stdout}");
+    assert!(!stdout.contains("iota: the constructor has no defining equation"), "TG demanded its retired Nat.succ abbreviation:\n{stdout}");
+    assert!(!stdout.contains("iota: the inductive has no defining equation"), "TG demanded its retired Nat carrier abbreviation:\n{stdout}");
+
+    let full = run(&["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&full.stdout);
+    assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:172")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
 }

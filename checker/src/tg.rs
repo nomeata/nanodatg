@@ -1675,13 +1675,11 @@ struct CtorRule {
 ///   `derived`, and `Nat.rec` no longer forces it. `List.rec` and the general
 ///   path still do, so it has moved rather than gone.
 struct NatOmega {
-    /// `ω`, `0`, `succ`, `natrec` and both ι rules.
-    n: derived::nat::Nat,
-    /// Addition by iterated `succ`. Held only because [`NatOmega::bin`] is
-    /// defined over it — `double(x) := add(x,x)` — and a second `Add` would
-    /// mint a second `add` whose theorems none of `bin`'s compose with.
-    add: derived::nat::Add,
-    /// `double`, `double1`, `addc`, and with them the **binary numeral**.
+    /// `ω`, `natrec`, arithmetic, and their theorems — the exact package
+    /// mini published on the shared core while handling the `Nat` declaration.
+    clause: Rc<crate::mini::nat_clause::NatClause>,
+    /// `double`, `double1`, `addc`, and with them the **binary numeral** (held
+    /// inside [`NatOmega::clause`]).
     ///
     /// `num(n)` is `double`/`double1` nested over `0`, least significant bit
     /// outermost, so it is Θ(log n) nodes: `num(2⁶⁴)` is 66. This is what
@@ -1689,7 +1687,6 @@ struct NatOmega {
     /// [`TgBackend::interp`] — and it is the object `derived::nat`'s arithmetic
     /// is stated at, which is the whole reason the literal can be computed with
     /// at all.
-    bin: derived::nat::Binary,
     /// `ω` — the body `⟦Nat⟧`'s abbreviation is defined as.
     ty: Term,
     /// `0`, which is `∅` literally.
@@ -1717,14 +1714,14 @@ impl NatOmega {
     /// extensions, hence a second `1`, `•`, `app`, `∅`, pairing and `ω`, and
     /// `⟦Nat.zero⟧ = 0` would then name an `∅` no other interpretation
     /// mentions. `mini/src/nat_clause.rs`'s header records the same hazard.
-    fn over(env: &mut Env, tower: std::rc::Rc<derived::tower::Tower>) -> Option<NatOmega> {
-        let n = derived::nat::Nat::over(env, tower).ok()?;
-        let sf = derived::nat::SuccFun::over(env, &n).ok()?;
-        let add = derived::nat::Add::new(env, &n).ok()?;
-        let bin = derived::nat::Binary::new(env, &n, &add).ok()?;
+    fn over(
+        env: &mut Env,
+        clause: Rc<crate::mini::nat_clause::NatClause>,
+    ) -> Option<NatOmega> {
+        let sf = derived::nat::SuccFun::over(env, &clause.nat).ok()?;
         NAT_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (ty, zero_t) = (n.omega(), n.zero());
-        let zero = n.zero_mem().clone();
+        let (ty, zero_t) = (clause.nat.omega(), clause.nat.zero());
+        let zero = clause.nat.zero_mem().clone();
         Some(NatOmega {
             ty,
             zero_t,
@@ -1732,9 +1729,7 @@ impl NatOmega {
             succ_fun: sf.term,
             succ_in_funspace: sf.in_funspace,
             succ_beta: sf.beta,
-            add,
-            bin,
-            n,
+            clause,
         })
     }
 
@@ -1747,8 +1742,12 @@ impl NatOmega {
     /// ([`Shared::lit_terms`]), keyed on the same value, and a second one would
     /// only duplicate it.
     fn numeral(&self, env: &mut Env, v: u128) -> Option<(Term, Thm)> {
-        let t = self.bin.numeral(&self.n, v);
-        let mut ev = derived::nat::Eval::new(&self.n, &self.add, &self.bin);
+        let t = self.clause.bin.numeral(&self.clause.nat, v);
+        let mut ev = derived::nat::Eval::new(
+            &self.clause.nat,
+            &self.clause.add,
+            &self.clause.bin,
+        );
         let mem = ev.mem(env, v).ok()?;
         (*mem.concl() == Formula::mem(t.clone(), self.ty.clone()) && mem.hyps().is_empty())
             .then_some((t, mem))
@@ -1756,7 +1755,7 @@ impl NatOmega {
 
     /// The term `natrec(c, g, n)`.
     fn natrec_of(&self, c: &Term, g: &Term, n: &Term) -> Term {
-        self.n.natrec_of(c.clone(), g.clone(), n.clone())
+        self.clause.nat.natrec_of(c.clone(), g.clone(), n.clone())
     }
 }
 
@@ -1952,9 +1951,9 @@ impl Inductives {
     /// object `mini` was already using — one `sum`, one `W`, for both.
     fn build(
         env: &mut Env,
-        pre: &Prelude,
         wt: derived::wtype::Wtype,
         bnd: derived::bound::Bound,
+        nat: Rc<crate::mini::nat_clause::NatClause>,
     ) -> Option<Inductives> {
         let empty_u = derived::enums::empty_in_least_universe(env, &wt, &bnd)?;
         let mem = derived::enums::enum_mem(env, &wt, &bnd, &empty_u)?;
@@ -1970,7 +1969,7 @@ impl Inductives {
         let pf = derived::point_fun::PointFun::over(env, &wt.sums, &wt.app_pair)?;
         // `Nat` is the one inductive here that is **not** a W-type: it is `ω`,
         // over the prelude's tower rather than over `wt`. See [`NatOmega`].
-        let nat = NatOmega::over(env, pre.tower.clone())?;
+        let nat = NatOmega::over(env, nat)?;
         // `List` reuses all of that and adds one thing: the fibre family's
         // right branch is a constant function on an *arbitrary* `α`, which is a
         // lambda graph rather than a one-point graph.
@@ -2060,6 +2059,16 @@ pub struct EnvCore {
             Option<Option<Rc<std::cell::RefCell<derived::inductive::Machine>>>>,
         >,
     >,
+    /// The one `derived::nat` apparatus used by both engines. Mini builds this
+    /// while translating the `Nat` declaration; TG subsequently consumes the
+    /// same `Rc`, so `omega`, `natrec`, and the two iota theorems are one
+    /// package rather than two extensionally similar packages over fresh
+    /// symbols.
+    nat: Rc<
+        std::cell::RefCell<
+            Option<Option<Rc<crate::mini::nat_clause::NatClause>>>,
+        >,
+    >,
     /// **The shared constant store** (ENV-UNIFY.md B4): `⟦c.{σ}⟧` carriers
     /// with their typings and defining equations, under the joint
     /// [`crate::const_store::ConstKey`], written and read by both engines.
@@ -2101,6 +2110,7 @@ impl EnvCore {
             hole_vars: Rc::new(std::cell::RefCell::new(Vec::new())),
             wtb: Rc::new(std::cell::RefCell::new(None)),
             machine: Rc::new(std::cell::RefCell::new(None)),
+            nat: Rc::new(std::cell::RefCell::new(None)),
             consts: Rc::new(std::cell::RefCell::new(crate::const_store::ConstStore::default())),
             lams: Rc::new(std::cell::RefCell::new(crate::lam_store::LamStore::default())),
             pis: Rc::new(std::cell::RefCell::new(crate::pi_store::PiStore::default())),
@@ -2111,6 +2121,22 @@ impl EnvCore {
     /// short-lived, like [`EnvCore::env_mut`]'s.
     pub fn consts(&self) -> &Rc<std::cell::RefCell<crate::const_store::ConstStore>> {
         &self.consts
+    }
+
+    /// The shared `Nat` package, built at most once by whichever engine first
+    /// needs it. The outer `Option` records that construction was attempted;
+    /// the inner one records whether it succeeded.
+    pub(crate) fn nat_clause(
+        &self,
+        tower: Rc<derived::tower::Tower>,
+    ) -> Option<Rc<crate::mini::nat_clause::NatClause>> {
+        if let Some(r) = self.nat.borrow().as_ref() {
+            return r.clone()
+        }
+        let built = crate::mini::nat_clause::NatClause::build(&mut self.env_mut(), tower)
+            .map(Rc::new);
+        *self.nat.borrow_mut() = Some(built.clone());
+        built
     }
 
     /// The shared lambda mint. Same-thread cell, same short-lived-borrow rule:
@@ -3192,6 +3218,12 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
 /// domains. They are the same terms because both go through
 /// [`TgBackend::interp`] on the same Lean types.
 struct RecNest {
+    /// Whether the head and lambda nest were published by mini. Such a nest is
+    /// reduced through the shared [`crate::lam_store::LamStore`] rather than
+    /// through the checker-private arrays below. At present this is the
+    /// authoritative `Nat.rec` path; the other recursors retain their existing
+    /// construction.
+    adopted: bool,
     /// `⟦T.rec.{us}⟧`, the abbreviation symbol.
     head: Term,
     /// `⊢ ⟦T.rec.{us}⟧ = lam₁(D₁)`.
@@ -5897,9 +5929,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // and the borrow is released before `Inductives::build` takes the
         // `Env`.
         let wtb = self.core.wtype_bound(&pre);
-        let built = wtb.and_then(|(wt, bnd)| {
+        let nat = self.core.nat_clause(pre.tower.clone());
+        let built = wtb.zip(nat).and_then(|((wt, bnd), nat)| {
             let mut env = self.env_mut();
-            Inductives::build(&mut env, &pre, wt, bnd)
+            Inductives::build(&mut env, wt, bnd, nat)
         });
         let r = built.map(Rc::new);
         self.shared.borrow_mut().inds = Some(r.clone());
@@ -5970,7 +6003,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // all. What `NatMem` is still consulted for is `(1+1) ∈ U₁`,
                 // below — `Bool`'s tag set, which was proved *on the way* to
                 // `N ∈ U₁` and has nothing to do with `Nat`.
-                add(&inds.nat.ty, Some(inds.nat.n.omega_mem().clone()));
+                add(
+                    &inds.nat.ty,
+                    Some(inds.nat.clause.nat.omega_mem().clone()),
+                );
                 let tags2 = derived::cumul::bool_tags_in_u1(&mut env, &chain);
 
                 let zero_u1 = derived::cumul::zero_in_u1(&chain);
@@ -7538,7 +7574,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         let (head, head_def) = self.ind_abbrev(name, &key.1, &inner?)?;
         let head_sym = self.parts.get(&head).map(|(f, _)| *f);
-        let nest = Rc::new(RecNest { head, head_def, lams, betas, t_defs, prefixes, bottom });
+        let nest = Rc::new(RecNest {
+            adopted: false,
+            head,
+            head_def,
+            lams,
+            betas,
+            t_defs,
+            prefixes,
+            bottom,
+        });
         // Publish, so that the next declaration mentioning this recursor gets
         // the same `⟦T.rec⟧` instead of minting one — **whatever the bottom**.
         // A `General` bottom used to be excluded here because it carries a
@@ -9330,6 +9375,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         doms.get(np + 1 + i0).cloned()
     }
 
+    /// Register the applicative structure of a term another engine minted.
+    /// `mk` normally fills `parts` while TG constructs a term; an adopted
+    /// carrier bypasses `mk`, so its graph heads would otherwise look opaque
+    /// even though the shared lambda store knows them.
+    fn record_adopted_term(&mut self, t: &Term) {
+        let Some((f, args)) = t.as_app() else { return };
+        let args = args.to_vec();
+        for a in &args {
+            self.record_adopted_term(a);
+        }
+        self.parts.entry(t.clone()).or_insert((f, args));
+    }
+
+    /// The mini-owned interpretation of an inductive constant, if one was
+    /// published before this declaration was dispatched to TG. Mini is the
+    /// sole checker for inductive groups in the unified loop, so this entry is
+    /// authoritative: TG consumes its carrier and certificates rather than
+    /// minting a parallel interpretation and then comparing the two.
+    fn mini_const(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Term> {
+        let key = self.const_key(ctx, name, levels)?;
+        let sp = self.spell(ctx, name);
+        let entry = self
+            .core
+            .consts()
+            .borrow_mut()
+            .get(&key, &sp)
+            .into_iter()
+            .find(|e| e.carrier_by == crate::const_store::Engine::Mini)?;
+        self.record_adopted_term(&entry.term);
+        if let Some((def, _)) = entry.defeq {
+            self.abbrev_defs.insert(entry.term.clone(), def.into_thm());
+        }
+        Some(entry.term)
+    }
+
     /// Interpret a Lean expression as a kernel term.
     pub fn interp(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Term {
         if let Some(t) = self.exprs.get(&e) {
@@ -9345,6 +9430,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // Every constant this backend interprets is checked against the
                 // schedule the pre-pass computed. See `inst_report`.
                 self.audit_instantiation(ctx, name, levels);
+                if let Some(t) = self.mini_const(ctx, name, levels) {
+                    t
+                } else {
                 // A constant with a value becomes an **explicit definition**
                 // `⟦c⟧ := ⟦value⟧`, monomorphised at these levels. That is
                 // conservative for free (`∃!y. y = t` holds for any term), and
@@ -9416,6 +9504,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         },
                     };
                     self.mk(sym, args)
+                }
                 }
             }
             Expr::App { fun, arg, .. } => self.interp_app(ctx, e, fun, arg),
@@ -13175,6 +13264,115 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// Contract one graph application from a lambda nest another engine
+    /// minted. The graph identity and both defining theorems come from the
+    /// shared lambda store; `mem` is the caller's checked domain obligation.
+    /// This is mini's `beta_spine` step expressed in TG's conditional-equation
+    /// discipline, so assumptions are carried rather than silently admitted.
+    fn adopted_lam_step(
+        &mut self,
+        fun: &Term,
+        arg: &Term,
+        dom: &Term,
+        mem: &Thm,
+        hyps: &[Formula],
+    ) -> Result<(CondEq, Term), &'static str> {
+        let Some((lam, largs)) = fun.as_app() else {
+            return Err("iota: the adopted nest is not a lambda graph")
+        };
+        let (key, site) = {
+            let lams = self.core.lams().borrow();
+            let Some((key, site)) = lams.by_lam(lam) else {
+                return Err("iota: the adopted nest has no shared lambda certificate")
+            };
+            (key.clone(), site.clone())
+        };
+        let Some((stored_dom, holes)) = largs.split_last() else {
+            return Err("iota: the adopted lambda graph has no domain")
+        };
+        if stored_dom != dom {
+            return Err("iota: the adopted lambda's domain is not the recursor's domain")
+        }
+        let Some(graph) = site.graph.as_ref() else {
+            return Err("iota: the adopted lambda graph has no defining certificate")
+        };
+        let Some(beta) = self.beta_thm(&key) else {
+            return Err("iota: deriving the adopted lambda's beta theorem failed")
+        };
+        let mut inst = holes.to_vec();
+        inst.push(dom.clone());
+        inst.push(arg.clone());
+        let Some(conditional) = derived::inst_all(&beta, &inst) else {
+            return Err("iota: instantiating the adopted lambda's beta theorem failed")
+        };
+        let hyp = conj_of(hyps);
+        let Some(beta_at) = u_mp(&u_a1i(&conditional, hyp.as_ref()), mem, hyp.as_ref()) else {
+            return Err("iota: discharging the adopted lambda's domain premise failed")
+        };
+        let Some(beta_at) = CondEq::new(beta_at, hyps.to_vec()) else {
+            return Err("iota: the adopted lambda's beta theorem has the wrong shape")
+        };
+
+        let mut body_inst = holes.to_vec();
+        body_inst.push(arg.clone());
+        let Some(body) = derived::inst_all(&graph.t_def, &body_inst) else {
+            return Err("iota: instantiating the adopted lambda's body theorem failed")
+        };
+        let Some(body) = CondEq::plain(body) else {
+            return Err("iota: the adopted lambda's body theorem is not an equation")
+        };
+        let Some(step) = self.ceq_trans(&beta_at, &body) else {
+            return Err("iota: chaining the adopted lambda's certificates failed")
+        };
+        let Some((lhs, rhs)) = step.as_eq() else {
+            return Err("iota: the adopted lambda step is not an equation")
+        };
+        let app = self.pre.ap.app;
+        let expected = self.mk(app, vec![fun.clone(), arg.clone()]);
+        if lhs != expected {
+            return Err("iota: the adopted lambda step is about another application")
+        }
+        self.record_adopted_term(&rhs);
+        Ok((step, rhs))
+    }
+
+    /// Contract an authoritative mini-published recursor spine through the
+    /// shared lambda certificates. The domain obligations are deliberately
+    /// the same ones [`Self::nest_chain`] asks from the Lean telescope; only
+    /// the source of the graph and beta/body certificates differs.
+    #[allow(clippy::type_complexity)]
+    fn adopted_nest_chain(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        nest: &RecNest,
+        args: &[ExprPtr<'t>],
+        ta: &[Term],
+        doms: &[Term],
+    ) -> Result<(CondEq, Vec<(Thm, Vec<Formula>)>), &'static str> {
+        let app = self.pre.ap.app;
+        let mut cur = nest.head.clone();
+        let mut acc = CondEq::refl(cur.clone());
+        let mut obligations = Vec::with_capacity(args.len());
+        for k in 0..args.len() {
+            let Some(lifted) = self.ceq_congr(app, &[acc.clone(), CondEq::refl(ta[k].clone())])
+            else {
+                return Err("iota: congruence over the adopted recursor's spine refused")
+            };
+            let Some((mem, hyps)) = self.mem_obligation(ctx, args[k], &ta[k], &doms[k]) else {
+                return Err("iota: an adopted recursor domain has no obligation to rest on")
+            };
+            let (step, next) =
+                self.adopted_lam_step(&cur, &ta[k], &doms[k], &mem, &hyps)?;
+            let Some(chained) = self.ceq_trans(&lifted, &step) else {
+                return Err("iota: chaining an adopted recursor contraction failed")
+            };
+            obligations.push((mem, hyps));
+            acc = chained;
+            cur = next;
+        }
+        Ok((acc, obligations))
+    }
+
     /// Move a derived membership along a defining equation.
     ///
     /// The interpretation names an inductive by an **abbreviation** — `⟦N⟧`,
@@ -13219,6 +13417,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ta: &[Term],
         doms: &[Term],
     ) -> Result<(CondEq, Vec<(Thm, Vec<Formula>)>), &'static str> {
+        if nest.adopted {
+            return self.adopted_nest_chain(ctx, nest, args, ta, doms)
+        }
         let app = self.pre.ap.app;
         let Some(mut acc) = CondEq::plain(nest.head_def.clone()) else {
             return Err("iota: the recursor's defining equation is not an equation")
@@ -13310,7 +13511,31 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if args.len() < depth {
             return Err("iota: the recursor is not applied to its major premise")
         }
-        let Some(nest) = self.rec_nest(ctx, name, levels) else {
+        // Mini is the sole declaration checker for inductive groups. When its
+        // `Nat.rec` carrier is present, use it as the nest head and consume the
+        // graph certificates it already placed in the shared lambda store.
+        // Other recursor shapes remain on TG's existing construction until
+        // their carrier-specific computation rules move in a later tranche.
+        let adopted_nat = if self.nat_rec_shape(ctx, &name).is_some() {
+            self.mini_const(ctx, name, levels).and_then(|head| {
+                let bottom = self.rec_bottom(ctx, &name, levels)?;
+                matches!(bottom, RecBottom::Nat(_)).then(|| {
+                    Rc::new(RecNest {
+                        adopted: true,
+                        head: head.clone(),
+                        head_def: Thm::eq_refl(head),
+                        lams: Vec::new(),
+                        betas: Vec::new(),
+                        t_defs: Vec::new(),
+                        prefixes: Vec::new(),
+                        bottom,
+                    })
+                })
+            })
+        } else {
+            None
+        };
+        let Some(nest) = adopted_nat.or_else(|| self.rec_nest(ctx, name, levels)) else {
             // **The largest origin in the gap ledger**, split by the gates
             // [`Self::gen_rec_bottom`] actually applies rather than reported as
             // one row.
@@ -13758,7 +13983,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let app = ap.app;
         let major = args.len() - 1;
         let inds = nr.inds.clone();
-        let natrec_sym = inds.nat.n.natrec;
+        let natrec_sym = inds.nat.clause.nat.natrec;
         let (z, s) = (ta[1].clone(), ta[2].clone());
 
         // ── The constructor, and with it which rule fires ────────────────────
@@ -13769,15 +13994,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // produced. A shared tail would have to reconstruct that distinction.
         let (ctor_eq, fired, extra) = match idx {
             0 => {
-                // `⟦Nat.zero⟧ = 0`, one abbreviation unfolding.
-                let Some(def) = self.abbrev_defs.get(&ta[major]).cloned() else {
-                    return Err("iota: the constructor has no defining equation")
-                };
-                let Some(def) = CondEq::plain(def) else {
-                    return Err("iota: the constructor's defining equation is not an equation")
+                // Mini publishes `⟦Nat.zero⟧` as `0` itself. Retain the old
+                // abbreviation bridge for a non-adopted carrier.
+                let def = if ta[major] == inds.nat.zero_t {
+                    CondEq::refl(ta[major].clone())
+                } else {
+                    let Some(def) = self.abbrev_defs.get(&ta[major]).cloned() else {
+                        return Err("iota: the constructor has no defining equation")
+                    };
+                    let Some(def) = CondEq::plain(def) else {
+                        return Err("iota: the constructor's defining equation is not an equation")
+                    };
+                    def
                 };
                 let Some(rule) =
-                    derived::inst_all(&inds.nat.n.iota_zero, &[z.clone(), s.clone()])
+                    derived::inst_all(
+                        &inds.nat.clause.nat.iota_zero,
+                        &[z.clone(), s.clone()],
+                    )
                 else {
                     return Err("iota: instantiating the zero computation rule failed")
                 };
@@ -13806,44 +14040,69 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // at `ω`. One transport along the abbreviation's own defining
                 // equation joins them — the *only* place that equation is still
                 // needed.
-                let Some(n_ax) = self.abbrev_defs.get(&doms[major]).cloned() else {
-                    return Err("iota: the inductive has no defining equation")
-                };
-                if n_ax.concl().as_eq() != Some((doms[major].clone(), inds.nat.ty.clone())) {
-                    return Err("iota: the major premise's domain is not this inductive")
-                }
-                let tn_c = tn.clone();
-                let Some(hn_t) =
-                    self.mem_along(&hn, &hn_hyps, &n_ax, |w| Formula::mem(tn_c.clone(), w))
-                else {
-                    return Err("iota: transporting the field's typing failed")
+                let hn_t = if doms[major] == inds.nat.ty {
+                    hn.clone()
+                } else {
+                    let Some(n_ax) = self.abbrev_defs.get(&doms[major]).cloned() else {
+                        return Err("iota: the inductive has no defining equation")
+                    };
+                    if n_ax.concl().as_eq()
+                        != Some((doms[major].clone(), inds.nat.ty.clone()))
+                    {
+                        return Err("iota: the major premise's domain is not this inductive")
+                    }
+                    let tn_c = tn.clone();
+                    let Some(hn_t) =
+                        self.mem_along(&hn, &hn_hyps, &n_ax, |w| Formula::mem(tn_c.clone(), w))
+                    else {
+                        return Err("iota: transporting the field's typing failed")
+                    };
+                    hn_t
                 };
 
                 let succ_t = self.interp(ctx, cfun);
-                let Some(succ_ax) = self.abbrev_defs.get(&succ_t).cloned() else {
-                    return Err("iota: the constructor has no defining equation")
-                };
-                let Some(succ_ax) = CondEq::plain(succ_ax) else {
-                    return Err("iota: the constructor's defining equation is not an equation")
-                };
-                let Some(step1) = self.ceq_congr(app, &[succ_ax, CondEq::refl(tn.clone())]) else {
-                    return Err("iota: congruence at the constructor's field refused")
-                };
-                let Some(sb) = derived::inst_all(&inds.nat.succ_beta, &[tn.clone()]) else {
-                    return Err("iota: instantiating the constructor's beta rule failed")
-                };
-                let hn_h = conj_of(&hn_hyps);
-                let Some(step2) = u_mp(&u_a1i(&sb, hn_h.as_ref()), &hn_t, hn_h.as_ref()) else {
-                    return Err("iota: discharging the field's typing failed")
-                };
-                let Some(step2) = CondEq::new(step2, hn_hyps.clone()) else {
-                    return Err("iota: the constructor's beta rule does not have the assumed shape")
-                };
-                let Some(def) = self.ceq_trans(&step1, &step2) else {
-                    return Err("iota: chaining the constructor's beta rule failed")
+                let def = if succ_t
+                    .as_app()
+                    .is_some_and(|(f, _)| self.core.lams().borrow().is_lam(f))
+                {
+                    let (step, rhs) = self.adopted_lam_step(
+                        &succ_t,
+                        &tn,
+                        &doms[major],
+                        &hn,
+                        &hn_hyps,
+                    )?;
+                    if rhs != inds.nat.clause.nat.succ_of(tn.clone()) {
+                        return Err("iota: the adopted successor reduces to another term")
+                    }
+                    step
+                } else {
+                    let Some(succ_ax) = self.abbrev_defs.get(&succ_t).cloned() else {
+                        return Err("iota: the constructor has no defining equation")
+                    };
+                    let Some(succ_ax) = CondEq::plain(succ_ax) else {
+                        return Err("iota: the constructor's defining equation is not an equation")
+                    };
+                    let Some(step1) = self.ceq_congr(app, &[succ_ax, CondEq::refl(tn.clone())]) else {
+                        return Err("iota: congruence at the constructor's field refused")
+                    };
+                    let Some(sb) = derived::inst_all(&inds.nat.succ_beta, &[tn.clone()]) else {
+                        return Err("iota: instantiating the constructor's beta rule failed")
+                    };
+                    let hn_h = conj_of(&hn_hyps);
+                    let Some(step2) = u_mp(&u_a1i(&sb, hn_h.as_ref()), &hn_t, hn_h.as_ref()) else {
+                        return Err("iota: discharging the field's typing failed")
+                    };
+                    let Some(step2) = CondEq::new(step2, hn_hyps.clone()) else {
+                        return Err("iota: the constructor's beta rule does not have the assumed shape")
+                    };
+                    let Some(def) = self.ceq_trans(&step1, &step2) else {
+                        return Err("iota: chaining the constructor's beta rule failed")
+                    };
+                    def
                 };
                 let Some(rule) = derived::inst_all(
-                    &inds.nat.n.iota_succ,
+                    &inds.nat.clause.nat.iota_succ,
                     &[z.clone(), s.clone(), tn.clone()],
                 ) else {
                     return Err("iota: instantiating the succ computation rule failed")

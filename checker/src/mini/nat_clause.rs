@@ -111,7 +111,7 @@ impl Interp {
     pub fn nat_clause(&mut self) -> Option<Rc<NatClause>> {
         if self.nat.is_none() && !self.nat_failed {
             let tower = Rc::clone(&self.prelude.tower);
-            let built = NatClause::build(&mut self.env_mut(), tower).map(Rc::new);
+            let built = self.core().nat_clause(tower);
             self.nat = built;
             self.nat_failed = self.nat.is_none();
         }
