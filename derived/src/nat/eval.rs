@@ -9,6 +9,16 @@
 //! Eval::add(env, a, b)  -> ⊢ add(num a, num b)  = num(a+b)
 //! Eval::addc(env, a, b) -> ⊢ addc(num a, num b) = num(a+b+1)
 //! Eval::inferences()              primitive kernel rule applications so far
+//!
+//! ── with a `Compare`, through `enable_compare` ──────────────────────────
+//! Eval::ble(env, a, b)      -> ⊢ ble(num a, num b) = num(1) | num(0)
+//! Eval::blt(env, a, b)      -> ⊢ blt(num a, num b) = num(1) | num(0)
+//! Eval::beq(env, a, b)      -> ⊢ beq(num a, num b) = num(1) | num(0)
+//!
+//! ── and decoded onto a caller's two values, with a `Decode` ─────────────
+//! Eval::ble_bool(env, d, a, b) -> ⊢ bleb(t,f,num a,num b) = t | f
+//! Eval::blt_bool(env, d, a, b) -> ⊢ bltb(t,f,num a,num b) = t | f
+//! Eval::beq_bool(env, d, a, b) -> ⊢ beqb(t,f,num a,num b) = t | f
 //! ```
 //!
 //! Every theorem it returns is unconditional and is about the *defined* symbols
@@ -66,7 +76,7 @@ use crate::prim::{self, Shape};
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
-use super::boolean::Boolean;
+use super::boolean::Decode;
 use super::compare::Compare;
 use super::mul::Mul;
 
@@ -475,39 +485,33 @@ impl Eval<'_> {
     pub fn ble_bool(
         &mut self,
         env: &mut Env,
-        bl: &Boolean,
-        t: &Term,
-        f: &Term,
+        d: &Decode<'_>,
         a: u128,
         b: u128,
     ) -> DResult<Thm> {
-        self.decide_bool(env, bl, t, f, a, b, State::Le)
+        self.decide_bool(env, d, a, b, State::Le)
     }
 
     /// `⊢ bltb(t,f,num a, num b) = t` if `a < b`, `= f` otherwise.
     pub fn blt_bool(
         &mut self,
         env: &mut Env,
-        bl: &Boolean,
-        t: &Term,
-        f: &Term,
+        d: &Decode<'_>,
         a: u128,
         b: u128,
     ) -> DResult<Thm> {
-        self.decide_bool(env, bl, t, f, a, b, State::Lt)
+        self.decide_bool(env, d, a, b, State::Lt)
     }
 
     /// `⊢ beqb(t,f,num a, num b) = t` if `a = b`, `= f` otherwise.
     pub fn beq_bool(
         &mut self,
         env: &mut Env,
-        bl: &Boolean,
-        t: &Term,
-        f: &Term,
+        d: &Decode<'_>,
         a: u128,
         b: u128,
     ) -> DResult<Thm> {
-        self.decide_bool(env, bl, t, f, a, b, State::Eq)
+        self.decide_bool(env, d, a, b, State::Eq)
     }
 
     /// [`Eval::compare`], decoded into the caller's two values.
@@ -527,13 +531,12 @@ impl Eval<'_> {
     fn decide_bool(
         &mut self,
         env: &mut Env,
-        bl: &Boolean,
-        t: &Term,
-        f: &Term,
+        d: &Decode<'_>,
         a: u128,
         b: u128,
         st: State,
     ) -> DResult<Thm> {
+        let (bl, t, f) = (d.bl, d.t, d.f);
         let raw = self.compare(env, a, b, st)?;
         let (lhs, value) = raw.concl().eq_parts()?;
         let (zero, one) = (self.nat.zero(), self.nat.succ_of(self.nat.zero()));

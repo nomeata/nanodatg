@@ -16,6 +16,7 @@
 //! | [`binary`] | [`Binary`] — `double`, `double1`, `addc`, the numeral encoding, and the eight binary recursion equations |
 //! | [`mod@sub`] | [`Sub`] — `pred`, truncated subtraction, and the zero test |
 //! | [`compare`] | [`Compare`] — `ble`, `blt`, `beq` and their twelve binary recursion equations |
+//! | [`ble_unique`] | [`ble_uniqueness`] — any operation satisfying `ble`'s three clauses *is* `ble`, decoded; and [`ble_transfer`] fires it |
 //! | [`boolean`] | [`Boolean`] — the two-valued decode from `succ 0`/`0` to a caller-supplied pair, and the three comparisons composed with it |
 //!
 //! # One set, two views
@@ -78,6 +79,7 @@
 pub mod add;
 pub mod apparatus;
 pub mod binary;
+pub mod ble_unique;
 pub mod boolean;
 pub mod compare;
 pub mod eval;
@@ -91,7 +93,8 @@ pub mod unique;
 pub use add::Add;
 pub use apparatus::Nat;
 pub use binary::Binary;
-pub use boolean::Boolean;
+pub use ble_unique::{ble_transfer, ble_uniqueness, BleClauses, BleSpec};
+pub use boolean::{Boolean, Decode};
 pub use compare::Compare;
 pub use sub::Sub;
 pub use eval::{numeral_size, Eval, Meter};

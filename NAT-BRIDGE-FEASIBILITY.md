@@ -572,7 +572,7 @@ largest single origin in the ledger. What has to exist, for
 | # | link | state |
 |---|---|---|
 | 1 | `⊢ bleb(t,f,num a,num b) = t` at literal operands | **built** — `derived::nat::Boolean`, `Eval::ble_bool`, 70 inferences at four bits |
-| 2 | `⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` | **not built** — `derived/`, and the sketch is below |
+| 2 | `⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` | **built** — `derived::nat::ble_uniqueness`, fired by `ble_transfer` |
 | 3 | `reduce_rec` recording the major premise's own whnf as a step the backend sees | **not built** — `checker/`, sequenced by the owner |
 
 None of the three is worth anything without the other two, and §1.5's census is
@@ -591,7 +591,7 @@ certificate is `certify_reduct` over the major's own memoised trace lifted by
 serves. The major's own certificate is `Rule::Admitted(Admit::NatRed)` today
 (`tc.rs:1568`); link 2 is what replaces that admission with a rule.
 
-*Link 2, sketched, with every lemma it needs named.* It is `unique.rs`'s bridge
+*Link 2, built — `derived/src/nat/ble_unique.rs`.* It is `unique.rs`'s bridge
 at `ble` instead of `add` — same shape, same reason, one more variable:
 
 ```text
@@ -615,7 +615,20 @@ hypothesis is ignored. Four cases, and each needs one existing lemma:
 **And the three premises are already available from the export.** §2.5 measures
 `natBleZ`, `natBleSZ` and `natBleSS` — exactly these three clauses — as
 certified by `mini` today, from `Nat.ble`'s own `brecOn` nest. That is the half
-of §4.4's tripwire that has fired, read at `ble` rather than at `add`.
+of §4.4's tripwire that has fired, read at `ble` rather than at `add`. So what
+link 3 has to hand the bridge is a thing the pipeline already produces.
+
+`derived/tests/nat.rs` runs links 1 and 2 together over the census's own pairs
+and reads off `app(app(g,num a),num b) = t` — the certificate `Admit::NatRed`
+stands in for — with exactly the three clauses left as hypotheses. Non-vacuity
+is `g := t := f := ∅`, since `app(∅,a) = ∅` at every `a` discharges all three
+outright; degenerate on purpose, and paired with a run at two distinct values,
+because the bridge never compares `t` with `f` and so holds at `t = f` too.
+
+**`beq` is not built, and the number says why.** The same construction at
+`Nat.beq` needs four clauses rather than three, and §1.5's census prices it at
+**66 gaps** against `ble`'s 2 959 — 14 firings, none of which even has literal
+operands. It is a named non-item, not an oversight.
 
 ---
 

@@ -856,7 +856,7 @@ fn peeling_a_successor_costs_bits_and_not_the_value() {
 // vacuously, and a `boolify` that ignored its third argument would survive.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use derived::nat::Boolean;
+use derived::nat::{Boolean, Decode};
 
 fn bool_fixture(env: &mut Env) -> (Nat, Add, Binary, Mul, Sub, Compare, Boolean) {
     let (nat, add, bin, mul, sb, cmp) = cmp_fixture(env);
@@ -930,6 +930,7 @@ fn the_decode_computes_over_the_whole_init_prelude_population() {
     let (tv, fv) = (env.fresh_var(), env.fresh_var());
     let (t, f) = (Term::var(tv), Term::var(fv));
 
+    let d = Decode::new(&bl, &t, &f);
     let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
     ev.enable_compare(&cmp);
     let mut trues = 0u32;
@@ -937,9 +938,9 @@ fn the_decode_computes_over_the_whole_init_prelude_population() {
     for a in 0u128..=12 {
         for b in 0u128..=12 {
             for (thm, hit, name, sym) in [
-                (ev.ble_bool(&mut env, &bl, &t, &f, a, b), a <= b, "bleb", bl.bleb),
-                (ev.blt_bool(&mut env, &bl, &t, &f, a, b), a < b, "bltb", bl.bltb),
-                (ev.beq_bool(&mut env, &bl, &t, &f, a, b), a == b, "beqb", bl.beqb),
+                (ev.ble_bool(&mut env, &d, a, b), a <= b, "bleb", bl.bleb),
+                (ev.blt_bool(&mut env, &d, a, b), a < b, "bltb", bl.bltb),
+                (ev.beq_bool(&mut env, &d, a, b), a == b, "beqb", bl.beqb),
             ] {
                 let thm = thm.unwrap_or_else(|e| panic!("{name} {a} {b}: {e}"));
                 assert!(thm.hyps().is_empty(), "{name} {a} {b} kept a hypothesis");
@@ -982,7 +983,7 @@ fn the_decode_costs_a_constant_on_top_of_the_comparison() {
         bare.ble(&mut env, n, n).expect("ble");
         let mut deco = Eval::with_mul(&nat, &add, &bin, &mul);
         deco.enable_compare(&cmp);
-        deco.ble_bool(&mut env, &bl, &t, &f, n, n).expect("ble_bool");
+        deco.ble_bool(&mut env, &Decode::new(&bl, &t, &f), n, n).expect("ble_bool");
         let (b, d) = (bare.inferences(), deco.inferences());
         eprintln!(
             "MEASURED  ble_bool at two {w}-bit numerals = {d} kernel inferences \
@@ -1002,7 +1003,8 @@ fn the_decode_costs_a_constant_on_top_of_the_comparison() {
     for (a, b) in [(3u128, 5u128), (12, 8)] {
         let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
         ev.enable_compare(&cmp);
-        ev.ble_bool(&mut env, &bl, &t, &f, a, b).expect("ble_bool at the population");
+        ev.ble_bool(&mut env, &Decode::new(&bl, &t, &f), a, b)
+            .expect("ble_bool at the population");
         eprintln!("MEASURED  ble_bool {a} {b} = {} kernel inferences", ev.inferences());
         assert!(
             ev.inferences() < 200,
@@ -1010,4 +1012,159 @@ fn the_decode_costs_a_constant_on_top_of_the_comparison() {
             ev.inferences()
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The `ble` bridge: any operation satisfying the three clauses *is* `ble`,
+// decoded. Link 2 of `NAT-BRIDGE-FEASIBILITY.md` §4.6.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use derived::nat::{ble_transfer, ble_uniqueness, BleClauses, BleSpec};
+
+/// The bridge is unconditional and closed, and its conclusion is the shape
+/// `BleSpec` says it is — so a caller can build the premises it has to
+/// discharge without reading this file.
+#[test]
+fn the_ble_bridge_is_stated_at_an_arbitrary_operation() {
+    let mut env = Env::new();
+    let (nat, _add, _bin, _mul, sb, cmp, bl) = bool_fixture(&mut env);
+    let bridge = ble_uniqueness(&mut env, &nat, &sb, &cmp, &bl).expect("the ble bridge");
+    assert!(bridge.hyps().is_empty(), "the bridge kept a hypothesis");
+    assert!(kernel::thm::debug_locally_closed(bridge.concl()));
+
+    let (gv, tv, fv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (g, t, f) = (Term::var(gv), Term::var(tv), Term::var(fv));
+    let spec = BleSpec::at(&nat, &bl, &g, &t, &f, env.fresh_var(), env.fresh_var());
+    let at = derived::inst_all(&bridge, &[g.clone(), t.clone(), f.clone()])
+        .expect("instantiate the bridge");
+    let want = Formula::imp(
+        spec.zero_l.clone(),
+        Formula::imp(spec.succ_zero.clone(), Formula::imp(spec.succ_succ.clone(), spec.agrees)),
+    );
+    assert_eq!(*at.concl(), want, "the bridge does not have `BleSpec`'s shape");
+
+    // Three genuinely different premises, and none of them is the conclusion —
+    // so this is not `A → A` wearing three hats.
+    assert_ne!(spec.zero_l, spec.succ_zero);
+    assert_ne!(spec.zero_l, spec.succ_succ);
+    assert_ne!(spec.succ_zero, spec.succ_succ);
+}
+
+/// **Non-vacuity.** The three premises are satisfiable, and the witness is
+/// `g := ∅`: `app(∅,a) = ∅` at *every* `a`, so `app(app(∅,x),y)` is `∅`
+/// throughout and `t := f := ∅` discharges all three. Degenerate on purpose —
+/// it establishes that the antecedent has a model, which is the one thing a
+/// shape test cannot. That the bridge also *distinguishes* two values is the
+/// next test, at a `t` and `f` that differ.
+#[test]
+fn the_ble_bridge_has_a_witness() {
+    let mut env = Env::new();
+    let (nat, _add, _bin, _mul, sb, cmp, bl) = bool_fixture(&mut env);
+    let bridge = ble_uniqueness(&mut env, &nat, &sb, &cmp, &bl).expect("the ble bridge");
+
+    let sums = nat.tower.sums.clone();
+    let ap = nat.rec.ap.clone();
+    let app_empty = derived::wtype::app_of_empty(&mut env, &sums).expect("app(∅,a) = ∅");
+    let e = kernel::Term::apply(ap.empty, vec![]);
+
+    // `⊢ app(app(∅,a), b) = ∅`, for any `a` and `b`.
+    let flat = |env: &mut Env, a: &Term, b: &Term| -> kernel::Thm {
+        let outer = derived::inst_all(&app_empty, std::slice::from_ref(a)).expect("at a");
+        let lifted = derived::congr_arg(env, ap.app, &[ap.apply(e.clone(), a.clone()), b.clone()], 0, &outer)
+            .expect("congruence in the function position");
+        let inner = derived::inst_all(&app_empty, std::slice::from_ref(b)).expect("at b");
+        derived::eq_trans(env, &lifted, &inner).expect("the two legs meet")
+    };
+
+    let (xv, yv) = (env.fresh_var(), env.fresh_var());
+    let (x, y) = (Term::var(xv), Term::var(yv));
+    let (zero, sx, sy) = (nat.zero(), nat.succ_of(x.clone()), nat.succ_of(y.clone()));
+    let (x_om, y_om) = (nat.in_omega(x.clone()), nat.in_omega(y.clone()));
+
+    // Each clause: the equation holds outright, so `∈ ω` is discharged unused.
+    let c1 = {
+        let eq = flat(&mut env, &zero, &y);
+        kernel::Thm::gen(yv, &derived::a1i(&eq, y_om.clone()))
+    };
+    let c2 = {
+        let eq = flat(&mut env, &sx, &zero);
+        kernel::Thm::gen(xv, &derived::a1i(&eq, x_om.clone()))
+    };
+    let c3 = {
+        let l = flat(&mut env, &sx, &sy);
+        let r = flat(&mut env, &x, &y);
+        let r_rev = derived::eq_symm(&mut env, &r).expect("symm");
+        let eq = derived::eq_trans(&mut env, &l, &r_rev).expect("both sides are ∅");
+        let inner = kernel::Thm::gen(yv, &derived::a1i(&eq, y_om.clone()));
+        kernel::Thm::gen(xv, &derived::a1i(&inner, x_om.clone()))
+    };
+
+    let bin = Binary::new(&mut env, &nat, &_add).expect("the binary view");
+    let mut ev = Eval::new(&nat, &_add, &bin);
+    let (m3, m5) = (ev.mem(&mut env, 3).expect("3 ∈ ω"), ev.mem(&mut env, 5).expect("5 ∈ ω"));
+    let clauses = BleClauses {
+        g: &e, t: &e, f: &e, zero_l: &c1, succ_zero: &c2, succ_succ: &c3,
+    };
+    let out = ble_transfer(&bridge, &clauses, &m3, &m5)
+        .expect("the bridge fires at the ∅ witness");
+    assert!(out.hyps().is_empty(), "the witness left a hypothesis — the premises were not met");
+    assert_eq!(
+        *out.concl(),
+        Formula::eq(
+            ap.apply(ap.apply(e.clone(), ev.numeral(3)), ev.numeral(5)),
+            bl.bleb_of(e.clone(), e.clone(), ev.numeral(3), ev.numeral(5))
+        ),
+        "the witness produced the wrong conclusion"
+    );
+}
+
+/// **The chain, end to end, over the population.** Assume the three clauses at
+/// an arbitrary `g` and two *distinct* values, fire the bridge at each pair the
+/// `init-prelude` census names, and compose with the evaluator: what comes out
+/// is `app(app(g,num a),num b) = t` or `= f`, which is exactly the certificate
+/// `Admit::NatRed` stands in for today.
+///
+/// The three clause hypotheses are what link 3 has to supply from the export —
+/// §2.5 measures them as certified — so they stay on the theorem here and their
+/// count is asserted rather than waved at.
+#[test]
+fn the_bridge_and_the_evaluator_compose_over_the_population() {
+    let mut env = Env::new();
+    let (nat, add, bin, mul, sb, cmp, bl) = bool_fixture(&mut env);
+    let bridge = ble_uniqueness(&mut env, &nat, &sb, &cmp, &bl).expect("the ble bridge");
+
+    let (gv, tv, fv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (g, t, f) = (Term::var(gv), Term::var(tv), Term::var(fv));
+    assert_ne!(t, f, "the two values must differ for this to test the decode");
+    let spec = BleSpec::at(&nat, &bl, &g, &t, &f, env.fresh_var(), env.fresh_var());
+    let c1 = kernel::Thm::assume(spec.zero_l.clone());
+    let c2 = kernel::Thm::assume(spec.succ_zero.clone());
+    let c3 = kernel::Thm::assume(spec.succ_succ.clone());
+
+    let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+    ev.enable_compare(&cmp);
+    let (mut trues, mut falses) = (0u32, 0u32);
+    for (a, b) in [(0u128, 0u128), (1, 0), (3, 5), (12, 8), (12, 11), (10, 10), (0, 12)] {
+        let a_mem = ev.mem(&mut env, a).expect("a ∈ ω");
+        let b_mem = ev.mem(&mut env, b).expect("b ∈ ω");
+        // Link 2: `app(app(g,num a),num b) = bleb(t,f,num a,num b)`.
+        let clauses = BleClauses {
+            g: &g, t: &t, f: &f, zero_l: &c1, succ_zero: &c2, succ_succ: &c3,
+        };
+        let via = ble_transfer(&bridge, &clauses, &a_mem, &b_mem).expect("the bridge fires");
+        // Link 1: `bleb(t,f,num a,num b) = t | f`.
+        let decoded =
+            ev.ble_bool(&mut env, &Decode::new(&bl, &t, &f), a, b).expect("the decode");
+        let out = derived::eq_trans(&mut env, &via, &decoded).expect("the two links meet");
+
+        let want = if a <= b { t.clone() } else { f.clone() };
+        if a <= b { trues += 1 } else { falses += 1 }
+        assert_eq!(
+            *out.concl(),
+            Formula::eq(nat.apply(nat.apply(g.clone(), ev.numeral(a)), ev.numeral(b)), want),
+            "the chain decided {a} ≤ {b} the wrong way"
+        );
+        assert_eq!(out.hyps().len(), 3, "only the three clauses should remain at {a} {b}");
+    }
+    assert!(trues > 0 && falses > 0, "the sample did not exercise both outcomes");
 }

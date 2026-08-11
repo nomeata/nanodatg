@@ -17,8 +17,10 @@
 //! ```
 //!
 //! [`crate::nat::Eval::ble_bool`], [`blt_bool`](crate::nat::Eval::blt_bool) and
-//! [`beq_bool`](crate::nat::Eval::beq_bool) evaluate those at numerals, and are
-//! the entry a consumer actually calls.
+//! [`beq_bool`](crate::nat::Eval::beq_bool) evaluate those at numerals, over a
+//! [`Decode`] — the bundle of this and the two values — and are the entry a
+//! consumer actually calls. [`crate::nat::ble_uniqueness`] is what connects an
+//! *imported* operation to `bleb` so that they say something about it.
 //!
 //! # What this exists for, measured
 //!
@@ -60,7 +62,9 @@
 //! makes the shared antecedent `¬(succ 0 = 0)`, which is
 //! [`Nat::succ_ne_zero`](crate::nat::Nat::succ_ne_zero) at `0` — discharged
 //! once, for both equations. That ordering is the only design choice in the
-//! file and it is what removes a `¬`-symmetry step.
+//! file and it is what removes a `¬`-symmetry step — **do not reverse it for
+//! symmetry's sake**: `0` first reads more naturally and costs a `¬`-symmetry
+//! derivation that this way round is simply absent.
 //!
 //! So both exports are **unconditional and O(1)**: no induction, no hypothesis,
 //! and nothing proved about `ω` beyond `succ 0 ≠ 0`.
@@ -99,6 +103,26 @@ use crate::twopoint::TwoPoint;
 use super::apparatus::Nat;
 use super::compare::Compare;
 use super::glue::{gen_all, imported, Chain};
+
+/// A [`Boolean`] together with the two values to decode onto.
+///
+/// They always travel together — every entry that needs the decode needs both
+/// values, and a signature taking them apart hit clippy's argument limit at
+/// [`Eval::ble_bool`](crate::nat::Eval::ble_bool), which was the right
+/// complaint about the wrong thing: the fix is that this is one datum.
+pub struct Decode<'a> {
+    /// The decode's symbols and equations.
+    pub bl: &'a Boolean,
+    /// What `ble` decodes to when it holds.
+    pub t: &'a Term,
+    /// What it decodes to when it does not.
+    pub f: &'a Term,
+}
+
+impl<'a> Decode<'a> {
+    /// Pair a decode with the two values.
+    pub fn new(bl: &'a Boolean, t: &'a Term, f: &'a Term) -> Decode<'a> { Decode { bl, t, f } }
+}
 
 /// The decode, and the three comparisons composed with it.
 pub struct Boolean {
