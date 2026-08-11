@@ -8105,13 +8105,24 @@ reproduces to the gap: `NANODA_ASSUME='accelerated Nat op at LITERAL'` gives
 12 775, a fall of **2 959**. With origin 1 no longer counted as one population
 the ranking reads
 
-| origin | own | relayed | sub-tree |
-|---|---:|---:|---:|
-| **iota: … accelerated Nat op at LITERAL operands** | **466** | **2 695** | **3 161** |
-| iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 280 | 2 680 |
-| proj_reduce | 659 | 1 808 | 2 467 |
-| iota: no interpretation — several constructors | 286 | 1 858 | 2 144 |
+| origin | own | relayed | sub-tree | own deletion |
+|---|---:|---:|---:|---:|
+| **iota: … accelerated Nat op at LITERAL operands** | **466** | **2 695** | **3 161** | **2 959** |
+| iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 280 | 2 680 | 2 480 |
+| proj_reduce | 659 | 1 808 | 2 467 | 1 618 |
+| iota: no interpretation — several constructors | 286 | 1 858 | 2 144 | unmeasured |
 
 so **`Nat.ble` at literal operands is the single largest origin anywhere in the
-ledger** — and the only one of the four whose construction is a fact about
-numerals rather than about recursor interpretation.
+ledger**, on the ceiling and on the measured deletion both — and the only one of
+the four whose construction is a fact about numerals rather than about recursor
+interpretation.
+
+**And the `proj_reduce` deletion corroborates this section from the other
+side.** `71b608a` found the sub-tree column is a ceiling that is tight only for
+a *terminal* origin, and `proj_reduce` — mid-chain — came in 34 % under it
+because its relays did not vanish but **re-originated, a third of them at
+literal arithmetic**: `nat_eq` 66 → 391 and `nat_reduce` 111 → 190. Those are
+the same numeral facts this section is about, arriving as the next wall behind a
+different origin. Two independent deletions therefore agree that literal
+arithmetic is a *terminal* obstruction of this ledger, and that closing the
+projection path raises rather than lowers the numeral tranche's value.
