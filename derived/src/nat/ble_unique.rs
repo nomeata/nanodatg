@@ -20,11 +20,23 @@
 //! a name. What it would take to use it is the three clauses for that set,
 //! derived by δ and ι, and this instantiated at them.
 //!
-//! **No checker can do that today, and the sentence this replaces said it
-//! could.** The clauses are stated at schematic `x, y ∈ ω`, so deriving them
-//! means running δ and ι *under a universal quantifier* through the `brecOn`
-//! nest; every ι step the checker performs is at a concrete `Expr` during a
-//! conversion check. The obvious way round — the corpus holds only 51 distinct
+//! **No checker can do that today** — but *why* is not what this header said
+//! for two revisions, and the wrong reason set the wrong scope. It is **not**
+//! that deriving the clauses needs δ and ι run *under a universal quantifier*
+//! through the `brecOn` nest. A Lean proof of a clause is converted into the
+//! set-level equation by `mini/src/eq_cash.rs`, which never
+//! reduces the operation at all: it reads the proof's **typing**, moves the
+//! subject to `•` by proof irrelevance, β-descends `⟦Eq.{v}⟧`'s stored nest and
+//! applies `derived::prop::cond_elim`. `mini` already certifies `natBleZ`,
+//! `natBleSZ` and `natBleSS` from `Nat.ble`'s own `brecOn` nest at ground σ —
+//! that certification *is* the schematic work, done by ordinary typing
+//! inference. What is actually missing is upstream and downstream of it: the
+//! three clauses are **not in `init-prelude`** (Lean core proves none of them
+//! under any name, §3), so they must be synthesised; and `eq_cash` lives in
+//! `mini`, which *depends on* `checker`, so `tg.rs` cannot call it.
+//! `MEASUREMENTS.md`, *"The Lean-`Eq`-to-set-equation bridge already exists, and
+//! it is not in the checker"*, is the measurement. The obvious way round — the
+//! corpus holds only 51 distinct
 //! `Nat.ble` instances, every operand ≤ 12, so derive 51 concrete facts instead
 //! — was censused before it was built and refuted (`MEASUREMENTS.md`, "The
 //! concrete route to link 3 is refuted inside the rule"): with the accelerator
@@ -34,8 +46,10 @@
 //! workaround was meant to escape — and 25 424 β contractions are conditional
 //! on domain premises nothing discharges.
 //!
-//! So this bridge is waiting on a **schematic** ι, not on wiring. Three
-//! documents said otherwise, including an earlier version of this header.
+//! So this bridge is waiting on a **synthesised declaration and a crate
+//! boundary**, not on wiring and not on a schematic ι. Three documents once
+//! said "wiring", including an earlier version of this header; the revision
+//! after that said "schematic ι", and that was wrong too.
 //!
 //! # Why `t` and `f` are quantified, and not `succ 0` and `0`
 //!

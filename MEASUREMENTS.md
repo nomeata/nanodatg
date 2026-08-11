@@ -9930,3 +9930,172 @@ this run's 1.84× step ratio reproducing it independently. Cost was never what
 refutes this. Every report in this section was checked to exist and to be
 471–542 lines before any number was read off it, per the failure mode recorded
 two sections up.
+
+## The Lean-`Eq`-to-set-equation bridge already exists, and it is not in the checker — 2026-08-11
+
+*Task #127, second census. The brief asked for **the distance between the
+certified typing and the wanted equation**, measured, before any machinery was
+scoped. The distance is **zero constructions and three relocations**, and the
+previous section's closing scope — "the schematic tranche is the honest answer,
+`⟦Nat.ble⟧`'s three clauses have to be derived at `x, y ∈ ω`" — is **wrong about
+what the work is**. Corrected here rather than appended to.*
+
+### The question, and the certificate as it actually prints
+
+`mini` certifies `⟦proof⟧ ∈ ⟦∀ x y, Nat.ble (succ x) (succ y) = Nat.ble x y⟧`,
+a Lean `Eq` **typing**. [`BleClauses`](derived/src/nat/ble_unique.rs) wants
+`⊢ ∀x ∀y. (x ∈ ω → y ∈ ω → app(app(g,succ x),succ y) = app(app(g,x),y))`, a
+set-level **equation**. What is between them?
+
+The three certificates, read off rather than described —
+`./target/debug/mini --no-modelgen --verbose --dump-theorems --dump-only=natBleZ
+mini/tests/fixtures/nat_char_equations.ndjson`:
+
+```
+  natBleZ    σ = —
+    typing   ⊢ ⟦natBleZ.{}⟧  ∈ f668(app(⟦Eq.{1}⟧,⟦Bool.{}⟧), app(⟦Nat.ble.{}⟧,⟦Nat.zero.{}⟧), ⟦Bool.true.{}⟧, ⟦Nat.{}⟧)
+  natBleSZ   σ = —
+    typing   ⊢ ⟦natBleSZ.{}⟧ ∈ f626(app(⟦Eq.{1}⟧,⟦Bool.{}⟧), ⟦Nat.ble.{}⟧, ⟦Nat.succ.{}⟧, ⟦Nat.zero.{}⟧, ⟦Bool.false.{}⟧, ⟦Nat.{}⟧)
+  natBleSS   σ = —
+    typing   ⊢ ⟦natBleSS.{}⟧ ∈ f633(app(⟦Eq.{1}⟧,⟦Bool.{}⟧), ⟦Nat.ble.{}⟧, ⟦Nat.succ.{}⟧, ⟦Nat.succ.{}⟧, ⟦Nat.ble.{}⟧, ⟦Nat.{}⟧, ⟦Nat.{}⟧)
+```
+
+Four things this settles that no document stated:
+
+* **The `∀` is already a dependent product, not a syntactic quantifier.** `f668`
+  / `f626` / `f633` are *fibre symbols* (`mini/src/interp.rs:329`), each with its
+  own defining axiom and Π-rule. Instantiating at `x, y ∈ ω` is `dprod_app` at
+  the fibre — the piece the owner suspected was already built under another
+  name, and it is.
+* **The operation in the statement is `⟦Nat.ble.{}⟧` — the export's own
+  constant.** That is exactly `BleClauses::g`. No name-keyed trust is involved.
+* **σ is empty for all three** (`σ = —`; the only level in sight is `Eq.{1}`,
+  ground). So `eq_cash`'s one hard caveat — `Gap::SymbolicLevel` at a symbolic
+  universe — **is discharged for this population**, measured rather than hoped.
+* **The proof term denotes `•`.** The dump's `defeq` line reads
+  `⊢ ⟦natBleZ.{}⟧ = ⟦Nat.zero.{}⟧`, which is proof irrelevance via
+  `Interp::point_of_proof` (`interp.rs:1633`) printing the tower's point under
+  another of its names — not a fact about `Nat`. That is `eq_cash`'s step 4
+  already done.
+
+The fixture's statements are spelled with explicit `Nat.zero`/`Nat.succ` and
+explicit `Eq`, proof `Eq.refl _` throughout, e.g.
+`theorem natBleSS (n m : Nat) : Eq (Nat.ble (Nat.succ n) (Nat.succ m)) (Nat.ble n m) := Eq.refl _`.
+`cargo test -p mini --test nat_equations` is **green** (2 passed, 20.0 s), and
+`mini/tests/nat_equations.rs` pins the three names **individually** — its
+`EXPECTED` table requires each to carry no `waiting on …` — as well as
+`pairs=38 typeEv=38 constEv=38 unsealed=0`, `convs gapped=0`. So the brief's
+first quotation is **confirmed**, at ground σ, in the form above.
+
+### Answer: nothing. It is built, corpus-exercised, and filed under "cashing"
+
+Searched by the statement concluded rather than by identifier, per the rule that
+has now paid six times. It is not called `eq_reflection` or `eq_of_mem`.
+
+| step | where | concludes |
+|---|---|---|
+| the interpretation clause | `mini/src/direct.rs` — `Direct::eq_ax` | `⟦Eq α a b⟧ = eq_set(a,b) = [a = b]` |
+| the elimination | `derived/src/prop/cond.rs:105` — `cond_elim` | `⊢ • ∈ [φ] → φ` |
+| named, at `Eq` | `derived/src/prop/apparatus.rs:52,90` — `Props::eq_sound` | `⊢ ∀a ∀b. (• ∈ eq_set(a,b) → a = b)` |
+| **proof term ⟶ equation** | `mini/src/eq_cash.rs:313` `cash`, `:353` `cash_stmt`, `:290` `Cashed{eq,lhs,rhs}` | `Γ ⊢ ⟦lhs⟧ = ⟦rhs⟧` from a Lean proof of `Eq α lhs rhs` |
+| **the ∀-quantified, membership-guarded form** | `mini/src/quot_classes.rs:505` — `rcompat_at` | `Γ ⊢ ∀x ∀y. (⟨x,y⟩ ∈ R̄ → f̄(x) = f̄(y))` from `h : ∀ a b, r a b → f a = f b` |
+
+`rcompat_at` is **the exact shape `BleClauses` wants** — two fresh scopes, two
+discharges, `dprod_app` at the fibre, one β down `⟦Eq.{v}⟧`'s stored nest, then
+`cond_elim` — and it runs on corpus rows `122_quotLiftType` and
+`124_quotLiftReduction`. `LEAN3-INDUCTIVE-COMPILER.md:16` is an entire section
+titled with this question and answers it *closed*, with the chain spelled out at
+`:22–53`.
+
+`Eq` never touches the indexed-inductive machinery: `INDEXED-DESIGN.md:124`
+classifies it **direct clause**, so "the fibre over a wrong index is empty" is
+immediate from `[a = b]` being empty at `a ≠ b` (`Props::eq_distinct`) and needs
+no index discrimination.
+
+Three qualifications, from `eq_cash.rs:57–70`: **ground σ only** (a symbolic
+universe is `Gap::SymbolicLevel`, `eq_cash.rs:365`); **hypothetical under open
+scopes** — `Cashed.eq.hyps()` must be read before persisting; and **only as
+available as the proof's own typing**.
+
+### So the distance is three relocations, and none of them is symbolic ι
+
+**1. The construction is on the wrong side of the dependency edge.**
+
+```sh
+for c in mini checker; do sed -n '/\[dependencies\]/,/^\[/p' $c/Cargo.toml; done
+```
+
+`mini → {kernel, derived, nanoda_lib}` — mini depends on **checker**. `checker →
+{kernel, derived}`. So `eq_cash` **cannot be called from `checker/src/tg.rs`**,
+which is where the 11 821-gap ledger is produced. `mini` is a second, clean-room
+kernel (`MINI-DESIGN.md` §0), not a stage of the checker; `ci/check-mini-vs-nanoda.sh`
+runs the two *against* each other and never feeds one into the other.
+
+**2. The proof term is not in the input.** The brief's "`init-prelude` has 156
+`thm` declarations, and these are among them" is false:
+
+```sh
+grep -c '"thm"' vendor/arena-tests/good/init-prelude.ndjson        # 156
+grep -c 'natBle\|natBeq' vendor/arena-tests/good/init-prelude.ndjson  # 0
+grep -n '"str":"ble"' vendor/arena-tests/good/init-prelude.ndjson  # name 606 = Nat.ble
+grep -n '"const":{"name":606' …                                    # exactly one node, ie 3542
+```
+
+One `Nat.ble` const node in 3.7 MB, and no clause theorem about it. §3 already
+records why, from the Lean v4.29.1 source: **core proves no defining clauses for
+`ble`/`beq` under any name.** The three certified clauses exist only in the
+hand-written fixture `mini/tests/fixtures/nat_char_equations.ndjson`, certified
+by `./target/debug/mini` — a different program, on a different input, from the
+one the ledger is measured over.
+
+**3. The bridge is still uncalled, but its carrier obstacle is genuinely gone.**
+
+```sh
+grep -rn "ble_transfer\|ble_uniqueness" --include=*.rs .   # derived/src/nat/* and derived/tests/nat.rs only
+grep -c 'derived::nat' checker/src/tg.rs                   # 24
+```
+
+`tg.rs` now threads `derived::nat`'s `Nat`, `SuccFun`, `Add`, `Binary`, `Eval`
+over ω — so §4.7's obstacle 2 (*two `Nat`s*) is closed by the carrier swap, as
+intended. What is missing is only the three premises.
+
+### The correction to the previous section's scope
+
+Symbolic δ and ι under a quantifier are **not required, and were never the
+obstacle**. `eq_cash` never reduces the operation: it reads the *typing* of a
+proof and converts it. mini already certifies `natBleSS` **from `Nat.ble`'s own
+`brecOn` nest** — that certification *is* the schematic work, performed by
+ordinary typing inference rather than by symbolic reduction. "Schematic ι" was
+the wrong name for the tranche, and it made a solved problem look open.
+
+### The scope that actually follows
+
+1. **Synthesise** the three clause declarations into the stream — §4.3's
+   `mutual_aux`-shaped generator, under the black-box invariant
+   `ci/check-mutual-blackbox.sh` enforces. **Not built.**
+2. **Certify them in the program that owns the ledger.** Measured for `mini`
+   (§2.3, 38/38 pairs); **unmeasured for `checker --features tg`**, and that is
+   the next measurement, not the next construction.
+3. **Cash and re-generalise** into three `BleClauses` `Thm`s — pattern exists
+   (`rcompat_at`), subject to the ground-σ and open-scope caveats above.
+4. **Call `ble_transfer` from `tg.rs`** — §4.6's link 4.
+
+### The fork that is not decided, and must not be assumed
+
+Step 2 has two readings and the repository does not choose between them: either
+`mini` is the successor kernel, in which case steps 1/3/4 all live in `mini`,
+the dependency edge is a non-issue, **and the 11 821-gap ledger is the wrong
+yardstick for this tranche**; or `checker` stays, in which case `eq_cash` must
+move down into `derived/` or be re-derived in `checker`. Nothing on this arc
+records that decision. It is the one thing a successor would most easily get
+wrong, because every document quoted above says "the pipeline already produces
+it" without naming which pipeline.
+
+### Method note
+
+No ledger run and no `perf stat` — nothing was landed, and every number above is
+a `grep` over a checked-in file or a `file:line` verified by reading it. The
+brief's two `NAT-BRIDGE-FEASIBILITY.md` quotations were treated as hypotheses
+per the standing warning; one is confirmed (the clauses certify) and one is
+refuted (they are *not* "available from the export"). §4.6 and §4.7 are
+corrected in place.

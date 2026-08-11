@@ -618,11 +618,25 @@ hypothesis is ignored. Four cases, and each needs one existing lemma:
 * `x = succ x'`, `y = succ y'` — premise 3, then the outer hypothesis at `y'`,
   against `ble(succ x', succ y') = ble(x', y')` from `Sub::sub_succ_succ`.
 
-**And the three premises are already available from the export.** §2.5 measures
-`natBleZ`, `natBleSZ` and `natBleSS` — exactly these three clauses — as
-certified by `mini` today, from `Nat.ble`'s own `brecOn` nest. That is the half
-of §4.4's tripwire that has fired, read at `ble` rather than at `add`. So what
-link 3 has to hand the bridge is a thing the pipeline already produces.
+**The three premises are *not* available from the export, and the sentence this
+replaces said they were.** §2.5 does measure `natBleZ`, `natBleSZ` and
+`natBleSS` — exactly these three clauses — as certified from `Nat.ble`'s own
+`brecOn` nest, and that much is true and re-verified (task #127; the dumped
+certificates are in `MEASUREMENTS.md`, *"The Lean-`Eq`-to-set-equation bridge
+already exists"*). But they are certified **by `mini`, on the hand-written
+fixture `mini/tests/fixtures/nat_char_equations.ndjson`** — not by the checker,
+and not from `init-prelude`. Measured on the export itself:
+
+```sh
+grep -c '"thm"' vendor/arena-tests/good/init-prelude.ndjson          # 156
+grep -c 'natBle\|natBeq' vendor/arena-tests/good/init-prelude.ndjson # 0
+grep -n '"const":{"name":606' …    # exactly one Nat.ble node in 3.7 MB
+```
+
+§3 already says why: Lean core proves no defining clauses for `ble`/`beq` under
+any name. So the clauses have to be **synthesised** (§4.3) before anything can
+cash them, and "a thing the pipeline already produces" was true only of a
+pipeline that is not the one this ledger measures.
 
 `derived/tests/nat.rs` runs links 1 and 2 together over the census's own pairs
 and reads off `app(app(g,num a),num b) = t` — the certificate `Admit::NatRed`
@@ -726,9 +740,11 @@ being **true**, not this bridge being able to prove it. The −2 597 is real and
 reproduces exactly against the post-degenerate-recursor baseline (−86 / +942 /
 −2 597, unchanged); it is simply not a measurement of link 2.
 
-*§4.4 is stale, in the good direction.* All seventeen characteristic equations
-now certify, `natBleZ`/`natBleSZ`/`natBleSS` included. Deriving the clauses is no
-longer what blocks this.
+*§4.4 is stale, in the good direction — but read §4.6's correction with it.* All
+seventeen characteristic equations certify **in `mini`, on a synthesised
+fixture**. Deriving the clauses from a `brecOn` nest is no longer what blocks
+this; *having a declaration to derive them from, in the program that owns the
+ledger*, is.
 
 *What the census pointed at instead, and it is refuted too.* The corpus has 35
 distinct `NatLit` values, 13 of them ≤ 12, largest 2⁶⁴; the `Nat.ble` population
@@ -756,10 +772,21 @@ literal-equation route is refuted before it was built"*.
   excludes `Iota`. Admitting `Iota` there is link 3 unconditional, already
   measured at +942.
 
-**So origin 2 needs a numeral representation and there is no route around it**:
-not a bignum bridge (§4.7, wrong carrier, operands ≤ 12), not structural
-unfolding, not a per-literal Peano chain. The decision to make first is *which
-set the numerals live in* — `⟦Nat⟧` is `derived::wnat`'s W-type today,
-`derived::nat` is von Neumann `ω`, and `interp` promises a third (*"Milestone 4
-replaces these with the kernel's primitive `ℕ`"*). Three candidates, no choice
-recorded; that is what has been dodged twice.
+**Origin 2 needs a numeral representation, and the carrier question is now
+settled**: `⟦Nat⟧` is von Neumann `ω`, `derived::wnat` is deleted, and
+`checker/src/tg.rs` threads `derived::nat`'s `Nat`/`SuccFun`/`Add`/`Binary`/`Eval`
+over it (24 references). Obstacle 2 above is closed.
+
+*Three routes to the clauses are refuted and the fourth is not what anyone
+said.* Not a bignum bridge (wrong carrier, operands ≤ 12); not structural
+unfolding (task #127, 51 reduce and 0 certify); not a per-literal Peano chain
+(task #129, 10 sites of 466). And **not symbolic δ/ι under a quantifier
+either** — that was the previous scope and it is wrong. A Lean proof of a clause
+is turned into the set-level equation by `mini/src/eq_cash.rs`, which never
+reduces the operation: it reads the proof's *typing*. What remains is
+(i) synthesising the clause declarations (§4.3, not built), (ii) certifying them
+in the program that owns the ledger — measured for `mini`, **unmeasured for
+`checker --features tg`** — and (iii) re-generalising the cashed equations into
+`BleClauses`, for which `mini/src/quot_classes.rs::rcompat_at` is the working
+precedent. `MEASUREMENTS.md`, *"The Lean-`Eq`-to-set-equation bridge already
+exists, and it is not in the checker"*, is the measurement.
