@@ -9340,7 +9340,11 @@ five declarations confirm.
 the three arms have not taken each other's work — the same check that made the
 degenerate recursor's disjointness a measurement rather than an assertion.
 
-## The dependent recursor, wired — 2026-08-11
+## The dependent recursor, wired — 2026-08-11, first tranche
+
+*(Superseded by the section below, which takes the origin entire. Kept because
+its 53 is the non-recursive half's own measurement and the trade ratios are
+compared against it.)*
 
 Task #126. `RecBottom::Dep`, dispatched **after** `General` so it picks up
 exactly what `t_policy` declines.
@@ -9457,3 +9461,122 @@ derivation refused" (`asked > computed`) are two different numbers rather than
 one silent zero. Verified by mutation: `fire_dep` refusing at entry takes the
 ledger back to **exactly** 13 254 and reddens both the reach assertion and the
 total.
+
+## Origin 3, entire — 2026-08-11
+
+`Lean.ParserDescr`'s 169 sites, and with them the whole origin.
+
+| | baseline | non-recursive half | **entire** |
+|---|---:|---:|---:|
+| gaps | 13 254 | 12 860 | **11 825** |
+| escapes | 2 432 | 2 464 | **2 629** |
+| derived kernel theorems | 162 483 | 162 909 | **164 109** |
+| `GEN_IOTAS` | 92 | 92 | 92 |
+| `DEGEN_IOTAS` | 400 | 400 | 400 |
+| **`DEP_IOTAS`** | — | 53 | **222** |
+| `DEP_ASKED` | — | 53 | **222** |
+| instructions | 210 G | — | **388 G** |
+
+Arena 152/0/2. `asked == fired`: every site the arm was reached at, it answered,
+and no `iota:` gap row of its own remains.
+
+**The census is fully accounted for**: 222 fired + 64 whose major premise never
+reduces to a constructor = 286.
+
+### `derived/` is untouched, and the reason is the arc's own lesson
+
+The previous section named the remainder as needing "a `terms_at` rebuilder in
+`derived`, ~30 lines in `guard.rs` plus a `DepRecursor::rec_at`". That estimate
+was **wrong in the same way the `dprod_app` estimate was wrong**, and the same
+correction applies: look the facility up by the *statement* it would conclude,
+not by the name it would have.
+
+The kernel has no term substitution — which is why `rec_of` and `carrier_at`
+exist — but it has **theorem instantiation**, and `⊢ t = t` is a theorem about
+any term. `dep_subst` closes the development over `p⃗, C, S⃗, T` and instantiates;
+`dep_rec_at` reads the term back off `eq_refl`. A guarded minor's
+`define_abbrev` nest comes along with everything else, because substitution does
+not care what a symbol was minted for.
+
+This is **better than the rebuild it replaced**, not merely cheaper to write:
+the `drec` the nest's bottom is built from and the `drec` the ι rule speaks of
+are now one substitution of one term, rather than two constructions checked
+against each other. Validated by reproducing the non-recursive 53
+byte-identically before any recursive constructor was admitted.
+
+### Three blockers, none of them the one that had been predicted
+
+Each was found by probing after the previous hypothesis was refuted, and none
+is about dependency as such.
+
+1. **`Hᵢ` is stated at two carriers.** `Ctor::hyp` puts a recursive field in
+   `ind(p⃗)`; `rect::field_atoms`, which the dependent ι rule is built from,
+   puts it in the raw `W`. One `w_ax` per atom, projected and reassembled.
+   *+26 sites.*
+
+2. **A defaulted field has two spellings.** `sepBy (allowTrailingSep : Bool :=
+   false)` is `optParam Bool false` as a *constructor field type* and plain
+   `Bool` as the recursor's *minor binder*, so `βⱼ`'s body is a **redex** and the
+   binder is its contractum. `gen_minor_typed` never meets this because it takes
+   `βⱼ`'s body *as* the domain and never compares the two.
+   `target_head_step` is the contraction — it works over a **term**, which is
+   what is in hand — iterated under `DELTA_FUEL`. Both memberships are then
+   needed and they are at different sets: `GenCtorBridge`'s antecedent wants the
+   declared type, `app_at_pi` the contractum.
+
+3. **`parts` is per backend and the term was not built here.** *+132 sites, the
+   largest single one.* The contraction found a λ-graph head and declined "the
+   head is opaque" because `TgBackend::parts` had never been told its shape —
+   `GenInd::betas` comes from the **thread's** cache and may have been built by
+   another declaration's backend. That is the miss `parts`' own header calls
+   "the silent kind" (`ThStep::HeadUnrecordedIsApp`); the δ branch had already
+   been let through it and the λ branch had not. `record_shape` re-mints the
+   spine through `mk`, which is build-and-record and changes no term.
+
+   **It was invisible until each contraction step's *output* was recorded too**,
+   not just its input: the first step succeeded and produced a fresh term whose
+   head was unrecorded in turn. One `record_shape` outside the loop moved
+   nothing; the same call inside it moved 132 sites.
+
+### The trade
+
+**1 429 gaps for 197 escapes, 7.3 to 1.** The degenerate arm paid 12.4 and this
+arm's non-recursive half 12.3; the ratio falls because a **recursive**
+constructor carries more antecedents per site — the deepest assumption list goes
+26 → 36 — and each is an old obligation becoming visible rather than a new one.
+No other row rose.
+
+### The forecast held as a ceiling, at 74 %
+
+1 929 forecast, 1 429 realised. The 26 % is the 64 sites whose major premise
+never reduces to a constructor: they move from `no interpretation — several
+constructors` to `the major premise is not a constructor`, a better **reason**
+and not a closure, kept honest by the prefix-summing `gap: iota` ratchet
+(878 → 656, a net 222). They belong to the numeral-representation decision.
+
+### The cost, and it is large
+
+**210 G → 388 G instructions, +85 %**, measured with `perf stat -e instructions`
+against `13c2982`. Two avoidable sources were removed (per-site `gen_all`
+hoisted to build time, 428 → 393 G; instantiation memoised, 393 → 388 G) and one
+dead loop deleted. What remains is structural: `fire_dep` discharges
+`PRE = COD ∧ DEP` at **every** ι site and `DEP` is one `dep_minor_typed` per
+constructor, so `Lean.ParserDescr` pays twelve full minor-premise derivations at
+each of its 169 sites. `fire_general` has the same shape and never showed it
+because its declarations have two or three constructors.
+
+`PRE` does not depend on which constructor is fired, so hoisting its discharge
+out of the per-site path is the real fix — but `dep_minor_typed` rests on the
+use site's own obligations, so the memo key is the ambient assumption list, and
+that wants its own design and its own measurement.
+
+### The arm's one remaining guard has no instance here
+
+A **function-typed** or **mixed** recursive slot, where the constructor term's
+argument and the minor premise's are two grains apart (`Inductive::minor_subs`
+hands over `app(tⱼ,•)`). `derived`'s `dep_minor` states both grains; this walk
+reads one binder per slot and would conflate them, so it declines by name. The
+corpus has no instance, so the decline row is absent rather than zero and
+`asked == fired` is asserted in its place — the stronger claim. `RTree`'s
+`node : (Bool → RTree) → RTree` and `Acc.intro` are the shapes that would
+populate it.
