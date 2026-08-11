@@ -159,8 +159,19 @@ pub fn provably_nonzero(l: &Level) -> bool {
 ///
 /// [`Gap::SymbolicLevel`] and not a silence: the caller counts it, and the
 /// zone-B histogram still names the shape.
+///
+/// **Minted through [`crate::gap`] rather than a bare `ok_or`**, so it appears
+/// on the blocker trail and the site census can tell this gate apart from the
+/// other things that answer `symbolic-level`. It could not, and the difference
+/// was load-bearing: reading the zone-B histogram alone says all twelve
+/// `zoneB`-only files stop here, and three of them stop at
+/// `kernel::scope_typing` instead. One line, and it is the same line the
+/// evidence axis needed when `no-endpoint` went three tranches unattributed.
 pub(crate) fn walk_numerals(inst: &[Level]) -> Result<Vec<u32>, Gap> {
-    inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)
+    inst.iter()
+        .map(ground::as_numeral)
+        .collect::<Option<_>>()
+        .ok_or_else(|| crate::gap!(Gap::SymbolicLevel))
 }
 
 /// `Sort ℓ` at a ground numeral, as a mini expression.

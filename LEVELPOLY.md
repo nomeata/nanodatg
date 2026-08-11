@@ -2147,6 +2147,68 @@ where `union_idem` proved `n̄a ∪ n̄a = n̄a`. The guard stays and is labelle
 defensive, on this file's usual grounds — a decline named where the assumption
 fails beats one two steps later.
 
+#### 5.3.3 The `zoneB` cluster, censused — one gate holds 28 of 38, and it is a door not a step
+
+**No verdict movement in this tranche.** Exits stay at **32 × 0 / 57 × 4 /
+2 × 2**, every counter and denominator unchanged, Gate A byte-identical
+against a parent built in this worktree, Gate B **0 changed rows**. What
+landed is the instrument and the measurement it produced.
+
+**The site census was armed on the zone-B axis, which it did not cover.** It
+covered the interpretation axis, then the evidence axis — where it put five of
+six files at one line and ended three tranches of an unattributed
+`no-endpoint`. Zone B had neither, and `symbolic-level` is far too wide a
+reason to read without one. Two changes, both one line: `poly_run::zone_b`'s
+blocked arm calls `PolyLedger::note_site`, and `zoneb::walk_numerals` mints
+through the `gap!` macro instead of a bare `ok_or`, so the named gate appears
+on the blocker trail at all.
+
+**It was worth arming before building, and the reason is the shape this branch
+keeps meeting.** Read from the histogram alone, all twelve `zoneB`-only files
+stop at `walk_numerals`. Read from the census, three of them do not.
+
+The 15 files owe **38** constants. `zoneBOk` is **208/362**, unmoved.
+
+    zoneb.rs:174   walk_numerals            28   9 files   the named gate
+    zoneb.rs:3452  parameter reduction       6   3 files   reduceCtorParam family
+    kernel.rs:939  Checker::scope_typing     2   2 files   036_andType, 078_And.right
+    unattributed                             2   097_aNatLit, and one of 098's two
+
+**So it is one clause for 74 % of it — and that clause is a door, not a step.**
+`walk_numerals` is `zoneb::build`'s single conversion of the declaration's own
+instantiation to `&[u32]`, and its header is accurate about what is behind it:
+*"the carrier, the constructor spec, the truncation and the index walk all read
+numerals."* Opening it is `LEVEL-POLYMORPHIC-INDUCTIVES.md`'s subject — the
+ground interior of the class walk — and it is a multi-tranche piece, not the
+step-change in the exit count that a single-clause cluster would have been.
+Saying so is the census's main value: the cluster is *concentrated* without
+being *cheap*, and those are different findings.
+
+**Within the 28, the split is worth having** — measured at the two
+`walk_numerals` call sites:
+
+    recursor::ensure   Eq.rec    6 files   040, 084, 086, 094, 098, 118
+                       Acc.rec   1 file    118
+    zoneb::build       Prod, PProd, PUnit, PropStructure
+
+`Eq.rec` at a symbolic motive level is the single most common blocked constant
+in the cluster and appears in six of the fifteen files. `Eq` already has a
+**direct** clause (`crate::direct`), which is why its type former and
+constructor certify at a symbolic instantiation while its recursor does not —
+`recursor::ensure` is gated and `direct::build` is not. That asymmetry is the
+narrowest thing in this cluster and the obvious next probe: it is one
+declaration, its clause is already de-scheduled, and only the eliminator's
+route still insists on numerals.
+
+**And the census is still partial, which is the standing caveat on it.**
+`note_site` files the oldest trail mint of the *same variant*, so a `Gap`
+returned by a bare `ok_or` — most of `zoneb.rs`'s
+`c.interp().ok_or(Gap::SymbolicLevel)` sites — never reaches the trail and its
+constant comes back unattributed. Two of the 38 did. Converting those to
+`gap!` is mechanical and should be done by whoever next needs one of them
+named, rather than pre-emptively across a file this seat is not otherwise
+touching.
+
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 
 `NANODATG_NO_SCHEDULE=1` (the staging switch in `check_declar_all`,

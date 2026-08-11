@@ -970,7 +970,19 @@ fn zone_b(env: &Environment, ip: &mut Interp, d: &Declaration, led: &mut PolyLed
             // `ensure`'s own reason, and `Skeleton` only where it returned
             // `Ok` and the constant is still absent — which is the store
             // having nothing to say, and is not a reason zone B can mint.
-            PolyLedger::note(&mut led.zone_b_blocked, Some(&r.err().unwrap_or(Gap::Skeleton)));
+            let g = r.err().unwrap_or(Gap::Skeleton);
+            PolyLedger::note(&mut led.zone_b_blocked, Some(&g));
+            // **The site census, on the zone-B axis.** It covered the
+            // interpretation axis, then the evidence axis, and not this one —
+            // and a reason as wide as `symbolic-level` is unreadable without
+            // it. Measured the moment it was armed: of the 32 constants the
+            // twelve `zoneB`-only files owe, three files' worth report
+            // `symbolic-level` from a site that is **not** `zoneb::ensure`'s
+            // named `walk_numerals` gate, which reading the histogram alone
+            // said they did. `note_site` is a no-op unless `MINI_POLY_SITES`
+            // armed the blocker, and `run` calls `enter_pair` before this, so
+            // the trail is this constant's own.
+            led.note_site(Some(&g));
         }
     }
 }
