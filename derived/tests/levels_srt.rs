@@ -64,6 +64,8 @@ fn the_sort_ladder_has_the_advertised_shape() {
         &s.mono_mem,
         &s.omega_mem,
         &s.u0_mem,
+        &s.empty_mem,
+        &s.transitive,
     ] {
         assert!(thm.hyps().is_empty(), "nothing is assumed");
         assert!(kernel::thm::debug_locally_closed(thm.concl()));
@@ -142,9 +144,149 @@ fn the_sort_ladder_has_the_advertised_shape() {
     // `⊢ ∀n. (n ∈ ω → U₀ ∈ srt(succ n))`.
     assert_eq!(
         *s.u0_mem.concl(),
-        Formula::forall(n, Formula::imp(h, Formula::mem(se.u0.clone(), s.at(sn)))),
+        Formula::forall(n, Formula::imp(h.clone(), Formula::mem(se.u0.clone(), s.at(sn)))),
         "u0_mem has the wrong shape"
     );
+
+    // `⊢ ∀n. (n ∈ ω → ∅ ∈ srt(n))` — at `n`, not at `succ n`, which is the
+    // whole difference from `u0_mem` above.
+    assert_eq!(
+        *s.empty_mem.concl(),
+        Formula::forall(n, Formula::imp(h.clone(), Formula::mem(zero.clone(), s.at(tn.clone())))),
+        "empty_mem has the wrong shape"
+    );
+
+    // `⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) → ∀z. (z ∈ y → z ∈ srt(n))))`.
+    let (y, z) = (env.fresh_var(), env.fresh_var());
+    let (ty, tz) = (Term::var(y), Term::var(z));
+    assert_eq!(
+        *s.transitive.concl(),
+        Formula::forall(
+            n,
+            Formula::imp(
+                h,
+                Formula::forall(
+                    y,
+                    Formula::imp(
+                        Formula::mem(ty.clone(), s.at(tn.clone())),
+                        Formula::forall(
+                            z,
+                            Formula::imp(
+                                Formula::mem(tz.clone(), ty),
+                                Formula::mem(tz, s.at(tn))
+                            )
+                        )
+                    )
+                )
+            )
+        ),
+        "transitive has the wrong shape"
+    );
+}
+
+/// **The two `Rung` facts at a variable rung, spent at three rungs** — rung 0,
+/// rung 1 and rung 2, each discharged of its `n̄ ∈ ω` premise and read through
+/// [`Srt::rung_eq`] onto the tower's own `Uₙ`.
+///
+/// Three rungs and not two, and here the reason is sharper than the usual one:
+/// the two statements are proved by inductions whose **base and step are
+/// different mathematics**. Rung 0 is `U₀ = {0,1}`, which is *not* a universe —
+/// it is transitive because proof irrelevance makes every member of a member
+/// `•`, and it holds `∅` because `0` is `∅`. Rungs 1 and 2 are universes and
+/// get the tower's own `C₁` and `∅ ∈ U(c)`. A test at successors alone passes
+/// under a `srt` whose ladder starts at rung 1, which is exactly the shape
+/// `at_zero` exists to rule out; a test at rung 0 alone passes under one with
+/// no step at all. Rung 2 is the first that composes `at_succ` with a recursive
+/// ladder result, so it is what keeps the transport honest past one step.
+///
+/// This is the non-vacuity these two exports need, because both conclusions are
+/// `∀`-statements over `ω` and a shape assertion cannot tell a theorem that
+/// says something at every rung from one that says something at none.
+#[test]
+fn every_rung_is_transitive_and_holds_the_empty_set() {
+    let mut env = Env::new();
+    let se = setup(&mut env);
+    let (r, ut, s) = (&se.r, &se.ut, &se.s);
+    let zero = r.zero();
+
+    // The numerals and their `∈ ω` witnesses, built here from the chain's own
+    // `0 ∈ ω` and successor closure — `utower`'s are crate-private and this
+    // test should state the arithmetic it relies on anyway.
+    let mut num = zero.clone();
+    let mut mem = r.core().zero_mem.clone();
+    for k in 0..3usize {
+        if k > 0 {
+            let pred = r.succ_of(num.clone());
+            let closed =
+                derived::inst_all(&r.core().succ_closed, std::slice::from_ref(&num)).expect("inst");
+            mem = Thm::mp(&closed, &mem).expect("succ closure");
+            num = pred;
+        }
+        let (num, mem) = (num.clone(), mem.clone());
+        // The bridge onto the tower's own rung term, so what follows is a
+        // statement about `Uₖ` and not only about the `ite0` application.
+        let bridge = s
+            .rung_eq(&mut env, r, ut, se.lu, k)
+            .unwrap_or_else(|| panic!("rung {k}: the ground bridge"));
+        let uk = bridge.concl().as_eq().expect("an equation").1.clone();
+
+        // `∅ ∈ srt(k̄)`, carried to `∅ ∈ Uₖ`.
+        let at_k = Thm::mp(
+            &derived::inst_all(&s.empty_mem, std::slice::from_ref(&num)).expect("inst"),
+            &mem,
+        )
+        .unwrap_or_else(|| panic!("rung {k}: `∅ ∈ srt(k̄)`"));
+        let w = env.fresh_var();
+        let leib = Thm::eq_leibniz(
+            s.at(num.clone()),
+            uk.clone(),
+            w,
+            Formula::mem(zero.clone(), Term::var(w)),
+        );
+        let in_uk = Thm::mp(&Thm::mp(&leib, &bridge).expect("mp"), &at_k)
+            .unwrap_or_else(|| panic!("rung {k}: `∅ ∈ Uₖ`"));
+        assert_eq!(
+            *in_uk.concl(),
+            Formula::mem(zero.clone(), uk.clone()),
+            "rung {k}: the empty set does not land in the tower's own rung"
+        );
+        assert!(in_uk.hyps().is_empty(), "rung {k}: unconditional");
+
+        // Transitivity, spent rather than restated: `∅ ∈ Uₖ` and `Uₖ`
+        // transitive give every member of `∅` back in `Uₖ`. The instance is
+        // vacuous as a *set* fact and is not vacuous as a *proof* — the
+        // universal has to instantiate at all, and at a rung where the
+        // statement had no branch it would not exist to instantiate.
+        let tr_k = Thm::mp(
+            &derived::inst_all(&s.transitive, std::slice::from_ref(&num)).expect("inst"),
+            &mem,
+        )
+        .unwrap_or_else(|| panic!("rung {k}: `C₁(srt(k̄))`"));
+        let at_empty =
+            Thm::mp(&derived::inst_all(&tr_k, std::slice::from_ref(&zero)).expect("inst"), &at_k)
+                .unwrap_or_else(|| panic!("rung {k}: transitivity at `∅`"));
+        let v = env.fresh_var();
+        assert_eq!(
+            *at_empty.concl(),
+            Formula::forall(
+                v,
+                Formula::imp(
+                    Formula::mem(Term::var(v), zero.clone()),
+                    Formula::mem(Term::var(v), s.at(num.clone()))
+                )
+            ),
+            "rung {k}: transitivity does not instantiate to the subset clause"
+        );
+        assert!(at_empty.hyps().is_empty(), "rung {k}: unconditional");
+
+        // …and the rung really is the one the name says. Rung 0 is `U₀`, which
+        // is *not* `U(·)` of anything, and that asymmetry is the content.
+        if k == 0 {
+            assert_eq!(uk, se.u0, "rung 0 is not U₀");
+        } else {
+            assert_ne!(uk, se.u0, "rung {k} must not be U₀");
+        }
+    }
 }
 
 /// **Non-vacuity**: `⊢ srt(1̄) = U(ω)` — landing on `Tower::u(1)` syntactically

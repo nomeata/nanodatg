@@ -16,7 +16,19 @@
 //! ⊢ ∀n. (n ∈ ω → ∀m. (m ∈ n → srt(m) ⊆ srt(n)))     [Srt::mono_mem]
 //! ⊢ ∀n. (n ∈ ω → ω ∈ srt(succ n))                   [Srt::omega_mem]
 //! ⊢ ∀n. (n ∈ ω → U₀ ∈ srt(succ n))                  [Srt::u0_mem]
+//! ⊢ ∀n. (n ∈ ω → ∅ ∈ srt(n))                        [Srt::empty_mem]
+//! ⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) →
+//!                     ∀z. (z ∈ y → z ∈ srt(n))))    [Srt::transitive]
 //! ```
+//!
+//! The last two are [`crate::tower::Rung`]'s `empty_mem` and `transitive` at a
+//! **variable** rung, and they are the two facts a `COD` obligation spends. At
+//! `succ n` they are the tower's own, read through [`Srt::at_succ`]; at `∅`
+//! they are facts about `U₀ = {0,1}` specifically, because rung 0 is not a
+//! universe. Both hold there: `0` **is** `∅` (`crate::sums`), so `∅ ∈ U₀` is
+//! [`Tower::false_in_u0`] verbatim, and every member of a member of `{0,1}` is
+//! `•`, which is `∅` again — [`Tower::u0_subsingleton`] is proof irrelevance
+//! and doubles as `{0,1}`'s transitivity.
 //!
 //! where `⊆` is spelled [`kernel::thm::subset`] exactly. This is `⟦Sort ℓ⟧`
 //! as one term of a variable level (`LEVELPOLY.md`): at the closed numeral `0`
@@ -48,6 +60,18 @@
 //! a case split on `z ∈ succ(n) ↔ (z ∈ n ∨ z = n)`, closed by
 //! [`crate::cumul::subset_trans`]. `omega_mem` and `u0_mem` are the cited
 //! tower facts rewritten along `at_succ` reversed.
+//!
+//! `empty_mem` and `transitive` are two further inductions, and **not the
+//! `Order::cases` split they were sized at**: `crate::levels::order` is not a
+//! parameter of this module and does not have to become one. `empty_mem`'s
+//! step is [`step_sub`] applied to the induction hypothesis — the ladder only
+//! grows, so a member stays a member. `transitive`'s step never reads its
+//! hypothesis at all, exactly as `sort_in_sort`'s does not: every successor
+//! rung is a universe outright, so [`Tower::transitive`] settles it and the
+//! induction is doing nothing but the case analysis. What that buys over
+//! `Order::cases` is the *existential* — `n = succ m` would have to be
+//! eliminated and the equation carried through three occurrences of `srt(n)`,
+//! where the induction hands the successor over already spelled.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -56,8 +80,8 @@ use crate::levels::utower::{numeral, numeral_in_omega, UTower};
 use crate::recursion::{hyp_eq_symm, hyp_eq_trans, induction_scheme, Rec};
 use crate::tower::Tower;
 use crate::{
-    a1i, and_intro, and_left, and_right, eq_symm_imp, eq_trans, ex_falso, hyp_and, hyp_mp,
-    hyp_or_elim, iff_mp, inst_all, mpd_const, syl, uncurry,
+    a1i, and_intro, and_intro_imp, and_left, and_right, eq_symm_imp, eq_trans, ex_falso, hyp_and,
+    hyp_mp, hyp_or_elim, iff_mp, imp_mono_r, inst_all, mpd_const, syl, uncurry,
 };
 
 /// The sort ladder `srt(n) = ite0(n, U₀, app(lvl, n))`, with everything proved
@@ -77,6 +101,13 @@ pub struct Srt {
     pub omega_mem: Thm,
     /// `⊢ ∀n. (n ∈ ω → U₀ ∈ srt(succ n))`.
     pub u0_mem: Thm,
+    /// `⊢ ∀n. (n ∈ ω → ∅ ∈ srt(n))` — [`crate::tower::Rung::empty_mem`] at a
+    /// variable rung. At **every** rung, `∅` included, which is the half
+    /// `u0_mem` does not cover.
+    pub empty_mem: Thm,
+    /// `⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) → ∀z. (z ∈ y → z ∈ srt(n))))` —
+    /// [`crate::tower::Rung::transitive`] at a variable rung.
+    pub transitive: Thm,
     /// The `ite0` symbol, kept so [`Srt::at`] spells the application exactly
     /// as every theorem above does.
     ite0: FnSym,
@@ -204,6 +235,16 @@ pub fn srt(env: &mut Env, r: &Rec, i: &Ite0, ut: &UTower, tower: &Tower) -> Opti
     let mono_mem = mono_mem(env, &cx, &step_sub)?;
     let omega_mem = omega_mem(env, &cx, &at_succ)?;
     let u0_mem = u0_mem(env, &cx, &at_succ, &tower.u0_in)?;
+    let empty_mem = empty_mem(env, &cx, &at_zero, &step_sub, &tower.false_in_u0)?;
+    let transitive = transitive(
+        env,
+        &cx,
+        &at_zero,
+        &at_succ,
+        &tower.u0_subsingleton,
+        &tower.false_in_u0,
+        &tower.transitive,
+    )?;
 
     let out = Srt {
         at_zero,
@@ -213,6 +254,8 @@ pub fn srt(env: &mut Env, r: &Rec, i: &Ite0, ut: &UTower, tower: &Tower) -> Opti
         mono_mem,
         omega_mem,
         u0_mem,
+        empty_mem,
+        transitive,
         ite0: i.sym,
         app: r.ap.app,
         lvl: ut.set.clone(),
@@ -574,4 +617,172 @@ fn u0_mem(env: &mut Env, cx: &Cx, at_succ: &Thm, u0_in: &Thm) -> Option<Thm> {
         "u0_mem: unexpected shape"
     );
     Some(Thm::gen(n, &body))
+}
+
+/// `⊢ ∀n. (n ∈ ω → ∅ ∈ srt(n))`, by induction on `n`.
+///
+/// Base: `srt(∅)` is `U₀ = {0,1}` and `0` **is** `∅` (`crate::sums` — the
+/// point, falsity and the empty set are one term), so [`Tower::false_in_u0`]
+/// transported along the reversed [`at_zero`] is the whole of it. Step:
+/// [`step_sub`] instantiated at `∅` and applied to the induction hypothesis —
+/// the ladder only grows, so a member stays one. This is the *one* fact of the
+/// pair whose induction hypothesis does real work.
+fn empty_mem(
+    env: &mut Env,
+    cx: &Cx,
+    at_zero: &Thm,
+    step_sub: &Thm,
+    false_in_u0: &Thm,
+) -> Option<Thm> {
+    let zero = cx.r.zero();
+    let nv = env.fresh_var();
+    let tn = Term::var(nv);
+    let sn = cx.r.succ_of(tn.clone());
+    let h = Formula::mem(tn.clone(), cx.r.omega());
+    let phi = Formula::mem(zero.clone(), cx.srt(tn.clone()));
+
+    // ── Base: `∅ ∈ U₀`, read at `srt(∅)` ─────────────────────────────────────
+    let srt0 = cx.srt(zero.clone());
+    debug_assert_eq!(
+        *false_in_u0.concl(),
+        Formula::mem(zero.clone(), cx.u0.clone()),
+        "empty_mem: `⊢ 0 ∈ U₀` is not about this `∅` and this `U₀`"
+    );
+    let w = env.fresh_var();
+    let sym0 = Thm::mp(&eq_symm_imp(env, srt0.clone(), cx.u0.clone()), at_zero)?;
+    let leib =
+        Thm::eq_leibniz(cx.u0.clone(), srt0, w, Formula::mem(zero.clone(), Term::var(w)));
+    let base = Thm::mp(&Thm::mp(&leib, &sym0)?, false_in_u0)?;
+    debug_assert_eq!(*base.concl(), phi.subst(nv, &zero), "empty_mem: the base drifted");
+
+    // ── Step, under `K := n ∈ ω ∧ φ(n)` ──────────────────────────────────────
+    let k = Formula::and(h.clone(), phi.clone());
+    let k_h = and_left(h.clone(), phi.clone());
+    let k_phi = and_right(h.clone(), phi.clone());
+    let k_sub = syl(&k_h, &inst_all(step_sub, std::slice::from_ref(&tn))?)?;
+    // `srt(n) ⊆ srt(succ n)` is `∀z. (z ∈ srt(n) → z ∈ srt(succ n))`; take `z`
+    // to be `∅` and the induction hypothesis is the antecedent.
+    let sub = kernel::thm::subset(env, cx.srt(tn.clone()), cx.srt(sn.clone()));
+    let at_zero_inst = Thm::ax_inst(sub, zero.clone())?;
+    let k_goal = hyp_mp(&syl(&k_sub, &at_zero_inst)?, &k_phi)?;
+    debug_assert_eq!(
+        *k_goal.concl(),
+        Formula::imp(k, phi.subst(nv, &sn)),
+        "empty_mem: the step drifted"
+    );
+
+    let scheme = induction_scheme(env, cx.r.core(), nv, &phi)?;
+    Thm::mp(&scheme, &and_intro(&base, &Thm::gen(nv, &k_goal)))
+}
+
+/// `⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) → ∀z. (z ∈ y → z ∈ srt(n))))`, by induction
+/// on `n`. **The induction hypothesis is never used** — see [`sort_in_sort`],
+/// which has the same shape and the same reason: the induction is being spent
+/// on the case analysis and on nothing else.
+///
+/// Base: `U₀ = {0,1}` is transitive, and that is proof irrelevance read
+/// sideways. [`Tower::u0_subsingleton`] says every member of every member of
+/// `{0,1}` is `•`; `•` is `∅` is `0`, and `0 ∈ {0,1}`. Step: `srt(succ n)` is
+/// the universe `U(app(lvl,n))` by [`at_succ`], and [`Tower::transitive`] is
+/// stated at every `U(·)` at once, so the whole statement transports along the
+/// reversed equation in one Leibniz step — the hole occurs twice in it and
+/// [`Thm::eq_leibniz`] rewrites both.
+fn transitive(
+    env: &mut Env,
+    cx: &Cx,
+    at_zero: &Thm,
+    at_succ: &Thm,
+    u0_subsingleton: &Thm,
+    false_in_u0: &Thm,
+    tower_transitive: &Thm,
+) -> Option<Thm> {
+    let zero = cx.r.zero();
+    let nv = env.fresh_var();
+    let tn = Term::var(nv);
+    let sn = cx.r.succ_of(tn.clone());
+    let h = Formula::mem(tn.clone(), cx.r.omega());
+    let (yv, zv) = (env.fresh_var(), env.fresh_var());
+    let (ty, tz) = (Term::var(yv), Term::var(zv));
+
+    // `C₁(s)` — "`s` is transitive" — as a formula of the set, so that the two
+    // transports below are each a single Leibniz step.
+    let c1 = |s: &Term| {
+        Formula::forall(
+            yv,
+            Formula::imp(
+                Formula::mem(ty.clone(), s.clone()),
+                Formula::forall(
+                    zv,
+                    Formula::imp(
+                        Formula::mem(tz.clone(), ty.clone()),
+                        Formula::mem(tz.clone(), s.clone()),
+                    ),
+                ),
+            ),
+        )
+    };
+    let phi = c1(&cx.srt(tn.clone()));
+    let w = env.fresh_var();
+
+    // ── Base: `C₁(U₀)`, then read at `srt(∅)` ────────────────────────────────
+    let hy = Formula::mem(ty.clone(), cx.u0.clone());
+    let hz = Formula::mem(tz.clone(), ty.clone());
+    let goal = Formula::mem(tz.clone(), cx.u0.clone());
+    // `(y ∈ U₀ ∧ z ∈ y) → z = •`, and `•` is `∅`.
+    let irrel = inst_all(u0_subsingleton, &[ty.clone(), tz.clone()])?;
+    debug_assert_eq!(
+        *irrel.concl(),
+        Formula::imp(Formula::and(hy.clone(), hz.clone()), Formula::eq(tz.clone(), zero.clone())),
+        "transitive: proof irrelevance does not name this `•`"
+    );
+    // `z = ∅ → z ∈ U₀`, from `∅ ∈ U₀` by Leibniz in the reverse direction.
+    let carry = mpd_const(
+        &Thm::eq_leibniz(zero.clone(), tz.clone(), w, Formula::mem(Term::var(w), cx.u0.clone())),
+        false_in_u0,
+    )?;
+    let z_in_u0 = syl(&eq_symm_imp(env, tz.clone(), zero.clone()), &carry)?;
+    let and_imp = syl(&irrel, &z_in_u0)?;
+    // Curry: `(hy ∧ hz) → goal` back to `hy → (hz → goal)`.
+    let inner = syl(
+        &and_intro_imp(hy.clone(), hz.clone()),
+        &imp_mono_r(&and_imp, hz.clone())?,
+    )?;
+    let quantified =
+        Thm::mp(&Thm::ax_dist(zv, hy.clone(), Formula::imp(hz, goal))?, &Thm::gen(zv, &inner))?;
+    let u0_c1 = Thm::gen(yv, &quantified);
+    debug_assert_eq!(*u0_c1.concl(), c1(&cx.u0), "transitive: `C₁(U₀)` has the wrong shape");
+
+    let srt0 = cx.srt(zero.clone());
+    let sym0 = Thm::mp(&eq_symm_imp(env, srt0.clone(), cx.u0.clone()), at_zero)?;
+    let leib0 = Thm::eq_leibniz(cx.u0.clone(), srt0, w, c1(&Term::var(w)));
+    let base = Thm::mp(&Thm::mp(&leib0, &sym0)?, &u0_c1)?;
+    debug_assert_eq!(*base.concl(), phi.subst(nv, &zero), "transitive: the base drifted");
+
+    // ── Step, under `K := n ∈ ω ∧ φ(n)` (the IH conjunct goes unused) ────────
+    let k = Formula::and(h.clone(), phi.clone());
+    let k_h = and_left(h.clone(), phi.clone());
+    let k_eq = syl(&k_h, &inst_all(at_succ, std::slice::from_ref(&tn))?)?;
+    let (_, eqf) = k_eq.concl().as_imp()?;
+    let (_, uln) = eqf.as_eq()?;
+    let uln = uln.clone();
+
+    let at_ln = inst_all(tower_transitive, std::slice::from_ref(&cx.ut.at(tn.clone())))?;
+    debug_assert_eq!(
+        *at_ln.concl(),
+        c1(&uln),
+        "transitive: the tower's C₁ did not land on at_succ's universe term"
+    );
+
+    let srt_sn = cx.srt(sn.clone());
+    let k_sym = hyp_eq_symm(env, &k_eq)?;
+    let leib1 = Thm::eq_leibniz(uln, srt_sn, w, c1(&Term::var(w)));
+    let k_goal = hyp_mp(&syl(&k_sym, &leib1)?, &a1i(&at_ln, k.clone()))?;
+    debug_assert_eq!(
+        *k_goal.concl(),
+        Formula::imp(k, phi.subst(nv, &sn)),
+        "transitive: the step drifted"
+    );
+
+    let scheme = induction_scheme(env, cx.r.core(), nv, &phi)?;
+    Thm::mp(&scheme, &and_intro(&base, &Thm::gen(nv, &k_goal)))
 }

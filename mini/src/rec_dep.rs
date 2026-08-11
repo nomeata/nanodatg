@@ -348,12 +348,20 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
 /// Tried at this module, the split costs three things beyond them, and the
 /// third is the large one:
 ///
-/// * **`cod_at_rung` at a variable rung.** It spends `Rung::transitive` and
-///   `Rung::empty_mem`; `derived::levels::srt::Srt` has neither, and neither is
-///   `UTower`'s. They are true at every rung — `srt(0) = U₀` is transitive and
-///   holds `∅`, and every successor rung is a universe — so this is a `derived`
-///   addition, not a blocker, but it *is* new mathematics and this branch had
-///   written none.
+/// * **`cod_at_rung` at a variable rung. Built.** It spends `Rung::transitive`
+///   and `Rung::empty_mem`, and `derived::levels::srt::Srt` had neither. Both
+///   are there now — `Srt::empty_mem` and `Srt::transitive`, `⊢ ∀n ∈ ω` — which
+///   is the **first `derived` addition this strand needed**, and so the end of
+///   the branch's "no new mathematics" run. It is a real change to that
+///   headline claim and it is small: two inductions, `sort_in_sort`'s shape,
+///   forty lines. **Not the `Order::cases` split this bullet used to size it
+///   at**: `crate::levels::order` never becomes a parameter of that module,
+///   because an induction hands the successor over already spelled where
+///   `cases` would make the caller eliminate an existential and carry the
+///   equation through three occurrences. `srt(0) = U₀` is transitive because
+///   proof irrelevance says every member of a member of `{0,1}` is `•`, and it
+///   holds `∅` because `0` **is** `∅`; every successor rung is a universe and
+///   gets the tower's own facts.
 /// * **The motive binder's own type.** `⟦T p⃗ → Sort u₁⟧` is not
 ///   `dprod(·, ⟦T p⃗⟧)` at a variable rung; it is
 ///   `ite0(succ(û₁), cndd(…), dprod(…))`, which [`cx_of`]'s `MOTIVE_TY` check
@@ -1349,11 +1357,15 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
 /// [`Closed::discharge`](crate::scope::Closed::discharge)'s, which is `COD`'s
 /// on the nose.
 ///
-/// **Still the ground rung, and that is the boundary rather than an
-/// oversight.** `Rung::transitive` and `Rung::empty_mem` are the two facts, and
-/// `derived::levels::srt::Srt` exports neither — see [`motive_level_of`]'s
-/// header. A variable rung needs them stated over `srt(n̄)`, which is a
-/// `derived` addition this route has no caller for until the split is built.
+/// **Still the ground rung, and the reason is now the caller and not the
+/// library.** The two facts this spends are `Rung::transitive` and
+/// `Rung::empty_mem`, and `derived::levels::srt::Srt` exports both of them at a
+/// **variable** rung as of this branch's first `derived` addition — `⊢ ∀n.
+/// (n ∈ ω → ∅ ∈ srt(n))` and `⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) → ∀z. (z ∈ y →
+/// z ∈ srt(n))))`. What this function still lacks is a *caller* at a variable
+/// rung: [`build`] answers [`SYMBOLIC_SPLIT`] before either clause runs, so
+/// de-grounding the line below would put a second untested spelling in front of
+/// no consumer. It moves with the split and not before it.
 pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
     let rung = ip.prelude.tower.at(ground::as_numeral(&site.u1)? as usize)?;
     if rung.set != cx.v_set {
