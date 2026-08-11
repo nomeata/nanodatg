@@ -2074,6 +2074,83 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     );
 }
 
+/// **`⟦Nat⟧` is `ω`, and the arm over it is reached.**
+///
+/// The carrier swap (`DECISIONS.md`, 2026-08-11) is invisible in every total:
+/// `TOTAL gaps`, the escape count and the derived-certificate count are all
+/// byte-identical across it, because origin 2 is about *literals* being opaque
+/// and the literals had not moved yet. So a swap that had silently stopped
+/// firing — dispatch falling through to the general path, or `fire_nat`
+/// refusing at entry — would look exactly like a swap that worked. **This test
+/// is the only thing that can tell them apart**, which is why it exists
+/// separately from the ledger ratchet and asserts reach rather than totals.
+///
+/// Four claims, in the order a failure is worth reading:
+///
+/// 1. the ω apparatus was **built** — `⟦Nat⟧` really is `derived::nat`'s object
+///    and not the W-type;
+/// 2. the arm was **asked**, so `RecBottom::Nat` is reachable;
+/// 3. it **answered every time it was asked** — `asked == zero + succ`;
+/// 4. **both constructors** fire. Two atoms cannot distinguish a nesting bug
+///    and one constructor cannot distinguish a recursor: an arm that served
+///    only `Nat.zero` would satisfy every count above if they were collapsed
+///    into one, and `succ` is the one carrying the live recursive call.
+#[test]
+fn the_omega_nat_arm_is_reached_on_the_prelude() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = report(&f);
+    // Scoped to the `⟦Nat⟧` section and **panicking on an absent label**, for
+    // the reason recorded throughout this file: a renamed row read through a
+    // permissive helper is zero, and every assertion below would then pass
+    // having measured nothing. That is the exact defect this test guards
+    // against at the level of the arm, so it may not commit it itself.
+    let nat_row = |label: &str| -> u64 {
+        let mut inside = false;
+        for l in text.lines() {
+            if l.trim_start().starts_with("⟦Nat⟧ as von Neumann ω") {
+                inside = true;
+                continue
+            }
+            if inside {
+                if !l.starts_with("    ") {
+                    break
+                }
+                if let Some((k, n)) = l.trim().rsplit_once(char::is_whitespace) {
+                    if k.trim() == label {
+                        return n.parse().unwrap_or(u64::MAX)
+                    }
+                }
+            }
+        }
+        panic!(
+            "the report has no `⟦Nat⟧ as von Neumann ω` section with a `{label}` row. \
+             Either the carrier is not being built — in which case `⟦Nat⟧` has silently \
+             gone back to being a W-type or nothing at all — or the row was renamed and \
+             every assertion here would have read zero."
+        )
+    };
+    let built = nat_row("the ω apparatus and the successor graph built");
+    assert_eq!(built, 1, "the ω apparatus was built {built} times, expected exactly once");
+    let asked = nat_row("…ω Nat ι sites the arm was asked at");
+    assert!(asked > 0, "the ω Nat arm was never asked: `RecBottom::Nat` is wired but unreachable");
+    let zero = nat_row("ι sites computed at Nat.zero (unconditional)");
+    let succ = nat_row("ι sites computed at Nat.succ (rests on ⟦n⟧ ∈ ω)");
+    assert_eq!(
+        asked,
+        zero + succ,
+        "the ω Nat arm was asked at {asked} sites but answered {zero} + {succ} — \
+         it is refusing somewhere, and every shortfall is a gap under an `iota:` reason"
+    );
+    // Both constructors, separately. `zero` alone would exercise an ι rule with
+    // no recursive call and no β step on the successor graph, which is most of
+    // what the swap changed.
+    assert!(zero > 0, "no ι site fired at `Nat.zero`");
+    assert!(succ > 0, "no ι site fired at `Nat.succ` — the live recursive call is untested here");
+}
+
 /// **The whole-ledger ratchets, and they are named for what they are.**
 ///
 /// `TOTAL gaps` and the boundary-escape count over `init-prelude`. Both are

@@ -93,7 +93,7 @@ pub use tags::{
     tags_at, tags_in_u1,
 };
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
-pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
+pub use enums::{bool_tags_in_u1, enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
 pub use finord::{bnd_finord, bnd_finords, finord_is_explicit};
 pub use carrier_bnd::{bnd_carrier, bnd_nullary_tags};

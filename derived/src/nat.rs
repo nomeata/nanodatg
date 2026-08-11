@@ -87,6 +87,7 @@ pub mod glue;
 pub mod mul;
 pub mod prim;
 pub mod sub;
+pub mod succ_fun;
 pub mod typing;
 pub mod unique;
 
@@ -97,6 +98,7 @@ pub use ble_unique::{ble_transfer, ble_uniqueness, BleClauses, BleSpec};
 pub use boolean::{Boolean, Decode};
 pub use compare::Compare;
 pub use sub::Sub;
+pub use succ_fun::SuccFun;
 pub use eval::{numeral_size, Eval, Meter};
 pub use mul::Mul;
 pub use prim::{prim_rec, PrimRec};

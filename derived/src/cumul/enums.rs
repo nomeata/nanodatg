@@ -69,6 +69,83 @@ pub fn unit_in_u1(c: &Chain) -> Option<Thm> {
     (*out.concl() == Formula::mem(s.unit(), c.u1.set.clone())).then_some(out)
 }
 
+/// `⊢ (1 + 1) ∈ U₁` — the two-element tag set, i.e. Lean's `Bool`'s.
+///
+/// # Why it is here and not in [`super::witness`]
+///
+/// It used to be a field of [`super::NatMem`], computed on the way to
+/// `⊢ N ∈ U₁` for the W-type presentation of `Nat`. That presentation is gone —
+/// `⟦Nat⟧` is `ω` and its membership is [`crate::tower::Rung::omega_mem`] — but
+/// this theorem is not about `Nat` at all: it is about `1 + 1`, and its only
+/// consumer was ever [`enum_in_u1`] at `Bool`. Leaving it inside a `Nat`
+/// witness would have kept the whole W-type alive to produce a fact that never
+/// mentions it.
+///
+/// # The route is the sum's defining equation, not its membership condition
+///
+/// `A + B` abbreviates `({∅} × A) ∪ ({1} × B)`, and `U₁` is closed under
+/// pairing, products and binary unions. So this is five instantiations and one
+/// rewrite along [`Sums::sum_def`](crate::sums::Sums::sum_def) — no Replacement
+/// instance and no case analysis on `a ∈ 1 + 1`.
+///
+/// Note that `{∅}` and `1` are the *same term*: `1` is `{∅,∅}`, which is what
+/// `singleton(up, ∅)` builds. That is why `one_in_u1` serves for both factors
+/// of the left product.
+pub fn bool_tags_in_u1(env: &mut Env, c: &Chain) -> Option<Thm> {
+    let s = &c.wt.sums;
+    let sets = s.ap.sets.clone();
+    let (zero, one) = (s.zero(), s.unit());
+    let tags = s.sum_of(one.clone(), one.clone());
+    let u1 = &c.u1;
+
+    let one_in_u1 = unit_in_u1(c)?;
+    let sing_one = crate::singleton(sets.up, one.clone());
+    let sing_one_in_u1 = Thm::mp(
+        &inst_all(&u1.pairing, &[one.clone(), one.clone()])?,
+        &and_intro(&one_in_u1, &one_in_u1),
+    )?;
+    let p_left = s.prod.of(crate::singleton(sets.up, zero.clone()), one.clone());
+    let p_right = s.prod.of(sing_one.clone(), one.clone());
+    let p_left_u1 = Thm::mp(
+        &inst_all(&u1.product, &[crate::singleton(sets.up, zero), one.clone()])?,
+        &and_intro(&one_in_u1, &one_in_u1),
+    )?;
+    let p_right_u1 = Thm::mp(
+        &inst_all(&u1.product, &[sing_one, one.clone()])?,
+        &and_intro(&sing_one_in_u1, &one_in_u1),
+    )?;
+    let body_u1 = Thm::mp(
+        &inst_all(&u1.bin_union, &[p_left.clone(), p_right.clone()])?,
+        &and_intro(&p_left_u1, &p_right_u1),
+    )?;
+    let sum_def_at = inst_all(&s.sum_def, &[one.clone(), one])?;
+    if *sum_def_at.concl()
+        != Formula::eq(
+            tags.clone(),
+            crate::funspace::bin_union(&sets, p_left.clone(), p_right.clone()),
+        )
+    {
+        return None
+    }
+    let wv = env.fresh_var();
+    let out = Thm::mp(
+        &Thm::mp(
+            &Thm::eq_leibniz(
+                crate::funspace::bin_union(&sets, p_left, p_right),
+                tags.clone(),
+                wv,
+                Formula::mem(Term::var(wv), u1.set.clone()),
+            ),
+            &eq_symm(env, &sum_def_at)?,
+        )?,
+        &body_u1,
+    )?;
+    // Pinned: every caller passes this straight to [`enum_in_u1`], which checks
+    // it again, but a wrong conclusion here would be a wrong *reason* reported
+    // at the wrong place.
+    (out.hyps().is_empty() && *out.concl() == Formula::mem(tags, u1.set.clone())).then_some(out)
+}
+
 /// `⊢ enum(A) ∈ U₁`, given `⊢ A ∈ U₁`.
 ///
 /// `tags_in_u1` must be exactly that, unconditionally: it is checked before it

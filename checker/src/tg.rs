@@ -1631,6 +1631,102 @@ struct CtorRule {
     prems: Vec<Formula>,
 }
 
+/// **`⟦Nat⟧`, and it is von Neumann `ω`** — not a W-type.
+///
+/// # What this is, and what it replaced
+///
+/// `⟦Nat⟧` used to be `derived::wnat::Nat`: `W(1+1, B, U(1+1))` with zero
+/// `⟨inl •,∅⟩`, built like every other inductive out of the general W
+/// machinery. It is now `ω`, zero `∅`, `derived::nat`'s object — **the same one
+/// `mini` interprets `Nat` as** (`mini/src/nat_clause.rs`). See `DECISIONS.md`,
+/// 2026-08-11, and `NAT-REPRESENTATION.md` §0.1.
+///
+/// The reason is not economy, it is that there was no *one* `Nat`. Three
+/// carriers were in play — this W-type, `derived::nat`'s `ω`, and one opaque
+/// `env.declare(0)` per numeral — and nothing related any two of them, which is
+/// why `⟦Nat.ble lit₃ lit₅⟧` could not fire ι and why the numeral bridge in
+/// `derived::nat::ble_unique` had nothing on the checker's side to attach to.
+/// Unifying the interpretation is the whole point; leaving the W-type
+/// compiling beside it would be the same defect in a quieter form.
+///
+/// # The fields are the same statements the W presentation offered
+///
+/// Deliberately: every consumer in this file reads `ty`, `zero_t`, `zero`,
+/// `succ_fun`, `succ_in_funspace` and `succ_beta`, and each names the same
+/// judgement it named before. Only the object changed. The one field that had
+/// no ω counterpart is `wnat::Nat::sc_ax` — `⊢ ∀x. sc(x) = ⟨inr •,{⟨•,x⟩}⟩`,
+/// the abbreviation layer that let the W ι rules be stated at a readable term.
+/// `ω`'s `succ` is a symbol of the ambient signature already, so the ι rules
+/// are stated at `succ(n)` directly and the layer, with its Leibniz step in
+/// [`TgBackend::fire_nat`], is simply gone.
+///
+/// # What it costs, compared with what it replaced
+///
+/// Strictly less, in both currencies that matter here.
+///
+/// * **A premise.** `derived::wnat_rec`'s two ι rules each carry
+///   `HYP := z ∈ T ∧ s ∈ fs(N, fs(T,T))` — Lean's typing of the two minor
+///   premises, which `fire_nat` had to obtain, transport along `⟦N⟧ = W(…)` and
+///   discharge. `Nat::iota_zero` carries **no hypothesis at all** and
+///   `Nat::iota_succ` carries only `n ∈ ω`. So an ι step at `Nat.zero` is now
+///   unconditional, where it used to produce a conditional certificate.
+/// * **The whole W-recursor.** `NatRecursor` no longer holds a [`RecCore`]:
+///   `Recursor::new` plus totality is the most expensive derivation in
+///   `derived`, and `Nat.rec` no longer forces it. `List.rec` and the general
+///   path still do, so it has moved rather than gone.
+struct NatOmega {
+    /// `ω`, `0`, `succ`, `natrec` and both ι rules.
+    n: derived::nat::Nat,
+    /// `ω` — the body `⟦Nat⟧`'s abbreviation is defined as.
+    ty: Term,
+    /// `0`, which is `∅` literally.
+    zero_t: Term,
+    /// `⊢ 0 ∈ ω`.
+    zero: Thm,
+    /// `{⟨x, succ x⟩ : x ∈ ω}` — `⟦Nat.succ⟧`, as a **set**.
+    ///
+    /// A Lean constructor of type `Nat → Nat` interprets to an element of
+    /// `fs(⟦Nat⟧,⟦Nat⟧)`, so a term-former will not do. See
+    /// [`derived::nat::SuccFun`], which is three existing pieces assembled and
+    /// no new derivation.
+    succ_fun: Term,
+    /// `⊢ succ_fun ∈ fs(ω,ω)`.
+    succ_in_funspace: Thm,
+    /// `⊢ ∀n. (n ∈ ω → app(succ_fun, n) = succ(n))`.
+    succ_beta: Thm,
+}
+
+impl NatOmega {
+    /// Build `ω` and the successor graph over the prelude's **own** tower.
+    ///
+    /// Threading the tower rather than letting [`derived::nat::Nat::new`] mint
+    /// one is not optional: a fresh `Tower` is a fresh chain of definitional
+    /// extensions, hence a second `1`, `•`, `app`, `∅`, pairing and `ω`, and
+    /// `⟦Nat.zero⟧ = 0` would then name an `∅` no other interpretation
+    /// mentions. `mini/src/nat_clause.rs`'s header records the same hazard.
+    fn over(env: &mut Env, tower: std::rc::Rc<derived::tower::Tower>) -> Option<NatOmega> {
+        let n = derived::nat::Nat::over(env, tower).ok()?;
+        let sf = derived::nat::SuccFun::over(env, &n).ok()?;
+        NAT_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (ty, zero_t) = (n.omega(), n.zero());
+        let zero = n.zero_mem().clone();
+        Some(NatOmega {
+            ty,
+            zero_t,
+            zero,
+            succ_fun: sf.term,
+            succ_in_funspace: sf.in_funspace,
+            succ_beta: sf.beta,
+            n,
+        })
+    }
+
+    /// The term `natrec(c, g, n)`.
+    fn natrec_of(&self, c: &Term, g: &Term, n: &Term) -> Term {
+        self.n.natrec_of(c.clone(), g.clone(), n.clone())
+    }
+}
+
 /// The W-type machinery, and the inductive types built from it.
 struct Inductives {
     /// `enum(0) = W(0, ∅, U(0))` — the empty type.
@@ -1639,10 +1735,9 @@ struct Inductives {
     e1: derived::enums::Enum1,
     /// `enum(1+1)`, its two elements, and their memberships — Lean's `Bool`.
     e2: derived::enums::Enum2,
-    /// `N = W(1+1, rec₊(λ_.0, λ_.1), U(1+1))`, its two constructors and their
-    /// memberships — Lean's `inductive N | zero | succ (n : N)`. The first
-    /// *recursive* inductive, and the first whose fibres are not empty.
-    nat: derived::wnat::Nat,
+    /// `⟦Nat⟧` — von Neumann **`ω`**, its zero `∅`, and `Nat.succ` as a set
+    /// function. See [`NatOmega`].
+    nat: NatOmega,
     /// `List`, `List.nil` and `List.cons` as **set functions** — Lean's
     /// `inductive List (α : Type u)`, the first **parameterised** inductive.
     ///
@@ -1737,30 +1832,39 @@ impl BoolRecursor {
     }
 }
 
-/// The **recursor** for the unary recursive shape — Lean's `N.rec`.
+/// The **recursor** for the unary recursive shape — Lean's `Nat.rec`.
 ///
-/// The `Bool` analogue of this ([`BoolRecursor`]) is a graph on two points,
-/// because with empty fibres the W-recursor's step sees exactly two arguments.
-/// `N`'s `succ` fibre is `1`, so the step has to compute
-/// `app(app(s, app(f,•)), app(r,•))` — the recursive call is *live* — and the
-/// packed step is [`derived::wnat_rec`]'s two-layer Replacement instead. What
-/// is kept here is the whole development plus the pieces `nrec` is built from,
-/// so that the term the nest's bottom names and the term the ι rules are stated
-/// at are the same term.
+/// # It holds nothing, and that is the change
+///
+/// This used to carry [`derived::wnat_rec::NatRec`] — a two-layer Replacement
+/// packing the W-recursor's step so that `app(app(s, app(f,•)), app(r,•))`
+/// could be computed — over a shared [`RecCore`], because `nrec` was
+/// `wrec(1+1, B, U(1+1), T, e(z,s,T))` and every theorem about it was stated
+/// over that one `Recursor`.
+///
+/// With `⟦Nat⟧ = ω` the recursor is `derived::nat`'s `natrec`, which the ω
+/// apparatus builds by iteration on states and which [`NatOmega`] already
+/// holds. So there is nothing left to keep but the inductives themselves, and
+/// **`Nat.rec` no longer forces `RecCore`** — the largest derivation in
+/// `derived`, previously paid for by any file that reduced a `Nat`.
+///
+/// # `natrec` takes no target, and the nest is what notices
+///
+/// `nrec(z,s,T)` needed `T` because `wrec` is a *set function into `T`* that
+/// the major premise is then applied to. `natrec(c,g,n)` is a **term in all
+/// three** and total, so there is no target to supply and no `app` around it.
+/// [`RecBottom::Degen`] has the same shape for the same reason; the motive is
+/// carried by the nest and unused, exactly as in [`RecBottom::Enum`].
 struct NatRecursor {
-    /// The packed step and both ι rules; see [`derived::wnat_rec::NatRec`].
-    nr: derived::wnat_rec::NatRec,
-    /// The shared W-recursor. Held, not rebuilt: `nr`'s theorems are stated
-    /// over *this* `Recursor`.
-    core: Rc<RecCore>,
-    /// The W-type, its bound and `N` itself, for the same reason.
+    /// `ω` and its `natrec`. Held so that the term the nest's bottom names and
+    /// the term the ι rules are stated at are the same term.
     inds: Rc<Inductives>,
 }
 
 impl NatRecursor {
-    /// `nrec(z,s,T) = wrec(1+1, B, U(1+1), T, e(z,s,T))`.
-    fn nrec(&self, z: &Term, s: &Term, t: &Term) -> Term {
-        self.nr.of(&self.inds.wt, &self.inds.bnd, &self.inds.nat, &self.core.r, z, s, t)
+    /// `natrec(z, s, n)`.
+    fn natrec_of(&self, z: &Term, s: &Term, n: &Term) -> Term {
+        self.inds.nat.natrec_of(z, s, n)
     }
 }
 
@@ -1811,7 +1915,7 @@ impl Inductives {
     /// object `mini` was already using — one `sum`, one `W`, for both.
     fn build(
         env: &mut Env,
-        _pre: &Prelude,
+        pre: &Prelude,
         wt: derived::wtype::Wtype,
         bnd: derived::bound::Bound,
     ) -> Option<Inductives> {
@@ -1821,13 +1925,15 @@ impl Inductives {
         let e0 = derived::enums::enum0(&wt, &bnd);
         let e1 = derived::enums::enum1(&wt, &bnd, &mem)?;
         let e2 = derived::enums::enum2(&wt, &bnd, &mem, &inj)?;
-        // `N` needs two things the enumerations do not: the case function
+        // `List` needs two things the enumerations do not: the case function
         // `rec₊`, to compute the fibre family, and the one-point graph
-        // `{⟨•,n⟩}`, which is `succ`'s recursive argument. Both are built over
+        // `{⟨•,n⟩}`, which is `cons`'s recursive argument. Both are built over
         // the *same* `Sums` as the W-type, so every theorem composes.
         let cases = derived::sums::Cases::new(env, &wt.sums)?;
         let pf = derived::point_fun::PointFun::over(env, &wt.sums, &wt.app_pair)?;
-        let nat = derived::wnat::Nat::over(env, &wt, &bnd, &cases, &pf, &empty_u)?;
+        // `Nat` is the one inductive here that is **not** a W-type: it is `ω`,
+        // over the prelude's tower rather than over `wt`. See [`NatOmega`].
+        let nat = NatOmega::over(env, pre.tower.clone())?;
         // `List` reuses all of that and adds one thing: the fibre family's
         // right branch is a constant function on an *arbitrary* `α`, which is a
         // lambda graph rather than a one-point graph.
@@ -3822,6 +3928,29 @@ static GEN_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 static GEN_REC_GUARD_MISS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// ι sites the general rule computed — the deliverable, counted.
 static GEN_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **`⟦Nat⟧` built at all** — the ω apparatus, once per backend. See
+/// [`NatOmega`]. Zero means no file in the run declared anything of `Nat`'s
+/// shape, which is a fact about the corpus; a positive count with
+/// [`NAT_ASKED`] at zero means the carrier was paid for and never used.
+static NAT_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Recursor nests bottoming out in [`RecBottom::Nat`].
+static NAT_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **Use sites the ω `Nat` arm was *asked* at**, whether or not it answered.
+///
+/// The distinction [`DEP_ASKED`] exists for, at the arm this tranche moved:
+/// `asked = 0` says the dispatch never reached `Nat.rec` at a constructor, and
+/// `asked > computed` says it did and the derivation refused. Without it, a
+/// carrier swap that silently stopped firing looks exactly like one that
+/// changed nothing — which is the reading the first measurement of this
+/// tranche had to rule out.
+static NAT_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **ι sites the ω `Nat` rule computed**, split by constructor.
+///
+/// Split because the two arms are no longer the same kind of step: `zero` is
+/// **unconditional** and `succ` rests on `⟦n⟧ ∈ ω`. Collapsing them would hide
+/// the one claim this port makes about the boundary-escape count.
+static NAT_IOTA_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static NAT_IOTA_SUCC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Recursor nests bottoming out in [`RecBottom::Degen`].
 static DEGEN_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Cached degenerate recursors whose carrier is not the one this backend has.
@@ -3886,6 +4015,38 @@ fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomi
 
 /// What the general inductive path did, or the empty string if it was never
 /// consulted.
+/// **`⟦Nat⟧`'s five rows, printed whether or not any of them is zero.**
+///
+/// Gated only on the carrier having been *built*: once a run has paid for `ω`
+/// it must say what it got for it. That is the "skip is not pass" rule at the
+/// arm this tranche moved, and it is here rather than in [`gen_report`] because
+/// the ω `Nat` is a hand-written recogniser and not part of
+/// `derived::inductive` — a row in the general path's section would claim the
+/// general path's subject, which CI forbids.
+///
+/// The two ι rows are split by constructor because they are no longer the same
+/// kind of step: see [`NAT_IOTA_ZERO`].
+fn nat_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    if NAT_BUILT.load(Relaxed) == 0 {
+        return String::new()
+    }
+    let width = 62;
+    let mut s = String::from("  ⟦Nat⟧ as von Neumann ω (derived::nat):\n");
+    let row = |s: &mut String, label: &str, n: u64| {
+        s.push_str(&format!("    {:<width$}  {n:>10}\n", label));
+    };
+    row(&mut s, "the ω apparatus and the successor graph built", NAT_BUILT.load(Relaxed));
+    row(&mut s, "recursors given an ω Nat nest", NAT_RECS.load(Relaxed));
+    // Named `ω Nat` rather than just "the arm": the dependent path prints
+    // `…DEPENDENT ι sites the arm was asked at`, and a label that is a
+    // substring of another row's makes every `grep` over the report ambiguous.
+    row(&mut s, "…ω Nat ι sites the arm was asked at", NAT_ASKED.load(Relaxed));
+    row(&mut s, "ι sites computed at Nat.zero (unconditional)", NAT_IOTA_ZERO.load(Relaxed));
+    row(&mut s, "ι sites computed at Nat.succ (rests on ⟦n⟧ ∈ ω)", NAT_IOTA_SUCC.load(Relaxed));
+    s
+}
+
 fn gen_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let built = GEN_BUILT.load(Relaxed);
@@ -5731,12 +5892,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     }
                 };
                 let s = &inds.wt.sums;
-                let nat = derived::cumul::NatMem::over(&mut env, &chain, &inds.nat);
-                // `(1+1) ∈ U₁` is proved on the way to `N ∈ U₁` and is exactly
-                // what `Bool`'s tag set needs, so it is taken from there rather
-                // than derived twice.
-                let tags2 = nat.as_ref().map(|m| m.tags_in_u1.clone());
-                add(&inds.nat.ty, nat.map(|m| m.nat_in_u1));
+                // **`⊢ ω ∈ U₁` is free.** `derived::cumul::NatMem` used to
+                // climb the cumulative hierarchy to place the W-type `N` in
+                // `U₁`; `ω` is the rung-1 tower's own witness
+                // (`derived::tower::Rung::omega_mem`) and needs no chain at
+                // all. What `NatMem` is still consulted for is `(1+1) ∈ U₁`,
+                // below — `Bool`'s tag set, which was proved *on the way* to
+                // `N ∈ U₁` and has nothing to do with `Nat`.
+                add(&inds.nat.ty, Some(inds.nat.n.omega_mem().clone()));
+                let tags2 = derived::cumul::bool_tags_in_u1(&mut env, &chain);
 
                 let zero_u1 = derived::cumul::zero_in_u1(&chain);
                 add(
@@ -5897,37 +6061,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         r
     }
 
-    /// The recursor development for the unary recursive shape, on top of the
-    /// same [`Self::rec_core`].
+    /// The recursor for the unary recursive shape — `Nat.rec`.
     ///
-    /// What is added here is the packed step of [`derived::wnat_rec`] — two
-    /// layers of Replacement over the projections of [`derived::proj`] — and
-    /// with it both ι rules, the `succ` one carrying a live recursive call.
+    /// **It builds nothing.** `natrec` and both ι rules come with `ω` itself
+    /// (`derived::nat::Nat`), which [`Self::inductives`] already holds, so this
+    /// is a lookup wearing the shape of the other three. It is kept as an
+    /// entry point rather than inlined because [`RecBottom::Nat`] is reached
+    /// from [`Self::rec_bottom`] on the same footing as the others, and because
+    /// the memo cell keeps the `None` of a run whose inductives failed.
+    ///
+    /// What is gone is the call to [`Self::rec_core`]. `derived::wnat_rec`
+    /// needed the shared W-recursor, its ι rule and its funspace theorem; ω's
+    /// recursor needs none of them, so reducing a `Nat` no longer pays for
+    /// `Recursor::new` and totality.
     fn nat_recursor(&mut self) -> Option<Rc<NatRecursor>> {
         if let Some(r) = self.shared.borrow().nat_rec.clone() {
             return r
         }
-        let inds = self.inductives();
-        let core = self.rec_core();
-        let built = inds.zip(core).and_then(|(inds, core)| {
-            let nr = {
-                let mut env = self.env_mut();
-                let pj = derived::proj::Proj::new(&mut env, &inds.wt.sums.ap, &inds.pf)?;
-                derived::wnat_rec::NatRec::over(
-                    &mut env,
-                    &inds.wt,
-                    &inds.bnd,
-                    &inds.nat,
-                    &core.r,
-                    &inds.pf,
-                    &pj,
-                    &core.iota,
-                    &core.funspace,
-                )?
-            };
-            Some(NatRecursor { nr, core, inds })
-        });
-        let r = built.map(Rc::new);
+        let r = self.inductives().map(|inds| Rc::new(NatRecursor { inds }));
+        if r.is_some() {
+            NAT_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         self.shared.borrow_mut().nat_rec = Some(r.clone());
         r
     }
@@ -7144,12 +7298,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // `t_last(C,F,T,b) := app(brec(F,T), b)` — the motive is carried but
             // unused, the two minor premises being the whole of the step.
             RecBottom::Enum(br) => ap.apply(br.brec(&ap, &minor_z, &minor_s), major),
-            // `t_last(C,z,s,b) := app(nrec(z,s,T), b)` with `T := D₂(C)`, the
-            // motive's value at the nullary constructor. That is the level-2
-            // domain the walk above has *already computed*, and using it rather
-            // than rebuilding the term is what lets the two sides of an ι
-            // equation share their assumptions.
-            RecBottom::Nat(nr) => ap.apply(nr.nrec(&minor_z, &minor_s, &doms[1]), major),
+            // `t_last(C,z,s,b) := natrec(z,s,b)`, and — like
+            // [`RecBottom::Degen`] and unlike every other arm here — there is
+            // **no `ap.apply` around it**. `ω`'s recursor is a term in all
+            // three arguments, total, built by iteration on states; it is not a
+            // function-set that the major premise is applied to.
+            //
+            // With it goes the target. `nrec(z,s,T)` needed `T` because `wrec`
+            // is a set function *into* `T`, so the nest had to thread the
+            // motive's value at the nullary constructor — `doms[1]` — down here
+            // and both sides of an ι equation had to be stated at the very same
+            // computed term. `natrec` has no codomain in its signature: where
+            // its value lives is [`derived::nat::natrec_mem`]'s business, given
+            // a motive, and is no part of the recursor's construction. The
+            // motive is carried by the nest and unused, as in
+            // [`RecBottom::Enum`].
+            RecBottom::Nat(nr) => nr.natrec_of(&minor_z, &minor_s, &major),
             // `t_last(α,C,z,s,b) := app(lrec(α,z,s,T), b)` with `T := D₂(C)`, the
             // motive's value at `List.nil α`. The parameter is the level-0
             // argument and the minors are one further along; `T` is again the
@@ -13251,8 +13415,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (chain, obligations) = self.nest_chain(ctx, nest, args, &ta, &doms)?;
         let fired = match nest.bottom.clone() {
             RecBottom::Enum(br) => self.fire_enum(&br, &ta, idx)?,
-            RecBottom::Nat(nr) => self
-                .fire_nat(ctx, &nr, nest, cfun, args, &ta, &doms, &obligations, idx, &fields)?,
+            // `obligations` is not passed, and the absence is load-bearing:
+            // they are what the W presentation discharged `HYP` from, and ω's
+            // ι rules have no `HYP`. See [`Self::fire_nat`].
+            RecBottom::Nat(nr) => {
+                self.fire_nat(ctx, &nr, nest, cfun, args, &ta, &doms, idx, &fields)?
+            }
             RecBottom::List(lr) => self
                 .fire_list(ctx, &lr, nest, cfun, args, &ta, &doms, &obligations, idx, &fields)?,
             RecBottom::General(gr, tn) => self.fire_general(
@@ -13337,33 +13505,73 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
     }
 
-    /// The ι rules for the unary recursive shape — `N.rec`.
+    /// The ι rules for the unary recursive shape — `Nat.rec`, over `ω`.
     ///
-    /// [`derived::wnat_rec`] supplies both, and neither is unconditional:
+    /// [`derived::nat::Nat`] supplies both, and the first is **unconditional**:
     ///
     /// ```text
-    /// HYP := z ∈ N-target ∧ s ∈ fs(N, fs(T,T))
-    /// ⊢ ∀z∀s∀T.    (HYP → app(nrec(z,s,T), ⟨inl •,∅⟩) = z)
-    /// ⊢ ∀z∀s∀T∀n. ((HYP ∧ n ∈ N) → app(nrec(z,s,T), ⟨inr •,{⟨•,n⟩}⟩)
-    ///                                 = app(app(s,n), app(nrec(z,s,T), n)))
+    /// ⊢ ∀c ∀g.    natrec(c,g,0) = c
+    /// ⊢ ∀c ∀g ∀n. (n ∈ ω → natrec(c,g,succ n) = app(app(g,n), natrec(c,g,n)))
     /// ```
     ///
-    /// `HYP` is Lean's own typing of the two minor premises and nothing more, so
-    /// it is supplied here rather than assumed: `⟦z⟧ ∈ T` **is** the level-2
-    /// domain obligation the nest already paid for, and `⟦s⟧ ∈ fs(N,fs(T,T))` is
-    /// the level-3 one asked at the beta-reduced kernel term rather than at the
-    /// dependent product `∀n, C n → C (succ n)`, which `has_type` cannot match.
+    /// # What this arm no longer has to do
     ///
-    /// `T` is `doms[1]` — the motive's value at `N.zero` **as the nest computed
-    /// it**, not a term rebuilt here. Rebuilding it would give two terms that
-    /// are equal only after a beta step, and then the two sides of the equation
-    /// would not share their assumptions and the certificate would not compose.
+    /// The W presentation's two rules each carried
+    /// `HYP := z ∈ T ∧ s ∈ fs(N, fs(T,T))` — Lean's own typing of the two minor
+    /// premises — and this function's first half existed to obtain it: two
+    /// `mem_obligation` calls, a `mem_along` transport of the `succ` minor's
+    /// typing across `⊢ ⟦N⟧ = W(1+1,B,U(1+1))`, a `reassume` of each into the
+    /// merged assumption list, and an `and_intro` to match
+    /// `derived::wnat_rec::premise` before the rule could be `syl`'d.
     ///
-    /// The `succ` rule's right-hand side mentions `nrec` **again** — the live
+    /// None of it is needed. `ω`'s ι rules do not mention the minor premises'
+    /// types at all, because `natrec` is total: it computes at every `n ∈ ω`
+    /// whatever `c` and `g` are, and *where the value lands* is a separate
+    /// theorem ([`derived::nat::natrec_mem`]) that a reduction does not need.
+    /// So the whole `HYP` apparatus is gone, and with it:
+    ///
+    /// * **`Nat.zero` reduces unconditionally** — the equation rests on
+    ///   nothing at all, where it used to rest on the two minors' typings.
+    /// * **`Nat.succ` rests on one thing: `⟦n⟧ ∈ ω`**, the field's own typing,
+    ///   which the `succ` β rule needs anyway.
+    /// * **One obligation per ι site is no longer asked.** `mem_obligation` at
+    ///   the `succ` minor premise is gone: measured on `init-prelude`,
+    ///   `typing obligations asked` falls 53 373 → 53 277 and
+    ///   `carried as assumptions` 45 682 → 45 586, both by exactly the 96 ι
+    ///   sites the arm fires at.
+    /// * **The defining equation `⟦Nat⟧ = ω` is consulted once instead of
+    ///   twice**, and only in the `succ` arm: it used to transport
+    ///   `⟦s⟧ ∈ fs(⟦Nat⟧,…)` into the W-type's vocabulary as well.
+    ///
+    /// **What it does *not* buy is a boundary escape.** The 96 assumptions
+    /// dropped here were being discharged downstream rather than escaping, so
+    /// `conditional derivations … escaped` is unmoved at 2 629 and the whole
+    /// ledger is byte-identical across this swap. That is the honest reading
+    /// and it is worth stating, because "one fewer premise" invites the
+    /// inference that the escape count must fall, and here it does not.
+    ///
+    /// # The constructor side
+    ///
+    /// `⟦Nat.zero⟧ = 0` is one abbreviation unfolding. `⟦Nat.succ n⟧` is
+    /// `app(⟦Nat.succ⟧, ⟦n⟧)`, and three steps take it to `succ(⟦n⟧)`: unfold
+    /// the constructor to its graph, β-reduce the graph at `⟦n⟧`
+    /// ([`NatOmega::succ_beta`], conditional on `⟦n⟧ ∈ ω`), and — nothing else.
+    /// The W presentation needed a fourth, unfolding the `sc` abbreviation its
+    /// ι rules were stated at; `succ` is a symbol of the ambient signature, so
+    /// the rules are stated at it directly.
+    ///
+    /// # Congruence is under `natrec`, not under `app`
+    ///
+    /// The nest's bottom is `natrec(z,s,b)` rather than `app(nrec(z,s,T), b)`,
+    /// so the Leibniz step that replaces the major premise by the constructor's
+    /// value is [`Self::ceq_congr`] at the **`natrec` symbol** with reflexivity
+    /// in the first two arguments — not at `app`.
+    ///
+    /// The `succ` rule's right-hand side mentions `natrec` again — the live
     /// recursive call, which no `Bool` equation could exercise. The reduct
-    /// spells that call as `⟦N.rec C z s n⟧`, the curried nest at the field, so
-    /// the last step here contracts that nest once more and rewrites the call
-    /// into the shape the reduct uses.
+    /// spells that call as `⟦Nat.rec C z s n⟧`, the curried nest at the field,
+    /// so the last step here contracts that nest once more and rewrites the
+    /// call into the shape the reduct uses.
     #[allow(clippy::too_many_arguments)]
     fn fire_nat(
         &mut self,
@@ -13374,67 +13582,49 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         args: &[ExprPtr<'t>],
         ta: &[Term],
         doms: &[Term],
-        obligations: &[(Thm, Vec<Formula>)],
         idx: usize,
         fields: &[ExprPtr<'t>],
     ) -> Result<CondEq, &'static str> {
+        NAT_ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ap = self.pre.ap.clone();
         let app = ap.app;
         let major = args.len() - 1;
         let inds = nr.inds.clone();
-        let nat_ty = inds.nat.ty.clone();
-        let (z, s, t_target) = (ta[1].clone(), ta[2].clone(), doms[1].clone());
-        let nrec = nr.nrec(&z, &s, &t_target);
-
-        // `⊢ ⟦N⟧ = W(1+1,B,U(1+1))`. The major premise's domain *is* `⟦N⟧`, so
-        // the equation is looked up rather than reconstructed, and checked.
-        let Some(n_ax) = self.abbrev_defs.get(&doms[major]).cloned() else {
-            return Err("iota: the inductive has no defining equation")
-        };
-        if n_ax.concl().as_eq() != Some((doms[major].clone(), nat_ty.clone())) {
-            return Err("iota: the major premise's domain is not this inductive")
-        }
-
-        // ── `HYP`, from the recursor's own domain obligations ────────────────
-        let (hz, hz_hyps) = obligations[1].clone();
-        let fs = self.pre.fs_sym();
-        let inner = Term::apply(fs, vec![t_target.clone(), t_target.clone()]);
-        let shown = Term::apply(fs, vec![doms[major].clone(), inner.clone()]);
-        let Some((hs, hs_hyps)) = self.mem_obligation(ctx, args[2], &s, &shown) else {
-            return Err("iota: the succ minor premise has no typing to rest on")
-        };
-        let (s_c, inner_c) = (s.clone(), inner.clone());
-        let Some(hs) = self.mem_along(&hs, &hs_hyps, &n_ax, |w| {
-            Formula::mem(s_c.clone(), Term::apply(fs, vec![w, inner_c.clone()]))
-        }) else {
-            return Err("iota: transporting the succ minor's typing failed")
-        };
-
-        let mut hyps = merge_hyps(&hz_hyps, &hs_hyps);
-        let premise = derived::wnat_rec::premise(&inds.wt.sums, &inds.nat, &z, &s, &t_target);
+        let natrec_sym = inds.nat.n.natrec;
+        let (z, s) = (ta[1].clone(), ta[2].clone());
 
         // ── The constructor, and with it which rule fires ────────────────────
-        let (ctor_eq, rule, extra) = match idx {
+        //
+        // Each arm returns its rule **already discharged**, because the two
+        // discharges have nothing in common: `zero`'s rule has no antecedent at
+        // all, and `succ`'s has exactly the field typing its own β step already
+        // produced. A shared tail would have to reconstruct that distinction.
+        let (ctor_eq, fired, extra) = match idx {
             0 => {
-                // `⟦N.zero⟧ = ⟨inl •,∅⟩`, one Leibniz step.
+                // `⟦Nat.zero⟧ = 0`, one abbreviation unfolding.
                 let Some(def) = self.abbrev_defs.get(&ta[major]).cloned() else {
                     return Err("iota: the constructor has no defining equation")
                 };
                 let Some(def) = CondEq::plain(def) else {
                     return Err("iota: the constructor's defining equation is not an equation")
                 };
-                let Some(rule) = derived::inst_all(
-                    &nr.nr.iota_zero,
-                    &[z.clone(), s.clone(), t_target.clone()],
-                ) else {
+                let Some(rule) =
+                    derived::inst_all(&inds.nat.n.iota_zero, &[z.clone(), s.clone()])
+                else {
                     return Err("iota: instantiating the zero computation rule failed")
+                };
+                // Unconditional, and pinned as such: this is the whole of the
+                // improvement over the W presentation, and a rule that had
+                // silently acquired a hypothesis would otherwise be discovered
+                // only as an unexplained escape.
+                let Some(rule) = CondEq::plain(rule) else {
+                    return Err("iota: the zero computation rule is not an equation")
                 };
                 (def, rule, None)
             }
             _ => {
-                // `⟦N.succ n⟧ = ⟨inr •,{⟨•,⟦n⟧}⟩⟩`: unfold the constructor's
-                // graph, beta-reduce it at `⟦n⟧`, unfold the abbreviation the
-                // result is stated at.
+                // `⟦Nat.succ n⟧ = succ(⟦n⟧)`: unfold the constructor's graph,
+                // then β-reduce it at `⟦n⟧`.
                 if fields.len() != 1 {
                     return Err("iota: the successor constructor has the wrong arity")
                 }
@@ -13443,10 +13633,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 else {
                     return Err("iota: the constructor's field has no typing to rest on")
                 };
+                // The domain the nest walked off `Nat.rec`'s type is `⟦Nat⟧`,
+                // the abbreviation; the ι rule and the β rule are both stated
+                // at `ω`. One transport along the abbreviation's own defining
+                // equation joins them — the *only* place that equation is still
+                // needed.
+                let Some(n_ax) = self.abbrev_defs.get(&doms[major]).cloned() else {
+                    return Err("iota: the inductive has no defining equation")
+                };
+                if n_ax.concl().as_eq() != Some((doms[major].clone(), inds.nat.ty.clone())) {
+                    return Err("iota: the major premise's domain is not this inductive")
+                }
                 let tn_c = tn.clone();
-                let Some(hn_t) = self.mem_along(&hn, &hn_hyps, &n_ax, |w| {
-                    Formula::mem(tn_c.clone(), w)
-                }) else {
+                let Some(hn_t) =
+                    self.mem_along(&hn, &hn_hyps, &n_ax, |w| Formula::mem(tn_c.clone(), w))
+                else {
                     return Err("iota: transporting the field's typing failed")
                 };
 
@@ -13470,71 +13671,39 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let Some(step2) = CondEq::new(step2, hn_hyps.clone()) else {
                     return Err("iota: the constructor's beta rule does not have the assumed shape")
                 };
-                let Some(sc) = derived::inst_all(&inds.nat.sc_ax, &[tn.clone()]) else {
-                    return Err("iota: instantiating the successor abbreviation failed")
-                };
-                let Some(sc) = CondEq::plain(sc) else {
-                    return Err("iota: the successor abbreviation is not an equation")
-                };
-                let Some(a) = self.ceq_trans(&step1, &step2) else {
+                let Some(def) = self.ceq_trans(&step1, &step2) else {
                     return Err("iota: chaining the constructor's beta rule failed")
                 };
-                let Some(def) = self.ceq_trans(&a, &sc) else {
-                    return Err("iota: chaining the successor abbreviation failed")
-                };
                 let Some(rule) = derived::inst_all(
-                    &nr.nr.iota_succ,
-                    &[z.clone(), s.clone(), t_target.clone(), tn.clone()],
+                    &inds.nat.n.iota_succ,
+                    &[z.clone(), s.clone(), tn.clone()],
                 ) else {
                     return Err("iota: instantiating the succ computation rule failed")
                 };
-                hyps = merge_hyps(&hyps, &hn_hyps);
-                (def, rule, Some((tn, hn_t, hn_hyps)))
+                let h = conj_of(&hn_hyps);
+                let Some(fired) = u_mp(&u_a1i(&rule, h.as_ref()), &hn_t, h.as_ref()) else {
+                    return Err("iota: discharging the computation rule's hypothesis failed")
+                };
+                let Some(fired) = CondEq::new(fired, hn_hyps) else {
+                    return Err("iota: the computation rule does not have the assumed shape")
+                };
+                (def, fired, Some(tn))
             }
         };
 
-        // ── `⊢ conj(hyps) → HYP`, and with it the rule's own antecedent ──────
-        let h = conj_of(&hyps);
-        let (Some(hz), Some(hs)) =
-            (reassume(&hz, &hz_hyps, &hyps), reassume(&hs, &hs_hyps, &hyps))
-        else {
-            return Err("iota: restating the minor premises' typings failed")
-        };
-        let Some(mut ante) = u_and_intro(&hz, &hs, h.as_ref()) else {
-            return Err("iota: assembling the recursor's hypothesis failed")
-        };
-        let mut want = premise;
-        if let Some((_, hn_t, hn_hyps)) = &extra {
-            let Some(hn_t) = reassume(hn_t, hn_hyps, &hyps) else {
-                return Err("iota: restating the field's typing failed")
-            };
-            let Some(both) = u_and_intro(&ante, &hn_t, h.as_ref()) else {
-                return Err("iota: assembling the successor's hypothesis failed")
-            };
-            let tn = extra.as_ref().map(|(t, _, _)| t.clone()).unwrap();
-            ante = both;
-            want = Formula::and(want, Formula::mem(tn, nat_ty));
-        }
-        if u_concl(&ante, h.as_ref()) != Some(want) {
-            return Err("iota: the assembled hypothesis is not the one the rule asks for")
-        }
-        let Some(fired) = u_syl(&ante, &rule, h.as_ref()) else {
-            return Err("iota: discharging the computation rule's hypothesis failed")
-        };
-        let Some(fired) = CondEq::new(fired, hyps) else {
-            return Err("iota: the computation rule does not have the assumed shape")
-        };
-
-        // ── `app(nrec, ⟦cᵢ …⟧) = app(nrec, ⟨…⟩)`, then the rule ──────────────
-        let Some(at_ctor) = self.ceq_congr(app, &[CondEq::refl(nrec.clone()), ctor_eq]) else {
+        // ── `natrec(z,s,⟦cᵢ …⟧) = natrec(z,s,…)`, then the rule ──────────────
+        let Some(at_ctor) = self.ceq_congr(
+            natrec_sym,
+            &[CondEq::refl(z.clone()), CondEq::refl(s.clone()), ctor_eq],
+        ) else {
             return Err("iota: congruence at the constructor refused")
         };
         let Some(mut acc) = self.ceq_trans(&at_ctor, &fired) else {
-            return Err("iota: the nest does not reduce to the W-recursor at the constructor")
+            return Err("iota: the nest does not reduce to the recursor at the constructor")
         };
 
         // ── The live recursive call, spelled the way the reduct spells it ────
-        if let Some((tn, _, _)) = extra {
+        if let Some(tn) = extra {
             let mut rec_args: Vec<ExprPtr<'t>> = args[..major].to_vec();
             rec_args.push(fields[0]);
             let mut rec_ta: Vec<Term> = ta[..major].to_vec();
@@ -13551,6 +13720,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 return Err("iota: rewriting the recursive call failed")
             };
             acc = t;
+            NAT_IOTA_SUCC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            NAT_IOTA_ZERO.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(acc)
     }
@@ -21857,6 +22029,7 @@ pub fn global_report() -> String {
     s.push_str(&pop_report());
     s.push_str(&ty_report());
     s.push_str(&split_report());
+    s.push_str(&nat_report());
     s.push_str(&gen_report());
     s.push_str(&inst_report());
     s.push_str(&translated_report());
