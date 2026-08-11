@@ -6729,6 +6729,31 @@ environment over the whole 5,851,543,902-byte file. **+4 against §8.16.8's
 sees only the environment the run itself built and not the position a model
 lands at in the file.
 
+### The corpus side, counted on the same axis
+
+`scripts/decl-shapes.py` gained the table: for every one-constructor,
+large-eliminating `Prop` it walks the constructor's *conclusion* — past the
+parameter binders and past every field binder, where alone the question can be
+asked — and buckets the declaration by its index mixture, all-ground (the old
+arm F), all-pivot (arm G) or **mixed**. Neither `arm-coverage.py` nor the
+inductive record can see it; it is not in the record at all.
+
+What the table says is the reason this class went unnoticed. On
+`pre-10000000`, the largest prefix the script can hold in memory, there are
+**three all-ground rows** (`Eq`, `HEq`, `CategoryTheory.Cat.FreeReflRel`), **one
+all-pivot** (`Acc`) and **no mixed row whatever**. The mixed bucket has exactly
+two occupants in all of Mathlib and both are at the far end of the export:
+`IsHomLift` and `Acc.below`. A prefix run — which is how this arc iterated —
+could not have found the class, and the fixture tree did not contain it either
+until `prim_idx.lean`. That is the argument for writing the grid rather than
+waiting for the corpus to present one.
+
+**And the script's `pivot` count is an upper bound on the generator's**, which
+its header says: distinguishing a data pivot from a proof field at a bare-
+variable index position needs the field's sort, which needs type inference the
+script does not do. The distinction does not move any of the three buckets — a
+mixed row stays mixed either way — and it is the buckets the arms turn on.
+
 ### What is left, exactly
 
 * **3 exempt.** `Eq`, `Nat`, `PSigma` — the basis, unmodelled by definition.
