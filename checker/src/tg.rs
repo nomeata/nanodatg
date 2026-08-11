@@ -1677,6 +1677,19 @@ struct CtorRule {
 struct NatOmega {
     /// `ω`, `0`, `succ`, `natrec` and both ι rules.
     n: derived::nat::Nat,
+    /// Addition by iterated `succ`. Held only because [`NatOmega::bin`] is
+    /// defined over it — `double(x) := add(x,x)` — and a second `Add` would
+    /// mint a second `add` whose theorems none of `bin`'s compose with.
+    add: derived::nat::Add,
+    /// `double`, `double1`, `addc`, and with them the **binary numeral**.
+    ///
+    /// `num(n)` is `double`/`double1` nested over `0`, least significant bit
+    /// outermost, so it is Θ(log n) nodes: `num(2⁶⁴)` is 66. This is what
+    /// `⟦lit n⟧` interprets to — see the `Expr::NatLit` arm of
+    /// [`TgBackend::interp`] — and it is the object `derived::nat`'s arithmetic
+    /// is stated at, which is the whole reason the literal can be computed with
+    /// at all.
+    bin: derived::nat::Binary,
     /// `ω` — the body `⟦Nat⟧`'s abbreviation is defined as.
     ty: Term,
     /// `0`, which is `∅` literally.
@@ -1707,6 +1720,8 @@ impl NatOmega {
     fn over(env: &mut Env, tower: std::rc::Rc<derived::tower::Tower>) -> Option<NatOmega> {
         let n = derived::nat::Nat::over(env, tower).ok()?;
         let sf = derived::nat::SuccFun::over(env, &n).ok()?;
+        let add = derived::nat::Add::new(env, &n).ok()?;
+        let bin = derived::nat::Binary::new(env, &n, &add).ok()?;
         NAT_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (ty, zero_t) = (n.omega(), n.zero());
         let zero = n.zero_mem().clone();
@@ -1717,8 +1732,26 @@ impl NatOmega {
             succ_fun: sf.term,
             succ_in_funspace: sf.in_funspace,
             succ_beta: sf.beta,
+            add,
+            bin,
             n,
         })
+    }
+
+    /// The numeral `num(v)`, and `⊢ num(v) ∈ ω`.
+    ///
+    /// The membership is [`derived::nat::Eval`]'s, which memoises on the
+    /// **value**: that is what keeps a numeral's side condition Θ(bits) rather
+    /// than Θ(bits²), and it is why the evaluator is minted here per call
+    /// rather than held — the interesting memo is the caller's
+    /// ([`Shared::lit_terms`]), keyed on the same value, and a second one would
+    /// only duplicate it.
+    fn numeral(&self, env: &mut Env, v: u128) -> Option<(Term, Thm)> {
+        let t = self.bin.numeral(&self.n, v);
+        let mut ev = derived::nat::Eval::new(&self.n, &self.add, &self.bin);
+        let mem = ev.mem(env, v).ok()?;
+        (*mem.concl() == Formula::mem(t.clone(), self.ty.clone()) && mem.hyps().is_empty())
+            .then_some((t, mem))
     }
 
     /// The term `natrec(c, g, n)`.
@@ -2456,6 +2489,24 @@ struct Shared {
     /// loses information and adds none. Distinct values still get distinct
     /// symbols, which is what the interpretation needs to stay injective.
     lit_syms: HashMap<Lit, FnSym>,
+    /// **`num(n)` per `Nat` literal value** — the numeral `⟦lit n⟧` is now.
+    ///
+    /// [`Shared::lit_syms`] is what this replaces for `Nat`; it survives for
+    /// strings and for the two fallbacks the numeral route has. Canonicity
+    /// matters here for the same reason and one more: the numeral is a *term*,
+    /// not a symbol, so two occurrences would be equal terms even unmemoised —
+    /// but rebuilding one costs Θ(bits) allocations and re-derives its
+    /// membership, and `2⁶⁴` is 66 nodes.
+    lit_terms: HashMap<num_bigint::BigUint, Term>,
+    /// `⊢ num(n) ∈ ω`, keyed on the numeral, for every numeral in
+    /// [`Shared::lit_terms`].
+    ///
+    /// Held rather than re-derived because [`derived::nat::Eval`]'s own memo is
+    /// per-evaluator and the evaluator is minted per call: without this the
+    /// membership would be rebuilt at every obligation asked about a literal,
+    /// which is Θ(bits) inferences each time. Behind [`Sealed`] like every
+    /// other stored theorem, so a recall is re-checked against the claim.
+    lit_mems: HashMap<Term, Sealed>,
     /// **The abbreviation symbols of interpreted inductives**, their
     /// constructors and their recursors — [`TgBackend::ind_abbrev`]'s store,
     /// per thread rather than per backend, keyed `(NamePtr::raw, levels)` like
@@ -2769,6 +2820,8 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             param_syms: HashMap::new(),
             idx_syms: HashMap::new(),
             lit_syms: HashMap::new(),
+            lit_terms: HashMap::new(),
+            lit_mems: HashMap::new(),
             ind_syms: HashMap::new(),
             rec_nests: HashMap::new(),
             gen_ty_nests: HashMap::new(),
@@ -3935,6 +3988,18 @@ static GEN_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 static NAT_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Recursor nests bottoming out in [`RecBottom::Nat`].
 static NAT_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **`Nat` literal occurrences interpreted as `num(n)`.**
+static LIT_NUMERAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **`Nat` literal occurrences that fell back to an opaque symbol**, and the
+/// row that must stay at zero.
+///
+/// A value too large for `u128` or one reached before the ω apparatus exists.
+/// The second would make the interpretation a *relation* on that value —
+/// `num(n)` at one occurrence and a constant at another — so it is a bug
+/// report on the order of `Admit::Whnf`, not a shortfall. Printed beside
+/// [`LIT_NUMERAL`] rather than only when nonzero, because the whole point is
+/// that a reader can see it is zero.
+static LIT_OPAQUE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// **Use sites the ω `Nat` arm was *asked* at**, whether or not it answered.
 ///
 /// The distinction [`DEP_ASKED`] exists for, at the arm this tranche moved:
@@ -4044,6 +4109,8 @@ fn nat_report() -> String {
     row(&mut s, "…ω Nat ι sites the arm was asked at", NAT_ASKED.load(Relaxed));
     row(&mut s, "ι sites computed at Nat.zero (unconditional)", NAT_IOTA_ZERO.load(Relaxed));
     row(&mut s, "ι sites computed at Nat.succ (rests on ⟦n⟧ ∈ ω)", NAT_IOTA_SUCC.load(Relaxed));
+    row(&mut s, "literal occurrences interpreted as num(n)", LIT_NUMERAL.load(Relaxed));
+    row(&mut s, "…literal occurrences left opaque (expected 0)", LIT_OPAQUE.load(Relaxed));
     s
 }
 
@@ -5953,6 +6020,43 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let out = self.ind_ty_mem_uncached(te, ty);
         self.ind_ty_mems.insert((te.clone(), ty.clone()), out.clone());
         out
+    }
+
+    /// `⊢ num(n) ∈ ⟦Nat⟧`, for a numeral this run interpreted a literal to.
+    ///
+    /// # Two things are looked up, and neither is guessed
+    ///
+    /// `te` must be a term in [`Shared::lit_terms`]'s image — i.e. a numeral
+    /// *this* interpretation minted — and `ty` must be an abbreviation whose
+    /// defining equation says it is `ω`. Both are compared as **terms**. In
+    /// particular nothing here inspects the shape of `te` to decide whether it
+    /// "looks like" a numeral: `double(double1(0))` is a perfectly good term
+    /// for a caller to have built by other means, and it is not the business of
+    /// this clause to type it.
+    ///
+    /// The stored theorem is about `ω`; the obligation is stated at the
+    /// abbreviation, because that is what the Lean type `Nat` interprets to.
+    /// One Leibniz step along the abbreviation's own equation joins them —
+    /// [`Self::ind_ty_mem_uncached`]'s move, one level down.
+    fn lit_mem(&mut self, te: &Term, ty: &Term) -> Option<Thm> {
+        let base = self.shared.borrow().lit_mems.get(te).map(|s| s.thm().clone())?;
+        let omega = self.shared.borrow().inds.clone().flatten()?.nat.ty.clone();
+        // The obligation may already be stated at `ω` itself, in which case
+        // there is nothing to transport.
+        if *ty == omega {
+            return (*base.concl() == Formula::mem(te.clone(), omega)).then_some(base)
+        }
+        let def = self.abbrev_defs.get(ty).cloned()?;
+        let (_, body) = def.concl().as_eq()?;
+        if body != omega {
+            return None
+        }
+        let back = derived::eq_symm(&mut self.env_mut(), &def)?;
+        let w = self.env_mut().fresh_var();
+        let leib =
+            Thm::eq_leibniz(omega, ty.clone(), w, Formula::mem(te.clone(), Term::var(w)));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, &base)?;
+        (*out.concl() == Formula::mem(te.clone(), ty.clone())).then_some(out)
     }
 
     fn ind_ty_mem_uncached(&mut self, te: &Term, ty: &Term) -> Option<Thm> {
@@ -9406,50 +9510,96 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let s = self.interp(ctx, structure);
                 self.mk(self.syms.proj, vec![i, s])
             }
-            // Literals get one opaque nullary symbol each, **per thread and per
-            // value** — see [`Shared::lit_syms`].
+            // **`⟦lit n⟧ = num(n)`** — the binary numeral over `ω`, and the
+            // third carrier is gone.
             //
-            // **This is the third carrier, and it is the one with no content.**
-            // The comment here used to promise "Milestone 4 replaces these with
-            // the kernel's primitive `ℕ` and its native bignum rule schemas".
-            // That option is refused — `kernel::term::TermData` admits function
-            // symbols only through conservative definitional extension, so the
-            // primitive signature stays `{∈, =}` and a primitive sort would be
-            // a change to the closed TCB. The decision is **von Neumann `ω`**:
-            // `⟦Nat⟧` is `derived::nat`'s ω and `⟦lit n⟧` is its binary numeral
-            // `num(n)`. See `DECISIONS.md`, 2026-08-11.
+            // A `Nat` literal used to get one opaque nullary symbol per value
+            // (`Shared::lit_syms`), carrying no axioms, related to neither
+            // `⟦Nat⟧` nor to anything `derived::nat` can compute with. That was
+            // the reason `Nat.ble lit₃ lit₅` could not be justified: three
+            // carriers were in play and no two of them met. `⟦Nat⟧` is now `ω`
+            // (see [`NatOmega`]) and this is the other half — `DECISIONS.md`,
+            // 2026-08-11.
             //
-            // Until that lands, a literal is a symbol carrying no axioms, so it
-            // is related to neither `⟦Nat⟧` (today the W-type,
-            // `Inductives::nat`) nor to `num(n)`. That is why `Nat.ble` at two
-            // literals cannot fire ι — the major premise is a constant, not a
-            // constructor application — and why it is 466 of the 503
-            // `Admit::NatRed` asks.
+            // `num(n)` is `double`/`double1` nested over `0`, so it is Θ(log n)
+            // nodes and carries `⊢ num(n) ∈ ω` outright. **Nothing here asserts
+            // that `num` is the *right* numeral**; what makes the choice load
+            // bearing is that `derived::nat`'s arithmetic — `ble`, `beq`, the
+            // uniqueness bridge — is stated at exactly these terms.
+            //
+            // # Two fallbacks, both still opaque, both counted
+            //
+            // A **string** literal has no numeral and keeps its symbol; the
+            // string extension is not this decision's business. A `Nat`
+            // literal too large for `u128`, or one interpreted before the ω
+            // apparatus exists, also keeps one. The second must not happen —
+            // the interpretation would then be a *relation* rather than a
+            // function on this value, with `num(n)` at one site and a constant
+            // at another — so it is counted (`LIT_OPAQUE`) rather than left to
+            // be discovered as an unexplained gap. The corpus's largest literal
+            // is 2⁶⁴, which fits.
             Expr::NatLit { .. } | Expr::StringLit { .. } => {
                 let lit = match ctx.read_expr(e) {
                     Expr::NatLit { ptr, .. } => ctx.read_bignum(ptr).cloned().map(Lit::Nat),
                     Expr::StringLit { ptr, .. } => Some(Lit::Str(ctx.read_string(ptr).to_string())),
                     _ => None,
                 };
-                let sym = match lit {
-                    Some(l) => {
-                        let hit = self.shared.borrow().lit_syms.get(&l).copied();
+                // The numeral route, when the value is a `Nat` that fits and
+                // the carrier is there. Memoised on the value for the same
+                // reason the symbols were: one term per literal per thread, so
+                // that two occurrences are the *same* term and every theorem
+                // about one is about the other.
+                let num = match &lit {
+                    Some(Lit::Nat(v)) => {
+                        let hit = self.shared.borrow().lit_terms.get(v).cloned();
                         match hit {
-                            Some(s) => s,
-                            // Not `entry`: the borrow above has to end before
-                            // `declare` takes the same cell mutably.
-                            None => {
-                                let s = self.env_mut().declare(0);
-                                self.shared.borrow_mut().lit_syms.insert(l, s);
-                                s
-                            }
+                            Some(t) => Some(t),
+                            None => u128::try_from(v.clone()).ok().and_then(|w| {
+                                let inds = self.inductives()?;
+                                let mut env = self.env_mut();
+                                let (t, mem) = inds.nat.numeral(&mut env, w)?;
+                                drop(env);
+                                let sealed = Sealed::new(mem).ok()?;
+                                let mut sh = self.shared.borrow_mut();
+                                sh.lit_terms.insert(v.clone(), t.clone());
+                                sh.lit_mems.insert(t.clone(), sealed);
+                                Some(t)
+                            }),
                         }
                     }
-                    // A literal whose value cannot be read is left per
-                    // occurrence, exactly as before.
-                    None => self.env_mut().declare(0),
+                    _ => None,
                 };
-                self.mk(sym, vec![])
+                match num {
+                    Some(t) => {
+                        LIT_NUMERAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        t
+                    }
+                    None => {
+                        if matches!(lit, Some(Lit::Nat(_)) | None) {
+                            LIT_OPAQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        let sym = match lit {
+                            Some(l) => {
+                                let hit = self.shared.borrow().lit_syms.get(&l).copied();
+                                match hit {
+                                    Some(s) => s,
+                                    // Not `entry`: the borrow above has to end
+                                    // before `declare` takes the same cell
+                                    // mutably.
+                                    None => {
+                                        let s = self.env_mut().declare(0);
+                                        self.shared.borrow_mut().lit_syms.insert(l, s);
+                                        s
+                                    }
+                                }
+                            }
+                            // A literal whose value cannot be read is left per
+                            // occurrence, exactly as before.
+                            None => self.env_mut().declare(0),
+                        };
+                        self.mk(sym, vec![])
+                    }
+                }
             }
         };
         self.exprs.insert(e, t.clone());
@@ -9827,6 +9977,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // at all, since a constructor is the commonest argument there is.
         if let Some(t) = self.ind_mems.get(&(te.clone(), ty.clone())).cloned() {
             return Some((u_a1i(&t, hyp.as_ref()), HtClause::Ctor, assms.to_vec()))
+        }
+        // A `Nat` literal in `⟦Nat⟧`. Beside `Ctor` because it is the same kind
+        // of fact one carrier along — an element of an interpreted type, by a
+        // theorem `derived` proved about it — and for the same reason: a
+        // literal is a very common argument, and until `⟦lit n⟧` became
+        // `num(n)` there was nothing here to return.
+        if let Some(t) = self.lit_mem(&te, ty) {
+            return Some((u_a1i(&t, hyp.as_ref()), HtClause::Numeral, assms.to_vec()))
         }
         // The same, one level up: the inductive *type* in the sort it lives in.
         // `⟦T⟧ ∈ ⟦Sort u⟧` is what the lambda and `Π` rules keep wanting, and
@@ -19647,6 +19805,13 @@ enum HtClause {
     /// A nullary constructor of an interpreted inductive, by the membership
     /// theorem `derived::enums` derived for it.
     Ctor,
+    /// **A `Nat` literal, by `⊢ num(n) ∈ ω`.**
+    ///
+    /// The clause an opaque literal could not have: a symbol carrying no
+    /// axioms has no typing to derive, so every obligation `⟦lit n⟧ ∈ ⟦Nat⟧`
+    /// used to be hoisted raw. This is the whole observable content of
+    /// `⟦lit n⟧ = num(n)` before the accelerator is wired.
+    Numeral,
     /// A constructor of a *parameterised* inductive, applied: its conditional
     /// rule, with the premises discharged by recursion.
     CtorApp,
@@ -19658,7 +19823,7 @@ enum HtClause {
     IndTy,
 }
 
-const N_HT_CLAUSES: usize = 17;
+const N_HT_CLAUSES: usize = 18;
 
 impl HtClause {
     const fn name(self) -> &'static str {
@@ -19678,11 +19843,13 @@ impl HtClause {
             HtClause::LamDProd => "Lam: a graph is a section of its fibres",
             HtClause::LamProp => "Lam: a proof λ is •, and • inhabits its ∀",
             HtClause::Ctor => "Ctor: a constructor lies in its inductive type",
+            HtClause::Numeral => "Numeral: a Nat literal lies in ω  (⊢ num(n) ∈ ω)",
             HtClause::CtorApp => "CtorApp: an applied constructor, by its conditional rule",
             HtClause::IndTy => "IndTy: an inductive type lies in its universe (⟦T⟧ ∈ ⟦Type 0⟧)",
         }
     }
     const ALL: [HtClause; N_HT_CLAUSES] = [
+        HtClause::Numeral,
         HtClause::MemU,
         HtClause::U0MemU1,
         HtClause::FsDiag,

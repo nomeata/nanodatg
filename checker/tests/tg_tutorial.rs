@@ -2149,6 +2149,40 @@ fn the_omega_nat_arm_is_reached_on_the_prelude() {
     // what the swap changed.
     assert!(zero > 0, "no ι site fired at `Nat.zero`");
     assert!(succ > 0, "no ι site fired at `Nat.succ` — the live recursive call is untested here");
+
+    // ── The literals, and the row that must be zero ──────────────────────────
+    //
+    // `⟦lit n⟧ = num(n)` is link 2, and it has the same measurement problem as
+    // link 1: it moves the ledger by four, so no total can witness it.
+    let numeral = nat_row("literal occurrences interpreted as num(n)");
+    assert!(
+        numeral > 0,
+        "no literal was interpreted as a numeral — `⟦lit n⟧` has gone back to being an \
+         opaque symbol, and `derived::nat`'s arithmetic has nothing to attach to"
+    );
+    // **A fallback here is not a shortfall, it is an inconsistency.** A `Nat`
+    // value interpreted as `num(n)` at one occurrence and as a constant at
+    // another makes the interpretation a *relation* on that value, which is the
+    // `Admit::Whnf` class of defect: everything downstream still typechecks and
+    // the two occurrences are silently different terms. The corpus's largest
+    // literal is 2⁶⁴ and fits in a `u128`, so the only way this rises is the
+    // carrier failing to build on a path that still interprets literals.
+    let opaque = nat_row("…literal occurrences left opaque (expected 0)");
+    assert_eq!(
+        opaque, 0,
+        "{opaque} `Nat` literal occurrences fell back to an opaque symbol. The \
+         interpretation is no longer a function on those values — see the `Expr::NatLit` \
+         arm of `TgBackend::interp`."
+    );
+    // The clause exists in the typing ledger and fires. Asserted through the
+    // file-wide `row`, which panics on an absent label: a renamed clause would
+    // read zero and this would pass having measured nothing.
+    let by_numeral = row(&text, "by Numeral:");
+    assert!(
+        by_numeral > 0,
+        "`HtClause::Numeral` never fired: a literal's typing is derivable now, and \
+         nothing is asking for it"
+    );
 }
 
 /// **The whole-ledger ratchets, and they are named for what they are.**
@@ -2270,9 +2304,19 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // and they move to a better *reason* rather than closing — which is
     // exactly the 26 % and is the numeral-representation decision's business,
     // not this arm's.
+    // **Tightened 11 825 → 11 821 on 2026-08-11**, in the right direction and
+    // therefore without a trade to write. `⟦Nat⟧` is von Neumann `ω` and
+    // `⟦lit n⟧` is `num(n)` (#127, links 1 and 2): the carrier swap on its own
+    // is byte-identical here — origin 2 is about *literals* being opaque, and
+    // link 1 did not move them — and the four are the literals' own arrival.
+    // The number that moved is not this one: `by Numeral` discharges 590
+    // obligations that had no clause at all before, and typing obligations
+    // discharged go 7 691 → 8 686 with `carried as assumptions` down by the
+    // same 995. Locked in rather than left slack, because a ratchet that only
+    // ever loosens has stopped measuring.
     assert!(
-        gaps > 0 && gaps <= 11825,
-        "init-prelude: {gaps} gaps, ratchet 11825 — SOME clause of the ledger regressed. \
+        gaps > 0 && gaps <= 11821,
+        "init-prelude: {gaps} gaps, ratchet 11821 — SOME clause of the ledger regressed. \
          This is the whole-ledger total and it does not say which; read the per-row gap \
          table in the report, and see the per-origin ratchets for the named subjects."
     );
@@ -2357,9 +2401,13 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     //
     // No other row rose. A rise with no gap movement is still a regression and
     // still fails here.
+    // **2 629 → 2 625 on 2026-08-11**, tightened rather than bought: the four
+    // are `⟦lit n⟧ = num(n)`'s, and they fall for the reason the gap ratchet
+    // above records — a literal's typing is now derivable, so a certificate
+    // that used to carry it as an assumption no longer does.
     assert!(
-        esc <= 2629,
-        "init-prelude: {esc} escapes, ratchet 2629 — SOME clause let an assumption reach the \
+        esc <= 2625,
+        "init-prelude: {esc} escapes, ratchet 2625 — SOME clause let an assumption reach the \
          boundary. Whole-ledger, like the gap ratchet above; it does not name a subject."
     );
 }
