@@ -47,10 +47,34 @@ fn fixture(env: &mut Env) -> Fix {
 }
 
 /// A constant argument-type symbol of the given arity, with value `1`.
+///
+/// **It ignores its arity**, so every `βⱼ(p⃗, y⃗<ⱼ)` built with it has the same
+/// closed body. That is fine for the shapes it is used at — they are about
+/// masks, slots and arities — and it is *not* the same as the fixture being
+/// blind to the parameters: `βⱼ` is an opaque symbol applied to `p⃗`, so the
+/// parameters ride on the application whatever the body is
+/// (`inductive.rs`'s `ctor_term_at_moves_with_the_parameters_…` measures
+/// exactly this, and refuted the opposite reading). What this file had no
+/// fixture for at all was the parameter **arity**: see
+/// [`param_beta`] and the three-parameter cell at the end.
 fn const_unit_beta(env: &mut Env, mach: &Machine, arity: usize) -> FnSym {
     let vars: Vec<kernel::FreeVar> = (0..arity).map(|_| env.fresh_var()).collect();
     let one = mach.wt.sums.unit();
     define_abbrev(env, &vars, &one).expect("β").0
+}
+
+/// An argument-type symbol of arity `np + j` whose body is its `which`-th
+/// argument — **parameter-live** when `which < np`.
+///
+/// `decl_proj.rs` and `decl_fields.rs`'s idiom, brought here for the same
+/// reason they have it: `Decidable.isTrue : p → Decidable p` types its field at
+/// the parameter itself, and a `β` that ignores its arguments cannot express
+/// that.
+fn param_beta(env: &mut Env, np: usize, j: usize, which: usize) -> FnSym {
+    let vars: Vec<kernel::FreeVar> = (0..np + j).map(|_| env.fresh_var()).collect();
+    let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let t = args[which].clone();
+    define_abbrev(env, &vars, &t).expect("β").0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2369,7 +2393,10 @@ fn the_dependent_recursor_is_derived_with_no_nullary_constructor() {
     let env = &mut Env::new();
     let fix = fixture(env);
     let mut mach = fix.mach;
-    let b = const_unit_beta(env, &mach, 1);
+    // `β₀(p) = p` — `Decidable.isTrue : p → Decidable p` types its field at the
+    // parameter itself, so the fixture is parameter-**live** and not merely
+    // parameter-arity.
+    let b = param_beta(env, 1, 0, 0);
     let spec = DeclSpec::new(
         1,
         vec![CtorSpec::new(vec![b], 0), CtorSpec::new(vec![b], 0)],
@@ -2530,4 +2557,96 @@ fn the_dependent_recursor_is_derived_at_thirteen_constructors_none_nullary() {
         derived::establishes(&dr.iota[4], &want),
         "constructor 4's ι rule is not the interleaved mask with both calls live"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// **Parameters that are actually used** — the axis this suite had in its
+// arities and not in its bodies
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The gap here is **arity**, and only arity. Of 321 unindexed declarations in
+// `vendor/arena-tests/good/`, 110 have `np = 0`, 106 have `np = 1`, and
+// **105 have `np ≥ 2`** — 71 at two, 29 at three, and five above that, up to
+// `Trans` at six. All of `derived/tests/` had four fixtures at `np = 2` and
+// **none at all at `np ≥ 3`** until the cell below.
+//
+// A reading that did *not* survive measurement, recorded so it is not
+// rediscovered: that `const_unit_beta`'s constant body also made the fixtures
+// blind to the parameters. It does not — `βⱼ` and `γⱼ` are opaque symbols
+// *applied to* `p⃗`, so every term mentions them whatever the body is
+// (`inductive.rs`'s `ctor_term_at_moves_with_the_parameters_…`). A constant
+// body is invisible only to a consumer that unfolds the symbol along its
+// defining equation.
+
+/// `EStateM.Result`-shaped: **three parameters, two constructors, two fields
+/// each, none nullary** — and the two fields typed at two *different*
+/// parameters, so a parameter list that were dropped, truncated or permuted
+/// would not produce these antecedents.
+///
+/// `np = 3` is the first fixture at that arity anywhere in `derived/tests/`;
+/// the corpus has 34 unindexed declarations there or above.
+#[test]
+fn the_dependent_recursor_at_three_parameters_two_of_them_live() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+
+    // `β₀(p₀,p₁,p₂) = p₀` and `β₁(p₀,p₁,p₂,y₀) = p₂` — the first and the last
+    // parameter, so an off-by-one in the parameter spine lands on neither.
+    let b0 = param_beta(env, 3, 0, 0);
+    let b1 = param_beta(env, 3, 1, 2);
+    let spec = DeclSpec::new(
+        3,
+        vec![CtorSpec::new(vec![b0, b1], 0), CtorSpec::new(vec![b0, b1], 0)],
+    );
+    assert!(spec.well_formed(), "βⱼ has arity np + j");
+    assert!(spec.ctors.iter().all(|c| !(c.args.is_empty() && c.recs == 0)), "none nullary");
+
+    let ind = Inductive::build(env, &mut mach, &spec).expect("declaration at three parameters");
+    assert_eq!(ind.params.len(), 3);
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor at three parameters");
+
+    let ap = &mach.wt.sums.ap;
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+
+    // The ι rule of constructor 1, rebuilt — antecedent included, which is
+    // where the parameters appear.
+    let (y0, y1) = (env.fresh_var(), env.fresh_var());
+    let (ty0, ty1) = (Term::var(y0), Term::var(y1));
+    let ys = [ty0.clone(), ty1.clone()];
+    let concl = Formula::eq(
+        ap.apply(dr.rec.clone(), ind.ctor_term(&mach, 1, &ys, &[]).expect("ctor")),
+        ap.apply(ap.apply(Term::var(dr.minors[1]), ty0.clone()), ty1.clone()),
+    );
+    let ante = conj_of(&[
+        Formula::mem(ty0.clone(), Term::apply(b0, ps.clone())),
+        Formula::mem(ty1, Term::apply(b1, {
+            let mut a = ps.clone();
+            a.push(ty0);
+            a
+        })),
+    ])
+    .expect("two atoms");
+    let want = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(y0, Formula::forall(y1, Formula::imp(ante, concl))),
+    );
+    assert!(
+        derived::establishes(&dr.iota[1], &want),
+        "the ι rule's antecedent is not stated at all three parameters"
+    );
+
+    // …and the parameters really are *in* it: the statement mentions each of
+    // the three free parameter variables. A `β` that ignored its arguments —
+    // this file's only other kind — would mention none of them.
+    let mut vs = Vec::new();
+    dr.iota[1].concl().free_vars(&mut vs);
+    for (i, p) in ind.params.iter().enumerate() {
+        assert!(vs.contains(p), "parameter {i} does not occur in the ι rule");
+    }
 }

@@ -840,3 +840,113 @@ fn the_function_extensionality_memo_costs_nothing_the_second_time() {
     assert_eq!(*first.concl(), *second.concl());
     assert!(first.hyps().is_empty() && second.hyps().is_empty());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// **The parameter axis**, and where it is and is not carried
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `Inductive::ctor_term_at` exists because a constructor taking
+// `RecArg::general` dispatches over its own fibre summands `Σ(z::γⱼ(p⃗))`, so
+// its *term* mentions the declaration's parameters and a client stating
+// something at other parameters needs the term rebuilt there.
+//
+// **A hypothesis this cell was written to confirm, and refuted instead.** The
+// suites that build every `γ` with a symbol whose body ignores its arguments —
+// `konst` here, `const_unit_beta` in `genrec.rs` and `deprec.rs` — looked as
+// though they could not see the parameter list at all, which would have made
+// the axis invisible in the same way `recursor::carrier_at`'s comment records
+// for the fibre's codomain. They can: `γⱼ` is an **opaque symbol applied to
+// `p⃗`**, so `Σ(z::γⱼ(p⃗))` moves with `ps` whatever its body is, and the term
+// at two parameter lists is two terms. A constant body is invisible only to a
+// consumer that *unfolds* `γⱼ` along its defining equation, which the
+// constructor term never does.
+//
+// So this cell pins the two facts that are actually true, and they are the two
+// a caller needs to keep straight:
+//
+//   * at a **function-typed** recursive argument the constructor term moves
+//     with `ps` — even at a constant `γ`;
+//   * at a **plain** constructor it mentions no parameter at all, which is what
+//     `super::degen`'s parameter-free ι rule rests on.
+//
+// What the corpus census *did* leave uncovered is the parameter **arity**: 105
+// of 321 unindexed declarations in `vendor/arena-tests/good/` have `np ≥ 2` and
+// 34 have `np ≥ 3` (up to `Trans` at six), against four fixtures at `np = 2` in
+// all of `derived/tests/` and, until `deprec.rs`'s three-parameter cell, none
+// anywhere at `np ≥ 3`.
+
+/// A symbol of arity `np + j` whose body is its `which`-th argument.
+fn arg_beta(env: &mut Env, np: usize, j: usize, which: usize) -> FnSym {
+    let vars: Vec<kernel::FreeVar> = (0..np + j).map(|_| env.fresh_var()).collect();
+    let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let t = args[which].clone();
+    define_abbrev(env, &vars, &t).expect("an abbreviation").0
+}
+
+#[test]
+fn ctor_term_at_moves_with_the_parameters_at_a_fibre_and_not_at_a_plain_constructor() {
+    let mut env = Env::new();
+    let mut mach = machine(&mut env);
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(&mut env, &s, 2).expect("the sum symbols");
+
+    // Two different closed parameter values to instantiate at.
+    let (p1, p2) = (s.zero(), s.unit());
+    assert_ne!(p1, p2);
+    let g = Term::var(env.fresh_var());
+
+    // ── a function-typed recursive argument: the term moves with `ps` ───────
+    //
+    // Both at a **live** `γ₀(p) = p` and at a **constant** `γ₀(p) = 1`, which
+    // is the half that refuted the hypothesis above.
+    for (label, gamma) in [
+        ("a parameter-dependent fibre", arg_beta(&mut env, 1, 0, 0)),
+        ("a constant fibre", konst(&mut env, 1, s.unit())),
+    ] {
+        let spec = DeclSpec::new(1, vec![CtorSpec::with_rec_doms(Vec::new(), vec![vec![gamma]])]);
+        assert!(spec.well_formed());
+        let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration");
+        let at1 = ind
+            .ctor_term_at(&mach, 0, &[], std::slice::from_ref(&g), std::slice::from_ref(&p1))
+            .expect("the constructor at p₁");
+        let at2 = ind
+            .ctor_term_at(&mach, 0, &[], std::slice::from_ref(&g), std::slice::from_ref(&p2))
+            .expect("the constructor at p₂");
+        assert_ne!(at1, at2, "{label}: the constructor term must move with `ps`");
+        // `ctor_term` is `ctor_term_at` at the declaration's own parameters,
+        // and at neither of the other two.
+        let own = ind.ctor_term(&mach, 0, &[], std::slice::from_ref(&g)).expect("own params");
+        assert_eq!(
+            own,
+            ind.ctor_term_at(&mach, 0, &[], std::slice::from_ref(&g), &ind.param_terms())
+                .expect("own params, spelled out")
+        );
+        assert_ne!(own, at1, "{label}");
+        assert_ne!(own, at2, "{label}");
+    }
+
+    // ── a plain constructor: no parameter occurs at all ─────────────────────
+    //
+    // This is not a weaker version of the above; it is the fact `degen.rs`'s
+    // parameter-free ι rule is built on. The field *types* take `p⃗`; the
+    // constructor *term* does not.
+    let b = arg_beta(&mut env, 1, 0, 0);
+    let spec = DeclSpec::new(1, vec![CtorSpec::new(vec![b], 0)]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration");
+    let y = Term::var(env.fresh_var());
+    let plain = ind.ctor_term(&mach, 0, std::slice::from_ref(&y), &[]).expect("the constructor");
+    for ps in [vec![p1.clone()], vec![p2.clone()], ind.param_terms()] {
+        assert_eq!(
+            plain,
+            ind.ctor_term_at(&mach, 0, std::slice::from_ref(&y), &[], &ps)
+                .expect("at these parameters"),
+            "a plain constructor's term is the same at every parameter list"
+        );
+    }
+    let mut vs = Vec::new();
+    Formula::eq(plain, s.zero()).free_vars(&mut vs);
+    assert!(
+        !vs.contains(&ind.params[0]),
+        "and the parameter does not occur in it — what `degen`'s ι rule rests on"
+    );
+}

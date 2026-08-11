@@ -8671,3 +8671,106 @@ path.
 so ~10 % under is the expectation. Nothing here changes it: no gap was closed on
 this pass, because the closure is checker-side. What changed is the *class* of
 the remaining work, from "derive a target" to "port a consumer".
+
+## The fixtures and the corpus, counted on the same axes — 2026-08-11
+
+*A sweep of `derived/tests/`, prompted by finding that all thirteen `DeclSpec`
+fixtures in `deprec.rs` began with `CtorSpec::nullary()`. The give-away was not
+a failing test; it was **a whole suite agreeing on an incidental detail**. So:
+count what the corpus presents, count what the fixtures present, and diff. Four
+gaps, one arm nothing could reach, one hypothesis of mine refuted by its own
+cell, one mislabelled ledger origin, and one suite that turned out to be fine.*
+
+### Method
+
+Two censuses at the grain `DeclSpec` has. `scripts/decl-shapes.py` (new) walks
+each constructor's **type** past the parameter binders and classifies every
+remaining binder — plain, recursive, recursive-and-function-typed, or a
+self-mention — which `arm-coverage.py` cannot do from the inductive record
+alone: **102 exports, 377 inductive declarations** in
+`vendor/arena-tests/good/`. The fixture side was an ad-hoc syntactic scan of
+`derived/tests/*.rs` — **133 `DeclSpec` and 32 `IndexedDeclSpec` fixtures** —
+and its counts are floors, not exact: it reads `vec![…]` literals and so misses
+a fixture built by a loop, including one of my own.
+
+### The diff
+
+| axis | corpus (377) | fixtures (133) | verdict |
+|---|---:|---:|---|
+| **`np ≥ 3`** | 34 unindexed, up to `Trans` at six | **0** | **no cell could reach it** — added |
+| `np ≥ 2` | 105 of 321 unindexed (33 %) | 4 | thin — the same cell |
+| **`ctors ≥ 6`** | 2 (`Lean.ParserDescr` 13, `Lean.Grind.CommRing.Expr`) | **0** | added last commit |
+| **no nullary constructor** | 263 (70 %) | 48 overall, **0 in `deprec.rs`** | the finding that started this — added |
+| interleaved field mask | 10 | 7 | covered |
+| function-typed recursive arg | 8 | 22 | over-covered, deliberately |
+| `maxrecs ≥ 3` | **0** | 3 | fixtures ahead of the corpus, fine |
+
+Unindexed declarations by parameter count: `np=0` 110, `np=1` 106, `np=2` 71,
+`np=3` 29, `np=4` 2, `np=5` 1, `np=6` 2.
+
+### The cell that refuted its own hypothesis
+
+I expected a second, deeper gap: that `konst` and `const_unit_beta` — argument
+symbols whose body ignores their arity, and the only kind `inductive.rs`,
+`genrec.rs` and `deprec.rs` had — made those suites blind to the parameter list
+entirely, the way `recursor::carrier_at`'s comment records for the fibre's
+codomain ("it happened to be closed for every declaration that reached this
+function before the fibre took a parameter list, which is why the difference was
+invisible").
+
+**They do not.** `βⱼ` and `γⱼ` are *opaque symbols applied to* `p⃗`, so
+`Σ(z::γⱼ(p⃗))` moves with `ps` whatever the body is, and
+`Inductive::ctor_term_at` at two parameter lists gives two different terms at a
+**constant** `γ` exactly as at a live one. A constant body is invisible only to
+a consumer that *unfolds* the symbol along its defining equation. The cell that
+was written to confirm the hypothesis is now the one that records the
+refutation, together with the contrasting fact `degen.rs` rests on: a **plain**
+constructor's term mentions no parameter at all, at any parameter list.
+
+So the parameter gap is **arity and only arity** — which is what was added.
+
+### One ledger origin is mislabelled, and the corpus has no mutual block at all
+
+`iota: no interpretation — **a mutual block**` is 100 gaps (100 own, 493
+sub-tree). There is **no mutual block anywhere in
+`vendor/arena-tests/good/`** — zero declarations with `len(all) > 1`. All three
+recursors that trip that gate are `Lean.Syntax`'s (`rec`, `rec_1`, `rec_2`),
+each with `all_inductives.len() == 1` and `num_motives = 3`. It is **nesting**
+(`Lean.Syntax` has `numNested = 2`), and `derive_iota` tests
+`num_motives != 1 || all_inductives.len() != 1` **before** `is_nested`, so the
+nested row never fires and the mutual row is entirely one nested declaration.
+
+That matters for reading the census: "a mutual block" names a whole missing
+feature class, and the population is one declaration's auxiliary recursors.
+`checker/` has a live seat, so this is named rather than reordered.
+
+### Arms with no possible corpus witness — nothing to add
+
+* **mutual** — 0 declarations. `DeclSpec`'s non-mutual scope has no witness
+  because none exists.
+* **self-mention** — 5 (`Lean.Syntax`, `reduceCtorParam`, `reduceCtorParamRefl`).
+  Not expressible as a `DeclSpec` at all; the checker declines at `walk_spec`,
+  so no `derived/` cell can present one.
+* **nested** — 2, declined upstream.
+* **`γ` at telescope depth ≥ 2** — 6, all `Acc`, served by `rec_acc`.
+  `deprec.rs` already has the *refusal* cell, which is the right coverage.
+
+### Where the fixtures already match — so the sweep is falsifiable
+
+The **indexed** suite is not a blind spot. The corpus has 56 indexed
+declarations at `ni ∈ {1,2}` (46 at one, 10 at two, **none at three or more**),
+`ctors ∈ {1,2,3}`, and parameters in 55 of 56; `derived/tests/family*.rs` has 32
+`IndexedDeclSpec` fixtures spanning `ni ∈ {1,2}` × `ctors ∈ {1,2}` × `np ∈
+{0,1}`. The only corpus shape missing is `(2 indices, 3 constructors)` —
+`RBTree`, which is declined upstream anyway.
+
+### What was added
+
+| file | cell | the corpus shape it presents |
+|---|---|---|
+| `deprec.rs` | `…_at_three_parameters_two_of_them_live` | `EStateM.Result`: `np = 3`, 2 ctors × 2 fields, none nullary, the two fields typed at the **first** and **last** parameter so a truncated or permuted spine is caught |
+| `inductive.rs` | `ctor_term_at_moves_with_the_parameters_at_a_fibre_and_not_at_a_plain_constructor` | both halves of the refutation, and `degen`'s parameter-free premise |
+| `deprec.rs` | `param_beta`, and the `Decidable` cell moved onto it | `Decidable.isTrue : p → Decidable p` types its field at the parameter itself |
+
+`derived` suite green throughout; `cargo clippy -p derived --all-targets -D
+warnings` clean.
