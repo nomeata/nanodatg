@@ -4532,12 +4532,12 @@ rather than proved.
 
 Full 5.6 GB export, exit 0, against the census §8.14 recorded:
 
-| | §8.14's census | with arm C | and with §8.14's alias retry | and with §8.16.2's arm W |
-|---|---|---|---|---|
-| models | 6,640 | 6,698 | 6,707 | **6,770** |
-| declines | 147 | 118 | 109 | **62** |
-| statements compared, differing | 16,928 / 0 | 16,928 / 0 | 16,948 / 0 | **17,270 / 0** |
-| instructions | 3.350 T | 3.371 T | 3.365 T | not re-measured |
+| | §8.14's census | with arm C | and with §8.14's alias retry | and with §8.16.2's arm W | and with §8.16.3's multi-slot carve |
+|---|---|---|---|---|---|
+| models | 6,640 | 6,698 | 6,707 | 6,770 | **6,868** |
+| declines | 147 | 118 | 109 | 62 | **13** |
+| statements compared, differing | 16,928 / 0 | 16,928 / 0 | 16,948 / 0 | 17,270 / 0 | **18,434 / 0** |
+| instructions | 3.350 T | 3.371 T | 3.365 T | not re-measured | **3.398 T** |
 
 **Say what the denominator now counts.** The +58 models are 29 families that
 used to decline *plus their 29 spliced skeletons*, and a skeleton is a verdict
@@ -5111,15 +5111,17 @@ is that the 99 are two separate jobs:
   is exactly `WEmitted.lean`'s `mix` arm. These are non-indexed and go straight
   through `primIso`.
 * **52 need a second change first.** They are indexed families whose *index
-  erasure* branches, and `armC` is guarded by `erasureLinear`
-  (`Simple.lean`'s `armC := route matches .type && ni > 0 && erasureLinear`), so
-  the run declines at the route guard **before** arm C splices anything. A W arm
-  alone does not reach them: the guard has to be relaxed so the branching
-  erasure is spliced, and the prim descent then hands *it* to W, with
-  `Iso.requires` withdrawing the whole model if it does not take. That is
-  §8.15's splice-and-model machinery reused unchanged, but it is a second
-  edit and a second set of fixtures, and it is where the arm's composition
-  with arm C is actually decided.
+  erasure* branches, and `armC` was guarded by `erasureLinear`
+  (`armC := route matches .type && ni > 0 && erasureLinear`), so the run
+  declined at the route guard **before** arm C spliced anything. A W arm alone
+  does not reach them: the guard has to be relaxed so the branching erasure is
+  spliced, and the prim descent then hands *it* to W, with `Iso.requires`
+  withdrawing the whole model if it does not take. That is §8.15's
+  splice-and-model machinery reused unchanged, but it is a second edit and a
+  second set of fixtures, and it is where the arm's composition with arm C is
+  actually decided. **That second edit is §8.16.3**, and the guard now reads
+  `erasureBare`; the count was 51 rather than 52 once `CofixA`'s double count
+  was corrected, immediately below.
 
 The 4 not-tag-factored are the irreducible remainder and are unchanged: their
 branching arity is a datum of the node, so there is no tag to factor through
@@ -5162,6 +5164,13 @@ now prints):
   `ctorIdxAt`, `good`'s minor and the constructor's carve proof to carry *all*
   the recursive slots instead of the last one. The infinitary 2 break the
   erasure itself and are a different question.
+
+  **Both halves of that prediction were carried out and both held** —
+  §8.16.3 below is the branching 51, and the hypothesis was tested at the
+  *first* target rather than the fifty-first: `tests/prim_carve.lean`'s `Br`
+  modelled with no change to `eraseCtorTy`, to `spineSwap`, or to any
+  assumption arm C makes beyond the slot count. The infinitary 2 are still
+  open and are still a different question.
 
 **What the prototypes settle.** The tag scheme, the label and branch encodings,
 both junk hazards, the universe argument, the fragment's one missing root, and
@@ -5289,3 +5298,180 @@ model withdraws the whole W model. `requires` is empty for every W target after
 the first in a run, and that is not a hole: [`Modelgen.genPrim`] rolls the
 environment back on every withdrawal and on every decline, so a fragment that is
 *present* was put there by an earlier model whose own `requires` were met.
+
+### 8.16.3 The carve at every recursive slot — arm C's guard, relaxed to bareness
+
+**Verdict: arm C now runs at `erasureBare` instead of `erasureLinear`, so a
+constructor may have any number of recursive fields.** The branching 51 of
+§8.16.2's table were the tranche; the infinitary 2 were not folded in and are
+still open. `tests/prim_carve.lean` gained `Br`, `Mx` and `Sm3`, and `Br` —
+which that file already held as arm C's *branching* negative — is now one of
+its positives, with the header corrected in place.
+
+**Why this is a subsection of §8.16 and not of §8.15.** The carve stands on a
+spliced skeleton, and the skeleton of a *branching* family branches too. Until
+arm W landed, nothing modelled a branching non-indexed inductive, so relaxing
+this guard would have spliced a skeleton that could not model and
+`Iso.requires` would have withdrawn every one of the 51 — a strictly worse
+outcome than declining at the guard, because the run would have paid for the
+splice first. The dependency is visible in the fixture: `Mx._model.skel` is a
+170-declaration model because it is the first W target in `prim_carve` and
+therefore the one that carries the W core, and the eighteen `_wcore` rows after
+it are the fragment being modelled in turn.
+
+**What moved.** One guard and four sites, and nothing else:
+
+```text
+armC := route .type ∧ ni > 0 ∧ erasureBare        -- was erasureLinear
+```
+
+`erasureLinear`'s single answer is split into the two reasons it always
+printed. `erasureBareWhy` asks only whether every recursive occurrence is a
+bare `T p⃗ e⃗`; `branchingWhy` asks whether any constructor has more than one.
+Only the first still bounds the arm. `erasureLinear` survives as the
+conjunction because it is what `armW`'s guard is stated by and what the census
+counts the two populations with.
+
+The four sites all read one array — `ctorIdxAt`'s `slots : Array (Nat × Array
+Expr)`, one entry per recursive field in **telescope order**, where it was
+`Option (Nat × Array Expr)` holding the last:
+
+| site | at one slot | at many |
+|---|---|---|
+| `good`'s minor | `Eq … ∧ ih χ` | `Eq …` conjoined with a right-nested chain, one clause per child |
+| the constructor | `⟨c f⃗[k ↦ fₖ.1], ⟨refl, fₖ.2⟩⟩` | every recursive field's first component into the skeleton term, every second into the chain |
+| the recursor's minor | one `Eq.rec`, one IH | the same `Eq.rec`; the tail split into per-slot components, one IH per slot |
+| `eraseCtorTy`, `spineSwap` | unchanged | **unchanged** — they replace a recursive field's whole domain and always did it once per field |
+
+That last row is the load-bearing one and it is why the tranche was small: the
+erasure never assumed linearity, only *bareness*. The hypothesis was tested at
+the first target rather than the fifty-first — `Br` modelled on the first run
+after the guard moved.
+
+**Right-nested, and not by taste.** The tail is `B₀ ∧ (B₁ ∧ B₂)`, so the first
+projection of `good` is always the index equation and the second is always
+"the rest". The recursor's minor moves that rest through its index transport
+**as one proof** and never has to re-associate; only the minor's own arguments
+need the per-slot split, and that is the one place `chainSplit` is called.
+
+**The ι rules are untouched.** Every arm C rule is still `Eq.refl`, proved by
+the shared block, and the three reductions that carry them — definitional proof
+irrelevance, the skeleton's own ι, and `PSigma` structure eta — are the same
+three. The carve layer still adds no axiom of its own; what a branching target
+now inherits is the *skeleton's* bill, which for a W skeleton is
+`[propext, Quot.sound]` plus the `Classical.choice` that `_wcore.Acc`'s own
+model spends.
+
+#### The pin, built before the code it pins
+
+"Skip is not pass" has a specific shape here: a carve that drops or permutes a
+slot and still passes every check. Four mutations against the three new
+occupants, all run interpreted (`lake build Modelgen.Simple` plus a probe, 8 s
+and 0.7 s, which is how all four were measured):
+
+| mutation | `Br` (2 slots, different indices) | `Mx` (2 slots, interleaved) | `Sm3` (3 slots, same index and type) |
+|---|---|---|---|
+| a slot **dropped** | red at `_model.good` | red at `_model.good` | red at `_model.good` |
+| the children **permuted** in the constructor | red at `ctor_1` | red at `ctor_1` | **`ctor_1` accepted**, red at `rec_0` |
+| the recursor's IH binders **reversed** | red at `rec_0` | red at `rec_0` | red at `rec_0` |
+| the chain **left-associated** | **models** | **models** | red at `ctor_1` |
+
+Every single-slot occupant in the file — `Vc`, `Two2`, `Bl`, `Fn`, `Vec`,
+`Tri3` — is untouched by all four, which is what makes the table a measurement
+of the new code rather than of the arm.
+
+**The two rows that need three recursive fields, and could not be seen with
+two.** `Sm3.tri`'s three children all have model type `Sm3._model.self n`, so
+permuting them is not a type error anywhere in the constructor: the skeleton
+term takes three first components in the wrong order and the carve proof
+supplies three `good` clauses in the matching wrong order, and the kernel
+accepts `ctor_1`. It is caught one declaration later, because the recursor's
+minor concludes at `motive ι⃗ (T._model.ctor_j f⃗)` and the index transport's
+motive is written against the skeleton term the model constructor must reduce
+to. At `Br` and `Mx` the same mutation dies at the constructor, because their
+children sit at different indices — so **only an occupant with interchangeable
+children measures the downstream check at all**.
+
+The last row is the sharper one. With two conjuncts there is exactly one
+association, so a chain built left and split right is invisible: `Br` and `Mx`
+both still model under it, statements compared and no difference. This is
+`modelgen/Test.lean`'s own "two atoms cannot distinguish an ordering" in its
+associativity form, and it is why the fixture's count is three.
+
+This is §8.16.2's collapsed-tag mutation in the carve's own terms, with one
+difference worth recording: there the pin was the ι theorem, because arm W's ι
+is a `Wrec_iota` application and the constructors of a collapsed tag are
+literally the same term. Here the ι rules are `Eq.refl` and the recursor gets
+there first, so the pin is `rec_0`. **Every red cell above is a kernel
+rejection with a declaration's name on it and not one is a statement
+mismatch** — which is the point of building the pin: axis 3 cannot see any of
+these, so if the kernel did not catch them nothing would.
+
+#### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, 342.9 s wall, 23.9 GB peak RSS, **3.398 T instructions**.*
+
+| | with §8.16.2's arm W | **and with the multi-slot carve** |
+|---|---|---|
+| models | 6,770 | **6,868** |
+| declines | 62 | **13** |
+| statements compared / differing | 17,270 / 0 | **18,434 / 0** |
+| recursors checked against Lean's own / differing | — | 6,796 / 0 |
+| planner level comparisons / escapes | — | 203 / 0 |
+
+**+98 models is 49 families and their 49 skeletons**, so the denominator moves
+with the numerator exactly as it did in §8.15: 6,868 / 6,881 is **99.8 %**,
+against 6,770 / 6,832 = 99.1 %.
+
+**The 13, in full** — and this is the whole remaining residue of the third
+construction on Mathlib:
+
+| what | count | which |
+|---|---|---|
+| indexed family, **infinitary** erasure | 3 | `Lean.Json…_model.aux`, `Lean.PrefixTreeNode…_model.aux`, `PFunctor.Approx.CofixA` |
+| **not tag-factored**, non-indexed | 3 | `WType`, `PSet`, `FirstOrder.Language.Term` |
+| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| name taken | 2 | `Lean.Syntax…_model.tag`, `Lean.Syntax…_model.aux` |
+| singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+
+**49 and not the 51 §8.16.2 predicted, and the two are both accounted for
+rather than lost.** The arithmetic closes exactly: 51 = 49 closed + 1 + 1.
+
+* **`Lean.Syntax._model.0._model.aux` passed the guard and stopped one step
+  later**, at `ensurePSigma`'s name guard — that file declares `PSigma`
+  itself, and the tuple tower's carrier needs it, which is why its sibling
+  `_model.tag` was already declining there. So it moved from the erasure
+  bucket to the name-taken bucket, which is a **better** decline: it now names
+  the real obstruction instead of one that had merely been reached first.
+  The old table's "other 3" is this row's "name taken 2" plus the two
+  singletons, and it should have read 4.
+* **One was misfiled as branching by the old classifier.** `erasureWhy` used to
+  scan constructors in order and return the *first* failing one's reason,
+  asking bareness and branching of each constructor together — so a
+  declaration whose first offending constructor branches and whose *later*
+  constructor is infinitary was reported "branching" and counted among the 51,
+  though no slot count would ever have closed it. Splitting the test into
+  `erasureBareWhy` (any constructor, anywhere) and `branchingWhy` is what
+  makes the two populations countable, and it moves one declaration from 51 to
+  the infinitary bucket, which is why that bucket reads 3 here and 2 there.
+  Which of the two `_model.aux` occupants it is was not separately measured.
+
+**The certifiability column, which is not the coverage column.** Every one of
+the 49 has a *branching* erasure by construction — that is what the guard was
+stopping — so every one of their skeletons takes arm W, and none takes the
+tuple tower. The target's own model is `[propext, Quot.sound]`; the
+`Classical.choice` in the output comes from `_wcore.Acc`'s model (arm G), one
+declaration shared by every W target, and `Iso.requires` means it cannot be
+dropped. So the two columns for this tranche are **49 closed** and **49
+certifiable but none choice-free** — unlike §8.15's original 29, which spend no
+axiom at all. The carve layer itself still adds nothing: it is the skeleton's
+bill, inherited.
+
+**And the guard's remaining refusal has a fixture again.** `Br` was
+`prim_carve`'s occupant of `erasure linear: no`, and this tranche turned it
+into a model — which would have left arm C's one live shape guard with nothing
+exercising it, the exact shape of a coverage loss that a green suite does not
+report. `Inf2` (`inode : (n : N) → (N → Inf2 n) → Inf2 (N.s n)`) replaces it
+and declines at `erasure … is not bare`, which is the half of the old reason
+that is still open and is what the three infinitary corpus occupants above hit.

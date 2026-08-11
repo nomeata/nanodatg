@@ -137,16 +137,19 @@ single-valuedness and is propositional.
   tuple tower ([`Modelgen.recSlotOf`]) carries *linear* recursion, and its
   spine is a single `Nat`, so a constructor with two recursive fields (or one
   under a binder) has no predecessor to take. That needs W/path, plan B.
-* **indexed at a never-zero sort whose index erasure is not linear** — the
-  erasure branches, and arm C below carves out of that erasure, so the family
-  waits on whatever models a branching non-indexed inductive: W. 43 of the 53
-  remaining occupants are the composed `T._model.aux`.
-  An indexed family whose erasure *is* linear is no longer a refusal: it is
-  **arm C** ([`Modelgen.primIso`]'s `armC`), thesis §5.2's
-  skeleton-plus-`good` standing on a spliced inductive rather than on a
-  W-type — no axioms, no per-constructor currying glue, every ι rule
-  `Eq.refl`, and 29 of Mathlib's 147 declines closed.
-  `scripts/inductive-basis/CarveOverSkeleton.lean` is the prototype and
+* **indexed at a never-zero sort whose index erasure is not bare** — a
+  recursive occurrence under a binder or inside a container, which the erasure
+  cannot replace: there is no whole domain to swap. That is *infinitary* and it
+  is the arm's remaining boundary.
+  An indexed family whose erasure is bare is no longer a refusal, **however
+  many recursive fields its constructors have**: it is **arm C**
+  ([`Modelgen.primIso`]'s `armC`), thesis §5.2's skeleton-plus-`good` standing
+  on a spliced inductive rather than on a W-type — no axioms, no
+  per-constructor currying glue, every ι rule `Eq.refl`.
+  A *branching* erasure used to decline here, because the spliced skeleton
+  branches too and nothing modelled a branching non-indexed inductive; arm W
+  does, so the carve now carries every recursive slot and hands the skeleton
+  to W. `scripts/inductive-basis/CarveOverSkeleton.lean` is the prototype and
   `MODELGEN.md` §8.15 the arm; `IndexedCarve.lean` is the older,
   thesis-shaped sketch.
 * **a recursive declaration with no base constructor** — uninhabited, and the
@@ -1816,9 +1819,11 @@ partial def eraseSelfTy (np : Nat) (w : Level) (e : Expr) : Expr :=
 `i` field binders the parameter `p_k` sits at de Bruijn index `np-1-k+i`, which
 is what `skelAt` rebuilds `T._model.skel p⃗` from.
 
-A field is recursive exactly when it mentions `tname`, and `erasureLinear` has
+A field is recursive exactly when it mentions `tname`, and `erasureBare` has
 already established that such a field is a bare `T p⃗ e⃗` — so replacing the
-whole domain is right, and a field this would corrupt has been declined. -/
+whole domain is right, and a field this would corrupt has been declined.
+**Once per such field and no cap on how many**: a branching constructor erases
+exactly as a linear one does, which is why arm C is gated on bareness alone. -/
 partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : Expr) : Expr :=
   let skelAt := fun (d : Nat) => mkAppN (.const skelN us)
     ((Array.range np).map fun k => Expr.bvar (np - 1 - k + d))
@@ -2088,26 +2093,34 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       -- class — empty, unit, payload, enum — is the Church encoding lifted.
       pure .bare
 
-  -- **Is the index erasure linear?** — the one question arm C's reach turns
-  -- on, and the same test the tuple tower applies
-  -- ([`Modelgen.recSlotOf`]): at most one recursive field per constructor, and
-  -- every recursive occurrence a *bare* `T p⃗ e⃗` rather than one under a
-  -- binder or inside a container. Erasing the indices does not move that test
-  -- — a field `T p⃗ e⃗` erases to `S p⃗`, one field either way — so it can be
-  -- asked here, of the family itself, before anything is built.
+  -- **Is the index erasure bare, and is it linear?** — the two questions arm
+  -- C's reach turns on, and the second is the same test the tuple tower
+  -- applies ([`Modelgen.recSlotOf`]). *Bare*: every recursive occurrence is a
+  -- `T p⃗ e⃗` rather than one under a binder or inside a container. *Linear*:
+  -- bare, and at most one such field per constructor. Erasing the indices
+  -- moves neither test — a field `T p⃗ e⃗` erases to `S p⃗`, one field either
+  -- way — so both can be asked here, of the family itself, before anything is
+  -- built.
   --
-  -- Non-throwing on purpose: it is asked of *every* indexed family, and the
-  -- ones it says no to are declined with the answer printed, so the Mathlib
+  -- Non-throwing on purpose: they are asked of *every* indexed family, and the
+  -- ones they say no to are declined with the answer printed, so the Mathlib
   -- census measures the arm's reach instead of estimating it.
   --
-  -- **Two reasons, counted apart.** The erasure can fail to be linear by
-  -- branching (two recursive fields) or by being infinitary (a recursive
-  -- occurrence under a binder), and the two are different jobs for arm W: the
-  -- first keeps every occurrence a bare `T p⃗ e⃗`, which is what
-  -- [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] assume, and the second
-  -- does not. The census counts them separately because the answer to "relax
-  -- this guard" is different for each.
-  let erasureWhy : Option String := Id.run do
+  -- **Two reasons, counted apart, and only one of them still bounds arm C.**
+  -- The erasure can fail to be linear by branching (two recursive fields) or
+  -- by being infinitary (a recursive occurrence under a binder). The first
+  -- keeps every occurrence a bare `T p⃗ e⃗`, which is all that
+  -- [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] assume — they replace
+  -- a recursive field's *whole domain*, once per such field, so a constructor
+  -- with three of them erases as readily as one. Arm C therefore runs at
+  -- `erasureBare` and carries **every** recursive slot through `ctorIdxAt`,
+  -- `good`'s minor and the constructor's carve proof; the spliced skeleton
+  -- that comes out branches, and arm W is what models *it*.
+  -- The second reason does move the erasure and is still a decline here.
+  --
+  -- `erasureLinear` survives because it is what the *decline message* reports
+  -- and what the census counts the two populations by.
+  let erasureBareWhy : Option String := Id.run do
     for (cn, cty) in exportCtors do
       let mut t := cty
       let mut short := false
@@ -2116,19 +2129,29 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
         | .forallE _ _ b _ => t := b
         | _ => short := true
       if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
-      let mut nrec := 0
-      let mut bare := true
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if mentionsAny #[tname] dom then
-          nrec := nrec + 1
-          unless dom.getAppFn.isConstOf tname do bare := false
-        t := b
-      unless bare do
-        return some s!"infinitary: {cn} has a recursive occurrence that is not a bare \
+        if mentionsAny #[tname] dom && !dom.getAppFn.isConstOf tname then
+          return some s!"infinitary: {cn} has a recursive occurrence that is not a bare \
 {tname}"
+        t := b
+    return none
+  let branchingWhy : Option String := Id.run do
+    for (cn, cty) in exportCtors do
+      let mut t := cty
+      for _ in [0:np] do
+        match t with
+        | .forallE _ _ b _ => t := b
+        | _ => pure ()
+      let mut nrec := 0
+      while t matches .forallE .. do
+        let .forallE _ dom b _ := t | unreachable!
+        if mentionsAny #[tname] dom then nrec := nrec + 1
+        t := b
       if nrec > 1 then return some s!"branching: {cn} has {nrec} recursive fields"
     return none
+  let erasureWhy : Option String := erasureBareWhy.orElse fun _ => branchingWhy
+  let erasureBare : Bool := erasureBareWhy.isNone
   let erasureLinear : Bool := erasureWhy.isNone
 
   -- What each route can carry. The Church routes gained indices and recursion
@@ -2137,11 +2160,12 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- through both, which is not done.
   match route with
   | PrimRoute.type =>
-    if ni > 0 && !erasureLinear then
+    if ni > 0 && !erasureBare then
       badShape s!"an indexed family at a never-zero sort whose index erasure is not \
-        linear (arm C splices the erasure and carves the family out of it — \
+        bare (arm C splices the erasure and carves the family out of it — \
         MODELGEN.md §8.15 — so its reach is bounded by whether that erasure \
-        models, and a branching erasure is W's, not the tuple tower's); \
+        models, and an infinitary erasure moves the erasure itself: a field \
+        under a binder has no whole domain to replace); \
         erasure linear: no; B factors through the tag: \
         {if tagFactored tname np exportCtors then "yes" else "no"}\
         ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}\
@@ -2235,10 +2259,13 @@ graph route's inversion cannot be stated at an arbitrary index"
   -- **Arm C**: an indexed family at a never-zero sort, carved out of its own
   -- index erasure. `MODELGEN.md` §8.15 and
   -- `scripts/inductive-basis/CarveOverSkeleton.lean`. Gated on the erasure being
-  -- linear, because that is what decides whether the spliced skeleton will model
-  -- — and a family whose skeleton does not model is a decline, never an
-  -- emission.
-  let armC := (route matches PrimRoute.type) && ni > 0 && erasureLinear
+  -- **bare** — every recursive occurrence a `T p⃗ e⃗` whose whole domain the
+  -- erasure can replace — and no longer on its being *linear*: the carve
+  -- carries an arbitrary number of recursive slots per constructor, and the
+  -- branching skeleton that results is modelled by arm W. A family whose
+  -- skeleton does not model is still a decline and never an emission, which is
+  -- `Iso.requires`' job and not this guard's.
+  let armC := (route matches PrimRoute.type) && ni > 0 && erasureBare
 
   -- **Arm W**: the tagged W construction, `MODELGEN.md` §8.16 and
   -- `scripts/inductive-basis/WEmitted.lean`. It is the *fallback* for the
@@ -2703,9 +2730,18 @@ the subsingleton rule that minted {ern} does not hold of it"
     -- model if it cannot.
     --
     --     skel p⃗           := T with its indices erased  (spliced inductive)
-    --     good p⃗ s y       := skel.rec … — `Eq Pk e⃗_j y`, conjoined with the
-    --                         child's own goodness at its own index
+    --     good p⃗ s y       := skel.rec … — `Eq Pk e⃗_j y`, conjoined with
+    --                         **each** child's own goodness at its own index
     --     T._model.self p⃗ ι⃗ := Σ'(s : skel p⃗), good p⃗ s (pack ι⃗)
+    --
+    -- **Any number of recursive fields per constructor.** The erasure replaces
+    -- each recursive field's whole domain, so a branching constructor erases as
+    -- readily as a linear one; `good`'s clause for it is a right-nested chain
+    -- with one conjunct per child, the constructor's carve proof supplies one
+    -- component per child, and the recursor takes one induction hypothesis per
+    -- child. All three read `ctorIdxAt`'s slot array, in telescope order.
+    -- The skeleton that comes out **branches**, and arm W is what models it —
+    -- which is why this could not be relaxed before arm W landed.
     --
     -- What this buys over carving out of W, all of it measured in
     -- `CarveOverSkeleton.lean`: **no per-constructor currying glue** (a
@@ -2736,10 +2772,10 @@ the subsingleton rule that minted {ern} does not hold of it"
         mkLambdaFVars #[s] (mkAppN (.const goodN us) (ps ++ #[s, y]))
 
     -- ── the skeleton, spliced ──
-    -- Each constructor keeps its field telescope; only the recursive field's
-    -- type and the codomain lose their indices. [`Modelgen.spineSwap`] does
+    -- Each constructor keeps its field telescope; only the recursive fields'
+    -- types and the codomain lose their indices. [`Modelgen.spineSwap`] does
     -- the first and is the tuple tower's own swap, which is the same swap
-    -- because `erasureLinear` has already said the recursive occurrence is a
+    -- because `erasureBare` has already said the recursive occurrence is a
     -- bare `T p⃗ e⃗`.
     let skelDecl : Declaration :=
       .inductDecl lparams np
@@ -2761,13 +2797,28 @@ the subsingleton rule that minted {ern} does not hold of it"
         (minors : Array Expr) (t : Expr) =>
       mkAppN (.const skelRecN (m :: us)) (ps ++ #[mot] ++ minors ++ #[t])
 
-    -- Constructor `j`'s **index expressions** and its recursive slot's
-    -- **child indices**, read off the export's own telescope and re-expressed at
-    -- whatever field vector the caller has opened — the erased one when building
-    -- `good`, the restored one when building the constructor. The substitution
-    -- is sound because an index expression can only mention parameters and
-    -- *non-recursive* fields: there is no way to compute an index out of a
-    -- recursive field before the type exists.
+    -- Constructor `j`'s **index expressions** and **every** recursive slot's
+    -- position with its own child indices, read off the export's own telescope
+    -- and re-expressed at whatever field vector the caller has opened — the
+    -- erased one when building `good`, the restored one when building the
+    -- constructor. The substitution is sound because an index expression can
+    -- only mention parameters and *non-recursive* fields: there is no way to
+    -- compute an index out of a recursive field before the type exists.
+    --
+    -- **The array is in telescope order and every consumer depends on that.**
+    -- The skeleton recursor's minor binds its induction hypotheses in the order
+    -- of the recursive fields, `good`'s conjunction is built in that order, and
+    -- the constructor's carve proof supplies its components in that order — so
+    -- the three agree only because all three read this one array.
+    --
+    -- Where a constructor's recursive fields sit at *different* indices, a
+    -- dropped or permuted slot is a type error in the model constructor. Where
+    -- they are interchangeable it is **not**: the constructor is well typed and
+    -- the kernel accepts it, and what catches the permutation is `rec_0`, whose
+    -- index transport is written against the skeleton term the model
+    -- constructor is supposed to reduce to. `tests/prim_carve.lean`'s `Sm3` is
+    -- that occupant and its header records the four mutations — including the
+    -- association error that two recursive fields cannot see at all.
     let ctorIdxAt := fun (ps gs : Array Expr) (j : Nat) => do
       let (cn, cty) := exportCtors[j]!
       let tele ← instForall cty ps
@@ -2777,7 +2828,7 @@ the subsingleton rule that minted {ern} does not hold of it"
         unless res.getAppFn.isConstOf tname && args.size == np + ni do
           badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
         let idx := (args.extract np args.size).map (·.replaceFVars fs gs)
-        let mut slot? : Option (Nat × Array Expr) := none
+        let mut slots : Array (Nat × Array Expr) := #[]
         for i in [0:nf] do
           let ft ← ityp fs[i]!
           if mentionsAny #[tname] ft then
@@ -2785,8 +2836,45 @@ the subsingleton rule that minted {ern} does not hold of it"
             unless ft.getAppFn.isConstOf tname && fargs.size == np + ni do
               badShape s!"{cn}'s recursive field is not {tname} at {np} parameters \
                 and {ni} indices"
-            slot? := some (i, (fargs.extract np fargs.size).map (·.replaceFVars fs gs))
-        pure (idx, slot?)
+            slots := slots.push
+              (i, (fargs.extract np fargs.size).map (·.replaceFVars fs gs))
+        pure (idx, slots)
+
+    -- ── the carve's conjunction, at an arbitrary number of slots ──
+    -- `good p⃗ (c f⃗) y` is `y = ι⃗_c` conjoined with **one clause per recursive
+    -- field**, right-nested: `A ∧ (B₀ ∧ (B₁ ∧ B₂))`. Right-nested rather than
+    -- left because then the *first* projection is always the index equation and
+    -- the second is always "the rest", which is the shape the recursor's minor
+    -- destructs and the shape it rebuilds under the index transport — it moves
+    -- the whole tail as one proof and never has to re-associate.
+    --
+    -- With no recursive field there is no tail at all and `good` is the bare
+    -- equation, which is the arm's original zero-slot branch unchanged.
+    let chainTyOf : Array Expr → Option Expr := fun bs =>
+      bs.foldr (fun b acc => some (match acc with | none => b | some t => andCOf b t)) none
+    -- The tail of `bs` from `i`, as a type. `bs[i:]` right-nested.
+    let tailTyOf : Array Expr → Nat → Option Expr := fun bs i =>
+      chainTyOf (bs.extract i bs.size)
+    -- The proof of `chainTyOf bs` from one proof per conjunct.
+    let chainMkOf : Array Expr → Array Expr → GenM (Option Expr) := fun bs prs => do
+      let mut acc : Option Expr := none
+      for i' in [0:bs.size] do
+        let i := bs.size - 1 - i'
+        acc := some (← match acc with
+          | none => pure prs[i]!
+          | some t => andCMk bs[i]! (tailTyOf bs (i + 1)).get! prs[i]! t)
+      pure acc
+    -- The conjuncts of `chainTyOf bs`, extracted from one proof of it.
+    let chainSplit : Array Expr → Expr → GenM (Array Expr) := fun bs p => do
+      let mut out : Array Expr := #[]
+      let mut cur := p
+      for i in [0:bs.size] do
+        if i + 1 == bs.size then out := out.push cur
+        else
+          let rest := (tailTyOf bs (i + 1)).get!
+          out := out.push (← andCFst bs[i]! rest cur)
+          cur ← andCSnd bs[i]! rest cur
+      pure out
 
     -- ── `good`, by the skeleton's own recursor ──
     -- The motive is `fun _ => Pk → Prop`, which is a `Prop`, so this uses only
@@ -2805,19 +2893,19 @@ the subsingleton rule that minted {ern} does not hold of it"
         let nf := numForalls tele
         let swapped ← spineSwap tname (skelSelf ps) nf tele
         forallBoundedTelescope swapped (some nf) fun gs _ => do
-          let (idx, slot?) ← ctorIdxAt ps gs j
+          let (idx, slots) ← ctorIdxAt ps gs j
           let pkc ← packChain ni pk idx 0
-          match slot? with
-          | none =>
-            let body ← withLocalDeclD `y pk fun y =>
-              mkLambdaFVars #[y] (eqi.mk' ℓpk pk pkc y)
-            mkLambdaFVars gs body
-          | some (_, chi) =>
-            let pkchi ← packChain ni pk chi 0
-            withLocalDeclD `ih predTy fun ih => do
-              let body ← withLocalDeclD `y pk fun y =>
-                mkLambdaFVars #[y] (andCOf (eqi.mk' ℓpk pk pkc y) (mkApp ih pkchi))
-              mkLambdaFVars (gs.push ih) body
+          -- One induction hypothesis per recursive field, in telescope order —
+          -- which is the order the kernel's own minor binds them in.
+          withLocalsD (slots.map fun _ => (`ih, predTy)) 0 #[] fun ihs => do
+            let bs ← slots.mapIdxM fun i (_, chi) =>
+              return mkApp ihs[i]! (← packChain ni pk chi 0)
+            let body ← withLocalDeclD `y pk fun y => do
+              let eq := eqi.mk' ℓpk pk pkc y
+              mkLambdaFVars #[y] (match chainTyOf bs with
+                | none => eq
+                | some t => andCOf eq t)
+            mkLambdaFVars (gs ++ ihs) body
       -- **The motive's universe is `imax ℓpk 1`, not `0`.** `Pk → Prop` is a
       -- *predicate type*, and its codomain is the type `Prop`, which lives in
       -- `Sort 1` — so the fold is a `Sort 1`-valued elimination and not a
@@ -2852,18 +2940,26 @@ the subsingleton rule that minted {ern} does not hold of it"
         let rtele ← instForall ty ps
         let nf := numForalls rtele
         forallBoundedTelescope rtele (some nf) fun fs _ => do
-          let (idx, slot?) ← ctorIdxAt ps fs j
+          let (idx, slots) ← ctorIdxAt ps fs j
           let pkc ← packChain ni pk idx 0
+          -- Each recursive field arrives as a carve pair `⟨s, h⟩`; the skeleton
+          -- constructor takes the first component and the carve proof's tail is
+          -- the second, one per slot and in the same order.
           let mut gs := fs
-          let mut proof := eqi.refl' ℓpk pk pkc
-          if let some (k, chi) := slot? then
+          let mut bs : Array Expr := #[]
+          let mut prs : Array Expr := #[]
+          for (k, chi) in slots do
             let pkchi ← packChain ni pk chi 0
             let βchi ← βOf ps pkchi
             let sk := psigmaFst w .zero (skelSelf ps) βchi fs[k]!
-            let sn := psigmaSnd w .zero (skelSelf ps) βchi fs[k]!
             gs := gs.set! k sk
-            proof ← andCMk (eqi.mk' ℓpk pk pkc pkc)
-              (mkAppN (.const goodN us) (ps ++ #[sk, pkchi])) proof sn
+            bs := bs.push (mkAppN (.const goodN us) (ps ++ #[sk, pkchi]))
+            prs := prs.push (psigmaSnd w .zero (skelSelf ps) βchi fs[k]!)
+          let refl := eqi.refl' ℓpk pk pkc
+          let proof ← match ← chainMkOf bs prs with
+            | none => pure refl
+            | some tail =>
+              andCMk (eqi.mk' ℓpk pk pkc pkc) (chainTyOf bs).get! refl tail
           let β ← βOf ps pkc
           mkLambdaFVars (ps ++ fs)
             (psigmaMk w .zero (skelSelf ps) β
@@ -2905,53 +3001,56 @@ the subsingleton rule that minted {ern} does not hold of it"
         let nf := numForalls tele
         let swapped ← spineSwap tname (skelSelf ps) nf tele
         forallBoundedTelescope swapped (some nf) fun gs _ => do
-          let (idx, slot?) ← ctorIdxAt ps gs j
+          let (idx, slots) ← ctorIdxAt ps gs j
           let pkc ← packChain ni pk idx 0
           let head := mkAppN (.const (skelCtorN j) us) (ps ++ gs)
-          -- `B` is the second conjunct of `good p⃗ head y`, absent when the
-          -- constructor has no recursive field.
-          let bOf : GenM (Option (Expr × Expr × Array Expr)) :=
-            match slot? with
-            | none => pure none
-            | some (k, chi) => do
-              let pkchi ← packChain ni pk chi 0
-              pure (some (mkAppN (.const goodN us) (ps ++ #[gs[k]!, pkchi]), pkchi, chi))
-          let b? ← bOf
-          let body := fun (ih? : Option Expr) => withLocalDeclD `y pk fun y => do
+          -- `B⃗` are the tail conjuncts of `good p⃗ head y` — one per recursive
+          -- field, in telescope order, and empty when there is none.
+          let pkchis ← slots.mapM fun (_, chi) => packChain ni pk chi 0
+          let bTys := slots.mapIdx fun i (k, _) =>
+            mkAppN (.const goodN us) (ps ++ #[gs[k]!, pkchis[i]!])
+          let body := fun (ihs : Array Expr) => withLocalDeclD `y pk fun y => do
             let aTy := eqi.mk' ℓpk pk pkc y
             withLocalDeclD `h (mkAppN (.const goodN us) (ps ++ #[head, y])) fun h => do
-              let (he, hc?) ← match b? with
+              -- The index equation, and the whole tail as **one** proof. The
+              -- tail is split into its per-slot components only where the
+              -- minor's own arguments need them; the transport moves it intact.
+              let (he, tail?) ← match chainTyOf bTys with
                 | none => pure (h, none)
-                | some (bTy, _, _) => do
+                | some bTy => do
                   pure (← andCFst aTy bTy h, some (← andCSnd aTy bTy h))
+              let hcs ← match tail? with
+                | none => pure #[]
+                | some tail => chainSplit bTys tail
               -- the motive of the index transport: rebuild the carve proof at
               -- each point, which proof irrelevance then identifies with `h`.
               let motiveE ← withLocalDeclD `y2 pk fun y2 => do
                 withLocalDeclD `hh (eqi.mk' ℓpk pk pkc y2) fun hh => do
                   let β2 ← βOf ps y2
-                  let reb ← match b?, hc? with
-                    | some (bTy, _, _), some hc =>
-                      andCMk (eqi.mk' ℓpk pk pkc y2) bTy hh hc
+                  let reb ← match chainTyOf bTys, tail? with
+                    | some bTy, some tail =>
+                      andCMk (eqi.mk' ℓpk pk pkc y2) bTy hh tail
                     | _, _ => pure hh
                   let ys ← unpackChain ni pk y2
                   mkLambdaFVars #[y2, hh]
                     (mkAppN motive (ys.push (psigmaMk w .zero (skelSelf ps) β2 head reb)))
-              -- the minor premise, at the carrier's own fields
+              -- the minor premise, at the carrier's own fields: every recursive
+              -- slot repaired into a carve pair, and one induction hypothesis
+              -- per slot appended in the same order.
               let mut args := gs
               let mut extra : Array Expr := #[]
-              if let (some (k, _), some (bTy, pkchi, _), some hc, some ih) :=
-                  (slot?, b?, hc?, ih?) then
-                let βchi ← βOf ps pkchi
-                let _ := bTy
-                args := args.set! k (psigmaMk w .zero (skelSelf ps) βchi gs[k]! hc)
-                extra := #[mkAppN ih #[pkchi, hc]]
+              for i in [0:slots.size] do
+                let (k, _) := slots[i]!
+                let βchi ← βOf ps pkchis[i]!
+                args := args.set! k (psigmaMk w .zero (skelSelf ps) βchi gs[k]! hcs[i]!)
+                extra := extra.push (mkAppN ihs[i]! #[pkchis[i]!, hcs[i]!])
               let base := mkAppN minors[j]! (args ++ extra)
               mkLambdaFVars #[y, h] (eqi.recAt v ℓpk pk pkc motiveE base y he)
-          match slot? with
-          | none => mkLambdaFVars gs (← body none)
-          | some (k, _) =>
-            withLocalDeclD `ih (← atSkel gs[k]!) fun ih => do
-              mkLambdaFVars (gs.push ih) (← body (some ih))
+          -- The skeleton recursor's minor binds the fields, then one induction
+          -- hypothesis per recursive field in telescope order.
+          let ihTys ← slots.mapM fun (k, _) => do pure (`ih, ← atSkel gs[k]!)
+          withLocalsD ihTys 0 #[] fun ihs => do
+            mkLambdaFVars (gs ++ ihs) (← body ihs)
       let pki ← packChain ni pk idxs 0
       let βi ← βOf ps pki
       let t1 := psigmaFst w .zero (skelSelf ps) βi t

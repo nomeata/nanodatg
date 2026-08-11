@@ -486,23 +486,55 @@ def expectedPrim : List Row :=
        ("Bool", 6), ("HEq", 4), ("PProd", 4)],
       [ ("Nat", "prim model shape: a basis primitive")
       , ("Eq", "prim model shape: a basis primitive")])
-  -- **Arm C**, and the two rows below the models are the arm's boundaries.
+  -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
+  -- the three rows below the models are the arm's boundaries.
   -- Every `X._model.skel` beside an `X` is the spliced index erasure being
   -- modelled in turn (§8.13's splice-and-model), so a row here going missing
   -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
   -- exists to make impossible.
+  --
+  -- `Mx`, `Sm3` and `Br` are the **multi-slot** occupants and they are the
+  -- reason this row grew the W fragment. Arm C runs at `erasureBare`: a
+  -- constructor may have any number of recursive fields, the erasure replaces
+  -- each one's whole domain, and the spliced skeleton that comes out
+  -- **branches** — so it is arm W that models it, and the first of the three
+  -- to be reached carries the splice. That is `Mx._model.skel` at 170 here,
+  -- and the eighteen `_wcore` rows after it are the fragment being modelled in
+  -- turn (`Iso.requires`' rule). `Br._model.skel` and `Sm3._model.skel` are
+  -- twelve each, because by then the fragment is in.
+  --
+  -- **`Mx._model.skel`'s 170 is an ordering fact, not a fact about `Mx`**, in
+  -- exactly the sense the arm W row below records for `Tree`: the fixture's
+  -- declaration order decides which skeleton pays for the splice.
+  --
+  -- **`Inf2` is the guard's remaining refusal and it replaced `Br` as the
+  -- occupant of it.** `Br` used to decline here for `erasure linear: no`, and
+  -- relaxing the guard to `erasureBare` turned it into a model — which would
+  -- have left the arm's one live shape guard with no fixture at all. `Inf2`'s
+  -- recursive field sits under a binder, so it is the *infinitary* half of the
+  -- old reason, and the half that is still open.
   , ("prim_carve",
       [("N", 9), ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
-       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6), ("Two2", 8),
-       ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
+       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6),
+       ("Mx", 8), ("Mx._model.skel", 170),
+       ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
+       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4),
+       ("Two2", 8), ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
+       ("Sm3", 8), ("Sm3._model.skel", 12), ("Br", 8), ("Br._model.skel", 12),
        ("Tri3", 8), ("Tri3._model.skel", 6)],
       [ ("Eq", "prim model shape: a basis primitive")
-      -- withdrawn: the erasure is linear and still does not model, and the
+      -- the shape guard itself, and the only reason left that stops arm C
+      -- before it splices anything
+      , ("Inf2", "prim model shape: an indexed family at a never-zero sort whose index \
+          erasure is not bare")
+      -- withdrawn: the erasure is bare and still does not model, and the
       -- reason carried is the *skeleton's* own rather than "it did not model"
       , ("IBox", "prim model shape: the spliced inductive IBox._model.skel did \
           not model")
-      , ("Br", "prim model shape: an indexed family at a never-zero sort whose index \
-          erasure is not linear")
       , ("NoBase", "prim model shape: the spliced inductive NoBase._model.skel did \
           not model")])
   -- **Arm W** (`MODELGEN.md` §8.16), and this row is three claims at once.

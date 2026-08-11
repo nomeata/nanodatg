@@ -39,15 +39,72 @@
      and a constructor whose child index and result index come from the same
      field cannot distinguish reading one for the other.
 
-   Two negatives, and they are the arm's two boundaries rather than incidental
-   refusals:
+   Three occupants for the **multi-slot** carve — a constructor with more than
+   one recursive field. Arm C runs at `erasureBare` rather than at
+   `erasureLinear`: [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] replace
+   a recursive field's whole domain and do it once per such field, so the
+   erasure of a branching family is as bare as a linear one — and the spliced
+   skeleton that comes out branches, which is **arm W's** to model. That is why
+   these three could not land before arm W did.
 
-   * `Br` — an indexed family whose erasure **branches**. Arm C splices the
-     erasure and the erasure has to model; a branching one is W's territory,
-     not the tuple tower's, so this declines *before* anything is spliced,
-     with `erasure linear: no`.
+   * `Br` — the base case: **two recursive fields at different indices**,
+     interleaved with the two non-recursive fields that carry those indices.
+     Different child indices make most slot confusions a type error, which is
+     what makes it the cheap target; it declined before this tranche with
+     `erasure linear: no` and models now.
 
-   * `IBox` and `NoBase` — two indexed families whose erasure is linear and
+   * `Mx` — two recursive fields **interleaved with non-recursive ones and
+     under a parameter**, at positions 1 and 4 of a five-field telescope. A
+     carve that used a slot's *ordinal* where its telescope *position* belongs
+     writes the child into a `N` field and is a type error here; with the
+     recursive fields at the front of the telescope it would not be one.
+
+   * `Sm3` — **three recursive fields at the same index and the same type**,
+     which is the arm's own "skip is not pass" pin and the reason the count is
+     three rather than two. Four mutations were run against these three
+     occupants and the two axes below are the two that `Br` and `Mx` do not
+     cover on their own.
+
+     *Permutation.* All three of `tri`'s children have model type
+     `Sm3._model.self n`, so a carve that permutes them builds a **well-typed
+     constructor** — the skeleton constructor takes the three first components
+     in the wrong order and the carve proof supplies the three `good` clauses
+     in the matching wrong order, and the kernel accepts `ctor_1`. At `Br` and
+     at `Mx` the same mutation dies at `ctor_1`, because their children sit at
+     *different* indices and the swap is a type mismatch; only where the
+     children are interchangeable does the constructor survive it. It is caught
+     one declaration later, at `rec_0`: the recursor's minor concludes at
+     `motive ι⃗ (T._model.ctor_j f⃗)`, so the model constructor's own value has
+     to reduce to the skeleton term the index transport's motive was written
+     against, and a permuted one does not. Measured: `Br` and `Mx` red at
+     `ctor_1`, `Sm3` red at `rec_0`, and every single-slot occupant above
+     untouched.
+
+     *Association.* The carve's tail is a right-nested chain `B₀ ∧ (B₁ ∧ B₂)`,
+     built by `chainMkOf` and taken apart by `chainSplit`, and those two have
+     to invert each other. **With two conjuncts there is only one association**,
+     so a chain built left and split right is invisible — measured, and `Br`
+     and `Mx` both still model under it. `Sm3` is red at `ctor_1`. This is the
+     one axis on which two recursive fields are no better than one.
+
+     Two further mutations, for the record, and both loud at every multi-slot
+     occupant: a **dropped** slot is rejected at `_model.good`, where the
+     minor's induction-hypothesis count stops matching the skeleton recursor's
+     own; **reversed** induction-hypothesis binders in the recursor are
+     rejected at `rec_0`.
+
+   Three negatives, and they are the arm's remaining boundary rather than
+   incidental refusals:
+
+   * `Inf2` — an indexed family whose erasure is **infinitary**: the recursive
+     occurrence sits under a binder, so it is not a bare `Inf2 p⃗ e⃗` and there
+     is no whole domain for the erasure to replace. This is the half of the old
+     `erasure linear: no` refusal that is *still* a refusal, and it is here
+     because `Br` was the occupant of that refusal until this tranche made it a
+     model — relaxing the guard without replacing the fixture would have left
+     arm C's one live shape guard with nothing exercising it.
+
+   * `IBox` and `NoBase` — two indexed families whose erasure is bare and
      **still does not model**, so the skeleton is spliced, the prim pass
      cannot model it, and the whole emission is **withdrawn**: §8.15's rule
      that a family whose skeleton does not model produces no emission, so that
@@ -111,6 +168,18 @@ inductive Tri3 : N → Type where
 inductive Br : N → Type where
   | leaf : Br N.z
   | node : (m n : N) → Br m → Br n → Br (N.s N.z)
+
+inductive Mx (α : Type) : N → Type where
+  | mx0 : Mx α N.z
+  | mx2 : (a : N) → Mx α a → α → (b : N) → Mx α b → Mx α (N.s b)
+
+inductive Sm3 : N → Type where
+  | tip : Sm3 N.z
+  | tri : (n : N) → Sm3 n → Sm3 n → Sm3 n → Sm3 (N.s n)
+
+inductive Inf2 : N → Type where
+  | ileaf : Inf2 N.z
+  | inode : (n : N) → (N → Inf2 n) → Inf2 (N.s n)
 
 inductive IBox (α : Sort u) (β : Sort v) : N → Sort (max 1 u v) where
   | mk : ((α → β) → β) → IBox α β N.z
