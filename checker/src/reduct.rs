@@ -123,6 +123,24 @@ pub(crate) enum Node<'t, C> {
     /// Two reductions in sequence. The left one's `to` is the right one's
     /// `from`; [`then`] is the only constructor and establishes that.
     Seq(Rc<Trace<'t, C>>, Rc<Trace<'t, C>>),
+    /// A reduction **inside an application spine**: the two endpoints are the
+    /// same head applied to the same arguments except at the positions the
+    /// inner reduction is about, and the certificate is a fold of `app_cong`
+    /// with reflexivity everywhere else.
+    ///
+    /// This exists for one reason. `reduce_rec` weak-head-normalises the major
+    /// premise *inside itself* and then reports a single `Iota` step from the
+    /// **unreduced** redex, so the backend's ι rule is handed a major premise
+    /// that is not a constructor and can only decline — 486 gaps on
+    /// `init-prelude`, and 3 066 with the sub-tree they feed. Splitting that
+    /// into a congruence leg and an ι leg needs a node that can carry "the same
+    /// spine, one argument reduced", and `Seq`/`One` cannot: a `One` is a whole-
+    /// term rewrite and a `Seq` composes two of those.
+    ///
+    /// Nothing is checked here; [`crate::tc::TypeChecker::trace_cert`] verifies
+    /// that the endpoints really are one spine differing only at the inner
+    /// reduction's own endpoints before it builds anything.
+    Cong(Rc<Trace<'t, C>>),
 }
 
 /// A reduction, where `None` means the empty one.
@@ -136,6 +154,60 @@ pub(crate) type TracePtr<'t, C> = Option<Rc<Trace<'t, C>>>;
 /// The one-step reduction `from ⟶ to` by `rule`.
 pub(crate) fn one<'t, C>(rule: Rule, from: ExprPtr<'t>, to: ExprPtr<'t>) -> TracePtr<'t, C> {
     Some(Rc::new(Trace { from, to, node: Node::One(rule), cert: RefCell::new(None) }))
+}
+
+/// Simulate the numeral bridge's link 2 having landed. Measurement only.
+#[cfg(feature = "stepcount")]
+fn nat_ruled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NANODA_NAT_RULED").is_some())
+}
+
+/// Whether every step of a reduction is one of the four rules that essentially
+/// always certify — `Beta`, `Zeta`, `Delta`, `Sort`.
+///
+/// A syntactic walk of the recorded trace: no backend call, no interpretation,
+/// so it may be asked on the reduction hot path. It exists so a caller can
+/// decide *whether to say more* about a reduction before anyone has paid to
+/// certify it. See `TypeChecker::reduce_rec`.
+pub(crate) fn fully_ruled<'t, C>(t: &TracePtr<'t, C>) -> bool {
+    match t {
+        None => true,
+        Some(t) => match &t.node {
+            // `Iota` and `ProjRed` are *asked*, which is the distinction this
+            // enum draws — but being asked is not being answered, and both gap
+            // on this corpus far more often than not. A caller uses this to
+            // decide whether to expose a reduction to certification that was
+            // never exposed before, so the bar is "will almost certainly
+            // certify", not "has somewhere to ask".
+            Node::One(Rule::Beta | Rule::Zeta | Rule::Delta | Rule::Sort) => true,
+            // `NANODA_NAT_RULED` promotes the numeral admission to a rule
+            // *for this test only*, which is exactly what the numeral bridge's
+            // link 2 will do for real. It is how the caller downstream can be
+            // shown to fire rather than being dead code waiting for a landing
+            // that has not happened. Measurement only, and gated twice.
+            #[cfg(feature = "stepcount")]
+            Node::One(Rule::Admitted(Admit::NatRed)) if nat_ruled() => true,
+            Node::One(_) => false,
+            Node::Seq(l, r) => {
+                fully_ruled(&Some(l.clone())) && fully_ruled(&Some(r.clone()))
+            }
+            Node::Cong(sub) => fully_ruled(&Some(sub.clone())),
+        },
+    }
+}
+
+/// The reduction `from ⟶* to` that `sub` performs inside an application spine.
+///
+/// `None` when `sub` is empty, which is the right answer: an inner reduction
+/// that took no step leaves the spine alone.
+pub(crate) fn cong<'t, C>(
+    from: ExprPtr<'t>,
+    to: ExprPtr<'t>,
+    sub: TracePtr<'t, C>,
+) -> TracePtr<'t, C> {
+    let sub = sub?;
+    Some(Rc::new(Trace { from, to, node: Node::Cong(sub), cert: RefCell::new(None) }))
 }
 
 /// Two reductions in sequence, in O(1) and without copying either.

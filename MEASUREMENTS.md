@@ -8464,3 +8464,93 @@ anything lost is checker-side plumbing shared with the general path:
 declines are 227 "constructors not yet in the environment" and 27 class-S/P) and
 `GenCtorBridge` must build. Neither can be measured from `derived/`, and both are
 the *same* plumbing `fire_general`'s 92 live ι sites already exercise.
+
+
+## Link 3: `reduce_rec` says what it reduced — a no-op that switches itself on — 2026-08-11
+
+*The `checker/` half of the numeral bridge. It lands as a **strictly
+non-increasing** change that does nothing today and fires by itself when link 2
+makes the numeral admission a rule. Getting there took two designs; the first
+one is recorded because it is the one the brief specified and it cannot be
+landed.*
+
+### What was wrong
+
+`reduce_rec` weak-head-normalises the major premise **inside itself** and throws
+that reduction away, then reports a single `Rule::Iota` step from the
+**unreduced** redex. The backend's ι rule reads the major off `args[major_idx]`,
+finds something that is not a constructor, and declines: 486 originated gaps and
+3 066 with the sub-tree they feed. Not a missing derivation — the checker knew
+the reduction and did not say so.
+
+So `reduce_rec` now returns the major's own trace beside the reduct, and the
+caller emits **two** steps: a congruence leg carrying the major to constructor
+form inside the spine (`Node::Cong`, a fold of `app_cong` starting at the first
+argument that moved), then an ι leg whose major *is* a constructor.
+
+### The first design, measured and refused
+
+Split unconditionally, as briefed. On `init-prelude`:
+
+| | baseline | split unconditionally |
+|---|---:|---:|
+| gaps | 15 734 | **20 707** |
+| ι: the major premise is not a constructor — own | 486 | **228** |
+| …its sub-tree | 3 286 | **353** |
+| `nat_reduce` sub-tree | 111 | **4 452** |
+| with the numeral rule simulated | — | 17 008 |
+
+The origin does collapse. It collapses **into `nat_reduce`**, and the ledger is
+31 % worse — because splitting makes the checker ask for certificates it never
+asked for, and the major's reduction contains admissions the single ι gap was
+silently standing in for. Still 1 274 above baseline with link 2 simulated. **A
+ratchet that loosens needs a written trade and this had nothing to trade**, so
+it is not what landed.
+
+### The design that did land
+
+The leg is offered only when the major's reduction is **fully ruled** — every
+step `Beta`, `Zeta`, `Delta` or `Sort`, the four that essentially always
+certify. `reduct::fully_ruled` is a syntactic walk of the recorded trace: no
+backend call, no interpretation, so it can be asked on the reduction hot path.
+Where a step is an admission the old single ι step is emitted unchanged.
+
+**Strictly non-increasing by construction**, and measured so:
+
+| | |
+|---|---:|
+| gaps | **15 734** |
+| escapes | **2 232** |
+| derived | **159 803** |
+| `admit whnf` | **0** |
+
+Byte-identical to baseline, every row.
+
+### One defect this exposed, which is what `Admit::Whnf` is for
+
+An intermediate version sat at 8 `Admit::Whnf`, a counter documented as a bug
+report that must stay at zero. The cause: **a reduction can move a term and
+record nothing.** An empty trace is the identity, so `then` drops the congruence
+leg — and the composite then claimed to start at the redex while actually
+starting at the rebuilt one. `whnf_trace.is_some()` is therefore not redundant
+with `major != major0`, and the counter caught it exactly as designed.
+
+### That it is not dead code
+
+`NANODA_NAT_RULED` promotes the numeral admission to a rule, which is precisely
+what link 2 does for real:
+
+| | gaps | escapes | derived | ι origin, own |
+|---|---:|---:|---:|---:|
+| today | 15 734 | 2 232 | 159 803 | 486 |
+| link 2's rule exists | 16 676 | 2 232 | 160 745 | **15** |
+| link 2 also **certifying** | **13 137** | 2 934 | 164 986 | **15** |
+
+**The origin falls 486 → 15, a 97 % collapse, the moment the numeral rule
+exists** — the wiring is live and waiting, not speculative. And the pair is
+worth **2 597 gaps** against baseline, which is 85 % of origin 2's measured
+3 066, exactly the shortfall the ceiling rule predicts.
+
+So: **alone this is not even a relay — it is a no-op**, because the gate
+suppresses it rather than moving the row to `nat_reduce`. The number to hold the
+pair to when link 2 lands is **15 734 → 13 137**.

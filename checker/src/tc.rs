@@ -15,6 +15,41 @@ use std::rc::Rc;
 use std::error::Error;
 use num_traits::pow::Pow;
 
+/// How a recursor's major premise reached constructor form during
+/// [`TypeChecker::reduce_rec`] — the input to the congruence leg the caller
+/// emits in front of the ι step. See that method.
+struct MajorStep<'t, C> {
+    /// Which argument of the recursor spine the major premise is.
+    idx: usize,
+    /// What it reduced to, or the original argument when nothing certifiable
+    /// happened.
+    to: ExprPtr<'t>,
+    /// The reduction, or `None` when there is no certifiable one.
+    trace: TracePtr<'t, C>,
+}
+
+impl<'t, C> MajorStep<'t, C> {
+    /// The redex with the major premise replaced by what it reduced to.
+    ///
+    /// On a hash-consed representation this is `n` lookups and no allocation
+    /// when nothing changed, so the common case — a major that was already a
+    /// constructor — rebuilds the identical pointer and `reduct::cong` drops
+    /// the empty leg.
+    fn rebuild<'p: 't>(
+        &self,
+        ctx: &mut TcCtx<'t, 'p>,
+        fun: ExprPtr<'t>,
+        args: &[ExprPtr<'t>],
+    ) -> ExprPtr<'t> {
+        let mut out = fun;
+        for (i, a) in args.iter().enumerate() {
+            let a = if i == self.idx { self.to } else { *a };
+            out = ctx.mk_app(out, a);
+        }
+        out
+    }
+}
+
 use DeltaResult::*;
 use Expr::*;
 use InferFlag::*;
@@ -1418,7 +1453,80 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let rc = self.trace_cert(&r);
                 self.seq(t.from, t.to, lc, rc)
             }
+            Node::Cong(sub) => {
+                let sub = sub.clone();
+                self.cong_cert(t.from, t.to, &sub)
+            }
         }
+    }
+
+    /// The certificate for a [`Node::Cong`]: `app_cong` folded over the spine,
+    /// reflexivity at every argument the inner reduction did not touch.
+    ///
+    /// The endpoints are **checked** before anything is built — same head, same
+    /// arity, and every position where they differ is exactly the inner
+    /// reduction's own pair. That check is what lets the node be built without
+    /// one: a `Cong` whose endpoints are not one spine differing at `sub` is a
+    /// bug in the recording and is reported as `Admit::Whnf`, the same way a
+    /// `Seq` whose halves do not meet is.
+    fn cong_cert(
+        &mut self,
+        from: ExprPtr<'t>,
+        to: ExprPtr<'t>,
+        sub: &Rc<Trace<'t, Cert<'t, 'p>>>,
+    ) -> DefEq<'t, 'p> {
+        let (f1, args1) = self.ctx.unfold_apps(from);
+        let (f2, args2) = self.ctx.unfold_apps(to);
+        if f1 != f2 || args1.len() != args2.len() || args1.is_empty() {
+            return self.admit(from, to, Admit::Whnf)
+        }
+        let mut touched = false;
+        for (a, b) in args1.iter().zip(args2.iter()) {
+            if a != b {
+                if (*a, *b) != (sub.from, sub.to) {
+                    return self.admit(from, to, Admit::Whnf)
+                }
+                touched = true;
+            }
+        }
+        if !touched {
+            // The spines are identical, so the inner reduction was not about an
+            // argument of this one. Reflexivity is the whole certificate and
+            // `None` is how this module spells it.
+            return if from == to { None } else { self.admit(from, to, Admit::Whnf) }
+        }
+        // **Start at the first argument that moved, not at the head.** Every
+        // `app_cong` over an admitted premise is itself a reported gap, so a
+        // fold across the whole spine turns one gap into one per argument —
+        // `reduct.rs`' own header records that lesson costing 971 extra gaps
+        // when a reduction was flattened. The prefix the two spines share is
+        // one term, so `refl` covers all of it in a single certificate and the
+        // fold runs only over the suffix from the first change onward. For a
+        // recursor applied to exactly its own arguments the major premise is
+        // last and that is **one** congruence.
+        let first = args1.iter().zip(args2.iter()).position(|(a, b)| a != b).unwrap_or(0);
+        let prefix = self.ctx.foldl_apps(f1, args1[..first].iter().copied());
+        let inner = self.trace_cert(sub);
+        let mut c = self.certifier.refl(self.ctx, prefix);
+        let (mut lhs, mut rhs) = (prefix, prefix);
+        for (a, b) in args1[first..].iter().copied().zip(args2[first..].iter().copied()) {
+            let ac = if a == b {
+                self.certifier.refl(self.ctx, a)
+            } else {
+                match inner.clone() {
+                    Some(x) => x,
+                    // The inner reduction is reflexivity, so the two spines
+                    // cannot differ. Recording says otherwise, which is a bug in
+                    // the recording and is reported as one.
+                    None => return self.admit(from, to, Admit::Whnf),
+                }
+            };
+            lhs = self.ctx.mk_app(lhs, a);
+            rhs = self.ctx.mk_app(rhs, b);
+            crate::certify::bump_certified();
+            c = self.certifier.app_cong(self.ctx, lhs, rhs, c, ac);
+        }
+        Some(c)
     }
 
     /// Ask the backend for one recorded step.
@@ -1793,9 +1901,18 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     let step = reduct::one(Rule::Admitted(Admit::Quot), e, reduced);
                     let (r, rest) = self.whnf_no_unfolding_reduce(reduced, cheap_proj);
                     (true, r, reduct::then(step, rest))
-                } else if let Some(reduced) = self.reduce_rec(name, levels, &args) {
+                } else if let Some((reduced, major)) = self.reduce_rec(name, levels, &args) {
                     crate::stepcount::bump(crate::stepcount::Kind::Iota);
-                    let step = reduct::one(Rule::Iota, e, reduced);
+                    // **Two steps, not one.** The congruence leg carries the
+                    // major premise to constructor form inside the spine; the ι
+                    // leg is then a redex whose major *is* a constructor, which
+                    // is the only shape the backend's rule can serve. When the
+                    // major needed no reduction the first leg is empty and
+                    // `then` drops it, so nothing changes for the majority that
+                    // already arrived in constructor form.
+                    let mid = major.rebuild(&mut self.ctx, e_fun, &args);
+                    let leg1 = reduct::cong(e, mid, major.trace.clone());
+                    let step = reduct::then(leg1, reduct::one(Rule::Iota, mid, reduced));
                     let (r, rest) = self.whnf_no_unfolding_reduce(reduced, cheap_proj);
                     (true, r, reduct::then(step, rest))
                 } else {
@@ -2377,17 +2494,51 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
     
+    /// One ι reduction, **and how the major premise got to be a constructor**.
+    ///
+    /// The second half is the whole of task link 3. This used to return the
+    /// reduct alone, having weak-head-normalised the major premise internally
+    /// and thrown that reduction away, so the caller reported a single `Iota`
+    /// step from the *unreduced* redex — and the backend's ι rule, which reads
+    /// the major off `args[major_idx]`, was handed something that is not a
+    /// constructor and could only decline. That is 486 originated gaps on
+    /// `init-prelude` and **3 066** with the sub-tree they feed, the second
+    /// largest origin in the ledger, and it is not a missing derivation: the
+    /// checker knows the reduction, it just did not say so.
+    ///
+    /// So the major's own trace comes back with the reduct, and the caller
+    /// emits **two** steps where it emitted one. `None` for the trace means the
+    /// major was already in constructor form, in which case the old single step
+    /// is still exactly right.
+    ///
+    /// # Only the part that has a trace
+    ///
+    /// `whnf` is traced; the four shape-level rescues around it —
+    /// [`Self::to_ctor_when_k`], literal-to-constructor for `Nat` and `String`,
+    /// and [`Self::iota_try_eta_struct`] — are not. So what comes back is the
+    /// major *as `whnf` left it*, together with the trace for exactly that, and
+    /// the caller only splits the step when the rescues changed nothing after
+    /// it. Where one of them fired the behaviour is unchanged, which is the
+    /// point: this widens what can be certified and moves nothing else.
     fn reduce_rec(
         &mut self,
         const_name: NamePtr<'t>,
         const_levels: LevelsPtr<'t>,
         args: &[ExprPtr<'t>],
-    ) -> Option<ExprPtr<'t>> {
+    ) -> Option<(ExprPtr<'t>, MajorStep<'t, Cert<'t, 'p>>)> {
         let rec @ RecursorData { info, rec_rules, num_params, num_motives, num_minors, .. } =
             self.env.get_recursor(&const_name)?;
-        let major = args.get(rec.major_idx()).copied()?;
-        let major = self.to_ctor_when_k(major, rec).unwrap_or(major);
-        let major = self.whnf(major);
+        let major0 = args.get(rec.major_idx()).copied()?;
+        let major = self.to_ctor_when_k(major0, rec).unwrap_or(major0);
+        // The one reduction of the major premise that carries evidence. Kept
+        // only if it starts where the redex's own argument does — a `K` rescue
+        // in front of it has no certificate and would make the leg a claim
+        // about a different term.
+        let (major, whnf_trace) = {
+            let (r, tr) = self.whnf_reduce(major);
+            (r, if major == major0 { tr } else { None })
+        };
+        let after_whnf = major;
         let major = match self.ctx.read_expr(major) {
             NatLit { ptr, .. } => self.ctx.nat_lit_to_constructor(ptr).unwrap_or(major),
             StringLit { ptr, .. } => self.str_lit_to_ctor_reducing(ptr).unwrap_or(major),
@@ -2408,7 +2559,49 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         let r = self.ctx.subst_expr_levels(rec_rule.val, info.uparams, const_levels);
         let r = self.ctx.foldl_apps(r, args.iter().copied().take((num_params + num_motives + num_minors) as usize));
         let r = self.ctx.foldl_apps(r, major_ctor_args_wo_params.into_iter());
-        Some(self.ctx.foldl_apps(r, args.iter().skip(rec.major_idx() + 1).copied()))
+        let reduct = self.ctx.foldl_apps(r, args.iter().skip(rec.major_idx() + 1).copied());
+        // **The leg is offered only when saying more cannot cost more.**
+        //
+        // Three conditions, and the third is the one that matters. `whnf` alone
+        // has to have got the major to the form the rule fired on; it has to
+        // have moved at all; and its reduction has to be **fully ruled** — no
+        // `Rule::Admitted` anywhere in the recorded tree.
+        //
+        // Without the third, splitting is a large loosening measured rather
+        // than argued: it makes the checker ask for certificates it never asked
+        // for, and on `init-prelude` that surfaces reductions whose own steps
+        // are admissions — gaps 15 734 → **20 707**, and still 17 008 with the
+        // numeral rule simulated. The ι origin does collapse (486 own → 228,
+        // sub-tree 3 286 → 353) but it collapses *into* `nat_reduce`, whose
+        // sub-tree goes 111 → 4 452, and the ledger is worse for it. A ratchet
+        // that loosens needs a written trade and this one has nothing to trade.
+        //
+        // With it, the split fires only where every step of the major's
+        // reduction is a rule some backend method is asked about, so the
+        // congruence leg costs no admission the old single step was not already
+        // paying for — **strictly non-increasing**. Today that is a small
+        // population and the ledger does not move. It is not dead code waiting
+        // for a caller: `Nat.ble` on literals is `Rule::Admitted(Admit::NatRed)`
+        // *today*, and the moment the numeral rule makes it a real rule those
+        // traces become fully ruled and this fires on 466 of the 486 by itself.
+        //
+        // `whnf_trace.is_some()` is not redundant with `major != major0`, and
+        // leaving it out was a real defect: a reduction can move a term and
+        // record nothing (an empty trace is the *identity*, so `then` drops the
+        // congruence leg), and the composite would then claim to start at the
+        // redex while actually starting at the rebuilt one. `certify_reduct`
+        // catches that as `Admit::Whnf` — 8 of them on `init-prelude`, which is
+        // exactly what that counter is for and why it is required to be zero.
+        let step = if major == after_whnf
+            && major != major0
+            && whnf_trace.is_some()
+            && reduct::fully_ruled(&whnf_trace)
+        {
+            MajorStep { idx: rec.major_idx(), to: major, trace: whnf_trace }
+        } else {
+            MajorStep { idx: rec.major_idx(), to: major0, trace: None }
+        };
+        Some((reduct, step))
     }
 
     pub fn reduce_quot(&mut self, c_name: NamePtr<'t>, args: &[ExprPtr<'t>]) -> Option<ExprPtr<'t>> {
