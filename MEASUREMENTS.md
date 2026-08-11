@@ -8554,3 +8554,120 @@ worth **2 597 gaps** against baseline, which is 85 % of origin 2's measured
 So: **alone this is not even a relay — it is a no-op**, because the gate
 suppresses it rather than moving the row to `nat_reduce`. The number to hold the
 pair to when link 2 lands is **15 734 → 13 137**.
+## Origin 3 is not a construction gap: the obstacle is two different `T`s — 2026-08-11
+
+*Assigned as the third construction, priced at 1 929 (a ceiling; terminal, so
+expect ~10 % under). It is not one. The stated obstacle does not exist, the
+construction does, and the two shapes the corpus actually has are now derived in
+`derived/tests/deprec.rs`. What is left is a `checker/` consumer, and that is a
+real port rather than a gate change — the honest version of the estimate is
+below.*
+
+### The obstacle, refuted in two independent places
+
+The brief: "`carrier_at` builds `(A, B, U({A,T′}), W(A,B,U({A,T′})))`, so `T`
+sits inside the carrier's own universe, and an image-union target defined from
+the motive would have to be shown not to make that circular."
+
+**The two `T`s are different sets, and neither claim survives contact with the
+code.**
+
+1. **The `T′` in `U({A,T′})` is the *fibre family's codomain*, not the
+   recursor's target.** `carrier_at` takes it from `ind.fibre_at(mach, ps).1`,
+   and `carrier.rs`'s header spells it out: `c := {A, T}`, "`T` = the fibre
+   family's codomain, `{finord(m₀)} ∪ (…)`". It is determined by the
+   declaration's recursive-argument *counts* and mentions no motive. The
+   collision is with `recursor.rs`'s `grec(p⃗,s⃗,T) := wrec(A, B, U({A,T′}), T,
+   e(p⃗,s⃗,T))`, where a single prime carries the whole distinction.
+2. **The recursor's target carries no side condition at all.**
+   `wrec_total`'s interface is `⊢ ∀A ∀B ∀u ∀T ∀e. (H → …)` with
+   `H = closed(A,B,u) ∧ step_typed(A,B,u,T,e)`. `closed` does not mention `T`;
+   there is no `T ∈ u`. So the circularity is not merely absent, it is not
+   expressible.
+
+And the obstruction the brief names is recorded **as already dissolved**, in the
+header of the file that dissolved it — `dep.rs`: "the two things that did not
+exist are: 1. `HYP` at a variable motive — `super::guard`, **which is where the
+`⋃img(C)` obstruction is actually dissolved**".
+
+### The construction exists, and its target policy is empty
+
+`derived::inductive::DepRecursor`:
+
+```text
+⊢ PRE → ∀z. (z ∈ W → app(drec,z) ∈ app(C,z))                [DepRecursor::typing]
+⊢ PRE → ∀y⃗ ∀t⃗. (Hᵢ → app(drec, ctorᵢ(y⃗,t⃗))
+                       = Sᵢ⟪y⃗,t⃗⟫ app(drec,t₀) … )            [DepRecursor::iota]
+       PRE = COD(C,T) ∧ DEP(C,S⃗)
+```
+
+`T` is a **free variable**, and `COD(C,T)` asks only that `T` hold every element
+of every value of the motive, and `∅`. Nothing about closure. `motive.rs`'s
+header: "the target policy of `RECURSOR-DESIGN.md` §5.2 has **nothing left to
+choose** at a dependent motive." `DepRecursor::build` declines for exactly two
+reasons — no constructors, or a foreign apparatus — and **nullary appears
+nowhere on the route**, in `derived/` or in `mini/`.
+
+It is not shelf-ware. `mini` fires it in production: it closed the whole
+`recursor(·: dependent motive)` row (18 pairs) and four `waiting:iota(…)` rows,
+and `RTree`'s function-typed slot took `116_rtreeRecReduction` to every pair.
+
+### The arm the fixtures never reached
+
+So why was this open? **Every `DeclSpec` in `derived/tests/deprec.rs` began with
+`CtorSpec::nullary()`.** Thirteen fixtures, and not one of them a declaration
+without a nullary constructor — precisely the population `t_policy` declines.
+That is `scripts/arm-coverage.py`'s own finding shape: green said nothing here
+because nothing could see the code.
+
+Two cells now do, at the shapes the corpus has:
+
+| cell | shape | firings it stands for |
+|---|---|---:|
+| `…_with_no_nullary_constructor` | `np = 1`, 2 ctors × 1 field, none nullary, non-recursive | `Decidable` 81, `Preresolved` 12, `Except` 12, `EStateM.Result` 12 = **117** |
+| `…_at_thirteen_constructors_none_nullary` | 13 ctors, none nullary, field counts the corpus's own `[1,2,3,3,4,1,2,2,1,3,4,4,3]`, two of them on `sepBy`'s interleaved `Rec,Plain,Rec,Plain` mask | `Lean.ParserDescr` **169** |
+
+Both derive `GenRecursor` and then `DepRecursor`, and both **rebuild the ι rule
+in full and pin it** — the second at constructor 4, with two live recursive
+calls placed by the mask rather than fields-then-recs, which is the one way a
+thirteen-constructor fixture could still be vacuous. **286 of 286 firings are at
+shapes the construction handles today.**
+
+The second fixture is faithful in arity, the absence of a nullary constructor,
+the field counts and the interleaving; its field *types* are all `1`. It is not
+`ParserDescr` and does not claim to be — what it exercises is the three things
+no other fixture in the file had at once.
+
+### What is actually owed, and it is not small
+
+**A `checker/` consumer, and calling it "wiring" would understate it.** `tg.rs`
+builds `GenRecursor` and picks a target with `t_policy`; the dependent route
+needs what `mini/src/rec_dep.rs` and `iota_dep.rs` do, which is ~2 700 lines:
+
+* discharge `COD(C, ⟦Sort u₁⟧)` from the rung facts — `mini` reads `u₁` off the
+  recursor's own motive binder, **not** off the instantiation;
+* discharge `DEPᵢ` per constructor by transporting each minor binder's own
+  interpretation, and check the fold against `dr.guards.dep_parts[i]`;
+* at the use site, move each field typing onto the set `derived` states it at
+  (`Hᵢ`), and retarget the major's membership onto the carrier;
+* keep `GenCtorBridge`'s two conversions, which `mini` carries as an input.
+
+It is a **port with a working reference**, not a derivation — but it is a port,
+and `SCOPING.md` §2088 already flags `GenRecursor::build + DepRecursor::build`
+as "the expensive one".
+
+**Two caveats that could cost coverage at the seam, both from `mini`'s own
+declines rather than guessed:** `iota_dep` reports a gap for a **`Prop`-valued
+motive** and for an **indexed family** (a different construction,
+`IndexedDepRecursor`). Neither is measurable from `derived/`. The five origin-3
+declarations are all unindexed, single-block, one-motive and not K-like, and
+none is *mixed* (every `rec_doms` is empty), so the one shape `mini` declines
+inside this route — a mixed constructor's plain recursive slot — is not on the
+path.
+
+### The number
+
+1 929 is a ceiling on what closing origin 3 removes, and origin 3 is terminal,
+so ~10 % under is the expectation. Nothing here changes it: no gap was closed on
+this pass, because the closure is checker-side. What changed is the *class* of
+the remaining work, from "derive a target" to "port a consumer".

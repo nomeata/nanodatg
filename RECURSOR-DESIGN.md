@@ -775,8 +775,20 @@ Each rung measurable, riskiest first-exposed rung marked.
    `073`/`075`/`076` do not; `077` I did not decode. Worth one instrumentation
    run before deciding how much §5.3-sketch matters.
 3. **`T`-policy for declarations with no nullary constructor** (§5.2 option
-   3). No corpus witness either way; recommend decline-and-count until one
-   appears.
+   3). ~~No corpus witness either way; recommend decline-and-count until one
+   appears.~~ **Both halves are now answered and this entry is closed.** There
+   *is* a witness, and it is large: `init-prelude` has **five** such recursors
+   at **286 ι firings** — `Lean.ParserDescr` 169, `Decidable` 81,
+   `Lean.Syntax.Preresolved` / `Except` / `EStateM.Result` 12 each — and the
+   checker declines every one of them at `t_policy`. And the policy question
+   itself is void at a dependent motive: `COD(C,T)` says only that `T` holds
+   every value of the motive and `∅`, nothing about closure, so §5.1's guarded
+   minors leave nothing for a policy to site at a nullary constructor
+   (`motive.rs`'s header, and `mini/src/rec_dep.rs`, which discharges `COD` at
+   `⟦Sort u₁⟧` outright). `derived/tests/deprec.rs` derives `DepRecursor` at
+   both corpus shapes — two constructors none nullary, and thirteen with two
+   live recursive calls on `sepBy`'s interleaved mask. What is left is a
+   `checker/` consumer, not a construction.
 4. **Whether Lean accepts a later field depending on an earlier recursive
    field** (would need declining, §3.1). Argued from the thesis's rule shape;
    not tested against a live kernel, and no corpus witness found (I did not

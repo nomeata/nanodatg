@@ -2343,3 +2343,191 @@ fn cod_is_discharged_for_any_motive_that_is_a_function() {
     // this declaration beyond its carrier appears in it.
     assert!(th.hyps().is_empty(), "cod_at_funspace carries a sequent hypothesis");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// **No nullary constructor** — the shape `t_policy` has no target for
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Every fixture above starts with `CtorSpec::nullary()`, so none of them
+// exercises the population the checker's target policy declines: a declaration
+// with *no* nullary constructor at all. On `init-prelude` that is five
+// recursors and 286 ι firings — `Lean.ParserDescr` 169, `Decidable` 81,
+// `Lean.Syntax.Preresolved` / `Except` / `EStateM.Result` 12 each.
+//
+// The claim under test is that this is not a construction question at all:
+// `DepRecursor`'s target is a **free variable** with `COD(C,T)` as a premise,
+// discharged outright by `motive::cod_at_funspace` at `T := ⋃V ∪ {∅}`, so there
+// is nothing for a policy to site at a nullary constructor. These two cells are
+// the witnesses, at the two shapes the corpus actually has.
+
+/// `Decidable`-shaped: **two constructors, one field each, neither nullary**,
+/// one parameter, no recursion — the shape of four of the five (`Decidable` 81,
+/// `Lean.Syntax.Preresolved` 12, `Except` 12, `EStateM.Result` 12; 117 firings
+/// of 286).
+#[test]
+fn the_dependent_recursor_is_derived_with_no_nullary_constructor() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let b = const_unit_beta(env, &mach, 1);
+    let spec = DeclSpec::new(
+        1,
+        vec![CtorSpec::new(vec![b], 0), CtorSpec::new(vec![b], 0)],
+    );
+    assert!(
+        spec.ctors.iter().all(|c| !(c.args.is_empty() && c.recs == 0)),
+        "the fixture's point: no constructor is nullary"
+    );
+    let ind = Inductive::build(env, &mut mach, &spec).expect("declaration");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor with no nullary constructor");
+
+    let ap = &mach.wt.sums.ap;
+    let tc = Term::var(dr.motive);
+
+    // The typing obligation, rebuilt.
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let want = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(
+            zv,
+            Formula::imp(
+                Formula::mem(tz.clone(), ind.wty.clone()),
+                Formula::mem(ap.apply(dr.rec.clone(), tz.clone()), ap.apply(tc, tz)),
+            ),
+        ),
+    );
+    assert!(derived::establishes(&dr.typing, &want), "the typing obligation");
+
+    // Both ι rules, at Lean's own minors. Two constructors of the same shape,
+    // so the pin has to name *which* minor each rule is about — an ι rule that
+    // reached for `S₀` in both places would satisfy a one-sided check.
+    assert_eq!(dr.iota.len(), 2);
+    for i in 0..2 {
+        let yv = env.fresh_var();
+        let ty = Term::var(yv);
+        let concl = Formula::eq(
+            ap.apply(
+                dr.rec.clone(),
+                ind.ctor_term(&mach, i, std::slice::from_ref(&ty), &[]).expect("ctor"),
+            ),
+            ap.apply(Term::var(dr.minors[i]), ty.clone()),
+        );
+        let ante = Formula::mem(ty, Term::apply(b, vec![Term::var(ind.params[0])]));
+        let want = Formula::imp(
+            dr.premise.clone(),
+            Formula::forall(yv, Formula::imp(ante, concl)),
+        );
+        assert!(derived::establishes(&dr.iota[i], &want), "the ι rule of constructor {i}");
+        // …and not about the other minor.
+        assert_ne!(dr.minors[i], dr.minors[1 - i]);
+    }
+}
+
+/// `Lean.ParserDescr`-shaped: **thirteen constructors, none nullary, and
+/// recursive** — 169 of the 286 firings, and the head of the population.
+///
+/// Faithful in the four respects the construction can see: `n = 13`, every
+/// constructor takes at least one field, the field counts are the corpus's own
+/// `[1,2,3,3,4,1,2,2,1,3,4,4,3]`, and two constructors carry recursive slots on
+/// the **interleaved** `Rec, Plain, Rec, Plain` mask that `spec.rs`'s header
+/// cites `ParserDescr.sepBy` and `sepBy1` for. It is not the real declaration —
+/// the field *types* here are all `1` — and it is not meant to be; what it
+/// exercises is arity, the absence of a nullary constructor, and live recursion
+/// at once, none of which any other fixture in this file has.
+#[test]
+fn the_dependent_recursor_is_derived_at_thirteen_constructors_none_nullary() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+
+    // Field counts as declared, and `sepBy`/`sepBy1`'s interleaved mask on the
+    // two four-field constructors.
+    let counts = [1usize, 2, 3, 3, 4, 1, 2, 2, 1, 3, 4, 4, 3];
+    let mut ctors = Vec::with_capacity(13);
+    for (i, k) in counts.iter().enumerate() {
+        if i == 4 || i == 11 {
+            // `sepBy : Rec, Plain, Rec, Plain` — two fields, two recursive.
+            let args: Vec<FnSym> = (0..2).map(|j| const_unit_beta(env, &mach, j)).collect();
+            ctors.push(
+                CtorSpec::with_order(
+                    args,
+                    2,
+                    vec![Slot::Rec, Slot::Plain, Slot::Rec, Slot::Plain],
+                )
+                .expect("the sepBy mask"),
+            );
+        } else {
+            let args: Vec<FnSym> = (0..*k).map(|j| const_unit_beta(env, &mach, j)).collect();
+            ctors.push(CtorSpec::new(args, 0));
+        }
+    }
+    let spec = DeclSpec::new(0, ctors);
+    assert_eq!(spec.ctors.len(), 13);
+    assert!(
+        spec.ctors.iter().all(|c| !(c.args.is_empty() && c.recs == 0)),
+        "no constructor is nullary — the whole point"
+    );
+    assert!(spec.ctors.iter().any(|c| c.recs > 0), "and the declaration is recursive");
+
+    let ind = Inductive::build(env, &mut mach, &spec).expect("declaration");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor at thirteen constructors");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor at thirteen constructors, none nullary");
+
+    assert_eq!(dr.iota.len(), 13);
+    assert_eq!(dr.minors.len(), 13);
+    assert!(dr.typing.hyps().is_empty());
+    assert!(dr.iota.iter().all(|t| t.hyps().is_empty()));
+
+    // The recursive constructor's ι rule, rebuilt in full — which is the one
+    // place a thirteen-constructor fixture could still be vacuous. Two live
+    // recursive calls, and the minor premise applied in the declared
+    // `Rec, Plain, Rec, Plain` order rather than fields-then-recs.
+    let ap = &mach.wt.sums.ap;
+    let (y0, y1) = (env.fresh_var(), env.fresh_var());
+    let (t0, t1) = (env.fresh_var(), env.fresh_var());
+    let ys = [Term::var(y0), Term::var(y1)];
+    let ts = [Term::var(t0), Term::var(t1)];
+    let ctor = ind.ctor_term(&mach, 4, &ys, &ts).expect("sepBy at these arguments");
+    let ihs = [ap.apply(dr.rec.clone(), ts[0].clone()), ap.apply(dr.rec.clone(), ts[1].clone())];
+    let rhs = derived::inductive::applied_minor(
+        ap,
+        &ind.spec.ctors[4].order,
+        &Term::var(dr.minors[4]),
+        &ys,
+        &ts,
+        &ihs,
+    );
+    let concl = Formula::eq(ap.apply(dr.rec.clone(), ctor), rhs);
+    let betas = &ind.spec.ctors[4].args;
+    let ante = conj_of(&[
+        Formula::mem(ys[0].clone(), Term::apply(betas[0], vec![])),
+        Formula::mem(ys[1].clone(), Term::apply(betas[1], vec![ys[0].clone()])),
+        Formula::mem(ts[0].clone(), ind.wty.clone()),
+        Formula::mem(ts[1].clone(), ind.wty.clone()),
+    ])
+    .expect("four atoms");
+    let want = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(
+            y0,
+            Formula::forall(
+                y1,
+                Formula::forall(t0, Formula::forall(t1, Formula::imp(ante, concl))),
+            ),
+        ),
+    );
+    assert!(
+        derived::establishes(&dr.iota[4], &want),
+        "constructor 4's ι rule is not the interleaved mask with both calls live"
+    );
+}
