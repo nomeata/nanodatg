@@ -9273,7 +9273,7 @@ object from `checker`'s `TgBackend`. The facilities the bulk of them stand on:
 |---|---:|---:|
 | `Interp::retarget_set` / `retarget_subject` | 116 / 55 | 0 / 0 |
 | `Interp::as_pi` (`PiShape`), reading which §6.2 clause built a level | 56 | 0 |
-| `Interp::dprod_app` / `cond_app` | 37 / 45 | **0 / 0** |
+| `Interp::dprod_app` / `cond_app` | 37 / 45 | **1 / 0**, under another name — see below |
 | `crate::scope::Scopes` | 118 | 0 |
 
 `minor_at` — 266 lines, the single largest piece, shared by both clauses and
@@ -9292,16 +9292,27 @@ own domain obligation, and carries the carrier bridge's assumptions. Likewise
 So the delta is bounded and nameable, which is the useful output of reading the
 reference:
 
-1. **`dprod_app`** — from `f ∈ dprod(B,A)` and `a ∈ A` infer
-   `app(f,a) ∈ app(B,a)`. `tg.rs` builds `dprod` terms everywhere (it is §6.2's
-   `Π` clause, 200 mentions) and has **no elimination rule for them**. mini's is
-   ~20 lines over `dprod_def`, which the checker also holds. *This is the one
-   genuinely missing primitive, and everything else waits on it*: `DEPᵢ`'s
-   codomain is `app(C, ctorᵢ(y⃗,t⃗))` and its induction hypotheses are
-   `vⱼ ∈ app(C,tⱼ)`, so the minor's type is a real dependent product where
-   `gen_minor_typed` today builds an iterated `fs` — and declines outright when
-   a field's type is dependent (*"HYP undischargeable — dependent constructor
-   field"*).
+1. ~~**`dprod_app`**~~ — **this item was wrong, and it was the load-bearing
+   one.** From `f ∈ dprod(B,A)` and `a ∈ A` infer `app(f,a) ∈ app(B,a)`: the
+   claim here was that `tg.rs` builds `dprod` terms everywhere and has *no
+   elimination rule for them*, and that everything else waited on writing one.
+   It has one, and had one before this task. It is `tg.rs`'s `app_in_fibre`,
+   and it is `Interp::dprod_app` step for step — instantiate `dprod_def`,
+   `iff_mp`, `and_elim_right`, instantiate at the point, `mp`, then unfold
+   `b_def` off the fibre symbol onto `⟦B[x]⟧` — with one *extra* parameter
+   mini's does not have: a carried hypothesis `H`. `has_type_a` has been firing
+   it at every dependent application in the corpus, under the counter
+   `ApStep::FiredDProd`.
+
+   **How the census missed it.** It grepped for the *name* `dprod_app` across
+   `tg.rs` and found zero, and read the zero as an absence. The row above is
+   the same table that correctly says `gen_minor_typed` *is* `minor_at` under
+   another name; the method was right and was applied to three of the four rows
+   and not to this one. **A name census over a file that renames everything
+   measures the renaming, not the facility.**
+
+   What was actually missing was not a primitive but a **walk** — see the
+   landing measurement below.
 2. **`DEPᵢ` as the claim** — `gen_minor_typed` checks its result against
    `premise::minor_typed_at`; the dependent arm checks against
    `guards.dep_parts[i]`, which `derived` already exports.
@@ -9328,3 +9339,121 @@ five declarations confirm.
 `GEN_IOTAS` staying at 92 and `DEGEN_IOTAS` at 400 are the two numbers that say
 the three arms have not taken each other's work — the same check that made the
 degenerate recursor's disjointness a measurement rather than an assertion.
+
+## The dependent recursor, wired — 2026-08-11
+
+Task #126. `RecBottom::Dep`, dispatched **after** `General` so it picks up
+exactly what `t_policy` declines.
+
+| | before | after |
+|---|---:|---:|
+| gaps | 13 254 | **12 860** |
+| escapes | 2 432 | **2 464** |
+| derived kernel theorems | 162 483 | **162 909** |
+| `GEN_IOTAS` | 92 | 92 |
+| `DEGEN_IOTAS` | 400 | 400 |
+| **`DEP_IOTAS`** | — | **53** |
+
+Arena 152/0/2. The two unmoved rows are the disjointness check: the three arms
+have not taken each other's work.
+
+### Nothing was built in `derived/`
+
+`derived/src/inductive/` is untouched by this landing. `DepRecursor`,
+`GuardedMinors`, `motive::cod_at_funspace` and `motive::cod_target` were all
+already there and all already correct; the census had confirmed
+`DepRecursor::build` succeeds for 5 of 5. Every line of this task is in
+`checker/`.
+
+### What was missing was a walk, not a primitive
+
+`gen_minor_typed` rebuilds a minor premise's type as an iterated `fs` chain,
+`cods[j] = fs(chain[j], cods[j+1])`. It can, because at a single target `T`
+every rung's codomain is known before the walk starts. At a dependent motive
+the last rung's codomain is `app(C, ctorᵢ(y⃗))` and every earlier one is a fibre
+over the arguments already supplied, so there is no chain to rebuild: the type
+has to be **walked**, one Lean binder at a time.
+
+`dep_minor_typed` is that walk. Each binder is opened at a local bound to the
+pointwise variable `yⱼ` — `rec_nest`'s own discipline, so the next domain
+interprets with `yⱼ` exactly where the binder was — and each rung is
+`app_at_pi`, factored out of `has_type_a` unchanged so that the two callers
+cannot drift, with the step counters left at the caller so `has_type_a`'s rows
+are byte-identical.
+
+`COD` is the half that looked hard and was not. A motive is a function into
+`⟦Sort u₁⟧`, and `cod_at_funspace` discharges `COD(C,T)` at `T := ⋃V ∪ {∅}` for
+**any** such motive — no constructor, arity or nullary-constructor case is
+consulted, which is the whole reason this arm exists where `t_policy` cannot.
+Two steps bridge the motive's own obligation to what it needs: `dprod_fs_eq`
+for the spelling (the motive's domain is a *constant-fibre* `dprod`, `Sort u₁`
+not mentioning the binder) and the carrier bridge `⟦T p⃗⟧ = W` for the domain.
+`⟦Sort u₁⟧` is read off the **motive binder's codomain**, not the recursor's
+level list, because the nest and the use site must build the same term or the
+join at the end of `derive_iota` fails.
+
+### Two things the census did not predict, both found by measurement
+
+**The constructor bridge's antecedent carries the parameters.**
+`GenCtorBridge`'s `H_declared` is *every* argument of the Lean spine at the
+nest's domains — `np` parameters and *then* the fields — because `⟦cᵢ p⃗ y⃗⟧` is
+a nest over both and each level's beta equation holds only when its argument is
+in its domain. `gen_minor_typed` never meets this because it never instantiates
+the bridge; the only other site that does, `ctor_spine_bridge`, pays it from
+the use site's obligations. Here the fields are variables and only the
+parameters have obligations, so the parameters' half comes from `nest_chain`'s
+levels `0 ‥ np`. **It cost 41 of the 53 reachable ι sites** until it was paid.
+
+**53 of 286, and the shortfall is two named populations, not slippage.**
+
+| | ι sites | where they went |
+|---|---:|---|
+| `Lean.ParserDescr` | 169 | `Decline::DepRecursive` — recursive constructors |
+| major premise never reduces | 64 | `iota: the major premise is not a constructor` |
+| **fired** | **53** | `Decidable` 81→…, `Except`, `EStateM.Result`, `Lean.Syntax.Preresolved` |
+
+`ParserDescr`'s constructors are recursive, so `GuardedMinors` hands back a
+`define_abbrev` nest rather than `Sᵢ`, and there is no `terms_at` rebuilder in
+`derived` to state that nest at the recursor nest's own variables — the kernel
+having no term-level substitution. That is the named remainder and the next
+step if this origin is reopened; it is ~30 lines in `guard.rs` plus a
+`DepRecursor::rec_at`, and it is the majority of the origin by site count.
+
+The 64 are the more interesting half: they move from `no interpretation —
+several constructors` to `the major premise is not a constructor`. That is a
+**better reason and not a closure** — the recursor was never what they were
+short of, a reduction was. The `gap: iota` prefix-summing ratchet is what keeps
+that visible (878 → 825, a net 53) instead of letting a rename bank it as
+progress.
+
+**The forecast was a ceiling and it held**, as all sixteen deletions have been:
+1 929 forecast, 394 realised, the gap fully accounted for by the two rows above
+rather than by the construction underperforming on what it reached — every one
+of the 53 sites it was asked at, it answered.
+
+### The trade
+
+**394 gaps for 32 escapes, 12.3 to 1** — the degenerate recursor's own ratio
+(12.4 to 1) to two figures, because it is the same mechanism at a twelfth of
+the scale. `ctor_spine_bridge` makes the spine equation conditional on the
+arguments' typings; where those are not discharged, a conditional certificate
+the checker consumes as an answer is counted at the boundary. Before this the
+whole ι step was **admitted** and nothing counted any of it. `dep_minor_typed`
+instantiates the same bridge a second time, at `p⃗` and at variables, which is
+where the parameters' typings join the escaping list.
+
+53 of the 394 are the `gap: iota` rows; the other 341 are the composition rows
+the closed clause fed — `trans` 6 457 → 6 168, `congruence` 636 → 614,
+`pi congruence over an admitted body premise` 867 → 821 — claimed in
+`the_prelude_ledger_totals_are_ratcheted` and not in the ι-named guard, which
+is the CI rule about guards ratcheting only what they are named for.
+
+### Skip is not pass
+
+Four rows, printed even at zero: nests built, ι sites computed, **sites the arm
+was asked at**, and the guard-miss. `asked` is separate from `computed` so that
+"the dispatch never reached the arm" (`asked == 0`) and "it did and the
+derivation refused" (`asked > computed`) are two different numbers rather than
+one silent zero. Verified by mutation: `fire_dep` refusing at entry takes the
+ledger back to **exactly** 13 254 and reddens both the reach assertion and the
+total.
