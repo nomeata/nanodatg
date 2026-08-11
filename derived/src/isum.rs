@@ -28,8 +28,7 @@
 //! constructor list, producing a right-nested sum for the tag set and a
 //! right-nested `rec₊` for the fibre family. `derived/src/sums/` supplies the
 //! *binary* step of each and nothing iterated, which is why
-//! `derived/src/enums.rs`, `wnat.rs` and `wlist.rs` are stuck at two
-//! constructors. These two files are the iteration.
+//! `derived/src/enums.rs` and `wlist.rs` are stuck at two constructors. These two files are the iteration.
 //!
 //! # What is a nest, and what is a real symbol
 //!

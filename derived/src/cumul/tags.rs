@@ -76,7 +76,7 @@
 //! The fold is `n` uses of the sum's **defining equation**
 //! [`Sums::sum_def`](crate::sums::Sums::sum_def) — `A + B` abbreviates
 //! `({∅} × A) ∪ ({1} × B)` — over `Uₙ`'s pairing, product and binary-union
-//! closures, exactly the route [`super::NatMem`] takes for `1 + 1`. No
+//! closures, exactly the route [`super::bool_tags_in_u1`] takes for `1 + 1`. No
 //! Replacement instance and no case analysis. Every caller-supplied theorem is
 //! checked for the conclusion it must have **and** for an empty hypothesis set,
 //! since a `Γ ⊢` would ride through `mp` into a statement advertised without

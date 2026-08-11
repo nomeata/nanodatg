@@ -118,9 +118,9 @@
 //! Each branch is the lambda graph over a constant body symbol, typed by
 //! [`crate::ext::lam_in_funspace_n`] — the pattern `derived/src/wlist.rs` had to
 //! invent for its one constant fibre on an arbitrary `α`, here used uniformly
-//! for all `n` branches. `derived/src/wnat.rs` used one-point graphs instead,
-//! which works only because its summands are both `1`; that shortcut does not
-//! generalise and is not taken.
+//! for all `n` branches. The deleted `derived/src/wnat.rs` used one-point
+//! graphs instead, which worked only because its summands were both `1`; that
+//! shortcut does not generalise and is not taken.
 //!
 //! # Interface
 //!

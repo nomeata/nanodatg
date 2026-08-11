@@ -15,7 +15,7 @@
 //! and it *applies* all three, so an interpretation that turns `List α` into
 //! `app(⟦List⟧, ⟦α⟧)` — which is what the backend does with every application —
 //! needs `⟦List⟧` to be a **set**. Same for the two constructors. This is
-//! [`crate::wnat`]'s `succ_fun` again, three times over and with one new twist.
+//! [`crate::nat::SuccFun`]'s job again, three times over and with one new twist.
 //!
 //! # `cons` is curried, not a function on a pair
 //!

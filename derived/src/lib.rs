@@ -75,8 +75,6 @@ pub mod wbool_rec;
 pub mod wlist;
 pub mod wlist_fun;
 pub mod wlist_rec;
-pub mod wnat;
-pub mod wnat_rec;
 pub mod wrec;
 pub mod wrec_extend;
 pub mod wrec_total;

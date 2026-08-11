@@ -21,7 +21,7 @@
 //! two functions from a packed row, which is what lets [`super::computes`] state
 //! the step's value in the terms the caller supplied.
 //!
-//! `List α`'s index set is `1 + α`, so unlike [`crate::wnat_rec`] the `cons`
+//! `List α`'s index set is `1 + α`, so unlike the unary recursive shape the `cons`
 //! branch is indexed by an arbitrary `α` rather than by a point, and every key
 //! carries that head along. `row_at` is what keeps the two spellings — the one
 //! inside the Replacement and the one a caller writes — literally equal.
@@ -94,7 +94,7 @@ pub fn domain(s: &Sums, wl: &WList, alpha: &Term, t: &Term) -> Term {
 /// `app(app(app(s,h), app(π₁ p,•)), app(π₂ p,•))` — the cons branch's value, **as
 /// a function of the head and the packed payload**.
 ///
-/// Against [`crate::wnat_rec::value_packed`] this is one more application and
+/// Against the unary shape's packed value this is one more application and
 /// nothing else. That is the whole of what a constructor's extra field costs in
 /// this encoding, and it is the claim [`crate::proj`] exists to make good.
 pub fn value_packed(ap: &Apply, pj: &Proj, su: &Term, h: &Term, p: &Term) -> Term {

@@ -51,7 +51,9 @@
 //!
 //! They are necessary, not sufficient: they compare symbols, not statements.
 //! The sufficient check is that the conclusion of the theorem finally wanted is
-//! the formula the caller claims, and [`super::NatMem::over`] makes it.
+//! the formula the caller claims, and [`super::enum_in_u1`] makes it — it
+//! refuses a `tags_in_u1` that rests on an assumption *and* one whose
+//! conclusion is a membership in some other set, before it uses either.
 
 use kernel::Env;
 

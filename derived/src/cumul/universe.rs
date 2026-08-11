@@ -14,8 +14,8 @@
 //!
 //! Two different universes need this, and they are not the same one:
 //!
-//! * `U(A)` — the *bound* the W-type is carved out of ([`crate::wnat`] uses
-//!   `W(A,B,U(A))`). [`crate::wtype::w_induction`] needs `T ⊆ U(A)`, so the
+//! * `U(A)` — the *bound* the W-type is carved out of ([`crate::wlist`] uses
+//!   `W(1+α,B,U(1+α))`). [`crate::wtype::w_induction`] needs `T ⊆ U(A)`, so the
 //!   stages have to be inside the bound;
 //! * `U₁ = U(ω)` — the universe `⟦N⟧ ∈ ⟦Type 0⟧` is a membership in. `T ∈ U₁`
 //!   is what makes `W ⊆ T` worth having.

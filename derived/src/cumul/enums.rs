@@ -14,33 +14,37 @@
 //! all at **closed terms** and with no hypothesis, so `enum(0)` (Lean's
 //! `Empty`), `enum(1)` (`Unit`) and `enum(1+1)` (`Bool`) are members of
 //! `⟦Type 0⟧`. The `1+1` case needs `⊢ (1+1) ∈ U₁`, which is
-//! [`super::NatMem::tags_in_u1`] — the same tag set, the same theorem.
+//! [`bool_tags_in_u1`] just below — the same tag set, the same theorem.
 //!
 //! Non-vacuity comes from [`crate::enums`] at the same terms:
 //! `⊢ ⟨inl •,∅⟩ ∈ enum(1+1)`, `⊢ ⟨inr •,∅⟩ ∈ enum(1+1)` and
 //! `⊢ ¬(⟨inl •,∅⟩ = ⟨inr •,∅⟩)`, so the membership is not about a singleton.
 //!
-//! # Why this is shorter than [`super::witness`], not merely different
+//! # Why an empty fibre makes this short
 //!
 //! [`super::WMem::w_in_universe`] asks for the same four things whatever the
-//! W-type, and three of the four are *cheaper* here than for `N`:
+//! W-type, and an enumeration answers all four at the seed `S := A` itself:
 //!
-//! | obligation | for `N` | for `enum(A)` |
-//! |---|---|---|
-//! | `A ⊆ S` | `S = A ∪ 1`, so the left introduction of `∪` | `S = A`, so reflexivity |
-//! | `∀a ∈ A. (B(a) ⊆ S ∧ B(a) ∈ ω)` | a case analysis on `a ∈ 1+1`, `sum_cases` + `unit_eta` + two `rec₊` rules | `B = ∅`, so `⊢ ∀a. app(∅,a) = ∅` and **no case analysis at all** |
-//! | `S ∈ U(A)` | `A ∈ U(A)`, `∅ ∈ U(A)`, pairing, binary union | `A ∈ U(A)` |
-//! | `S ∈ U₁` | `(1+1) ∈ U₁` and `1 ∈ U₁`, then binary union | the caller's `A ∈ U₁` |
+//! | obligation | for `enum(A)` |
+//! |---|---|
+//! | `A ⊆ S` | `S = A`, so reflexivity |
+//! | `∀a ∈ A. (B(a) ⊆ S ∧ B(a) ∈ ω)` | `B = ∅`, so `⊢ ∀a. app(∅,a) = ∅` and **no case analysis at all** |
+//! | `S ∈ U(A)` | `A ∈ U(A)` |
+//! | `S ∈ U₁` | the caller's `A ∈ U₁` |
 //!
 //! The seed can be `A` itself precisely because the fibres are empty: `Fin`'s
-//! second clause is about `B(a)`, and `∅ ⊆ A` holds for every `A`. `N` cannot
-//! do this — its `succ` fibre is `1`, which is not a subset of `1+1`.
+//! second clause is about `B(a)`, and `∅ ⊆ A` holds for every `A`. A W-type
+//! with a non-empty fibre cannot do this, and the contrast used to be drawn
+//! against the deleted `cumul::witness`, whose `succ` fibre was `1` — not a
+//! subset of `1+1` — and which therefore needed the seed `A ∪ 1`, a case
+//! analysis on `a ∈ 1+1`, and pairing and binary union to place the seed. It
+//! is drawn against [`super::decl`] now, which pays the general form of the
+//! same bill at `finord(m)`.
 //!
 //! So the closing note of [`crate::cumul`] was right that the ω-tower is what
 //! `W ∈ u` needs, and its remark that the enumerations were bounded "at their
 //! own tag set" is about the *bound* `U(A)`, not about the universe they live
-//! in. `enum(A) ∈ U(A)` is refutable for the same reason `N ∈ U(1+1)` is; this
-//! is the membership that is not.
+//! in. `enum(A) ∈ U(A)` is refutable; this is the membership that is not.
 
 use kernel::{Env, Formula, Term, Thm};
 
@@ -71,9 +75,9 @@ pub fn unit_in_u1(c: &Chain) -> Option<Thm> {
 
 /// `⊢ (1 + 1) ∈ U₁` — the two-element tag set, i.e. Lean's `Bool`'s.
 ///
-/// # Why it is here and not in [`super::witness`]
+/// # Why it is here
 ///
-/// It used to be a field of [`super::NatMem`], computed on the way to
+/// It used to be a field of `cumul::witness`'s `NatMem`, computed on the way to
 /// `⊢ N ∈ U₁` for the W-type presentation of `Nat`. That presentation is gone —
 /// `⟦Nat⟧` is `ω` and its membership is [`crate::tower::Rung::omega_mem`] — but
 /// this theorem is not about `Nat` at all: it is about `1 + 1`, and its only

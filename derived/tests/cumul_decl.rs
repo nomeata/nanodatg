@@ -71,13 +71,18 @@ fn bool_from_a_declspec_lands_in_u1() {
 
 /// `inductive N | zero | succ : N → N`, from declaration data alone.
 ///
-/// The analogue of `cumul.rs`'s
-/// `the_general_membership_statement_reproves_the_naturals_in_u1`, which runs
-/// the same `w_in_universe_bnd` at `derived/src/wnat.rs`'s hand-built `N`. The
-/// two carriers are **not the same set** — `wnat`'s fibres are the von Neumann
-/// numerals `0` and `1`, this one's are `finord(0)` and `finord(1)`, and
-/// `finord(1) = 1 + 0` is a set of ordered pairs — so what is reproduced is the
-/// statement and its route, not the term.
+/// **The only place `w_in_universe_bnd` is exercised at a concrete W-type.**
+/// It used to be one of two: `cumul.rs`'s
+/// `the_general_membership_statement_reproves_the_naturals_in_u1` ran the same
+/// route at `derived/src/wnat.rs`'s hand-built `N`, and went with it when the
+/// W-type presentation of `Nat` was deleted (#127 — `⟦Nat⟧` is `ω`, and its
+/// membership is `Rung::omega_mem`, which needs no chain at all).
+///
+/// Nothing is lost by that: the two carriers were never the same set — `wnat`'s
+/// fibres were the von Neumann numerals `0` and `1`, this one's are `finord(0)`
+/// and `finord(1)`, and `finord(1) = 1 + 0` is a set of ordered pairs — so what
+/// the deleted test reproduced was the statement and its route, which is
+/// exactly what this one covers, from declaration data rather than by hand.
 #[test]
 fn the_naturals_from_a_declspec_land_in_u1() {
     let mut env = Env::new();

@@ -31,7 +31,7 @@
 //! [`derive`] never looks at the fibre condition — it reads the antecedent off
 //! the `tower_closed` it is handed and carries it — so the general pair costs
 //! one extra call and no extra mathematics. The `Fin` pair is
-//! [`crate::wnat`]'s and [`crate::enums`]': their fibres really are von Neumann
+//! [`crate::wlist`]'s and [`crate::enums`]': their fibres really are von Neumann
 //! naturals, and their discharge is unchanged.
 //!
 //! **The `Fin⁺` pair has stopped having one.** It existed for the general
@@ -46,7 +46,7 @@
 //! # Two universes, and they are not the same one
 //!
 //! `c` is the **bound**: `W(A,B,U(c))` is carved out of `U(c)`, and
-//! [`crate::wnat`] takes `c := A`. `d` is where the W-type *lives*, and it has
+//! [`crate::wlist`] takes `c := 1 + α`. `d` is where the W-type *lives*, and it has
 //! to satisfy `ω ∈ U(d)`.
 //!
 //! They cannot be identified, and this is the correction the previous session

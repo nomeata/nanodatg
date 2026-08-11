@@ -19,7 +19,7 @@
 //!
 //! as equations between sets.
 //!
-//! # What is new here, against [`crate::wnat_rec`]
+//! # What is new here, against the unary recursive shape
 //!
 //! Two things, and only two.
 //!
@@ -32,7 +32,7 @@
 //! payload `p` and never names a component. That collapse is the whole reason
 //! [`crate::proj`] was built rather than the existential encoding, and it holds:
 //! `step_cases`, `value_at_packed`, `value_at_nil` and `step_single_valued` are
-//! `wnat_rec`'s proofs with `h` threaded through as an inert extra argument.
+//! the deleted `wnat_rec`'s proofs with `h` threaded through as an inert extra argument.
 //!
 //! *The tag carries the field.* `N`'s `succ` tag is the constant `inr •`;
 //! `List`'s is `inr h`, which **varies**. So the step's Replacement can no longer
@@ -118,8 +118,8 @@
 //! `shared` holds the private implication-form rewriting steps more than one of
 //! them needs; it exports no theorem and is not re-exported.
 //!
-//! The layout mirrors [`crate::wnat_rec`] file for file, because the two
-//! constructions are the same argument at a different index set — `1 + α`
+//! The layout mirrors the deleted `crate::wnat_rec` file for file, because the
+//! two constructions were the same argument at a different index set — `1 + α`
 //! instead of `1 + 1` — and keeping them parallel is what makes the extra cost
 //! of the head parameter visible.
 
@@ -167,7 +167,7 @@ pub use typed::premise;
 //
 // ## The "one more π" claim, tested
 //
-// `wnat_rec`'s closing notes justify `crate::proj` by predicting that a
+// The deleted `wnat_rec`'s closing notes justified `crate::proj` by predicting that a
 // constructor with a field costs "one more `π` in the value term and nothing
 // else, because every lemma between the step's Replacement and `unpack` is
 // stated at the packed payload and never names a component". **That held**, and
@@ -176,7 +176,7 @@ pub use typed::premise;
 // * `value_packed` gains one application — `app(su,h)` in place of `su` — and
 //   `unpack` gains one congruence. That is the predicted cost, exactly.
 // * `step_cases`, `value_at_packed`, `value_at_nil`, `step_single_valued`,
-//   `row_in_step` and `nil_in_step` are `wnat_rec`'s proofs with `h` threaded
+//   `row_in_step` and `nil_in_step` are the deleted `wnat_rec`'s proofs with `h` threaded
 //   through as an **inert extra argument**. Not one of them changed shape; the
 //   fibre payload `p` is still opaque to all of them.
 // * What the prediction did *not* cover, and what a reader should expect next

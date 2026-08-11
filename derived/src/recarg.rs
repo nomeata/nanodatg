@@ -15,8 +15,8 @@
 //! ```
 //!
 //! For `m = 1` and a fibre written literally as `1 = {•}` that function is the
-//! one-point graph `{⟨•, r₀⟩}`, which is what `derived/src/wnat.rs` and
-//! `wlist.rs` use. **That does not survive the general case**, and for two
+//! one-point graph `{⟨•, r₀⟩}`, which is what `derived/src/wlist.rs` uses (and
+//! the deleted `wnat.rs` used). **That does not survive the general case**, and for two
 //! independent reasons: `finord(1)` is `Sum_1(1)`, which unfolds to `1 + 0` and
 //! whose single element is `Inj_0(•) = ⟨∅,•⟩` and not `•`, so the domain is not
 //! the singleton

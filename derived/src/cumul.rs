@@ -16,7 +16,6 @@
 //! | [`closed`] | `⊢ closed(A,B,T)` — **(b)**, the tower is closed under `sup` |
 //! | [`inside`] | [`Inside`] — `T ⊆ U(c)` **(c)** and `T ∈ U(c)` **(e)** |
 //! | [`wmem`] | [`WMem`] — `W ⊆ T` **(d)** and `W ∈ U(d)` **(f)** |
-//! | [`witness`] | [`NatUniverse`] — **(g)**, `⊢ ⟦N⟧ ∈ U₁` at closed terms |
 //! | [`chain`] | [`Chain`] — the one chain of definitional extensions all of the above live over |
 //! | [`ambient`] | `Chain::over` — the same chain over a signature the caller already has |
 //! | [`enums`] | `⊢ enum(A) ∈ U₁` — the same argument where the fibres are empty |
@@ -29,25 +28,38 @@
 //!
 //! # What it is for, and what it now proves
 //!
-//! `⟦N⟧ ∈ ⟦Type 0⟧` — for a long time the largest remaining wall in the
-//! checker, and no longer a wall: `checker/src/tg.rs` consumes this module's
-//! `NatMem::over` and `enums::enum_in_u1` through its `IndTy` clause, so `⟦N⟧`,
-//! `⟦Bool⟧`, `⟦Unit⟧` and `⟦Empty⟧` are discharged rather than assumed (see
-//! "WHAT THE CHECKER NOW CONSUMES" below). It is a
-//! **size** statement: `W(A,B,u) ⊆ u` is free by construction, but membership
-//! needs `W` to be caught inside a set that is itself a member of a universe,
-//! and the cumulative hierarchy over a seed containing `A` and the fibres is
-//! that set. The chain is complete and its end point is
+//! `⟦T⟧ ∈ ⟦Type 0⟧` for an interpreted inductive — for a long time the largest
+//! remaining wall in the checker, and no longer a wall: `checker/src/tg.rs`
+//! consumes [`enum_in_u1`] and [`bool_tags_in_u1`] through its `IndTy` clause,
+//! so `⟦Bool⟧`, `⟦Unit⟧` and `⟦Empty⟧` are discharged rather than assumed, and
+//! [`DeclUniverse`] does the same from a `DeclSpec` for the general path (see
+//! "WHAT THE CHECKER NOW CONSUMES" below). It is a **size** statement:
+//! `W(A,B,u) ⊆ u` is free by construction, but membership needs `W` to be
+//! caught inside a set that is itself a member of a universe, and the
+//! cumulative hierarchy over a seed containing `A` and the fibres is that set.
+//! The chain is complete and its end point is
 //!
 //! ```text
-//! ⊢ W(1+1, B, U(1+1)) ∈ U(ω)        [NatUniverse::nat_in_u1]
+//! ⊢ W(A, B, U(A)) ∈ U(ω)        [WMem::w_in_universe, and DeclUniverse::ty_in_u1]
 //! ```
 //!
-//! at **closed terms with no hypothesis**, together with [`crate::wnat::Nat`]'s
-//! `zero`, `succ` and `zero_ne_succ` at the same terms — so the set it is about
-//! is provably infinite. Start at [`Chain`], then [`NatUniverse`]; the closing
-//! note at the bottom of this file is the record of how the route was found and
-//! which parts of it were wrong.
+//! at **closed terms with no hypothesis**.
+//!
+//! ## `⟦Nat⟧` is no longer one of its customers
+//!
+//! This module's original deliverable was `⊢ ⟦N⟧ ∈ U₁` for the *W-type*
+//! presentation of `Nat` — `W(1+1, B, U(1+1))` — and `cumul::witness`
+//! (`NatUniverse`, `NatMem`) was the file that produced it. Both are gone.
+//! `⟦Nat⟧` is von Neumann `ω` (`DECISIONS.md`, 2026-08-11), whose membership is
+//! [`crate::tower::Rung::omega_mem`] and costs nothing: no seed, no stage
+//! arithmetic, no `Fin` discharge. The one thing `witness` proved that was
+//! never about `Nat` — `⊢ (1+1) ∈ U₁`, `Bool`'s tag set — is
+//! [`bool_tags_in_u1`], beside its only consumer.
+//!
+//! Nothing else here changed. The route is what generalised into [`decl`], and
+//! that is where it is exercised now. Start at [`Chain`], then [`decl`]; the
+//! closing note at the bottom of this file is the record of how the route was
+//! found and which parts of it were wrong.
 
 pub mod ambient;
 pub mod apparatus;
@@ -67,7 +79,6 @@ pub mod sigma;
 pub mod sigma_n;
 pub mod stages;
 pub mod tags;
-pub mod witness;
 pub mod wpaths;
 pub mod wmem;
 pub mod universe;
@@ -105,7 +116,6 @@ pub use stages::{subset_refl, Stages};
 pub use universe::stages_in_universe;
 pub use step::{curry, mem_bin_union_elim, subset_trans, Step};
 pub use wpaths::{fin_sub, tower_amb};
-pub use witness::{NatMem, NatUniverse};
 pub use wmem::WMem;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3,9 +3,10 @@
 //!
 //! # What this replaces
 //!
-//! `derived/src/enums.rs`, `wnat.rs` and `wlist.rs` each interpret **one**
-//! inductive at **one** concrete arity: all-nullary capped at two constructors,
-//! `N`, `List`. `inductive RGB | red | green | blue` is the same shape as
+//! `derived/src/enums.rs` and `wlist.rs` each interpret **one** inductive at
+//! **one** concrete arity: all-nullary capped at two constructors, and `List`.
+//! (`wnat.rs` was a third, for `N`; it is deleted — `⟦Nat⟧` is von Neumann `ω`,
+//! [`crate::nat`].) `inductive RGB | red | green | blue` is the same shape as
 //! `Bool` and none of them can express it. This module takes the declaration's
 //! data — how many parameters, and per constructor its non-recursive argument
 //! types and its recursive-argument count — and builds the carrier, the

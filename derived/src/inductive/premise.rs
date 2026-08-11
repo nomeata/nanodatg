@@ -3,7 +3,7 @@
 //!
 //! # Why pointwise
 //!
-//! `wnat_rec`/`wlist_rec` state their hypothesis as a curried function-space
+//! `wlist_rec` (and the deleted `wnat_rec`) state their hypothesis as a curried function-space
 //! membership (`s ∈ fs(α, fs(lt(α), fs(T,T)))`). That does not generalise,
 //! for a reason that has nothing to do with arity: a *dependent* telescope
 //! (`β₁` mentioning `y₀`) has no iterated-`fs` type at all — the inner space

@@ -22,7 +22,7 @@
 //! [`tower_closed_bnd`] is the derivation; [`tower_closed`] is it with the
 //! fibre condition strengthened back to `B(a) ∈ ω` by [`mod@super::bounded`], and
 //! is four lines. The two are kept **both** because the two consumers are
-//! different: [`crate::wnat`] and [`crate::enums`] have von Neumann naturals as
+//! different: [`crate::wlist`] and [`crate::enums`] have von Neumann naturals as
 //! fibres and should not pay for generality, while the general inductive
 //! translation's fibre is `finord(m)`, a nest of binary sums with `m` elements
 //! which is not a member of `ω` and cannot be made one.
@@ -50,9 +50,13 @@
 //!   stage;
 //! * `B(a) ∈ ω`, which is finite branching — see [`mod@super::bounded`].
 //!
-//! At a concrete W-type both are one line each: [`super::witness`] discharges
-//! them for [`crate::wnat`] at the seed `S := A ∪ 1`, which is a great deal
-//! smaller than `A ∪ ⋃⋃⋃B`.
+//! At a concrete W-type both are one line each: [`super::enum_in_u1`]
+//! discharges them for an enumeration at the seed `S := A`, which is a great
+//! deal smaller than `A ∪ ⋃⋃⋃B`. (There used to be a second instance here,
+//! `cumul::witness` at the W-type presentation of `Nat`, with the seed
+//! `S := A ∪ 1` its non-empty `succ` fibre forced. It went with that
+//! presentation — `⟦Nat⟧` is von Neumann `ω` and its membership is
+//! [`crate::tower::Rung::omega_mem`], which needs no seed at all.)
 //!
 //! # The shape of the argument
 //!
@@ -455,7 +459,7 @@ pub fn tower_closed_bnd(
 }
 
 /// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ B(a) ∈ ω))) → closed(A,B,T))`
-/// — [`tower_closed_bnd`] at the fibre condition [`crate::wnat`] and
+/// — [`tower_closed_bnd`] at the fibre condition [`crate::wlist`] and
 /// [`crate::enums`] satisfy.
 ///
 /// The whole content is [`mod@super::bounded`] under a `∀a` and inside a

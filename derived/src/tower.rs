@@ -155,14 +155,19 @@
 //!
 //! # What this tower does *not* give, named precisely
 //!
-//! * **`⟦N⟧ ∈ U₁`.** `⟦N⟧` is [`crate::wnat`]'s `W(A, B, U(A))` with
-//!   `A = 1 + 1`, and its bound is `U(A)`, not a rung of this tower. Getting
-//!   `⟦N⟧ ∈ U₁` needs a W-type-in-a-universe argument: `W(A,B,u) ⊆ u` is
-//!   immediate, but `W(A,B,u) ∈ u` is not, and the rank argument the thesis
+//! * **`⟦T⟧ ∈ U₁` for a W-type `T`.** An interpreted inductive is
+//!   `W(A, B, U(A))`, whose bound is `U(A)` and not a rung of this tower.
+//!   Getting it into `U₁` needs a W-type-in-a-universe argument: `W(A,B,u) ⊆ u`
+//!   is immediate, but `W(A,B,u) ∈ u` is not, and the rank argument the thesis
 //!   uses (**§6.2.1**, `cf(λ) > sup_{x∈A}|B(x)|`, `thesis.txt:2148`) is a
 //!   cofinality computation, not a transfer through the intersection.
 //!   `⊢ ω ∈ Uₙ` is the ingredient that argument needs from *here*, and it is
-//!   supplied; the argument itself is a separate job.
+//!   supplied; the argument itself is [`crate::cumul`]'s.
+//!
+//!   **`⟦Nat⟧` is not an instance of this**, and used to be the leading one.
+//!   `⟦Nat⟧` is von Neumann `ω` (`DECISIONS.md`, 2026-08-11), so its membership
+//!   is [`Rung::omega_mem`] — a theorem this tower proves outright, at every
+//!   rung `n ≥ 1`, with no W-type argument at all.
 //! * **`⟦Sort u⟧` for a Lean level *variable* `u`.** Out of scope by
 //!   construction — an unground level names no rung — and nothing here would
 //!   have to change: an opaque symbol plus the [`Rung`] fields as hypotheses is

@@ -173,8 +173,8 @@
 //!   `A ∪ ⋃T`. `⋃T` rather than `T` because `fin` wants `B(a) ⊆ S`, and
 //!   `B(a)` is a *member* of `T`; `⋃T` is exactly the set its members are
 //!   subsets of, and the union axiom supplies that with no case analysis. This
-//!   is [`super::NatUniverse`]'s `A ∪ 1` generalised — there the one non-empty
-//!   fibre is `1` and `⋃T` is `⋃{0,1} = 1` — and it is *not* the generic
+//!   is the deleted `cumul::witness`'s `A ∪ 1` generalised — there the one
+//!   non-empty fibre was `1` and `⋃T` was `⋃{0,1} = 1` — and it is *not* the generic
 //!   `A ∪ ⋃⋃⋃B` the closing note of [`crate::cumul`] proposed and rejected: it
 //!   needs nothing about `B` as a set of pairs.
 //!

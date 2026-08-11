@@ -26,8 +26,8 @@
 //! [`empty_funspace`] is the converse and is what makes the recursors compute:
 //! at a fibre-free constructor the function and the recursive-value argument are
 //! *forced* to be `∅`, so the step term reduces to a closed term with nothing
-//! left to case on. [`crate::wbool_rec`], [`crate::wnat_rec`] and
-//! [`crate::wrec_unit`] all turn on it. [`empty_product`] is the lemma it runs
+//! left to case on. [`crate::wbool_rec`] and [`crate::wrec_unit`] both turn on
+//! it. [`empty_product`] is the lemma it runs
 //! through: a function into `fs(∅,x)` is a subset of `prod(∅,x)`, and **nothing
 //! is in that product**. Note the form — `¬(z ∈ prod(∅,T))` for every `z`, not
 //! the equation `prod(∅,x) = ∅`. The equation is true, but deriving it needs

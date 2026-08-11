@@ -1796,9 +1796,13 @@ struct Inductives {
     wt: derived::wtype::Wtype,
     bnd: derived::bound::Bound,
     /// The one-point graph `{⟨a,b⟩}`, over the *same* [`derived::wtype::Wtype`]
-    /// as everything else. `N` was built over it, and [`derived::wnat_rec`]
+    /// as everything else. `List` is built over it and [`derived::wlist_rec`]
     /// insists on being handed that very one — a second copy would mint new
-    /// symbols and none of `N`'s theorems would compose with the recursor's.
+    /// symbols and none of `List`'s theorems would compose with the recursor's.
+    ///
+    /// It used to serve the W-type `N` as well, whose `succ` fibre was `1` and
+    /// whose recursive argument was therefore `{⟨•,n⟩}`. `⟦Nat⟧` is `ω` now and
+    /// has no fibres at all, so this is `List`'s alone.
     pf: derived::point_fun::PointFun,
     /// `⊢ ∀A. closed(A, ∅, U(A))` — the W-type bound hypothesis for an
     /// enumeration, the one thing [`derived::wbool_rec`] needs that
@@ -1869,7 +1873,7 @@ impl BoolRecursor {
 ///
 /// # It holds nothing, and that is the change
 ///
-/// This used to carry [`derived::wnat_rec::NatRec`] — a two-layer Replacement
+/// This used to carry the deleted `derived::wnat_rec`'s `NatRec` — a two-layer Replacement
 /// packing the W-recursor's step so that `app(app(s, app(f,•)), app(r,•))`
 /// could be computed — over a shared [`RecCore`], because `nrec` was
 /// `wrec(1+1, B, U(1+1), T, e(z,s,T))` and every theorem about it was stated
@@ -6323,19 +6327,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// of the type itself**, which is Lean's
     /// `inductive N | zero | succ (n : N)`.
     ///
-    /// Every condition is one [`derived::wnat`] genuinely needs, and every one
-    /// is read off `InductiveData`/`ConstructorData` rather than off the name:
+    /// # It recognises a *shape*, and the carrier it maps onto is `ω`
+    ///
+    /// These conditions were written for [`derived::wtype`]'s `W(1+1,B,U(1+1))`
+    /// and they are unchanged, because what they check is that the declaration
+    /// really is Peano's `zero`/`succ` and nothing else — which is exactly the
+    /// evidence needed to send it to von Neumann `ω` instead. Nothing here
+    /// looks at the name `Nat`. See [`NatOmega`].
+    ///
+    /// Every condition is read off `InductiveData`/`ConstructorData`:
     ///
     /// * *no parameters or indices* — the type is a closed term, not a family,
     ///   so `INDUCTIVES.md`'s `good` predicate is vacuous;
     /// * *no universe parameters* — keeps the interpretation injective on
     ///   constants, as for the enumerations;
     /// * *not a `Prop`* — a `Prop` is a subsingleton ([`derived::prop`]), not a
-    ///   W-type;
+    ///   set of numbers;
     /// * *exactly two constructors, of arity 0 and 1*, the second's field being
-    ///   the inductive itself — that is what makes the fibre family
-    ///   `B(inl •) = 0`, `B(inr •) = 1` and nothing else. A second field, or a
-    ///   field of another type, would need a `Σ` in the tag set.
+    ///   the inductive itself — Peano exactly. A second field, or a field of
+    ///   another type, is a different shape and `ω` is not its carrier.
     ///
     /// `zero`'s type is checked to be `N` and `succ`'s to be `N → N`, so a
     /// declaration that merely *counts* right cannot slip through.

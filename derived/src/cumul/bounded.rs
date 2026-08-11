@@ -27,7 +27,7 @@
 //! `bnd(k)` is what [`super::tower_closed_bnd`] actually spends, and it is the
 //! hypothesis carried by the general form of every statement downstream;
 //! `k ∈ ω` is one *sufficient* condition for it, proved here, and the one
-//! [`crate::wnat`] and [`crate::wlist`] happen to satisfy. See
+//! [`crate::wlist`] and [`crate::enums`] happen to satisfy. See
 //! [`mod@super::finite`] for the closure properties that make `bnd` usable at a
 //! fibre which is not a von Neumann natural, and [`mod@super::finord`] for
 //! `⊢ bnd(finord(m))`, the fibre the general inductive translation produces.
@@ -111,8 +111,8 @@
 //! It is **not** dead, and the reason is one theorem: [`super::tower_closed`],
 //! the `B(a) ∈ ω` form, is derived *from* [`super::tower_closed_bnd`] and
 //! [`bounded`] — and `tower_closed` is what [`super::WMem::w_in_universe`]
-//! carries, which is what [`crate::wnat`], [`crate::wlist`],
-//! [`super::enums`] and [`super::NatUniverse`] spend. So `bnd`, [`bounded`],
+//! carries, which is what [`crate::wlist`] and [`super::enums`] spend. So
+//! `bnd`, [`bounded`],
 //! [`bounded_at`], `tower_closed_bnd` and [`super::fin_bnd`] are all live, as
 //! the *proof* of a statement that never mentions them.
 //!
@@ -145,8 +145,8 @@
 //!
 //! What *is* a choice is the shape of "finite". This file proves `bnd` for the
 //! **von Neumann naturals**, `k ∈ ω`, because that is the shape the fibres
-//! actually have: [`crate::wnat`]'s family sends the two tags to `0` and `1`,
-//! [`crate::wlist`]'s to `0` and `1`, and a constructor with two recursive
+//! actually have: [`crate::wlist`]'s family sends its two tags to `0` and `1`,
+//! [`super::enums`]' sends every tag to `0`, and a constructor with two recursive
 //! arguments would send its tag to `2`. A fibre that is merely *equinumerous*
 //! to a natural — a sum of units, say — needs `bnd` transported along a
 //! surjection, which is one more lemma and not this one.

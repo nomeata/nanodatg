@@ -608,86 +608,6 @@ fn the_wtype_is_a_member_of_a_universe() {
     );
 }
 
-/// **Step (g), the deliverable** — `⊢ ⟦N⟧ ∈ U₁` at closed terms, and the
-/// witness that says it is not a statement about a one-element set.
-#[test]
-fn the_naturals_are_a_member_of_the_first_universe() {
-    let mut env = Env::new();
-    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
-    let n = derived::cumul::NatUniverse::new(&mut env, &c).expect("NatUniverse");
-
-    for t in [
-        &n.one_is_succ_zero,
-        &n.one_in_omega,
-        &n.tags_in_u1,
-        &n.seed_in_bound,
-        &n.seed_in_u1,
-        &n.fin,
-        &n.nat_in_u1,
-    ] {
-        assert!(kernel::thm::debug_locally_closed(t.concl()));
-        assert!(t.hyps().is_empty(), "every step must be unconditional");
-    }
-
-    let s = &c.wt.sums;
-    let (zero, one) = (s.zero(), s.unit());
-
-    // `⊢ 1 = succ 0` — the one Extensionality in the chain.
-    assert_eq!(
-        *n.one_is_succ_zero.concl(),
-        Formula::eq(one.clone(), c.r.succ_of(zero)),
-        "one_is_succ_zero has the wrong shape"
-    );
-    assert_eq!(*n.one_in_omega.concl(), Formula::mem(one, c.r.omega()));
-
-    // **`⊢ ⟦N⟧ ∈ U₁`** — `N = W(1+1, B, U(1+1))` and `U₁ = U(ω)`, both closed.
-    let u1 = c.u1.set.clone();
-    assert_eq!(u1, Term::apply(c.lu(), vec![c.r.omega()]), "U₁ must be U(ω)");
-    assert_eq!(
-        *n.nat_in_u1.concl(),
-        Formula::mem(n.nat.ty.clone(), u1.clone()),
-        "N ∈ U₁ has the wrong shape"
-    );
-    assert_eq!(
-        n.nat.ty,
-        c.wt.of(
-            n.nat.tags.clone(),
-            n.nat.fam.clone(),
-            Term::apply(c.lu(), vec![n.nat.tags.clone()])
-        ),
-        "the set that is a member of U₁ must be W(1+1, B, U(1+1))"
-    );
-
-    // Non-vacuity: `N` has two provably distinct elements, so `N ∈ U₁` is not
-    // a statement about the empty set or a singleton — and the bound `U(1+1)`
-    // is *not* the universe `N` lives in, which is the correction this chain
-    // was built around.
-    assert!(kernel::thm::debug_locally_closed(n.nat.zero.concl()));
-    assert_eq!(*n.nat.zero.concl(), Formula::mem(n.nat.zero_t.clone(), n.nat.ty.clone()));
-    let m = env.fresh_var();
-    let tm = Term::var(m);
-    assert_eq!(
-        *n.nat.succ.concl(),
-        Formula::forall(
-            m,
-            Formula::imp(
-                Formula::mem(tm.clone(), n.nat.ty.clone()),
-                Formula::mem(derived::wnat::Nat::succ_term(&c.wt, tm.clone()), n.nat.ty.clone()),
-            )
-        )
-    );
-    assert_eq!(
-        *n.nat.zero_ne_succ.concl(),
-        Formula::forall(
-            m,
-            Formula::not(Formula::eq(
-                n.nat.zero_t.clone(),
-                derived::wnat::Nat::succ_term(&c.wt, tm)
-            ))
-        )
-    );
-    assert_ne!(u1, Term::apply(c.lu(), vec![n.nat.tags.clone()]), "the two universes differ");
-}
 
 /// **`Chain::over`** — the same chain, over an ambient signature the caller
 /// built for itself, and the enumerations in `U₁` on top of it.
@@ -728,22 +648,22 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
     assert_eq!(c.lu(), tower.space.lu, "the chain must use the caller's U(·)");
     assert_eq!(c.u1.set, tower.u(1), "U₁ must be the tower's own rung 1");
 
-    // `N` over the caller's apparatus, and the membership at *that* `N`.
-    let cases = derived::sums::Cases::new(&mut env, &wt.sums).expect("cases");
-    let pf = derived::point_fun::PointFun::over(&mut env, &wt.sums, &wt.app_pair).expect("pf");
+    // `⊢ (1+1) ∈ U₁` over the caller's own `Sums`.
+    //
+    // This used to come from `NatMem::over` at a `wnat::Nat` built here — the
+    // theorem was proved on the way to `⊢ N ∈ U₁` for the W-type presentation
+    // of `Nat`. That presentation is gone (`⟦Nat⟧` is `ω`, and its membership
+    // is `Rung::omega_mem`), and the tag set never mentioned `Nat` anyway, so
+    // the fact is taken from `bool_tags_in_u1` where it now lives. What the
+    // test is *about* is unchanged: every conclusion below is checked against
+    // terms rebuilt from the caller's own `Wtype`, not from a second one.
     let empty_u = derived::enums::empty_in_least_universe(&mut env, &wt, &bnd).expect("empty_u");
-    let nat = derived::wnat::Nat::over(&mut env, &wt, &bnd, &cases, &pf, &empty_u).expect("Nat");
-    let m = derived::cumul::NatMem::over(&mut env, &c, &nat).expect("NatMem::over");
-    assert!(m.nat_in_u1.hyps().is_empty(), "N ∈ U₁ must be unconditional");
+    let tags2 = derived::cumul::bool_tags_in_u1(&mut env, &c).expect("(1+1) ∈ U₁");
+    assert!(tags2.hyps().is_empty(), "(1+1) ∈ U₁ must be unconditional");
     assert_eq!(
-        *m.nat_in_u1.concl(),
-        Formula::mem(nat.ty.clone(), tower.u(1)),
-        "the membership must be about the caller's own N"
-    );
-    assert_eq!(
-        nat.ty,
-        wt.of(nat.tags.clone(), nat.fam.clone(), Term::apply(tower.space.lu, vec![nat.tags.clone()])),
-        "the caller's N must be W(1+1, B, U(1+1)) over the caller's W"
+        *tags2.concl(),
+        Formula::mem(wt.sums.sum_of(wt.sums.unit(), wt.sums.unit()), tower.u(1)),
+        "the membership must be about the caller's own 1+1"
     );
 
     // The three enumerations, at the same terms `derived::enums` builds.
@@ -760,7 +680,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
     for (ty, tags, tin) in [
         (&e0, wt.sums.zero(), &zero_u1),
         (&e1.ty, e1.tags.clone(), &one_u1),
-        (&e2.ty, e2.tags.clone(), &m.tags_in_u1),
+        (&e2.ty, e2.tags.clone(), &tags2),
     ] {
         let t = derived::cumul::enum_in_u1(&mut env, &c, &tags, tin).expect("enum ∈ U₁");
         assert!(t.hyps().is_empty(), "enum ∈ U₁ must be unconditional");
@@ -836,49 +756,6 @@ fn the_chain_refuses_a_signature_it_was_not_given() {
     assert!(derived::cumul::Chain::over(&mut env, &tower, &wt1, &bnd1).is_some());
 }
 
-/// **`NatMem::over` reads its input's `Γ`, not only its conclusion.**
-///
-/// `Nat`'s theorem fields are `pub`, so "the right conclusion" is not the same
-/// as "the right theorem": `Thm::assume(φ)` has conclusion `φ` and hypothesis
-/// `φ`. `finite_branching` consumes the fibre equations through `hyp_mp`, which
-/// unions the hypothesis sets, so such an input would ride all the way into
-/// `nat_in_u1` — a `{φ} ⊢ N ∈ U₁` presented, by a struct whose documentation
-/// says `⊢ N ∈ U₁`, to the checker. A conclusion comparison cannot see it,
-/// which is the whole point.
-///
-/// This is `Thm::assume` used the way `ci/check-boundary.sh` exempts test code
-/// to allow: to pin a guard that exists for hypothetical theorems.
-#[test]
-fn the_witness_refuses_a_hypothetical_input() {
-    use kernel::Thm;
-
-    let mut env = Env::new();
-    let c = derived::cumul::Chain::new(&mut env).expect("chain");
-    let wt = c.wt.clone();
-    let bnd = c.bound.clone();
-    let cases = derived::sums::Cases::new(&mut env, &wt.sums).expect("cases");
-    let pf = derived::point_fun::PointFun::over(&mut env, &wt.sums, &wt.app_pair).expect("pf");
-    let empty_u = derived::enums::empty_in_least_universe(&mut env, &wt, &bnd).expect("empty_u");
-    let honest =
-        derived::wnat::Nat::over(&mut env, &wt, &bnd, &cases, &pf, &empty_u).expect("Nat");
-
-    // The honest `Nat` goes through, and everything it yields is unconditional.
-    let m = derived::cumul::NatMem::over(&mut env, &c, &honest).expect("the honest witness");
-    assert!(m.is_unconditional());
-    assert!(m.nat_in_u1.hyps().is_empty());
-
-    // The same conclusions, one of them assumed rather than derived.
-    let mut faked = honest;
-    let phi = faked.fibre_zero.concl().clone();
-    faked.fibre_zero = Thm::assume(phi.clone());
-    assert_eq!(*faked.fibre_zero.concl(), phi, "the conclusion is identical …");
-    assert_eq!(faked.fibre_zero.hyps(), &[phi], "… and only Γ differs");
-
-    assert!(
-        derived::cumul::NatMem::over(&mut env, &c, &faked).is_none(),
-        "a hypothetical fibre equation must not become an unconditional N ∈ U₁"
-    );
-}
 
 /// **`bnd` is a finiteness predicate** — it holds of `∅`, of every singleton,
 /// and is closed under binary union.
@@ -1078,84 +955,3 @@ fn the_wtype_membership_at_the_general_fibre_condition() {
     );
 }
 
-/// **The general statement composes** — `⊢ ⟦N⟧ ∈ U₁` again, this time out of
-/// `w_in_universe_bnd` rather than `w_in_universe`.
-///
-/// This is the consumer's path walked end to end at terms that already exist:
-/// take the `∈ ω` fibre condition `crate::wnat` discharges, weaken it to
-/// `bnd(B(a))` with `bounded`, and feed it to the general theorem. The result is
-/// the *same* theorem `NatUniverse` produces, so nothing about the
-/// generalisation costs the specialised consumers anything.
-#[test]
-fn the_general_membership_statement_reproves_the_naturals_in_u1() {
-    let mut env = Env::new();
-    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
-    let nu = derived::cumul::NatUniverse::new(&mut env, &c).expect("NatUniverse");
-    let seed = nu.seed.clone();
-    let (tags, fam) = (nu.nat.tags.clone(), nu.nat.fam.clone());
-    let om = c.r.omega();
-
-    // `bounded` at the concrete seed: the seed is a free variable everywhere in
-    // `cumul`, so a statement about it is really `∀S`.
-    let bounded_here = derived::inst_all(
-        &kernel::Thm::gen(c.st.seed, &c.bounded),
-        std::slice::from_ref(&seed),
-    )
-    .expect("bounded at the seed");
-
-    // `Fin(A,B) → Fin⁺(A,B)`, at these terms: `B(a) ∈ ω → bnd(B(a))` under the
-    // `a ∈ A →` and under the `∀a`.
-    let av = env.fresh_var();
-    let ta = Term::var(av);
-    let k = c.r.apply(fam.clone(), ta.clone());
-    let k_sub = kernel::thm::subset(&mut env, k.clone(), seed.clone());
-    let k_om = Formula::mem(k.clone(), om.clone());
-    let a_in = Formula::mem(ta, tags.clone());
-    let strengthen = derived::hyp_and(
-        &derived::and_left(k_sub.clone(), k_om.clone()),
-        &derived::syl(
-            &derived::and_right(k_sub, k_om),
-            &derived::inst_all(&bounded_here, std::slice::from_ref(&k)).expect("bnd at B(a)"),
-        )
-        .expect("syl"),
-    )
-    .expect("hyp_and");
-    let under_all = derived::forall_mono(
-        av,
-        &kernel::Thm::gen(av, &derived::imp_mono_r(&strengthen, a_in).expect("imp_mono_r")),
-    )
-    .expect("forall_mono");
-
-    let fin_plus = derived::and_intro(
-        &derived::and_elim_left(&nu.fin).expect("A ⊆ S"),
-        &kernel::Thm::mp(&under_all, &derived::and_elim_right(&nu.fin).expect("the fibres"))
-            .expect("mp"),
-    );
-    assert_eq!(
-        *fin_plus.concl(),
-        derived::cumul::fin_bnd(&mut env, &c.r, &c.st, &seed, &tags, &fam),
-        "the weakened hypothesis is not Fin⁺"
-    );
-
-    let at = derived::inst_all(
-        &kernel::Thm::gen(c.st.seed, &c.wmem.w_in_universe_bnd),
-        &[seed, tags.clone(), fam, tags, om],
-    )
-    .expect("w_in_universe_bnd at the concrete terms");
-    let out = kernel::Thm::mp(
-        &at,
-        &derived::and_intro(
-            &derived::and_intro(&fin_plus, &nu.seed_in_bound),
-            &derived::and_intro(&nu.seed_in_u1, &c.u1.omega_mem),
-        ),
-    )
-    .expect("mp");
-
-    assert!(out.hyps().is_empty(), "the general route also rests on nothing");
-    assert_eq!(
-        *out.concl(),
-        Formula::mem(nu.nat.ty.clone(), c.u1.set.clone()),
-        "the general route must land on ⟦N⟧ ∈ U₁"
-    );
-    assert_eq!(*out.concl(), *nu.nat_in_u1.concl(), "the two routes must agree");
-}

@@ -16,7 +16,7 @@
 //! `α` is a **parameter**, not an index, so `INDUCTIVES.md`'s `good` predicate is
 //! vacuous and `lt(α)` is the W-type outright, with no subset carving. It stays a
 //! free variable of every statement below: `lt` is a *unary* symbol, where
-//! [`crate::wnat`]'s `N` was nullary.
+//! an unparameterised inductive's carrier is nullary.
 //!
 //! # Interface
 //!

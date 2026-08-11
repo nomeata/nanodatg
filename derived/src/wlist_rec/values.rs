@@ -16,7 +16,7 @@
 //! the step, exactly one branch can have produced it, and the value is read off
 //! that branch alone.
 //!
-//! The `cons` branch is where this costs more than [`crate::wnat_rec`]'s: the
+//! The `cons` branch is where this costs more than the unary shape's: the
 //! key carries a head as well as a tail, so cancelling it needs the pair
 //! injectivity applied one level deeper.
 
