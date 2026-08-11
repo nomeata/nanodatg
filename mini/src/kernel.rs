@@ -3336,6 +3336,17 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// states its premises over `srt(n̄)`. That is live on every `Sort 0 → Sort
     /// u`, and deleting it is a red test.
     ///
+    /// **And it is two reconciliations, not one — the heading above undercounts
+    /// and is left as written because the correction is the interesting part.**
+    /// `srt(n̄)` is not where the premise belongs either: the rule was
+    /// instantiated at `Interp::level_term`'s **structural** spelling, and that
+    /// function disagrees with `ground::as_numeral` at every closed level
+    /// `as_numeral` folds — `max(1,1)` is `succ(∅) ∪ succ(∅)` to one and
+    /// `succ(∅)` to the other. `Interp::level_rung_eq` is the bridge between
+    /// them, spent inside `mem_at_srt` on the premise side and inside
+    /// `Interp::mem_from_srt` on the conclusion side. It was worth 50
+    /// `conv-compose(pi-poly)` — the whole population — and `typeEv` 81 → 92.
+    ///
     /// **This paragraph predicted a second one and the prediction was wrong,
     /// which is why it is stated here rather than quietly dropped.** It said a
     /// conclusion at `imax ℓ k` for nonzero `k` would arrive already normalised

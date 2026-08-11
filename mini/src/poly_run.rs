@@ -237,6 +237,56 @@
 //! exactly this caller) and `kernel`'s `Thm::eq_refl` are the whole of it —
 //! the branch's three-step run of new derivations does not continue here.
 //!
+//! # The level bridge — `typeEv` 81 → 92, exits 31 → 32 of 89
+//!
+//! `conv-compose(pi-poly)` was 50 declarations and is **0**. It was never
+//! downstream of the `Π` collapse: it is two functions rendering one `Level`
+//! and disagreeing. [`crate::interp::level_term_over`] is **structural**;
+//! [`crate::ground::as_numeral`] **evaluates** — it folds `max(1,1)` to `1`
+//! and short-circuits `imax ℓ 0` to `0` without looking at `ℓ`. So a closed
+//! level reaches `pi_imax_dep`'s `mp` spelled `srt(succ(∅) ∪ succ(∅))` from
+//! one side and `srt(succ(∅))` from the other.
+//!
+//! **Probed before writing, and the probe moved the target.** Of the 18 714
+//! `Interp::mem_at_srt` calls the corpus makes, 13 629 are at an *open* level
+//! and every one certifies — both sides are structural, so nothing has to
+//! agree with a canonical form, and that holds for the 3 591 whose raw
+//! spelling is not `Level::simplify`'s as much as for the 10 038 whose is.
+//! **The `≤`-kit's own "1005 of 2103" census is that open population**, and on
+//! this route it costs nothing. What blocks is the 224 *closed* sites where
+//! the raw spelling is not the numeral rung — matching, to the unit, the 224
+//! `mp` failures — in four shapes:
+//!
+//! ```text
+//! max(1,1)                     142   union idempotence
+//! imax(0,0)                     45   Ite0::when_zero at an ∅ guard
+//! imax(imax(P,imax(0,0)),0)     24   the same, and the left operand is never
+//!                                    looked at — which is why this fires
+//!                                    where it mentions a parameter
+//! imax(1,1)                     13   when_nonzero, then idempotence
+//! ```
+//!
+//! So `Leq::imax_absorb` — the fact the coordinator and this module both
+//! expected to spend — is spent by **none** of them. Union idempotence is
+//! `Order::max_absorb` at equal operands, where its disjunction has one
+//! distinct disjunct and an `or`-elimination with two identical arms is the
+//! whole derivation. Still **no new `derived` mathematics**, and the `≤`-kit
+//! still has no consumer.
+//!
+//! **And the fix upstream made a "never fires" check fire.**
+//! `Interp::pi_typing_of`'s conclusion check was documented as *"measured, it
+//! never fires"*. It never fired because the `mp` above it refused first;
+//! with the premise side bridged it fired **157** times, all the same
+//! mismatch arriving on the conclusion side. `Interp::mem_from_srt` is
+//! `mem_at_srt` run backwards and puts it right.
+//!
+//! **What moved.** `typeEv` **81 → 92** — eleven declarations gain a type
+//! certificate — `conv-compose(pi-poly)` 50 → **0**, and the exits **31 → 32
+//! of 89** (`115_rTreeRec`). No column fell, no denominator moved, `open = 0`
+//! on all 89. The other 39 declarations moved to the obstacle behind this one:
+//! `conv-compose(proof-irrel)` 38 and one `ind-spec(Acc: …)`. `015_levelParams`
+//! is now the only file owing `typeEv` alone, and 15 owe only `zoneB`.
+//!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
 //! * **A ground use of a poly constant pays the §1.2 bridge — and does not

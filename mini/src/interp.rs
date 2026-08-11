@@ -2573,6 +2573,222 @@ impl Interp {
         (*out.thm().concl() == out.about(t, &zero)).then_some(out)
     }
 
+    /// **`⊢ f(x) = f(y)` from `⊢ x = y`** — one-hole congruence over a term
+    /// former, in one Leibniz step and a reflexivity.
+    ///
+    /// `f` must be a *structural* term builder — `LevelPoly::succ_of`,
+    /// `LevelPoly::max` at a fixed operand, `LevelPoly::srt_at` — because the
+    /// hole is a fresh kernel variable and the substitution that fills it is
+    /// the formula's, not this closure's. Anything that inspected its argument
+    /// would build one term for `Term::var(w)` and a different one for `x`,
+    /// and the conclusion check below is what would catch it.
+    fn congr_eq(&mut self, eq: &Thm, f: &dyn Fn(Term) -> Term) -> Option<Thm> {
+        let (x, y) = eq.concl().as_eq()?;
+        let w = self.fresh_var();
+        let fx = f(x.clone());
+        // `φ(w) := f(x) = f(w)`, so `φ(x)` is reflexivity and `φ(y)` is the goal.
+        let phi = Formula::eq(fx.clone(), f(Term::var(w)));
+        let leib = Thm::eq_leibniz(x, y.clone(), w, phi);
+        let out = Thm::mp(&Thm::mp(&leib, eq)?, &Thm::eq_refl(fx.clone()))?;
+        (*out.concl() == Formula::eq(fx, f(y))).then_some(out)
+    }
+
+    /// **`⊢ m ∪ m = m`** — [`Order::max_absorb`](derived::levels::order::Order)
+    /// at equal operands, where its disjunction has one distinct disjunct.
+    ///
+    /// `max_absorb` is `(m ∪ n) = m ∨ (m ∪ n) = n` and says nothing about
+    /// *which*; at `m = n` it does not have to, and an `or`-elimination whose
+    /// two arms are the same identity is the whole derivation. Union
+    /// idempotence is **not** in the `≤`-kit and is not being added to
+    /// `derived`: it is one instance of a fact the order kit already exports.
+    ///
+    /// The disjunction is compared against the one this function expects
+    /// before it is eliminated, so an `Order` whose `max_absorb` were restated
+    /// with the operands the other way round declines here rather than
+    /// producing a theorem about the wrong union.
+    fn union_idem(&mut self, lp: &LevelPoly, m: &Term, m_om: &Thm) -> Option<Thm> {
+        let inst = derived::inst_all(&lp.ord.max_absorb, &[m.clone(), m.clone()])?;
+        let (hyp, disj) = inst.concl().as_imp()?;
+        let goal = Formula::eq(lp.max(m.clone(), m.clone()), m.clone());
+        if disj != Formula::or(goal.clone(), goal.clone()) {
+            return None
+        }
+        let arm = derived::a1i(&derived::imp_refl(goal.clone()), hyp);
+        let cases = derived::hyp_or_elim(&inst, &arm, &arm)?;
+        let out = Thm::mp(&cases, &derived::and_intro(m_om, m_om))?;
+        (*out.concl() == goal).then_some(out)
+    }
+
+    /// **`⊢ ℓ̂ = n̄`** — a level's *own* spelling reconciled with the numeral
+    /// rung [`crate::ground::as_numeral`] reads it as. **The level bridge**
+    /// (`LEVELPOLY.md` §5.4 blocker 1), and the consumer
+    /// `derived::levels::order::Order` was waiting for.
+    ///
+    /// # The mismatch this exists for, and where it is *not*
+    ///
+    /// Two functions render the same Lean `Level` and they do not agree.
+    /// [`level_term_over`] is **structural**: `max ℓ ℓ'` is `ℓ̂ ∪ ℓ̂'` and
+    /// `imax ℓ ℓ'` is `ite0(ℓ̂', ∅, ℓ̂ ∪ ℓ̂')`, whatever the operands are.
+    /// [`crate::ground::as_numeral`] **evaluates**: it folds `max(1,1)` to `1`
+    /// and short-circuits `imax ℓ 0` to `0` without looking at `ℓ` at all. So
+    /// a closed level can arrive at `srt(succ(∅))` from one side and
+    /// `srt(succ(∅) ∪ succ(∅))` from the other, and `pi_imax_dep`'s `mp`
+    /// refuses two spellings of one number.
+    ///
+    /// **It is only ever the closed case, measured.** Over the corpus,
+    /// `mem_at_srt` is reached 18 714 times:
+    ///
+    /// ```text
+    /// open,   raw is already Level::simplify's      10 038   certifies
+    /// open,   raw is not                             3 591   certifies anyway
+    /// closed, raw coincides with the rung             4 861   certifies
+    /// closed, raw does not                              224   every pi-poly
+    /// ```
+    ///
+    /// The 3 591 are the interesting zero: an open level's *two sides* are
+    /// both [`level_term_over`]'s, so a raw spelling that differs from
+    /// `Level::simplify`'s costs nothing — nothing on this route ever has to
+    /// agree with a canonical form. The `≤`-kit's header sizes the population
+    /// it was built for at "1005 of 2103 … a raw `imax(a,…,u)` chain whose
+    /// canonical form is the bare parameter `u`", and **that is the open
+    /// population**. Naming it here so the next reader does not come looking
+    /// for `Leq` in this function and wonder why it is not spent: the identity
+    /// that blocks is `as_numeral`'s folding, not `simplify`'s.
+    ///
+    /// The 224 are, to the unit, every `conv-compose(pi-poly)` the route
+    /// reported.
+    ///
+    /// # Four shapes, and each is one fact the kits already export
+    ///
+    /// ```text
+    /// max(1,1)                     142   union idempotence
+    /// imax(0,0)                     45   Ite0::when_zero at an ∅ guard
+    /// imax(imax(P,imax(0,0)),0)     24   the same, and the left operand is
+    ///                                    never looked at — which is why this
+    ///                                    fires where it mentions a parameter
+    /// imax(1,1)                     13   when_nonzero, then idempotence
+    /// ```
+    ///
+    /// # The one boundary
+    ///
+    /// A `max`/`imax` whose two operands evaluate to **different** numerals
+    /// declines. `Order::max_absorb` says the union is one of its operands and
+    /// not which, so settling `n̄a ∪ n̄b = max(na,nb)‾` at `na ≠ nb` needs an
+    /// ordering fact this does not have — the `⊆`-route through
+    /// `Leq::sub_refl`/`Order::sub_iff` would do it and is not built, because
+    /// **the corpus contains no such site**: all 224 have equal operands. A
+    /// decline here is a `conv-compose` exactly as before, so the boundary
+    /// costs nothing it was not already costing.
+    ///
+    /// `None` at an open level, which has no rung to be reconciled with.
+    pub fn level_rung_eq(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        let lp = self.levels_built()?.clone();
+        self.rung_eq_at(l, vars, &lp)
+    }
+
+    /// [`Interp::level_rung_eq`]'s recursion, over an apparatus in hand.
+    fn rung_eq_at(&mut self, l: &Level, vars: &LevelVars, lp: &LevelPoly) -> Option<Thm> {
+        let n = crate::ground::as_numeral(l)?;
+        let raw = self.level_term(l, vars)?;
+        let rung = self.level_term(&crate::ground::numeral(n), vars)?;
+        let want = Formula::eq(raw.clone(), rung.clone());
+        // The overwhelming majority, and the ground route's only case: the two
+        // renderings already coincide. Reflexivity, and no apparatus spent.
+        if raw == rung {
+            return Some(Thm::eq_refl(raw))
+        }
+        let out = match l.view() {
+            // `∅` renders as `∅` either way, so it never reaches here; a
+            // parameter has no numeral and `as_numeral` declined above.
+            LevelView::Zero | LevelView::Param(_) => return None,
+            LevelView::Succ(a) => {
+                let inner = self.rung_eq_at(&a, vars, lp)?;
+                self.congr_eq(&inner, &|t| lp.succ_of(t))?
+            }
+            LevelView::Max(a, b) => {
+                let ea = self.rung_eq_at(&a, vars, lp)?;
+                let eb = self.rung_eq_at(&b, vars, lp)?;
+                self.union_rung(lp, &ea, &eb)?
+            }
+            LevelView::IMax(a, b) => {
+                let eb = self.rung_eq_at(&b, vars, lp)?;
+                let (_, nb) = eb.concl().as_eq()?;
+                let bh = self.level_term(&b, vars)?;
+                let ah = self.level_term(&a, vars)?;
+                let args = [bh.clone(), lp.zero(), lp.max(ah, bh.clone())];
+                if nb == lp.zero() {
+                    // **`imax ℓ 0 = 0`, and `ℓ` is never looked at.** That is
+                    // not an optimisation: `as_numeral` short-circuits the
+                    // same way, so this arm is reached at levels whose left
+                    // operand mentions a parameter and has no rung at all.
+                    Thm::mp(&derived::inst_all(&lp.i.when_zero, &args)?, &eb)?
+                } else {
+                    // The rung is a successor, so the guard is nonzero — read
+                    // off the *rung* and carried back along `b̂ = n̄b`, because
+                    // `b̂` itself is whatever the structural spelling made it.
+                    let ne_rung = self.succ_nonzero_at(&nb)?;
+                    let back = derived::eq_symm(&mut self.core.env_mut(), &eb)?;
+                    let w = self.fresh_var();
+                    let hole = Formula::not(Formula::eq(Term::var(w), lp.zero()));
+                    let leib = Thm::eq_leibniz(nb, bh, w, hole);
+                    let ne = Thm::mp(&Thm::mp(&leib, &back)?, &ne_rung)?;
+                    let unfold = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, &ne)?;
+                    let ea = self.rung_eq_at(&a, vars, lp)?;
+                    let union = self.union_rung(lp, &ea, &eb)?;
+                    derived::eq_trans(&mut self.core.env_mut(), &unfold, &union)?
+                }
+            }
+        };
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `⊢ â ∪ b̂ = n̄` from `⊢ â = n̄a` and `⊢ b̂ = n̄b`, at `n̄a = n̄b`.
+    ///
+    /// Two congruence steps to move the operands onto their rungs, then
+    /// [`Interp::union_idem`]. The `n̄a ≠ n̄b` case is
+    /// [`Interp::level_rung_eq`]'s stated boundary and declines here.
+    fn union_rung(&mut self, lp: &LevelPoly, ea: &Thm, eb: &Thm) -> Option<Thm> {
+        let (_, na) = ea.concl().as_eq()?;
+        let (bh, nb) = eb.concl().as_eq()?;
+        if na != nb {
+            return None
+        }
+        // Defensive, and measured to be: removing this guard still declines at
+        // unequal operands, because `union_idem` proves `n̄a ∪ n̄a = n̄a` and the
+        // `eq_trans` below has `n̄a ∪ n̄b` on its left. It stays because a
+        // decline named where the assumption fails beats one two steps later.
+        let left = self.congr_eq(ea, &|t| lp.max(t, bh.clone()))?;
+        let right = self.congr_eq(eb, &|t| lp.max(na.clone(), t))?;
+        let both = derived::eq_trans(&mut self.core.env_mut(), &left, &right)?;
+        // `n̄ ∈ ω` off the rung term itself, so it carries no hypothesis: the
+        // rung is closed however open the level it came from was.
+        let om = self.omega_of_rung(lp, &na)?;
+        let idem = self.union_idem(lp, &na, &om)?;
+        derived::eq_trans(&mut self.core.env_mut(), &both, &idem)
+    }
+
+    /// `⊢ n̄ ∈ ω` for a term that is a **numeral rung** — `succ` applied to
+    /// `∅` some number of times, and nothing else.
+    ///
+    /// Walked off the term rather than taken from the caller's `Level`,
+    /// because [`Interp::union_rung`] holds the rungs as terms and a rung
+    /// rebuilt from a level it did not check would be a second chance to
+    /// disagree. `None` at anything that is not literally `succⁿ(∅)`.
+    fn omega_of_rung(&mut self, lp: &LevelPoly, t: &Term) -> Option<Thm> {
+        if *t == lp.zero() {
+            return Some(lp.r.core().zero_mem.clone())
+        }
+        let (_, args) = self.parts_of(t)?;
+        let [pred] = args.as_slice() else { return None };
+        if lp.succ_of(pred.clone()) != *t {
+            return None
+        }
+        let pred = pred.clone();
+        let inner = self.omega_of_rung(lp, &pred)?;
+        let out = Thm::mp(&derived::inst_all(&lp.r.core().succ_closed, &[pred])?, &inner)?;
+        (*out.concl() == Formula::mem(t.clone(), lp.omega())).then_some(out)
+    }
+
     /// `ℓ̂` from `ℓ̂ ∪ ℓ̂'`, given the right operand — taken apart and then
     /// **rebuilt and compared**, which is what makes it safe for
     /// [`Interp::level_guard_at`] to name no `derived` symbol here.
@@ -3484,6 +3700,23 @@ impl Interp {
     ///
     /// So the two spellings meet here, at one function, rather than at each
     /// clause — which is what §5.5's switchover eventually deletes.
+    ///
+    /// # And a *third* spelling, which is the level's own
+    ///
+    /// `srt(n̄)` is not where the numeral branch may stop. `pi_imax_dep` states
+    /// its premises at `srt(u)` and `srt(v)` for the terms
+    /// [`Interp::level_term`] built, and that function is **structural** where
+    /// [`crate::ground::as_numeral`] **evaluates**: a closed `max(1,1)` renders
+    /// as `succ(∅) ∪ succ(∅)` on one side and `succ(∅)` on the other, and the
+    /// `mp` refuses them. So the numeral branch ends by moving the membership
+    /// the last step onto the level's own spelling, over
+    /// [`Interp::level_rung_eq`]. Measured, that step is needed at 224 of the
+    /// 18 714 sites this function sees, and those 224 were every
+    /// `conv-compose(pi-poly)` on the route.
+    ///
+    /// Where the two renderings already coincide — 4 861 of the closed sites —
+    /// `level_rung_eq` is reflexivity and `congr_eq`/`retarget_set` are skipped
+    /// outright, so the common path costs one term comparison.
     pub fn mem_at_srt(&mut self, l: &Level, vars: &LevelVars, mem: &Thm) -> Option<Thm> {
         let Some(n) = crate::ground::as_numeral(l) else {
             // Already `srt(ℓ̂)`: `sort_of` built it that way. Checked rather
@@ -3495,7 +3728,60 @@ impl Interp {
         };
         let bridge = self.rung_bridge(n)?;
         let back = derived::eq_symm(&mut self.env_mut(), &bridge)?;
-        self.retarget_set(mem, &back)
+        let at_rung = self.retarget_set(mem, &back)?;
+        let raw = self.level_term(l, vars)?;
+        let rung = self.level_term(&crate::ground::numeral(n), vars)?;
+        if raw == rung {
+            return Some(at_rung)
+        }
+        let eq = self.level_rung_eq(l, vars)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &eq)?;
+        let lp = self.levels_built()?.clone();
+        let cong = self.congr_eq(&back, &|t| lp.srt_at(t))?;
+        self.retarget_set(&at_rung, &cong)
+    }
+
+    /// **[`Interp::mem_at_srt`] run backwards** — `Γ ⊢ t ∈ srt(ℓ̂)` to
+    /// `Γ ⊢ t ∈ ⟦Sort ℓ⟧`, for a caller holding a rule's conclusion rather
+    /// than its premise.
+    ///
+    /// `pi_imax_dep` concludes at `srt(imax ℓ₁ ℓ₂)̂` — the structural
+    /// spelling, because that is what it was instantiated at — and
+    /// [`Interp::pi_typing_of`]'s caller asks about [`Interp::sort_of`], which
+    /// answers a *closed* level with `Uₙ`. Same two renderings as
+    /// `mem_at_srt`'s, met from the other side, so this is that function's
+    /// three steps in reverse order and not a second opinion about them.
+    ///
+    /// # This is what stopped the conclusion check being decoration
+    ///
+    /// `pi_typing_of`'s header said its conclusion check was *"defensive
+    /// rather than load-bearing — measured, it never fires"*. That was true
+    /// while the `mp` above it refused every closed level whose spelling was
+    /// not its rung. With the level bridge in `mem_at_srt` the `mp` succeeds
+    /// and **the check fired 157 times**, all of them this mismatch and none
+    /// of them a wrong theorem. The measurement was right about the corpus and
+    /// wrong about why; this function is what puts the conclusion where the
+    /// caller asks for it, and the check goes back to never firing — now
+    /// because the conclusion is right rather than because nothing gets there.
+    pub fn mem_from_srt(&mut self, l: &Level, vars: &LevelVars, mem: &Thm) -> Option<Thm> {
+        let Some(n) = crate::ground::as_numeral(l) else {
+            // Open: `sort_of` is `srt(ℓ̂)` and the conclusion is already there.
+            let want = self.sort_of(l, vars)?;
+            let (_, set) = mem.concl().as_mem()?;
+            return (set == want).then(|| mem.clone())
+        };
+        let raw = self.level_term(l, vars)?;
+        let rung = self.level_term(&crate::ground::numeral(n), vars)?;
+        let at_rung = if raw == rung {
+            mem.clone()
+        } else {
+            let eq = self.level_rung_eq(l, vars)?;
+            let lp = self.levels_built()?.clone();
+            let cong = self.congr_eq(&eq, &|t| lp.srt_at(t))?;
+            self.retarget_set(mem, &cong)?
+        };
+        let bridge = self.rung_bridge(n)?;
+        self.retarget_set(&at_rung, &bridge)
     }
 
     /// **`⊢ ⟦Π x:A. B⟧ ∈ ⟦Sort (imax ℓ₁ ℓ₂)⟧` at a variable rung** —
@@ -3521,9 +3807,22 @@ impl Interp {
     ///
     /// The last line compares the derived conclusion against
     /// [`Interp::sort_of`] at `imax ℓ₁ ℓ₂` rather than trusting the
-    /// instantiation. **Measured, it never fires**: removing it leaves all 91
-    /// tutorial exports' `polyledger`/`polyblocked`/`polyev` rows
-    /// byte-identical, so nothing on the corpus reaches it.
+    /// instantiation.
+    ///
+    /// **It never fires, and the paragraph that stood here was right about
+    /// that and wrong about why — recorded because the difference is the whole
+    /// value of the check.** It said: *"removing it leaves all 91 tutorial
+    /// exports' rows byte-identical, so nothing on the corpus reaches it."*
+    /// True at the time, and only because the `mp` two lines above refused
+    /// every closed level whose structural spelling was not its numeral rung
+    /// — 50 declarations' worth of `conv-compose(pi-poly)`, never getting far
+    /// enough to be checked. With the level bridge in [`Interp::mem_at_srt`]
+    /// the `mp` succeeds and **this check fired 157 times**, every one of them
+    /// the same spelling mismatch arriving on the *conclusion* side. So the
+    /// green measurement was measuring an obstruction upstream, not a
+    /// redundant guard. [`Interp::mem_from_srt`] is what now puts the
+    /// conclusion where `sort_of` asks for it, and the check is back to never
+    /// firing — this time because the conclusion is right.
     ///
     /// That is a reason to *label* it, not a reason to remove it, and this
     /// paragraph exists because the green measurement is exactly what would
@@ -3558,8 +3857,14 @@ impl Interp {
         let levels = derived::and_intro(&u_om, &v_om);
         let shapes = derived::and_intro(dom_mem, fibres);
         let out = Thm::mp(&inst, &derived::and_intro(&levels, &shapes))?;
+        // The rule concludes at the **structural** spelling `srt(imax ℓ₁ ℓ₂)̂`
+        // and the caller asks about `sort_of`, which answers a closed level
+        // with `Uₙ`. [`Interp::mem_from_srt`] is `mem_at_srt`'s three steps in
+        // reverse; at an open level it is the identity and checks that it is.
+        let l = Level::imax(*l1, *l2);
+        let out = self.mem_from_srt(&l, vars, &out)?;
         let tm = self.pi_term_of(site, kit, dom, l2, vars)?;
-        let want = Formula::mem(tm, self.sort_of(&Level::imax(*l1, *l2), vars)?);
+        let want = Formula::mem(tm, self.sort_of(&l, vars)?);
         (*out.concl() == want).then_some(out)
     }
 
@@ -4931,6 +5236,118 @@ mod tests {
                 "{label} is ∅ at some instantiation and must not be settled"
             );
         }
+    }
+
+    /// **The level bridge** — [`Interp::level_rung_eq`], at the four shapes
+    /// the corpus census found and at the one boundary it declines on.
+    ///
+    /// Two functions render a `Level` and they disagree: [`level_term_over`]
+    /// is structural, [`crate::ground::as_numeral`] evaluates. Every case here
+    /// is a *closed* level where they differ, which is the only case that ever
+    /// blocked anything — an open level's two sides are both structural and
+    /// agree by construction.
+    ///
+    /// **No hypothesis, at any of them.** A rung is closed however open the
+    /// level it came from was, so `omega_of_rung` walks `succⁿ(∅)` off the
+    /// Peano base and nothing is spent. The `imax` case with a parameter in
+    /// its *left* operand is the one that makes that visible: `as_numeral`
+    /// short-circuits `imax ℓ 0` to `0` without looking at `ℓ`, this
+    /// recursion does the same, and the parameter's `∈ ω` never comes up.
+    #[test]
+    fn a_closed_levels_own_spelling_is_bridged_to_its_rung() {
+        // No apparatus, no answer — and none built to say so.
+        let mut fresh = Interp::new();
+        assert!(fresh.level_rung_eq(&crate::ground::numeral(1), &LevelVars::new()).is_none());
+        assert!(fresh.levels_built().is_none(), "no apparatus built on the way to declining");
+
+        let mut ip = Interp::new();
+        let (_lp, vars) = omega_vars(&mut ip);
+        let n = crate::ground::numeral;
+        let (one, two, z) = (n(1), n(2), Level::zero());
+        let pu = p("u");
+
+        for (label, l) in [
+            // The four corpus shapes: 142, 45, 24 and 13 sites.
+            ("max(1,1)", Level::max(one, one)),
+            ("imax(0,0)", Level::imax(z, z)),
+            ("imax(imax(u,imax(0,0)),0)", Level::imax(Level::imax(pu, Level::imax(z, z)), z)),
+            ("imax(1,1)", Level::imax(one, one)),
+            // …and the congruence arm that carries them under a successor.
+            ("succ(max(1,1))", Level::max(one, one).succ()),
+        ] {
+            let raw = ip.level_term(&l, &vars).expect("ℓ̂");
+            let nn = crate::ground::as_numeral(&l).expect("closed");
+            let rung = ip.level_term(&n(nn), &vars).expect("n̄");
+            assert_ne!(raw, rung, "{label}: this test's premise is that the spellings differ");
+            let eq = ip.level_rung_eq(&l, &vars).unwrap_or_else(|| panic!("{label} bridges"));
+            assert_eq!(*eq.concl(), Formula::eq(raw, rung), "{label}: about these two terms");
+            assert!(eq.hyps().is_empty(), "{label}: a rung is closed, so nothing is spent");
+        }
+
+        // Where the renderings coincide it is reflexivity, not a walk.
+        let t2 = ip.level_term(&two, &vars).expect("2̄");
+        let eq = ip.level_rung_eq(&two, &vars).expect("a numeral is its own rung");
+        assert_eq!(*eq.concl(), Formula::eq(t2.clone(), t2));
+
+        // **The boundary.** `Order::max_absorb` says the union is one of its
+        // operands and not which, so unequal operands need an ordering fact
+        // this does not have. No corpus site has one; a decline here is the
+        // `conv-compose` it was already paying.
+        assert!(
+            ip.level_rung_eq(&Level::max(one, two), &vars).is_none(),
+            "max(1,2) must decline rather than guess which operand the union is"
+        );
+        // An open level has no rung to be reconciled with.
+        assert!(ip.level_rung_eq(&Level::max(pu, one), &vars).is_none(), "no rung, no bridge");
+    }
+
+    /// **A membership crosses to the level's own spelling and back** —
+    /// [`Interp::mem_at_srt`] and [`Interp::mem_from_srt`], the premise side
+    /// and the conclusion side of the same mismatch.
+    ///
+    /// `pi_imax_dep` takes its premises at `srt(ℓ̂)` and concludes at
+    /// `srt(imax ℓ₁ ℓ₂)̂`, both **structural**; the caller's `Uₙ` is
+    /// [`Interp::sort_of`]'s answer at a closed level. The interesting
+    /// assertion is the middle one: the premise must land at `srt(1̂ ∪ 1̂)` and
+    /// **not** at `srt(succ(∅))`, which is where this function used to stop
+    /// and is exactly what the `mp` above it refused fifty times.
+    ///
+    /// The negative is a membership at the wrong rung, which must decline
+    /// rather than be carried onto a sort it was never about.
+    #[test]
+    fn a_membership_crosses_between_a_rung_and_the_levels_own_spelling() {
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let one = crate::ground::numeral(1);
+        let l = Level::max(one, one);
+        let (mem, wrong) = {
+            let t1 = ip.prelude.tower.at(1).expect("rung 1");
+            let t2 = ip.prelude.tower.at(2).expect("rung 2");
+            (t1.empty_mem.clone(), t2.empty_mem.clone())
+        };
+        assert_eq!(
+            *mem.concl(),
+            Formula::mem(lp.zero(), ip.sort(1)),
+            "the fixture is `⊢ ∅ ∈ U₁`, which is what a numeral level's premise looks like"
+        );
+
+        let raw = ip.level_term(&l, &vars).expect("ℓ̂");
+        assert_ne!(raw, lp.succ_of(lp.zero()), "max(1,1) does not render as its own rung");
+        let at_srt = ip.mem_at_srt(&l, &vars, &mem).expect("onto the level's own spelling");
+        assert_eq!(
+            *at_srt.concl(),
+            Formula::mem(lp.zero(), lp.srt_at(raw)),
+            "the premise must land at srt(ℓ̂) — srt(n̄) is what the mp refused"
+        );
+
+        let back = ip.mem_from_srt(&l, &vars, &at_srt).expect("and back to what sort_of answers");
+        assert_eq!(*back.concl(), *mem.concl(), "the round trip is the identity on the conclusion");
+        assert!(back.hyps().is_empty(), "and it spends nothing on the way");
+
+        assert!(
+            ip.mem_at_srt(&l, &vars, &wrong).is_none(),
+            "a membership at another rung must decline, not be carried onto this sort"
+        );
     }
 
     /// **[`Interp::level_guard_at`] with no caller hypothesis at all** — the

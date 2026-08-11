@@ -980,6 +980,22 @@ THREADING-CENSUS §2).
 
    Remove the worktree afterwards (`rm -rf "$W-parent/target"` first — 14 GB).
 
+   **The same trap, at a second call site — a `perf` comparison.** Discovery is
+   relative to the *binary's own path*, not the cwd, so `cp target/debug/mini
+   target/mini-parent` breaks it just as a fresh worktree does, and by the same
+   silent route: the copy prints one line to stderr and **exits 2 in about two
+   milliseconds**. A `perf stat -e instructions` over 91 exports then reports
+   ~330 M instructions for both binaries and a plausible-looking sub-1 %
+   difference, which is entirely the process startup. Two seats have now hit
+   this in two places, so state it once as the general rule: **any `mini`
+   invoked from a path other than `<worktree>/target/{debug,release}/mini`
+   needs `MINI_MODELGEN` set, and the tell is an implausibly small number
+   rather than an error.** Sanity-check a comparison run against a
+   known-good absolute count before believing its delta — the corpus at
+   `--no-modelgen` is ~404 G instructions, four thousand times the failure
+   mode. Prefer building the comparison binary *in place* and copying it only
+   after confirming it produces `ledger` rows.
+
    ```sh
    # Gate A — must be byte-identical to the previous tranche's file.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do echo "## $(basename $f)"
@@ -2034,6 +2050,102 @@ three**, so the ground-path control separates from the polymorphic case rather
 than dying with it. `perf stat -e instructions` over the corpus, two
 repetitions each, parent binary and new binary built side by side: ground route
 **−0.002 %** (unreachable code path, as designed), `--poly` route **+0.23 %**.
+
+#### 5.3.2 The level bridge — `typeEv` 81 → 92, `conv-compose(pi-poly)` 50 → 0, exits 31 → **32 of 89**
+
+`§5.4 blocker 1` is closed on this route. `Interp::level_rung_eq` is the
+bridge, spent inside `Interp::mem_at_srt` on the premise side and
+`Interp::mem_from_srt` on the conclusion side.
+
+**And the probe moved the target before a line was written — which is the
+point of probing, because the target was named in this file.** §5.3.1 handed
+the next seat "`Leq::imax_absorb`, no new mathematics". `Leq` is still not
+spent, and its own header explains why once you measure instead of read it.
+
+**What the mismatch actually is.** Two functions render one `Level` and
+disagree. `level_term_over` is **structural** — `max ℓ ℓ'` is `ℓ̂ ∪ ℓ̂'`,
+`imax ℓ ℓ'` is `ite0(ℓ̂', ∅, ℓ̂ ∪ ℓ̂')`, whatever the operands. `ground::as_numeral`
+**evaluates** — it folds `max(1,1)` to `1` and short-circuits `imax ℓ 0` to `0`
+without looking at `ℓ` at all. So a closed level arrives at `pi_imax_dep`'s
+`mp` as `srt(succ(∅) ∪ succ(∅))` from one side and `srt(succ(∅))` from the
+other, and the `mp` refuses two spellings of one number.
+
+**The census, over the 18 714 `mem_at_srt` calls the corpus makes:**
+
+    open,   raw is already Level::simplify's      10 038   certifies
+    open,   raw is not                             3 591   certifies anyway
+    closed, raw coincides with the rung             4 861   certifies
+    closed, raw does not                              224   every pi-poly, to the unit
+
+The 3 591 are the finding. An open level's *two sides are both structural*, so
+a raw spelling that differs from `simplify`'s costs nothing — **nothing on this
+route ever has to agree with a canonical form.** The `≤`-kit's "1005 of 2103 …
+a raw `imax(a,…,u)` chain whose canonical form is the bare parameter `u`" is
+exactly that open population. It has not collapsed; it was never on the
+critical path. The identity that blocks is `as_numeral`'s folding, not
+`simplify`'s, and it is only ever closed.
+
+**Four shapes, and `imax_absorb` is spent by none of them:**
+
+    max(1,1)                     142   union idempotence
+    imax(0,0)                     45   Ite0::when_zero at an ∅ guard
+    imax(imax(P,imax(0,0)),0)     24   the same — and the left operand is never
+                                       looked at, which is why this fires where
+                                       it mentions a parameter
+    imax(1,1)                     13   when_nonzero, then idempotence
+
+Union idempotence is **`Order::max_absorb` at equal operands**: it says the
+union is one of them and not which, and at `m = n` it does not have to, so an
+`or`-elimination whose two arms are the same identity is the whole derivation.
+**Still no new `derived` mathematics** — `Order::max_absorb`,
+`Ite0::when_zero`/`when_nonzero`, the Peano base and `kernel`'s `Thm::eq_refl`.
+The `≤`-kit remains derived, tested and unconsumed, and that is now a
+*measured* statement rather than an unexamined one.
+
+**A "never fires" check that fired 157 times.** `pi_typing_of`'s conclusion
+check was documented as *"measured, it never fires — removing it leaves all 91
+exports byte-identical, so nothing on the corpus reaches it."* True, and true
+because the `mp` two lines above refused first. With the premise side bridged
+the `mp` succeeds and the check fired **157** times, every one the same
+mismatch arriving on the *conclusion* side, none of them a wrong theorem. A
+green "this guard is unreachable" measurement is only as good as the
+obstruction upstream of it — the third time on this branch that a measurement
+was right about the corpus and wrong about why. `Interp::mem_from_srt` is
+`mem_at_srt` run backwards and puts it right; the check is back to never
+firing, now because the conclusion is correct.
+
+**What moved.**
+
+    typeEv     81 → 92        eleven declarations gain a type certificate
+    zoneBOk    208/362        unchanged, denominators unchanged
+    exits      31 × 0 → 32 × 0,  57 × 4,  2 × 2
+
+`115_rTreeRec` exits 0. The other 39 declarations moved to the obstacle behind
+this one — `conv-compose(proof-irrel)` 38 and one `ind-spec(Acc: …)`.
+`015_levelParams` is now the **only** file owing `typeEv` alone; 15 owe only
+`zoneB`, which is the largest single cluster left.
+
+**The one boundary, stated and tested.** A `max`/`imax` whose operands
+evaluate to *different* numerals declines: `max_absorb` will not say which
+operand the union is, and settling `n̄a ∪ n̄b = max(na,nb)‾` at `na ≠ nb` needs
+the `⊆`-route through `Leq`/`Order::sub_iff`. **No corpus site has one** — all
+224 have equal operands — and a decline is the `conv-compose` it was already
+paying, so the boundary costs nothing it was not costing.
+
+**Gates.** Gate A byte-identical against a parent build in this worktree — 358
+lines, 89 `ledger` rows, `cmp`-clean. Gate B: 70 changed lines, **every one a
+`typeEv` increase**; `open = 0` on all 89; `declars`/`zoneB`/`valuesOk`/
+`zoneBOk` all `md5`-identical. Tests 233/24/12/6/1/12/2/20/16 (`mini/src`
+231 → **233**, two added). Three mutations verified red, each by the case that
+names it — the `mem_at_srt` tail reverted to stopping at the rung, the
+`imax(_,0)` arm made to inspect its left operand, and `union_idem` stated the
+identity the other way round — and
+`an_open_level_at_an_unthreaded_checker_costs_no_apparatus` survives all three.
+A fourth mutation is a *finding rather than a red*: dropping `union_rung`'s
+`na ≠ nb` guard still declines, because `eq_trans` has `n̄a ∪ n̄b` on its left
+where `union_idem` proved `n̄a ∪ n̄a = n̄a`. The guard stays and is labelled
+defensive, on this file's usual grounds — a decline named where the assumption
+fails beats one two steps later.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 
