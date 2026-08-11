@@ -2107,7 +2107,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // **The store's own reason, not a bare `no-interp` on the name.** This
         // is the same call `const_evidence` makes and it was missing here; see
         // [`Checker::miss_reason`] for what that cost.
-        if let Some(g) = self.miss_reason(name, &inst) {
+        if let Some(g) = self.miss_reason(name, ls) {
             return (Ev::missing(g), None)
         }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
@@ -3667,8 +3667,8 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// blocker named `no-interp(Quot.ind)` with the store's own decline
     /// nowhere. Every clause with a bare-constant value has the same blind
     /// spot, which is why the fix is symmetry rather than a special case.
-    fn miss_reason(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
-        let key = (*name, crate::ground::ground_levels(inst));
+    fn miss_reason(&mut self, name: &Name, inst: &[crate::expr::Level]) -> Option<Gap> {
+        let key = (*name, crate::ground::store_key_levels(inst));
         let missing = |c: &Self| c.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none());
         if self.th.is_none() || !missing(self) {
             return None
@@ -3678,8 +3678,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 if let Some(th) = self.th.as_mut() {
                     th.ip.lazy_fills += 1;
                 }
-                let declines_to =
-                    crate::zoneb::ensure(self, name, &crate::ground::ground_levels(inst)).err();
+                let declines_to = crate::zoneb::ensure(self, name, inst).err();
                 // A decline that nevertheless filled the store is not a reason:
                 // the constant is there and the caller should read it.
                 declines_to.filter(|_| missing(self))
@@ -3763,13 +3762,32 @@ impl<'e, 'i> Checker<'e, 'i> {
         if let Some(hit) = self.poly_const_evidence(name, ls) {
             return hit
         }
-        let Some(inst) =
-            ls.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
-        else {
+        // **The flatten is now a routing test, not a refusal.** This used to
+        // require `ls` to be numerals before it would so much as look in the
+        // store, which made it a *third* boundary behind `zoneb::ensure`'s and
+        // `crate::quot`'s — and the one that decided what a **use site** could
+        // see. It is why the direct clause moved `zoneBOk` and moved no exit
+        // code: zone B calls `ensure` directly and saw the entries, every use
+        // of `Eq.{u}` came through here and did not.
+        //
+        // An **open** `ls` at a checker with no ω-variables is still
+        // `Gap::SymbolicLevel`, unchanged and said before anything is read:
+        // that is a use site the route never threaded, which is the sense
+        // `Checker::poly_const_evidence` already gives the word. Testing
+        // `level_vars` rather than trying to interpret the levels keeps this
+        // arm **syntactic** — calling `Interp::level_term` here would build the
+        // level apparatus on the σ-scheduled path, which is a build point
+        // `Checker::poly` owns and which Gate A's counts would not catch.
+        if self.level_vars().is_empty()
+            && ls.iter().any(|l| crate::ground::as_numeral(l).is_none())
+        {
             return (None, Ev::missing(Gap::SymbolicLevel))
-        };
-        let key = (*name, crate::ground::ground_levels(&inst));
-        if let Some(g) = self.miss_reason(name, &inst) {
+        }
+        // `store_key_levels` keeps the closed spelling exactly, so nothing a
+        // schedule filled can miss; an open list reaches the same store
+        // `ensure` fills, at the same key.
+        let key = (*name, crate::ground::store_key_levels(ls));
+        if let Some(g) = self.miss_reason(name, ls) {
             return (None, Ev::missing(g))
         }
         let Some(th) = self.th.as_ref() else { return (None, Ev::missing(Gap::SymbolicLevel)) };
@@ -5606,6 +5624,48 @@ mod tests {
     }
 
     fn k(n: &str) -> E { konst(Name::simple(n), no_levels()) }
+
+    /// **An open level at an unthreaded checker is `SymbolicLevel`, and asking
+    /// costs no apparatus.**
+    ///
+    /// [`Checker::const_evidence`] stopped flattening `ls` to numerals so that
+    /// a *use* of `⟦Eq.{u}⟧` could reach the store `zoneb::ensure` now fills at
+    /// symbolic keys. That deletion has to leave the σ-scheduled route exactly
+    /// where it was, and this pins both halves of how:
+    ///
+    /// * the **reason** is still `SymbolicLevel`, said before any table is
+    ///   read — without the guard the lazy fill runs, records three
+    ///   `symbolic-level` declarations on `084_projProp1` and `086_projProp3`,
+    ///   and Gate A moves. It was measured moving, which is why the guard is
+    ///   here;
+    /// * the **apparatus is not built**. The guard is `level_vars().is_empty()`
+    ///   and `as_numeral`, both syntactic; interpreting the level to decide
+    ///   would call `Interp::levels` on the ground path and un-pin a build
+    ///   point `Checker::poly` owns. `Interp::levels_built` is the only
+    ///   question that does not itself answer it, and **Gate A cannot see
+    ///   this** — its rows are counts and reason strings, so the assertion
+    ///   belongs here.
+    #[test]
+    fn an_open_level_at_an_unthreaded_checker_costs_no_apparatus() {
+        let env = env();
+        let mut ip = Interp::new();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            assert!(c.level_vars().is_empty(), "`threaded` opens no ω-variable");
+            let us: std::rc::Rc<[Level]> = vec![Level::param(Name::simple("u"))].into();
+            let (tm, ev) = c.const_evidence(&Name::simple("P"), &us);
+            assert!(tm.is_none(), "an unthreaded use site interprets nothing");
+            assert_eq!(
+                ev.gap(),
+                Some(&Gap::SymbolicLevel),
+                "and says the word it has always said, not a table's reason"
+            );
+        }
+        assert!(
+            ip.levels_built().is_none(),
+            "the ground path must still build no level apparatus"
+        );
+    }
 
     /// **[`first_reason`]'s four cells**, which are the `Proj` clause's §0.4
     /// rule and are not symmetric in the two routes.

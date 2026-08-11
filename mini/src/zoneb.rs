@@ -492,7 +492,7 @@ pub(crate) fn stored_or_reason_after(
 /// answer for a name that belongs to no declaration — an unthreaded checker,
 /// or a constant the environment does not own — and is not a fallback standing
 /// in for a reason that exists.
-pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Gap {
+pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[Level]) -> Gap {
     let bare = Gap::NoInterpretation(*name);
     let (ind_name, ind_inst, is_rec) = {
         let env = c.environment();
@@ -512,14 +512,18 @@ pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]
     };
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return bare };
     if is_rec {
-        if let Some(g) = app.rec_untranslated.get(&(*name, crate::ground::ground_levels(inst))) {
+        if let Some(g) = app.rec_untranslated.get(&(*name, crate::ground::store_key_levels(inst))) {
             return g.clone()
         }
     }
-    if let Some(g) = app.untranslated.get(&(ind_name, crate::ground::ground_levels(&ind_inst))) {
+    if let Some(g) =
+        app.untranslated.get(&(ind_name, crate::ground::store_key_levels(&ind_inst)))
+    {
         return g.clone()
     }
-    if let Some(g) = app.ctor_untranslated.get(&(*name, crate::ground::ground_levels(&ind_inst))) {
+    if let Some(g) =
+        app.ctor_untranslated.get(&(*name, crate::ground::store_key_levels(&ind_inst)))
+    {
         return g.clone()
     }
     bare

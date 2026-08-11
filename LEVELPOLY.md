@@ -1681,6 +1681,54 @@ No fundamental blocker turned up. Every level expression the frontier produces
 a genuine `ite0` would have been needed (the trichotomy at `PUnit.{u}`) does not
 need one.
 
+##### The third boundary, taken — and what is actually behind it
+
+`Checker::const_evidence`'s flatten is now a **routing test rather than a
+refusal**: an open `ls` at a checker with no ω-variables is still
+`Gap::SymbolicLevel`, said before any table is read, and otherwise the lookup
+goes to the store at `ground::store_key_levels(ls)`. The gains are zone A's,
+summed over the 91 exports:
+
+    typesOk    102 → 115        valuesOk   111 → 117
+    stored     111 → 116        valueEv     65 →  67
+
+`zoneBOk` stays 208 / 362 and every denominator is unchanged. **This is a wider
+set of columns than the tranche's clause was expected to move** — Gate B as
+written permits `typesOk`/`typeEv`/`valuesOk`/`valueEv`/`zoneBOk` to rise, and
+these are rises, but the expectation was `zoneBOk` alone and the departure is
+declared rather than absorbed.
+
+Three things this cost, each measured rather than predicted:
+
+* **`store_key_levels` and not `key_levels`.** A use site's levels are whatever
+  the Lean expression wrote — `max 1 0`, not the canonical numerals a schedule
+  produces — and on those `as_numeral`-then-`numeral` and `Level::simplify` can
+  disagree about the *spelling* of one value. A closed list is therefore keyed
+  exactly as it always was and only an open one takes `key_levels`, which makes
+  the ground key byte-identical by construction rather than by measurement.
+* **The guard is syntactic, deliberately.** Deciding the arm by interpreting
+  the level would call `Interp::levels` on the σ-scheduled path and un-pin a
+  build point `Checker::poly` owns — and **Gate A would not catch it**, its
+  rows being counts and reason strings. `Interp::levels_built` is asserted in
+  `an_open_level_at_an_unthreaded_checker_costs_no_apparatus` instead.
+* **Gate A broke first, and that is how the guard was found.** Without it the
+  lazy fill runs on the scheduled route at a symbolic level and records three
+  `symbolic-level` declarations on each of `084_projProp1` and `086_projProp3`,
+  moving `untranslated` and `lazyFills` while leaving every verdict alone. The
+  guard restores byte-identity.
+
+**Exits are still 27 × 0, 62 × 4, 2 × 2, and the reason is the next
+construction rather than another boundary.** A use site reaches the keyed store
+only when its level list is *syntactically* the declaration's own parameters;
+`Eq.{v}` inside some other declaration, or `Eq.{max v w}`, is a different key
+and misses. What answers that for a `def` is the **generic point**
+(`Interp::put_poly_const`), and `poly_run` writes one only on the path that has
+a **value** — so inductive type formers, constructors and recursors have none
+at all. *A generic point for inductive declarations is the named next
+construction*, and it is not a boundary retype: it is `⟦T.{u⃗}⟧` as a `k`-ary
+symbol with its typing quantified over `u⃗ ∈ ω`, which is exactly what step 5
+already does for definitions.
+
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 
 `NANODATG_NO_SCHEDULE=1` (the staging switch in `check_declar_all`,

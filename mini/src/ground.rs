@@ -122,6 +122,29 @@ pub fn key_levels(levels: &[Level]) -> Vec<Level> {
     levels.iter().map(|l| l.simplify()).collect()
 }
 
+/// [`key_levels`] for a **use site's** level list, spelled so that the ground
+/// path cannot move.
+///
+/// The difference matters and is not stylistic. A use site's levels are
+/// whatever the Lean expression wrote — `max 1 0`, `imax (u+1) 0` — and not the
+/// canonical numerals a schedule produces. On such a list `as_numeral` and
+/// [`Level::simplify`] can disagree about the *spelling* of the same value:
+/// `as_numeral(max 1 0)` is `1`, whose [`numeral`] is `(0+1)`, while
+/// `simplify` need not flatten the `max` node at all. Two spellings of one
+/// instantiation would then be two store entries, and every lookup a schedule
+/// filled would miss.
+///
+/// So a closed list is keyed exactly as it always was — through `as_numeral`
+/// and back through `numeral` — and only an *open* one takes `key_levels`.
+/// That makes the ground key byte-identical by construction rather than by
+/// measurement, which is what Gate A needs of a change on this path.
+pub fn store_key_levels(levels: &[Level]) -> Vec<Level> {
+    match levels.iter().map(as_numeral).collect::<Option<Vec<u32>>>() {
+        Some(inst) => ground_levels(&inst),
+        None => key_levels(levels),
+    }
+}
+
 /// How an instantiation is *spelled* in a label, a dump row or a blocker
 /// draft: a closed level as its numeral, an open one as the level expression.
 ///
