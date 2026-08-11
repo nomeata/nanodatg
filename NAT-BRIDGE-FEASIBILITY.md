@@ -730,14 +730,36 @@ reproduces exactly against the post-degenerate-recursor baseline (−86 / +942 /
 now certify, `natBleZ`/`natBleSZ`/`natBleSS` included. Deriving the clauses is no
 longer what blocks this.
 
-*What the census points at instead.* The corpus has 35 distinct `NatLit` values,
-13 of them ≤ 12, largest 2⁶⁴; the `Nat.ble` population lies entirely in the 13.
-`reduce_rec` **already** reduces them by ι through `nat_lit_to_constructor`, on
-the W-nat the interpretation actually uses — silently, exactly as the major's
-own whnf was before link 3. The missing fact is one defining equation per small
-literal, `⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})`, keeping every literal a nullary
-symbol and costing ≤ 78 abbreviations here. It needs nothing from
-`derived::nat`. The open question is whether `try_reduce_nat` may stand aside at
-small operands so the certifiable route is reached at all, and that is a
-reduction-hot-path change to be priced with `perf stat -e instructions` before
-it is written.
+*What the census pointed at instead, and it is refuted too.* The corpus has 35
+distinct `NatLit` values, 13 of them ≤ 12, largest 2⁶⁴; the `Nat.ble` population
+lies entirely in the 13. `reduce_rec` **already** reduces them by ι through
+`nat_lit_to_constructor`, on the W-nat the interpretation actually uses —
+silently, exactly as the major's own whnf was before link 3. So the proposal was
+one defining equation per small literal,
+`⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})`, keeping every literal a nullary symbol,
+≤ 78 abbreviations, and needing nothing from `derived::nat`.
+
+**Censused before building, task #129, and it does not work.**
+`scripts/nat-accel-withhold.diff`; full account in `MEASUREMENTS.md`, *"The
+literal-equation route is refuted before it was built"*.
+
+* *Cost is not the obstacle.* Withholding the accelerator below 13 costs
+  **+0.55 % instructions** (`perf stat -e instructions`) against 1.84× the
+  reduction steps. The crossover question is settled in the proposal's favour.
+* *Value is negative at every setting*: withhold +148 gaps, `Iota` in
+  `fully_ruled` +512, both +660, all three knobs +698. Nothing is below
+  baseline, and the best is 3 257 worse than the `NANODA_ASSUME` ideal.
+* *And the equation would serve 10 sites of 466.* With the accelerator
+  withheld, only **10** ι asks arrive with a nat literal as the major. The 466
+  are unmoved — `reduce_rec` still presents the unreduced major, and link 3
+  declines to split because the major's trace is now δ+ι and `fully_ruled`
+  excludes `Iota`. Admitting `Iota` there is link 3 unconditional, already
+  measured at +942.
+
+**So origin 2 needs a numeral representation and there is no route around it**:
+not a bignum bridge (§4.7, wrong carrier, operands ≤ 12), not structural
+unfolding, not a per-literal Peano chain. The decision to make first is *which
+set the numerals live in* — `⟦Nat⟧` is `derived::wnat`'s W-type today,
+`derived::nat` is von Neumann `ω`, and `interp` promises a third (*"Milestone 4
+replaces these with the kernel's primitive `ℕ`"*). Three candidates, no choice
+recorded; that is what has been dodged twice.

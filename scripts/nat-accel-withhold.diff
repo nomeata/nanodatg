@@ -1,0 +1,215 @@
+# MEASUREMENT PROBE — can the numeral comparison be reduced STRUCTURALLY, and
+# is the literal's missing defining equation what blocks it?
+# Worktree-only, never to be landed.
+#
+# `git apply scripts/nat-accel-withhold.diff` onto a scratch worktree, then
+#
+#   cargo build --release --features tg,stepcount --bin nanoda_bin
+#   ./target/release/nanoda_bin cfg.json                  # baseline
+#   NANODA_NAT_CMP_MIN=13 …    # withhold GMP beq/ble at operands < 13
+#   NANODA_IOTA_RULED=1 …      # let `Iota` count as `reduct::fully_ruled`
+#   (and the two together, and with NANODA_NAT_RULED=1)
+#
+# `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
+# `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`.
+#
+# WHAT IT ANSWERS. `try_reduce_nat` short-circuits `Nat.ble` before δ, so the
+# δ+ι route is entered only if the accelerator stands aside. Withholding it is
+# affordable — **+0.55 % instructions**, `perf stat -e instructions`, despite
+# 1.84x the reduction steps — and it is also worthless: every combination is
+# WORSE than the baseline (+148 / +512 / +660 / +698 gaps), and the 466
+# `Bool.rec (Nat.ble ⟨a⟩ ⟨b⟩)` sites are *unmoved*, because `reduce_rec` still
+# presents the unreduced major. Above all, only **10** ι asks arrive with a nat
+# literal as the major premise, so a defining equation per literal —
+# `⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})` — would serve 10 sites of 466.
+#
+# It also carries the `Admit::NatRed` census of `scripts/nat-red-census.diff`,
+# so the two halves can be read off one run.
+#
+# Ledger byte-identical with the probe applied and no variable set:
+# 13 254 gaps, 2 432 escapes, 162 483 derived.
+diff --git a/checker/src/reduct.rs b/checker/src/reduct.rs
+index 1756434..bc106ea 100644
+--- a/checker/src/reduct.rs
++++ b/checker/src/reduct.rs
+@@ -163,6 +163,13 @@ fn nat_ruled() -> bool {
+     *ON.get_or_init(|| std::env::var_os("NANODA_NAT_RULED").is_some())
+ }
+ 
++/// PROBE (task #129, worktree only): let `Iota` count as fully ruled.
++#[cfg(feature = "stepcount")]
++fn iota_ruled() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("NANODA_IOTA_RULED").is_some())
++}
++
+ /// Whether every step of a reduction is one of the four rules that essentially
+ /// always certify — `Beta`, `Zeta`, `Delta`, `Sort`.
+ ///
+@@ -188,6 +195,13 @@ pub(crate) fn fully_ruled<'t, C>(t: &TracePtr<'t, C>) -> bool {
+             // that has not happened. Measurement only, and gated twice.
+             #[cfg(feature = "stepcount")]
+             Node::One(Rule::Admitted(Admit::NatRed)) if nat_ruled() => true,
++            // PROBE (task #129, worktree only): admit `Iota` into the
++            // "will almost certainly certify" set. With the GMP comparison
++            // withheld, `Nat.ble 3 5`'s major reduces by δ+ι rather than by a
++            // numeral admission, and the question this answers is whether link
++            // 3's split can fire on such a trace at all.
++            #[cfg(feature = "stepcount")]
++            Node::One(Rule::Iota) if iota_ruled() => true,
+             Node::One(_) => false,
+             Node::Seq(l, r) => {
+                 fully_ruled(&Some(l.clone())) && fully_ruled(&Some(r.clone()))
+diff --git a/checker/src/tc.rs b/checker/src/tc.rs
+index 38615a0..74d218b 100644
+--- a/checker/src/tc.rs
++++ b/checker/src/tc.rs
+@@ -662,8 +662,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+             XOr => self.ctx.mk_nat_lit_quick(nat_xor(&arg1, &arg2)),
+             Shl => self.ctx.mk_nat_lit_quick(nat_shl(arg1, arg2)),
+             Shr => self.ctx.mk_nat_lit_quick(nat_shr(arg1, arg2)),
+-            Beq => self.ctx.bool_to_expr(arg1 == arg2),
+-            Ble => self.ctx.bool_to_expr(arg1 <= arg2),
++            // PROBE (task #129, worktree only): withhold the GMP acceleration
++            // at SMALL operands, so the comparison unfolds structurally and the
++            // δ+ι route is entered at all. `NANODA_NAT_CMP_MIN=n` accelerates
++            // only when max(a,b) >= n.
++            Beq | Ble => {
++                static MIN: std::sync::OnceLock<Option<num_bigint::BigUint>> =
++                    std::sync::OnceLock::new();
++                let m = MIN.get_or_init(|| {
++                    std::env::var("NANODA_NAT_CMP_MIN")
++                        .ok()
++                        .and_then(|s| s.parse::<u64>().ok())
++                        .map(num_bigint::BigUint::from)
++                });
++                if let Some(m) = m {
++                    if &arg1 < m && &arg2 < m {
++                        return None
++                    }
++                }
++                if matches!(op, Beq) {
++                    self.ctx.bool_to_expr(arg1 == arg2)
++                } else {
++                    self.ctx.bool_to_expr(arg1 <= arg2)
++                }
++            }
+         }
+     }
+     
+@@ -2236,8 +2258,76 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+     /// Convenience: admit an equality the checker believes but cannot yet
+     /// justify. Each call site names itself via one of `certify::admits`, so
+     /// the remaining holes are enumerable. See `certify.rs`.
++    #[allow(clippy::type_complexity)]
+     pub(crate) fn admit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, site: Admit) -> DefEq<'t, 'p> {
+         crate::certify::bump_admit(site);
++        // ── PROBE (task #128 census, worktree only) ──────────────────────────
++        // Every `Admit::NatRed` the checker is asked about, split by the head
++        // constant and by whether both operands are already numeral literals.
++        // `derived::nat::ble_transfer` serves exactly `Nat.ble` at two numerals,
++        // so this says what fraction of the population the construction reaches
++        // before it is wired.
++        #[cfg(feature = "stepcount")]
++        if matches!(site, Admit::NatRed) {
++            let (f, args) = self.ctx.unfold_apps(x);
++            let head = match self.ctx.read_expr(f) {
++                Const { name, .. } => {
++                    fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: crate::util::NamePtr<'t>, out: &mut String) {
++                        match ctx.read_name(n) {
++                            crate::name::Name::Anon => {}
++                            crate::name::Name::Str(pre, sfx, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(ctx.read_string(sfx).as_ref());
++                            }
++                            crate::name::Name::Num(pre, i, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(&i.to_string());
++                            }
++                        }
++                    }
++                    let mut buf = String::new();
++                    go(self.ctx, name, &mut buf);
++                    buf
++                }
++                _ => "<not a constant>".to_string(),
++            };
++            let lit = |e: crate::util::ExprPtr<'t>| -> Option<u64> {
++                match self.ctx.read_expr(e) {
++                    crate::expr::Expr::NatLit { ptr, .. } => {
++                        self.ctx.read_bignum(ptr).and_then(|b| u64::try_from(b).ok())
++                    }
++                    _ => None,
++                }
++            };
++            let shape = match args.as_slice() {
++                [a] => match lit(*a) {
++                    Some(_) => "1 numeral",
++                    None => "1 NON-numeral",
++                },
++                [a, b] => match (lit(*a), lit(*b)) {
++                    (Some(_), Some(_)) => "2 numerals",
++                    _ => "2 args, NOT both numerals",
++                },
++                _ => "other arity",
++            };
++            let big = args
++                .iter()
++                .filter_map(|a| lit(*a))
++                .max()
++                .map_or("-".to_string(), |m| match m {
++                    0..=12 => "max<=12".to_string(),
++                    13..=255 => "max<=255".to_string(),
++                    _ => "max>255".to_string(),
++                });
++            let mut g = crate::tc::NAT_RED_CENSUS.lock().expect("nat census poisoned");
++            *g.entry(format!("{head:<24} {shape:<26} {big}")).or_insert(0u64) += 1;
++        }
+         Some(self.certifier.admit(self.ctx, x, y, site.name()))
+     }
+ 
+@@ -3077,3 +3167,25 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         None
+     }
+ }
++
++// ── PROBE (task #128 census, worktree only) ──────────────────────────────────
++/// Every `Admit::NatRed` the checker asks about, keyed by head constant and
++/// operand shape. Printed by `nat_red_census`, called from the report.
++#[cfg(feature = "stepcount")]
++pub(crate) static NAT_RED_CENSUS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++/// The census, rendered.
++#[cfg(feature = "stepcount")]
++pub fn nat_red_census() -> String {
++    let g = NAT_RED_CENSUS.lock().expect("nat census poisoned");
++    if g.is_empty() {
++        return String::new()
++    }
++    let total: u64 = g.values().sum();
++    let mut s = format!("PROBE nat_reduce census — {} rows, {total} firings\n", g.len());
++    for (k, n) in g.iter() {
++        s.push_str(&format!("  {k:<70} {n:>8}\n"));
++    }
++    s
++}
+diff --git a/checker/src/tg.rs b/checker/src/tg.rs
+index f652fc4..4b81faa 100644
+--- a/checker/src/tg.rs
++++ b/checker/src/tg.rs
+@@ -20107,6 +20107,8 @@ pub fn global_report() -> String {
+     s.push_str(&split_report());
+     s.push_str(&gen_report());
+     s.push_str(&inst_report());
++    #[cfg(feature = "stepcount")]
++    s.push_str(&crate::tc::nat_red_census());
+     s.push_str(&translated_report());
+     s.push_str(&provenance);
+     if total == 0 && proved > 0 {

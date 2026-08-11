@@ -9113,3 +9113,91 @@ bridge, built over a third carrier, for operands this corpus does not contain.
 The population census was right and was not carried into the construction; the
 census **inside the rule** is what would have caught it, and it costs one
 afternoon less than the bridge did.
+
+## The literal-equation route is refuted before it was built — 2026-08-11
+
+*Task #129, censusing my own proposal from the section above rather than
+building it. Baseline `13 254 / 2 432 / 162 483`. Release,
+`--features tg,stepcount`, `good/init-prelude.ndjson`, `num_threads: 1`.
+`scripts/nat-accel-withhold.diff`. **Two runs, and the answer is no.***
+
+### The proposal
+
+`try_reduce_nat` short-circuits `Nat.ble` **before** δ, so the δ+ι route is
+entered only if the accelerator stands aside at small operands. Then
+`reduce_rec`'s existing `nat_lit_to_constructor` turns `3` into `Nat.succ 2` and
+ι fires on the W-nat the interpretation actually uses — silently, so the
+proposal was one defining equation per small literal,
+`⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})`, to make that step certifiable.
+
+### Cost: affordable. Value: negative at every setting.
+
+| | gaps | vs baseline | derived | escapes |
+|---|---:|---:|---:|---:|
+| baseline | 13 254 | — | 162 483 | 2 432 |
+| withhold the accelerator at operands < 13 | 13 402 | **+148** | 170 935 | 2 446 |
+| `Iota` admitted to `reduct::fully_ruled` | 13 766 | **+512** | 163 927 | 2 432 |
+| both | 13 914 | **+660** | 172 379 | 2 446 |
+| both, plus link 3's own knob | 13 952 | **+698** | 172 417 | 2 446 |
+
+**The cost side is a clean pass and it is worth recording separately:
++0.55 % instructions** (210 499 649 740 → 211 647 760 918, `perf stat -e
+instructions`), even though reduction steps go 89 710 → 165 003, **1.84×**. The
+accelerator exists because unfolding was assumed unaffordable at scale; at the
+operands this corpus actually has, withholding it costs half a percent. That
+disposes of the crossover question: **cost is not what refutes this.**
+
+`CMP_MIN=13` and `CMP_MIN=256` give byte-identical ledgers, which independently
+confirms the operand census — every accelerated comparison in the run has both
+operands below 13.
+
+### Why it is worthless, and it is one number
+
+With the accelerator withheld, only **10** ι asks arrive with a nat literal as
+the major premise. The defining equation per literal — the thing the proposal
+was — would therefore serve **10 sites of 466**.
+
+The 466 do not arrive because they are not blocked where the proposal supposed.
+The second-origin census is *unmoved* by withholding: `definition Nat.ble 466`,
+before and after. `reduce_rec` whnf's the major internally and still presents
+`Bool.rec … (Nat.ble ⟨a⟩ ⟨b⟩)` with the **unreduced** major, exactly the defect
+link 3 exists for — and link 3 declines to split, because the major's trace is
+now δ+ι and `fully_ruled` excludes `Iota`.
+
+Admitting `Iota` to `fully_ruled` is the obvious repair and it is the third row
+of the table: **+512 on its own, +660 with the withholding**. It is link 3
+unconditional, which the link-3 seat already measured at +942 and gated against
+for this reason. The structural route has no configuration below the baseline,
+and its best is **3 257 gaps worse than the `NANODA_ASSUME` ideal of 10 657**.
+
+### What this leaves
+
+The +8 452 derived kernel theorems under withholding are real: the structural
+reduction *does* certify, in bulk. What it does not do is produce the equation
+the checker is asking for. Origin 2's gap is `Bool.rec` at a major that has not
+been presented reduced, and closing it needs the numeral fact **as one fact** —
+`⊢ ⟦Nat.ble 3 5⟧ = ⟦true⟧` — which needs numerals with content.
+
+So the conclusion of three tranches on this origin is one sentence:
+**origin 2 needs a numeral representation, and there is no route around it.**
+Not a bignum bridge (the operands are ≤ 12 and it is over the wrong carrier —
+previous section), not structural unfolding (this section), not a per-literal
+Peano chain (this section, 10 of 466). The open design decision, dodged twice,
+is *which set the numerals live in*: `⟦Nat⟧` is `derived::wnat`'s W-type today,
+`derived::nat` is von Neumann `ω`, and `interp`'s own comment promises a third
+(*"Milestone 4 replaces these with the kernel's primitive `ℕ`"*). Whoever takes
+it should pick one and state it before writing a line.
+
+### Two numbers to keep
+
+**`NAT-BRIDGE-FEASIBILITY.md` §4.4 is stale in the good direction.** All
+seventeen characteristic equations certify — `natBleZ`, `natBleSZ` and
+`natBleSS` among them, all `None` in `mini/tests/nat_equations.rs`. Deriving the
+clauses has not been the obstacle for some time; nobody should re-open it.
+
+**The corpus has 35 distinct `NatLit` values, 13 of them ≤ 12, and the largest
+is 2⁶⁴.** The whole `Nat.ble` population lies inside the 13. This is the number
+that should govern any future Nat work here: it rules out unary representations
+globally and permits them at exactly the operands that matter, and it is the
+third time this arc that a corpus population honestly measured has been more
+useful than a design document.

@@ -21,6 +21,43 @@ a named source file. Where I could not settle something I say so, in §10.
 
 ---
 
+## 0. The corpus population, and the decision nobody has recorded — 2026-08-11
+
+*Measured, tasks #128–#129; the accounts are in `MEASUREMENTS.md` and
+`NAT-BRIDGE-FEASIBILITY.md` §4.7. Read this before §1: two constructions have
+now been built or proposed against assumptions this section refutes.*
+
+**`init-prelude` has 35 distinct `NatLit` values. Thirteen are ≤ 12. The
+largest is 2⁶⁴.** The entire `Nat.ble` population the checker admits — 466 of
+the 503 `Admit::NatRed` asks, 92.6 % — lies inside the thirteen. This rules out
+a unary representation *globally* and permits one at exactly the operands that
+matter, and it is the number any recommendation below has to be checked against.
+
+**Three candidate carriers are in play and no choice is recorded.**
+
+| where | what `Nat` is | who uses it |
+|---|---|---|
+| `checker/src/tg.rs` | `derived::wnat::Nat::ty`, the W-type, zero `⟨inl •, ∅⟩` | the interpretation, today |
+| `derived/src/nat/` | von Neumann `ω`, zero `∅`, binary numerals `num(n)` | `ble_uniqueness`, `Eval::ble_bool` |
+| `interp`'s own comment | *"Milestone 4 replaces these with the kernel's primitive `ℕ`"* | nothing yet |
+
+Nothing joins the first two: `derived/src/nat/` never mentions `wnat`, and
+`wnat.rs` says the ω-tower is not needed. The numeral bridge's links 1 and 2 were
+built over the second while the checker uses the first, which is why link 4
+cannot be written.
+
+**And the literal has no content.** `interp`'s `Expr::NatLit` arm gives each
+value one `env.declare(0)`; `Shared::lit_syms` says these symbols carry no
+axioms. Whatever representation is chosen, *this* is the line that has to change
+first — every route to `⊢ ⟦Nat.ble 3 5⟧ = ⟦true⟧` goes through relating `lit₃`
+to something.
+
+**Two routes are already closed, by measurement rather than by argument.** A
+bignum bridge is over the wrong carrier for operands the corpus does not have.
+Structural unfolding is affordable (+0.55 % instructions) and worthless (+148
+gaps, and every variant worse); a defining equation per small literal would
+serve 10 sites of 466.
+
 ## 1. What `mini` does with `Nat` today — measured
 
 ### 1.1 The literal clause
