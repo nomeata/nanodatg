@@ -471,10 +471,16 @@ cutover.
 **Size / files:** unknown until (a) is read; an afternoon if it transfers, a
 session if it does not. `derived/`-only, parallel-safe with checker work.
 
-**Payoff:** unblocks the deletion of `enums.rs`, `wnat.rs`, `wlist.rs`,
-`wnat_rec.rs`, `wlist_rec.rs`, `wbool_rec.rs`, `twopoint.rs` and
-`wlist_fun.rs` — one construction in place of eight — and with them the three
-shape recognisers and three `RecBottom` arms in `tg.rs`.
+**Payoff:** unblocks the deletion of `enums.rs`, `wlist.rs`, `wlist_rec.rs`,
+`wbool_rec.rs`, `twopoint.rs` and `wlist_fun.rs` — one construction in place of
+six — and with them two of the shape recognisers and two `RecBottom` arms in
+`tg.rs`.
+
+*Was eight files and three arms. `wnat.rs` and `wnat_rec.rs` are already gone
+(2026-08-11, task #127) and they did not wait for this: `⟦Nat⟧` is von Neumann
+`ω`, so the `Nat` arm is not a W-type recogniser to be subsumed — it is a
+different carrier, and `RecBottom::Nat`'s bottom is `natrec(z,s,b)` with no
+`app` around it. This item can no longer claim it.*
 
 ---
 

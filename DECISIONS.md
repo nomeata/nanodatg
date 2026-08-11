@@ -3452,11 +3452,14 @@ code was written.*
 
 ### There were three carriers, and that is why three tranches failed
 
-| where | what `Nat` is |
-|---|---|
-| `checker/src/tg.rs:1645`, `:1830` | `derived::wnat::Nat` — the **W-type**, zero `⟨inl •, ∅⟩` |
-| `derived/src/nat/` | von Neumann **`ω`**, zero `∅`, binary numerals `num(n)` |
-| `checker/src/tg.rs`'s `Expr::NatLit` arm | **one opaque nullary symbol per value**, carrying no axioms |
+*This table is **history** as of 2026-08-11: rows 1 and 3 are gone, and there is
+one carrier. It is kept because the rest of this entry argues from it.*
+
+| where | what `Nat` was | now |
+|---|---|---|
+| `checker/src/tg.rs:1645`, `:1830` | `derived::wnat::Nat` — the **W-type**, zero `⟨inl •, ∅⟩` | **deleted**, module and suites |
+| `derived/src/nat/` | von Neumann **`ω`**, zero `∅`, binary numerals `num(n)` | **the one carrier** |
+| `checker/src/tg.rs`'s `Expr::NatLit` arm | **one opaque nullary symbol per value**, carrying no axioms | `num(n)`, with `⊢ num(n) ∈ ω` |
 
 The third is the one usually left out of the telling, and it is the reason no
 bridge could be written: `⟦lit 3⟧` is `env.declare(0)` and is related to

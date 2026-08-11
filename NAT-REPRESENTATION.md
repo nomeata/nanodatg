@@ -42,7 +42,7 @@ and §0.1 inventories what already exists for it.**
 
 | where | what `Nat` is | who uses it |
 |---|---|---|
-| `checker/src/tg.rs` | `derived::wnat::Nat::ty`, the W-type, zero `⟨inl •, ∅⟩` | the interpretation, today |
+| ~~`checker/src/tg.rs`~~ | ~~`derived::wnat::Nat::ty`, the W-type, zero `⟨inl •, ∅⟩`~~ — **struck 2026-08-11: deleted, module and all** | nothing |
 | `derived/src/nat/` | von Neumann `ω`, zero `∅`, binary numerals `num(n)` | `ble_uniqueness`, `Eval::ble_bool` |
 | ~~`interp`'s own comment~~ | ~~*"Milestone 4 replaces these with the kernel's primitive `ℕ`"*~~ — **struck**: `TermData` admits symbols only by definitional extension, so the signature stays `{∈, =}`, and `kernel/` is closed | nothing, ever |
 
