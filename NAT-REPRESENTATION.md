@@ -99,21 +99,37 @@ carry `HYP := z ∈ T ∧ s ∈ fs(N, fs(T,T))` (`derived/src/wnat_rec.rs:105`);
 ω's `iota_zero` carries **no hypothesis at all** and `iota_succ` carries only
 `n ∈ ω`. The port removes a premise rather than acquiring one.
 
-### The one genuine gap: `succ` as an *element of a function space*
+### `succ` as an *element of a function space* — the apparent gap, and it is not one
 
 `derived::nat` has no `succ_fun`, no `succ_in_funspace`, no `succ_beta`; there
-is no `fs` anywhere under `derived/src/nat/`. `succ` is a **term-former**, and
+is no `fs` anywhere under `derived/src/nat/`. `succ` is a **term-former**, while
 `tg.rs:7519` wants `⟦Nat.succ⟧ ∈ fs(⟦Nat⟧,⟦Nat⟧)` because a constructor is
-interpreted as a *set function*.
+interpreted as a *set function*. On the identifiers, this is missing.
 
-`mini` does not have this problem and the reason is instructive: it builds
-`⟦Nat.succ⟧` with the **generic λ-nest** (`mini/src/direct.rs:544`, `:658`,
-whose bottom is `succ x` typed by `succ_mem_at`), and gets the β-equation from
-`Interp::beta_spine` (`mini/src/interp.rs:2034`) rather than from a bespoke
-`succ_beta`. So the missing piece is either that λ-nest or a small
-`succ_fun`/`succ_beta` pair on the ω side — **it is the only construction this
-port needs that does not already exist**, and it should be looked for under the
-statement it concludes before being written.
+**On the statement it concludes, it is already in `checker/`** — the fourth time
+that lesson has paid on this seat, and the reason this paragraph replaces one
+that called it "the only construction this port needs that does not already
+exist". Three pieces, all present:
+
+| need | what to call | where |
+|---|---|---|
+| mint the skeleton `λx. succ x` **without a Lean node** | `LamStore::site(who, pre, env, hole_vars, x_canon, skel, k, inert)` — it takes a **skeleton term**, not an `ExprPtr` | `checker/src/lam_store.rs:160` |
+| `⊢ lam(ω) ∈ fs(ω,ω)` | `TgBackend::lam_fs_thm`, over `lam_in_funspace_n` | `checker/src/tg.rs:11615`; `derived/src/ext/lam_typing_n.rs:238` |
+| `⊢ app(lam(ω), n) = succ n` — i.e. `succ_beta` | `TgBackend::beta_thm` | `checker/src/tg.rs` (`Shared::lam_betas`) |
+
+`lam_in_funspace_n` concludes
+
+```text
+⊢ ∀p⃗ ∀A ∀C. ((∀x. (x ∈ A → t(p⃗,x) ∈ C)) → lam(p⃗,A) ∈ fs(A,C))
+```
+
+and at `A := C := ω`, `t(x) := succ x`, **its antecedent is exactly
+`Nat::succ_mem`** — `⊢ ∀n. (n ∈ ω → succ(n) ∈ ω)`, `derived/src/nat/apparatus.rs:174`.
+So the pair is one `LamStore::site`, one `inst_all`, one `mp`.
+
+This is the same route `mini` takes (`lam_nest` at `mini/src/direct.rs:544`,
+`:658`, β from `Interp::beta_spine`), which is why `mini` never needed a bespoke
+`succ_fun` either. **The port has no missing construction. It is assembly.**
 
 ### What `wnat` is actually load-bearing for — the brief on this is wrong
 
@@ -173,7 +189,8 @@ decode a flat 15.
 
 ### The order this implies
 
-1. `succ` as a set function on ω — the only missing construction.
+1. `⟦Nat.succ⟧` as a set function on ω, from `LamStore::site` + `lam_fs_thm` +
+   `beta_thm` discharged by `succ_mem` — assembly, not a new derivation.
 2. Swap `Inductives::nat` and `NatRec` to the ω apparatus; `NatMem` → `omega_mem`;
    `fire_nat` to `iota_zero`/`iota_succ`. **`derived::wnat` stays in the tree
    until `cumul/witness.rs` is moved too** — deleting it is a separate change.
