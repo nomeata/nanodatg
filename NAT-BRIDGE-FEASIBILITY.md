@@ -564,6 +564,59 @@ carried. Two consequences worth recording: `NAT-REPRESENTATION.md` §6.3's
 (V3)/(V4) become statements relating two operations on one carrier — and §10.4's
 worry about the cost of `rep` disappears with `rep`.
 
+**4.6 The chain for one firing, and who owns each link.** `MEASUREMENTS.md`'s
+"Origin 2 is not the bignum bridge" prices closing this at **2 959 gaps**, the
+largest single origin in the ledger. What has to exist, for
+`Bool.rec … (Nat.ble ⟨3⟩ ⟨5⟩) ⟶ Bool.rec … Bool.true ⟶ minor`:
+
+| # | link | state |
+|---|---|---|
+| 1 | `⊢ bleb(t,f,num a,num b) = t` at literal operands | **built** — `derived::nat::Boolean`, `Eval::ble_bool`, 70 inferences at four bits |
+| 2 | `⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` | **not built** — `derived/`, and the sketch is below |
+| 3 | `reduce_rec` recording the major premise's own whnf as a step the backend sees | **not built** — `checker/`, sequenced by the owner |
+
+None of the three is worth anything without the other two, and §1.5's census is
+what says the sizes: link 1 only ever fires at operands ≤ 12 on this file.
+
+*Link 3, precisely, so the plumbing seat does not re-derive it.* `reduce_rec`
+(`checker/src/tc.rs`) does `let major = self.whnf(major);` **internally** and
+returns the ι reduct of the reduced major, while the `redex` its caller records
+still carries the unreduced one. So `TgBackend::derive_iota_core` reads
+`Nat.ble 3 5` off `args[major]` and declines, *however that term reduced* —
+which is why withholding the acceleration moves the origin by zero. The change
+is to emit **two** steps where one is emitted now: `rec ā m ⟶ rec ā m'`, whose
+certificate is `certify_reduct` over the major's own memoised trace lifted by
+`Certifier::app_cong` over the recursor's spine, and then `Rule::Iota` at
+`rec ā m'`, whose major *is* a constructor and which `derive_iota_core` already
+serves. The major's own certificate is `Rule::Admitted(Admit::NatRed)` today
+(`tc.rs:1568`); link 2 is what replaces that admission with a rule.
+
+*Link 2, sketched, with every lemma it needs named.* It is `unique.rs`'s bridge
+at `ble` instead of `add` — same shape, same reason, one more variable:
+
+```text
+⊢ ∀g. ( (∀y ∈ ω. app(app(g,0), y) = t)
+      → ((∀x ∈ ω. app(app(g, succ x), 0) = f)
+      → ((∀x ∈ ω. ∀y ∈ ω. app(app(g, succ x), succ y) = app(app(g,x), y))
+      → ∀x ∈ ω. ∀y ∈ ω. app(app(g,x),y) = bleb(t,f,x,y))))
+```
+
+Induction on `x` with `∀y` **inside** the motive, so the inductive hypothesis is
+usable at `y'`; the step then case-splits on `y` by an inner induction whose own
+hypothesis is ignored. Four cases, and each needs one existing lemma:
+
+* `x = 0` — premise 1, against `bleb(t,f,0,y) = boolify(t,f,ble(0,y)) = t` by
+  [`Compare::ble_zero_l`] and [`Boolean::boolify_one`].
+* `x = succ x'`, `y = 0` — premise 2, against `ble(succ x', 0) = 0` from
+  `Sub::sub_zero` then `Sub::iszero_succ`, and [`Boolean::boolify_zero`].
+* `x = succ x'`, `y = succ y'` — premise 3, then the outer hypothesis at `y'`,
+  against `ble(succ x', succ y') = ble(x', y')` from `Sub::sub_succ_succ`.
+
+**And the three premises are already available from the export.** §2.5 measures
+`natBleZ`, `natBleSZ` and `natBleSS` — exactly these three clauses — as
+certified by `mini` today, from `Nat.ble`'s own `brecOn` nest. That is the half
+of §4.4's tripwire that has fired, read at `ble` rather than at `add`.
+
 ---
 
 ## 5. Reproducing
@@ -606,12 +659,18 @@ worry about the cost of `rep` disappears with `rep`.
    conversions are comparisons at `2⁶⁴`" — was the mistake, and it is §1.5's
    subject: that is the acceptance demand, not the certification demand.
 
-   What replaces it is the **consumer**. `derived::nat::Eval::{ble, beq}` is
-   built, certified and called by nothing outside `derived/tests/nat.rs`;
-   `checker/src/tg.rs` does not reach `derived::nat` at all. And `Compare` is
-   ω-valued (`succ 0`/`0`) where the 466 blocked firings need
-   `⟦Nat.ble a b⟧ = ⟦Bool.true⟧` — there is no occurrence of `Bool` anywhere in
-   `derived/src/nat/`. That bridge is the missing piece, not the arithmetic.
+   What replaces it is the **consumer**, and it is the thirteenth instance of
+   this project's oldest failure: `derived::nat::Eval::{ble, beq}` was built,
+   certified and called by nothing outside `derived/tests/nat.rs`, and
+   `checker/src/tg.rs` does not reach `derived::nat` at all. The reason it could
+   not be called was real rather than an oversight — `Compare` is ω-valued
+   (`succ 0`/`0`) where the 466 blocked firings need `⟦Bool.true⟧`, and there
+   was no occurrence of `Bool` anywhere in `derived/src/nat/` because
+   `derived/` may not learn what `Bool` is.
+   `derived::nat::Boolean` closes that: the decode takes the two values as
+   arguments, costs **fifteen inferences flat**, and `Eval::ble_bool` evaluates
+   it at numerals for `12·bits + 22`, so **70 at four bits**. §4.6 is the chain
+   it sits in and names the two links still missing.
 3. **Whether any `Nat.rec` in `init-prelude` iterates over a large literal.**
    Still open, and `NAT-REPRESENTATION.md` §10.2 is still the statement of it.
    §1 narrows it: the two fatal sites are `decide`-shaped, so the *known*

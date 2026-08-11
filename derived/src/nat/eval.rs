@@ -66,6 +66,7 @@ use crate::prim::{self, Shape};
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
+use super::boolean::Boolean;
 use super::compare::Compare;
 use super::mul::Mul;
 
@@ -199,6 +200,35 @@ impl<'a> Eval<'a> {
         let lhs = Term::apply(f, vec![a.clone(), r.clone()]);
         let phi = Formula::eq(lhs.clone(), Term::apply(f, vec![Term::var(x), r.clone()]));
         let leib = Thm::eq_leibniz(a, b, x, phi);
+        self.meter.0 += 1;
+        let step = prim::mp(&leib, ab)?;
+        self.meter.0 += 1;
+        let refl = Thm::eq_refl(lhs);
+        self.meter.0 += 1;
+        let out = prim::mp(&step, &refl)?;
+        self.meter.0 += 1;
+        Ok(out)
+    }
+
+    /// `⊢ f(…,a,…) = f(…,b,…)` from `⊢ a = b`, rewriting argument `i` of a
+    /// symbol of any arity. Four primitives.
+    fn congr_at(
+        &mut self,
+        env: &mut Env,
+        f: FnSym,
+        args: &[Term],
+        i: usize,
+        ab: &Thm,
+    ) -> DResult<Thm> {
+        let (a, b) = ab.concl().eq_parts()?;
+        if args.get(i) != Some(&a) {
+            return Err(decline!("argument `i` is not the equation's left side"))
+        }
+        let x = env.fresh_var();
+        let lhs = Term::apply(f, args.to_vec());
+        let mut hole = args.to_vec();
+        hole[i] = Term::var(x);
+        let leib = Thm::eq_leibniz(a, b, x, Formula::eq(lhs.clone(), Term::apply(f, hole)));
         self.meter.0 += 1;
         let step = prim::mp(&leib, ab)?;
         self.meter.0 += 1;
@@ -439,6 +469,99 @@ impl Eval<'_> {
         }
         let back = self.symm(env, &self.bin.double1_zero.clone())?;
         self.trans(env, &raw, &back)
+    }
+
+    /// `⊢ bleb(t,f,num a, num b) = t` if `a ≤ b`, `= f` otherwise.
+    pub fn ble_bool(
+        &mut self,
+        env: &mut Env,
+        bl: &Boolean,
+        t: &Term,
+        f: &Term,
+        a: u128,
+        b: u128,
+    ) -> DResult<Thm> {
+        self.decide_bool(env, bl, t, f, a, b, State::Le)
+    }
+
+    /// `⊢ bltb(t,f,num a, num b) = t` if `a < b`, `= f` otherwise.
+    pub fn blt_bool(
+        &mut self,
+        env: &mut Env,
+        bl: &Boolean,
+        t: &Term,
+        f: &Term,
+        a: u128,
+        b: u128,
+    ) -> DResult<Thm> {
+        self.decide_bool(env, bl, t, f, a, b, State::Lt)
+    }
+
+    /// `⊢ beqb(t,f,num a, num b) = t` if `a = b`, `= f` otherwise.
+    pub fn beq_bool(
+        &mut self,
+        env: &mut Env,
+        bl: &Boolean,
+        t: &Term,
+        f: &Term,
+        a: u128,
+        b: u128,
+    ) -> DResult<Thm> {
+        self.decide_bool(env, bl, t, f, a, b, State::Eq)
+    }
+
+    /// [`Eval::compare`], decoded into the caller's two values.
+    ///
+    /// It goes through [`Eval::compare`] and **not** [`Eval::decide`]: the
+    /// equations produce `succ 0`, which is exactly what
+    /// [`Boolean::boolify_one`] is stated at, so putting the value back into
+    /// numeral form and taking it out again would be seven inferences spent to
+    /// return to where it started.
+    ///
+    /// Twenty-two inferences on top of [`Eval::compare`], whatever the operands
+    /// — two instantiations, one congruence and two transitivities — against the
+    /// seven [`Eval::decide`] spends renormalising, so a decoded comparison is
+    /// **fifteen** more than the undecoded one at every width. Measured
+    /// (`derived/tests/nat.rs`): `12·bits + 22`, so **70 at four bits** against
+    /// 790 at sixty-four.
+    fn decide_bool(
+        &mut self,
+        env: &mut Env,
+        bl: &Boolean,
+        t: &Term,
+        f: &Term,
+        a: u128,
+        b: u128,
+        st: State,
+    ) -> DResult<Thm> {
+        let raw = self.compare(env, a, b, st)?;
+        let (lhs, value) = raw.concl().eq_parts()?;
+        let (zero, one) = (self.nat.zero(), self.nat.succ_of(self.nat.zero()));
+        // `compare` returns one of exactly two values. Anything else is a defect
+        // in this file rather than a refusal of the caller's, and it must not be
+        // decoded to `f` by falling through.
+        let end = if value == one {
+            bl.boolify_one.clone()
+        } else if value == zero {
+            bl.boolify_zero.clone()
+        } else {
+            return Err(decline!("the comparison did not evaluate to `succ 0` or `0`"))
+        };
+
+        let (na, nb) = (self.numeral(a), self.numeral(b));
+        let ax = match st {
+            State::Le => &bl.bleb_ax,
+            State::Lt => &bl.bltb_ax,
+            State::Eq => &bl.beqb_ax,
+        };
+        // `⊢ symb(t,f,num a,num b) = boolify(t,f,cmp(num a,num b))`.
+        let unfold = self.inst(&ax.clone(), &[t.clone(), f.clone(), na, nb])?;
+        // `⊢ boolify(t,f,cmp(num a,num b)) = boolify(t,f,value)`.
+        let inner =
+            self.congr_at(env, bl.boolify, &[t.clone(), f.clone(), lhs], 2, &raw)?;
+        let out = self.trans(env, &unfold, &inner)?;
+        let closed = self.inst(&end, &[t.clone(), f.clone()])?;
+        self.trans(env, &out, &closed)
     }
 
     /// One pass over the bits of both arguments, in the state `st`.

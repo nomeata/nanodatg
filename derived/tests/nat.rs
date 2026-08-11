@@ -845,3 +845,169 @@ fn peeling_a_successor_costs_bits_and_not_the_value() {
     eprintln!("MEASURED  succ at an even numeral (2^16 … 2^100) = {} inferences, flat", even[0]);
     eprintln!("MEASURED  succ at all-ones 16/32/64 bits = {at16}/{at32}/{at64} inferences");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The two-valued decode: `ω`'s `succ 0`/`0` to a caller-supplied pair.
+//
+// Everything here uses **free variables** for the two values, never numerals.
+// That is the point of the construction and it is also the only way the test
+// can fail honestly: with `t := num 1` and `f := num 0` the decode is the
+// identity on the comparison's own output, every assertion below passes
+// vacuously, and a `boolify` that ignored its third argument would survive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use derived::nat::Boolean;
+
+fn bool_fixture(env: &mut Env) -> (Nat, Add, Binary, Mul, Sub, Compare, Boolean) {
+    let (nat, add, bin, mul, sb, cmp) = cmp_fixture(env);
+    let bl = Boolean::new(env, &nat, &cmp).expect("the two-valued decode");
+    (nat, add, bin, mul, sb, cmp, bl)
+}
+
+/// Every theorem `Boolean` exports is unconditional. Field-exhaustive, so a new
+/// field cannot slip past.
+#[test]
+fn the_bool_decode_exports_nothing_hypothetical() {
+    let mut env = Env::new();
+    let (_nat, _add, _bin, _mul, _sb, _cmp, bl) = bool_fixture(&mut env);
+    let Boolean {
+        boolify: _,
+        boolify_ax,
+        boolify_zero,
+        boolify_one,
+        bleb: _,
+        bleb_ax,
+        bltb: _,
+        bltb_ax,
+        beqb: _,
+        beqb_ax,
+    } = &bl;
+    let fields: [&Thm; 6] =
+        [boolify_ax, boolify_zero, boolify_one, bleb_ax, bltb_ax, beqb_ax];
+    assert!(all_unconditional(&fields), "a `Boolean` field carries a hypothesis");
+    for t in fields {
+        assert!(kernel::thm::debug_locally_closed(t.concl()));
+    }
+}
+
+/// The two decode equations fire at values about which nothing is known, and
+/// they disagree — which is `succ 0 ≠ 0` and nothing else.
+#[test]
+fn the_decode_reads_both_values_off_one_graph() {
+    let mut env = Env::new();
+    let (nat, _add, _bin, _mul, _sb, _cmp, bl) = bool_fixture(&mut env);
+    let (tv, fv) = (env.fresh_var(), env.fresh_var());
+    let (t, f) = (Term::var(tv), Term::var(fv));
+    assert_ne!(t, f, "the two values must be distinguishable for this to test anything");
+
+    let (zero, one) = (nat.zero(), nat.succ_of(nat.zero()));
+    let at_one = derived::inst_all(&bl.boolify_one, &[t.clone(), f.clone()])
+        .expect("boolify at succ 0");
+    let at_zero = derived::inst_all(&bl.boolify_zero, &[t.clone(), f.clone()])
+        .expect("boolify at 0");
+    assert!(at_one.hyps().is_empty() && at_zero.hyps().is_empty());
+    assert_eq!(
+        *at_one.concl(),
+        Formula::eq(bl.boolify_of(t.clone(), f.clone(), one), t.clone())
+    );
+    assert_eq!(
+        *at_zero.concl(),
+        Formula::eq(bl.boolify_of(t.clone(), f.clone(), zero), f.clone())
+    );
+}
+
+/// **The population, decoded.** Every pair the `init-prelude` census names —
+/// 55 distinct `Nat.ble` instances, every operand ≤ 12 — plus `blt` and `beq`
+/// over the same square, at two values that are not numerals.
+///
+/// `MEASUREMENTS.md`, "Origin 2 is not the bignum bridge": these operands are
+/// the whole of the second-largest origin in the gap ledger, and the reason
+/// this test stops at 12 rather than at 2⁶⁴ is that 2⁶⁴ is 8 firings of 643.
+#[test]
+fn the_decode_computes_over_the_whole_init_prelude_population() {
+    let mut env = Env::new();
+    let (nat, add, bin, mul, _sb, cmp, bl) = bool_fixture(&mut env);
+    let (tv, fv) = (env.fresh_var(), env.fresh_var());
+    let (t, f) = (Term::var(tv), Term::var(fv));
+
+    let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+    ev.enable_compare(&cmp);
+    let mut trues = 0u32;
+    let mut falses = 0u32;
+    for a in 0u128..=12 {
+        for b in 0u128..=12 {
+            for (thm, hit, name, sym) in [
+                (ev.ble_bool(&mut env, &bl, &t, &f, a, b), a <= b, "bleb", bl.bleb),
+                (ev.blt_bool(&mut env, &bl, &t, &f, a, b), a < b, "bltb", bl.bltb),
+                (ev.beq_bool(&mut env, &bl, &t, &f, a, b), a == b, "beqb", bl.beqb),
+            ] {
+                let thm = thm.unwrap_or_else(|e| panic!("{name} {a} {b}: {e}"));
+                assert!(thm.hyps().is_empty(), "{name} {a} {b} kept a hypothesis");
+                let want = if hit { t.clone() } else { f.clone() };
+                if hit { trues += 1 } else { falses += 1 }
+                let lhs = Term::apply(sym, vec![
+                    t.clone(),
+                    f.clone(),
+                    ev.numeral(a),
+                    ev.numeral(b),
+                ]);
+                assert_eq!(
+                    *thm.concl(),
+                    Formula::eq(lhs, want),
+                    "{name} {a} {b} decoded the wrong way"
+                );
+            }
+        }
+    }
+    // Both outcomes are exercised in bulk, so a decode that ignored its input
+    // and returned one value throughout cannot pass.
+    assert!(trues > 100 && falses > 100, "the square did not exercise both outcomes");
+}
+
+/// **The measurement.** The decode is a *constant* on top of the comparison,
+/// and at the width the population actually lives at that constant is most of
+/// the cost — which is the number the tranche should be priced on.
+#[test]
+fn the_decode_costs_a_constant_on_top_of_the_comparison() {
+    let mut env = Env::new();
+    let (nat, add, bin, mul, _sb, cmp, bl) = bool_fixture(&mut env);
+    let (tv, fv) = (env.fresh_var(), env.fresh_var());
+    let (t, f) = (Term::var(tv), Term::var(fv));
+
+    let mut overheads = Vec::new();
+    for w in [1u32, 2, 4, 8, 16, 32, 64] {
+        let n = (1u128 << w) - 1;
+        let mut bare = Eval::with_mul(&nat, &add, &bin, &mul);
+        bare.enable_compare(&cmp);
+        bare.ble(&mut env, n, n).expect("ble");
+        let mut deco = Eval::with_mul(&nat, &add, &bin, &mul);
+        deco.enable_compare(&cmp);
+        deco.ble_bool(&mut env, &bl, &t, &f, n, n).expect("ble_bool");
+        let (b, d) = (bare.inferences(), deco.inferences());
+        eprintln!(
+            "MEASURED  ble_bool at two {w}-bit numerals = {d} kernel inferences \
+             ({b} for the undecoded `ble` + {} for the decode)",
+            d - b
+        );
+        overheads.push(d - b);
+    }
+    let first = overheads[0];
+    assert!(
+        overheads.iter().all(|o| *o == first),
+        "the decode overhead is not flat in the width: {overheads:?}"
+    );
+
+    // The population: four bits, both outcomes. This is the figure
+    // `MEASUREMENTS.md` prices the tranche on.
+    for (a, b) in [(3u128, 5u128), (12, 8)] {
+        let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+        ev.enable_compare(&cmp);
+        ev.ble_bool(&mut env, &bl, &t, &f, a, b).expect("ble_bool at the population");
+        eprintln!("MEASURED  ble_bool {a} {b} = {} kernel inferences", ev.inferences());
+        assert!(
+            ev.inferences() < 200,
+            "a four-bit decoded comparison cost {} inferences",
+            ev.inferences()
+        );
+    }
+}
