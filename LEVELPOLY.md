@@ -966,13 +966,13 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 23 as of the first eliminator,
+   # de-scheduled route certifies end to end. 24 as of the u₁ = 0 split,
    # and **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
    # `$?` must be its own statement: `echo "$(basename $f) $?"` reports
    # `basename`'s exit status, which reads as 89 clean files.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 23 × 0, 66 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 24 × 0, 65 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1456,6 +1456,69 @@ calls are the *other* half of their obstacle. So the collapse is the next
 tranche's unit of work and it should be built once, at `Interp`, rather than
 per route — which is why `level_nonzero` and `pi_dprod_at` were landed there
 and not inside `rec_dep`.
+
+##### The split, built — and the three bullets above re-measured
+
+The clause landed as `rec_dep::split_bottom`. Of the three costs above: **one
+was real and mis-sized, two were not spent at all, and the cost that actually
+stopped the build was on nobody's list.** Seventh size correction on this
+branch, and again not a feasibility one.
+
+| | + `rec_dep` de-grounded | **+ the `u₁ = 0` split** |
+|---|---|---|
+| zone-B constants owed | 362 | 362 |
+| interpreted at their own levels | 121 | **136** |
+| `recursor(…: the u₁ = 0 split …)` | 27 | **0** |
+| `recursor(…: a minor premise …)` | — | **12** |
+| `symbolic-level` | 208 | 208 |
+| whole exports certified | 23 of 89 | **24 of 89** (`032_bool`) |
+
+`27 = 15 + 12` exactly. `Bool` (12 constants) and `Color` (3) certify; `N` (7),
+`TwoBool` (2), `RTree` (2) and `TypeWithTypeField` (1) do not, and **every one
+of those four has a field-carrying constructor**. That is the whole of the
+`as_pi` frontier here: a field-free constructor's minor premise has no binder
+to be blind at.
+
+* **`Srt::transitive`/`Srt::empty_mem` — needed, and by induction rather than
+  `Order::cases`.** `crate::levels::order` never becomes a parameter of
+  `levels/srt.rs`: an induction hands the successor over already spelled where
+  `cases` makes the caller eliminate an existential and carry `n = succ m`
+  through three occurrences of `srt(n)` under two binders. Rung 0 is the
+  content — `U₀ = {0,1}` is not a universe, is transitive because proof
+  irrelevance makes every member of a member `•`, and holds `∅` because `0`
+  **is** `∅`.
+* **The `cndd` registration — still not needed, and now for a measured
+  reason.** The `Prop` arm never reaches `as_pi` on the 15 that certify, and
+  the one collapse it does need is not at a binder: `⟦Sort u₁⟧ = U₀`
+  (`Interp::sort_u0_at`), spent where `minor_at` reaches proof irrelevance,
+  because `point_of_proof` is stated over `U₀` and a field-free constructor's
+  minor arrives as a scope *variable* rather than as `•`. The registration is
+  what the remaining 12 want.
+* **The recursion over the level expression — not spent, and the reason is the
+  `∀n ∈ ω`.** The nonzero arm needs **no** guard at all. `DepRecursor` hides
+  its target behind `COD(C,V)`, and the two new `Srt` facts discharge `COD` at
+  `srt(û₁)` for *every* `û₁ ∈ ω`, so `pre_at` and `dep_bottom` build at a
+  variable rung unchanged. The `imax`/`max_ub` recursion is real and is,
+  again, what the remaining 12 want — it belongs with the `cndd` registration
+  in one `Interp`-level "collapse this binder under this guard" clause.
+* **The cost nobody listed, and it was the one that stopped the build.**
+  `derived::define_abbrev` refuses a body with a free variable outside its
+  prefix; at a variable rung the eliminator's term mentions `û`, so
+  `dep_bottom` answered `TERM` — a message that reads like a wiring fault and
+  is a level-threading one. `Interp::level_var_prefix` is the fix, and
+  `LevelVar::v` had been kept for exactly it (step 5, obstacle 3).
+
+**The shape claim survives and was right**: two arms, two hypotheses, joined by
+`Ite0` (`Interp::ite0_merge` — two Leibniz steps and Clavius, needing no
+decidability), and unlike the `Π` clause the `ite0` relocates the split rather
+than removing it. `⟦T.rec.{u}⟧` is `ite0(û₁, •, drec t)`, whose value at every
+instantiation is §6.2's own: **one interpretation, at every point of the level
+space at once**, which is this strand's objective stated as a term.
+
+Gate baselines move to **24 × exit 0, 65 × exit 4, 2 × exit 2** and
+`zoneBOk = 136 / 362`; `open` is 0 on every file, the accounting identity
+`zone_b_ok + Σ zone_b_blocked == zone_b_consts` holds, and Gate A is
+byte-identical against a build of the parent commit.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

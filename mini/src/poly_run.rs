@@ -118,14 +118,19 @@
 //! [`crate::interp::Interp::level_nonzero`] settles it outright and
 //! [`crate::interp::Interp::pi_dprod_at`] takes the term back to the product.
 //!
-//! What is left is measured in `crate::rec_dep::motive_level_of`'s header and
-//! it is **larger than `sort_of` and `utower`**, both of which exist and
-//! neither of which is the obstacle: [`crate::interp::Interp::as_pi`]
-//! dispatches on a term's head symbol, that head is `ite0` at every binder
-//! whose codomain level mentions `u₁` — which is every binder of every minor
-//! premise — and its **42 call sites in 20 modules** are blind there. That is
-//! one frontier shared by this queue and by the ~70 eliminators whose
-//! declaration is itself polymorphic, not a cost `rec_dep` pays alone.
+//! **The split then landed, and this paragraph's sizing of what was left was
+//! wrong — recorded because getting it wrong twice would be worse.** It said
+//! the remaining cost was `Interp::as_pi`'s 42 blind call sites, at *every*
+//! binder of *every* minor premise. `crate::rec_dep::split_bottom` runs both
+//! clauses under their own hypotheses and merges them with `Ite0`; the nonzero
+//! arm needs no collapse (`COD` is discharged at `srt(û₁)` for every `û₁ ∈ ω`
+//! by the two `Srt` facts) and the zero arm needs one, `⟦Sort u₁⟧ = U₀`. The
+//! `zoneBOk` column moved 121 → 136 and the 27 split rows became 15
+//! certifications and 12 declines. Those 12 are the `as_pi` frontier, and every
+//! one of them is a declaration with a **field-carrying** constructor — the
+//! only shape whose minor premise has a binder to be blind at. It is still one
+//! frontier shared with the ~70 declaration-polymorphic eliminators; it was
+//! never the whole of the eliminator clause.
 //!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
@@ -1180,6 +1185,97 @@ mod tests {
                 led.rows()
             );
         }
+    }
+
+    /// **A class-(T) eliminator is *one* term at a symbolic motive level** —
+    /// `crate::rec_dep::split_bottom`, and the strand's objective stated as a
+    /// test: every Lean term has one interpretation, with the level parameter
+    /// an element of `ω`.
+    ///
+    /// `T.rec.{u}` is `•` where `u` is `0` and `drec t` where it is not, and at
+    /// a parameter it is **neither and both** — the conditional
+    /// `ite0(û, •, drec t)`, whose value at each instantiation is §6.2's own.
+    /// Both clauses are built, each under its own kernel hypothesis, and joined
+    /// by `Interp::ite0_merge`.
+    ///
+    /// # What is asserted, and why none of it can go red on progress
+    ///
+    /// This is a **positive** fixture throughout: the declaration certifies,
+    /// so there is no reason string in it to rot. `zone_b_ok == zone_b_consts`
+    /// at 5 of 5 — the type former, three constructors and the eliminator —
+    /// with `is_clean()` and `open == 0`, and `⟦T.rec.{u}⟧` addressable at the
+    /// recursor's own instantiation rather than the declaration's.
+    ///
+    /// The last assertion is the soundness one and it is the only negative:
+    /// `IndApparatus::dep_elims` must hold **nothing** for this eliminator.
+    /// `dep_bottom` files an equation `sym(…) = app(drec,t)` there for
+    /// `crate::iota_dep` to reduce through; on this path `⟦T.rec⟧` is the
+    /// conditional and not `drec`, so that equation would be true about its own
+    /// symbol and *wrong* about the interpretation. A stored fact that is wrong
+    /// about the thing it is filed under is discovered nowhere, which is
+    /// exactly the class `crate::ev::Sealed` exists to keep out.
+    ///
+    /// Three constructors, so `decl_rect` is a real structural induction with
+    /// three steps rather than a shape two atoms could imitate.
+    #[test]
+    fn an_eliminator_is_one_conditional_term_at_a_symbolic_motive_level() {
+        let (env, d) = nullary_ind(&["a", "b", "c"]);
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!(
+            (led.zone_b_ok, led.zone_b_consts),
+            (5, 5),
+            "the type former, three constructors and T.rec, all interpreted: {:?}",
+            led.rows()
+        );
+        assert!(led.is_clean(), "{:?}", led.rows());
+        assert_eq!(led.open, 0, "the split's two assumptions were both discharged");
+        owed_is_met_or_explained(&led);
+
+        let t = n("T");
+        let rec = Name::str(&t, "rec");
+        let lps = env.get(&rec).expect("T.rec is generated").lparams().to_vec();
+        let own: Vec<Level> = lps.iter().map(|u| Level::param(*u)).collect();
+        let key = (rec, crate::ground::key_levels(&own));
+        assert!(
+            ip.get_const(&key).is_some(),
+            "⟦T.rec.{{u}}⟧ at a symbolic motive level: {:?}",
+            led.rows()
+        );
+        // **The bottom of the nest is the conditional itself**, which is the
+        // assertion the objective actually names and the only one a
+        // "took one clause and called it the interpretation" mutation fails.
+        // Descend the λ-nest by body shape — five levels, one per binder of
+        // `∀ C S⃗ t` — and read the head symbol off what is left.
+        //
+        // Head symbol, not "mentions an `ite0`": `⟦Sort u⟧` is *itself* an
+        // `ite0` and occurs all over this nest, so an occurrence test is green
+        // under every mutation. The bottom is `sym(û,p⃗,C,S⃗,t)` if one clause
+        // was taken and `ite0(û, •, sym(…))` if both were.
+        {
+            let stored = ip.get_const(&key).expect("⟦T.rec.{u}⟧").term.clone();
+            let ite0 = ip.levels().expect("the ω-vocabulary").i.sym;
+            let mut cur = stored;
+            let mut depth = 0;
+            while let Some((site, _)) = ip.as_lam(&cur) {
+                cur = site.skel.clone();
+                depth += 1;
+            }
+            assert_eq!(depth, 5, "the nest binds the motive, three minors and the major premise");
+            let (head, args) = ip.parts_of(&cur).expect("the bottom is an application");
+            assert_eq!(
+                head, ite0,
+                "the eliminator's bottom must be §1.4's conditional, not one of its arms"
+            );
+            assert_eq!(args.len(), 3, "ite0(guard, proof clause, value clause)");
+            assert_ne!(args[1], args[2], "the two clauses must not be the same term");
+        }
+        // …and the ι-reduction table must not have been told the eliminator is
+        // `drec`, because here it is not.
+        assert!(
+            ip.ind_apparatus().is_some_and(|a| !a.dep_elims.contains_key(&key)),
+            "the split path must file no dep_elim: ⟦T.rec⟧ is the conditional, not drec"
+        );
     }
 
     /// **A `mutual` block is recorded and never handed to `zoneb::ensure`** —

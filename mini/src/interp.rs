@@ -1991,6 +1991,212 @@ impl Interp {
         (*out.concl() == want).then_some(out)
     }
 
+    /// **The two arms of a `u = 0` split, merged into one term** — from
+    /// `Γ ⊢ ĝ = ∅ → φ(a)` and `Γ ⊢ ¬(ĝ = ∅) → φ(b)`, conclude `Γ ⊢ φ(ite0(ĝ,a,b))`.
+    ///
+    /// # This is what "one interpretation" costs at an undecidable guard
+    ///
+    /// §1.4's conditional is how a level parameter's case analysis is
+    /// *evaluated in the model* instead of by the translator. Everywhere the
+    /// guard is a successor, [`Interp::level_nonzero`] settles it and no split
+    /// happens. Where it is `û` itself — the eliminator's `u₁`, §6.2's own
+    /// split — neither branch may be taken, so both are run under their own
+    /// kernel hypothesis and this is the join: the term is the `ite0`, and its
+    /// property holds at every instantiation because it holds under each half
+    /// of excluded middle.
+    ///
+    /// The join is classical and cheap. `Ite0::when_zero`/`when_nonzero` carry
+    /// `φ(a)` and `φ(b)` onto `φ(m)` under their respective guards, and
+    /// [`derived::clavius`] closes `¬φ(m) → φ(m)`; nothing here needs the
+    /// guard to be decidable, which is exactly the point.
+    ///
+    /// `phi` is the property with `w` for the hole. Both premises are checked
+    /// against the shape claimed, so an arm proved about some other formula is
+    /// a `None` and never a theorem about the wrong term.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ite0_merge(
+        &mut self,
+        g: &Term,
+        a: &Term,
+        b: &Term,
+        w: FreeVar,
+        phi: &Formula,
+        hz: &Thm,
+        hn: &Thm,
+    ) -> Option<Thm> {
+        let lp = self.levels()?;
+        let is_zero = Formula::eq(g.clone(), lp.zero());
+        let not_zero = Formula::not(is_zero.clone());
+        if *hz.concl() != Formula::imp(is_zero.clone(), phi.subst(w, a))
+            || *hn.concl() != Formula::imp(not_zero.clone(), phi.subst(w, b))
+        {
+            return None
+        }
+        let m = lp.i.at(g.clone(), a.clone(), b.clone());
+        let goal = phi.subst(w, &m);
+        let args = [g.clone(), a.clone(), b.clone()];
+
+        // Under each guard the conditional *is* that branch, so `φ` transports
+        // onto the merged term by one Leibniz step per arm.
+        let arm = |ip: &mut Self, rule: &Thm, branch: &Term, hyp: &Thm| -> Option<Thm> {
+            let eq = derived::inst_all(rule, &args)?;
+            let sym = derived::recursion::hyp_eq_symm(&mut ip.core.env_mut(), &eq)?;
+            let leib = Thm::eq_leibniz(branch.clone(), m.clone(), w, phi.clone());
+            derived::hyp_mp(&derived::syl(&sym, &leib)?, hyp)
+        };
+        let p_zero = arm(self, &lp.i.when_zero, a, hz)?;
+        let p_nonzero = arm(self, &lp.i.when_nonzero, b, hn)?;
+
+        // `¬φ(m) → ¬(ĝ = ∅) → φ(m)`, then Clavius.
+        let chain = derived::syl(&derived::contrapos(&p_zero)?, &p_nonzero)?;
+        let out = Thm::mp(&derived::clavius(goal.clone()), &chain)?;
+        (*out.concl() == goal).then_some(out)
+    }
+
+    /// **`Γ ⊢ ⟦Sort ℓ⟧ = U₀`, unlocked by `Γ ⊢ ℓ̂ = ∅`** — the `Prop` half of
+    /// §1.4's collapse, and the mirror of [`Interp::pi_dprod_at`].
+    ///
+    /// Where [`Interp::level_nonzero`] settles a *successor* guard with no case
+    /// analysis, this is the branch that cannot be settled and has to be
+    /// **assumed**: `û₁` itself is zero at some instantiations and not at
+    /// others, so the eliminator's `u₁ = 0` split runs each clause under its own
+    /// kernel hypothesis and this is what the zero one buys. `⟦Sort ℓ⟧` is
+    /// `srt(ℓ̂)`, one Leibniz step carries `ℓ̂` to `∅` inside it, and
+    /// `Srt::at_zero` — the `ite0` guard taken, not the ladder — finishes at
+    /// `U₀`. That is Lean's `Prop`, which is the whole content: at `u₁ = 0` an
+    /// eliminator is a *proof*, and proof irrelevance is stated over `U₀`.
+    ///
+    /// A numeral level answers only at `0`, and by reflexivity: `sort_of`
+    /// already spells it `U₀` there, and any other numeral is not zero however
+    /// the caller assumed it.
+    ///
+    /// Nothing is trusted: the premise must be the equation this level's own
+    /// term is zero at, and the conclusion is compared against the equation
+    /// expected.
+    pub fn sort_u0_at(&mut self, l: &Level, vars: &LevelVars, zero: &Thm) -> Option<Thm> {
+        let u0 = self.sort(0);
+        if let Some(n) = crate::ground::as_numeral(l) {
+            return (n == 0).then(|| Thm::eq_refl(u0))
+        }
+        let t = self.level_term(l, vars)?;
+        let lp = self.levels()?;
+        if *zero.concl() != Formula::eq(t.clone(), lp.zero()) {
+            return None
+        }
+        // `srt(ℓ̂) = srt(∅)`: the hole occurs twice in the `ite0` application
+        // and `eq_leibniz` rewrites both, which is why this is one step.
+        let w = self.fresh_var();
+        let src = lp.srt_at(t.clone());
+        let congr = derived::mpd_const(
+            &Thm::eq_leibniz(
+                t,
+                lp.zero(),
+                w,
+                Formula::eq(src.clone(), lp.srt_at(Term::var(w))),
+            ),
+            &Thm::eq_refl(src.clone()),
+        )?;
+        let at_zero = Thm::mp(&congr, zero)?;
+        let out = derived::eq_trans(&mut self.core.env_mut(), &at_zero, &lp.s.at_zero)?;
+        (*out.concl() == Formula::eq(src, u0)).then_some(out)
+    }
+
+    /// **The declaration's ω-variables as an abstraction prefix**, in a
+    /// deterministic order — empty on the scheduled path.
+    ///
+    /// [`derived::define_abbrev`] refuses a body with a free variable outside
+    /// its prefix, and at a variable rung *every* term this route names
+    /// mentions `û` — `⟦Sort u₁⟧` is `srt(û)` and the eliminator's own term is
+    /// built over it. So an abbreviation minted over the nest's binders alone
+    /// is `None`, which is what `crate::rec_dep::dep_bottom` measured before
+    /// this existed. [`LevelVar::v`] was kept for exactly this (§5.3 step 5,
+    /// obstacle 3).
+    ///
+    /// **Ascending [`FreeVar`], and not the map's iteration order.** A
+    /// `HashMap`'s order is not reproducible and this prefix is part of a
+    /// symbol's arity, so two runs must agree. `Name` deliberately has **no**
+    /// `Ord` — its pointer order is allocation order, which is not stable
+    /// across runs and `crate::expr` says so — while `FreeVar` is minted by
+    /// [`crate::kernel::Checker::poly`] in the declaration's own `uparams`
+    /// order, so ascending variable order *is* declaration order and needs no
+    /// second table to say so.
+    pub fn level_var_prefix(&self, vars: &LevelVars) -> Vec<LevelVar> {
+        let mut out: Vec<LevelVar> = vars.values().cloned().collect();
+        out.sort_by_key(|lv| lv.v);
+        out
+    }
+
+    /// **`Γ ⊢ ∅ ∈ ⟦Sort ℓ⟧` at any level** — `Rung::empty_mem` where `ℓ` is a
+    /// numeral, `Srt::empty_mem` where it is not.
+    ///
+    /// One of the two facts a `COD` obligation spends
+    /// ([`crate::rec_dep::cod_at_rung`]), and half of what
+    /// `derived::levels::srt` gained for this route. The quantified half is one
+    /// instantiation and one `mp`, exactly as [`Interp::sort_typing_of`]'s is,
+    /// so the conclusion carries precisely the `uᵢ ∈ ω` of the parameters `ℓ`
+    /// mentions.
+    ///
+    /// The conclusion is compared against [`Interp::sort_of`] at the same
+    /// level, which is what makes the two branches one vocabulary to the
+    /// caller: whichever spelling `sort_of` hands out, this is a membership in
+    /// *that* set.
+    pub fn rung_empty_mem(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        let want_set = self.sort_of(l, vars)?;
+        let out = match crate::ground::as_numeral(l) {
+            Some(n) => self.prelude.tower.at(n as usize)?.empty_mem.clone(),
+            None => {
+                let t = self.level_term(l, vars)?;
+                let mem = self.level_in_omega(l, vars)?;
+                let lp = self.levels()?;
+                Thm::mp(&derived::inst_all(&lp.s.empty_mem, std::slice::from_ref(&t))?, &mem)?
+            }
+        };
+        // **`Interp::point`, not `levels()?.zero()`.** They are the same term
+        // — `Ite0` is built over the tower's own `∅`, which is what `srt`'s
+        // constructor guards — but asking the ω-apparatus for it would *build*
+        // it, and the apparatus is pinned to `Checker::poly`'s route entry
+        // because `level_poly` declares symbols off the shared `Env`. A
+        // numeral caller must reach the end of this function without ever
+        // touching it, and `the_scheduled_path_gets_the_ground_rung_and_builds_
+        // no_apparatus` is what says so.
+        let empty = self.point();
+        (*out.concl() == Formula::mem(empty, want_set)).then_some(out)
+    }
+
+    /// **`Γ ⊢ ∀y. (y ∈ ⟦Sort ℓ⟧ → ∀z. (z ∈ y → z ∈ ⟦Sort ℓ⟧))` at any level** —
+    /// `Rung::transitive` where `ℓ` is a numeral, `Srt::transitive` where it is
+    /// not. The other fact a `COD` obligation spends; see
+    /// [`Interp::rung_empty_mem`].
+    ///
+    /// The shape is rebuilt here rather than taken from either source, because
+    /// the two sources bind their own variables and the caller compares the
+    /// result against `derived`'s `COD`, which binds a third pair.
+    pub fn rung_transitive(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        let want_set = self.sort_of(l, vars)?;
+        let out = match crate::ground::as_numeral(l) {
+            Some(n) => self.prelude.tower.at(n as usize)?.transitive.clone(),
+            None => {
+                let t = self.level_term(l, vars)?;
+                let mem = self.level_in_omega(l, vars)?;
+                let lp = self.levels()?;
+                Thm::mp(&derived::inst_all(&lp.s.transitive, std::slice::from_ref(&t))?, &mem)?
+            }
+        };
+        let (y, z) = (self.fresh_var(), self.fresh_var());
+        let (ty, tz) = (Term::var(y), Term::var(z));
+        let want = Formula::forall(
+            y,
+            Formula::imp(
+                Formula::mem(ty.clone(), want_set.clone()),
+                Formula::forall(
+                    z,
+                    Formula::imp(Formula::mem(tz.clone(), ty), Formula::mem(tz, want_set)),
+                ),
+            ),
+        );
+        (*out.concl() == want).then_some(out)
+    }
+
     /// **The ground bridge: `⊢ srt(n̄) = ⟦Sort n⟧`.**
     ///
     /// `derived::levels::srt::Srt::rung_eq`, checked against *this* module's
@@ -4235,6 +4441,80 @@ mod tests {
         (lp, vars)
     }
 
+    /// **The `u = 0` split, joined into one term** — [`Interp::ite0_merge`] and
+    /// [`Interp::sort_u0_at`], the two halves of taking §6.2's case analysis
+    /// *inside the model*.
+    ///
+    /// The arms are deliberately about **different** sets: `∅` under `û = ∅`
+    /// and `U₀` under `¬(û = ∅)`, both in `U₁`. A merge that quietly used one
+    /// arm twice, or that built the conditional the other way round, passes
+    /// under arms that agree — and the eliminator's two arms are `•` and
+    /// `drec t`, which never agree syntactically.
+    ///
+    /// Four negatives, each a way the join could be wrong rather than missing:
+    /// the arms swapped; an arm stated under the *other* guard; the zero
+    /// collapse asked without a matching premise; and asked at a nonzero
+    /// numeral, where no hypothesis makes `⟦Sort 4⟧` be `Prop`.
+    #[test]
+    fn a_symbolic_guard_merges_its_two_arms_into_one_conditional() {
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let u = p("u");
+        let uhat = ip.level_term(&u, &vars).expect("û");
+        let is_zero = Formula::eq(uhat.clone(), lp.zero());
+        let not_zero = Formula::not(is_zero.clone());
+
+        // ── the zero arm's own collapse: `⟦Sort u⟧ = U₀` under `û = ∅` ───────
+        let h = crate::scope::test_support::assume(is_zero.clone());
+        let coll = ip.sort_u0_at(&u, &vars, &h).expect("⟦Sort u⟧ = U₀ under the guard");
+        assert_eq!(
+            *coll.concl(),
+            Formula::eq(ip.sort_of(&u, &vars).unwrap(), ip.sort(0)),
+            "the collapse must equate the sort the clause built with Lean's Prop"
+        );
+        assert_eq!(coll.hyps().len(), 1, "and must carry the guard, not hide it");
+        // No hypothesis, no collapse — and no numeral above 0 is Prop however
+        // the caller assumed it.
+        let wrong = crate::scope::test_support::assume(Formula::eq(uhat.clone(), uhat.clone()));
+        assert!(ip.sort_u0_at(&u, &vars, &wrong).is_none(), "a premise about nothing");
+        assert!(
+            ip.sort_u0_at(&crate::ground::numeral(4), &vars, &h).is_none(),
+            "⟦Sort 4⟧ is not Prop under any guard"
+        );
+
+        // ── the join ────────────────────────────────────────────────────────
+        let (a, b, s) = (lp.zero(), ip.sort(0), ip.sort(1));
+        let t1 = ip.prelude.tower.at(1).expect("rung 1");
+        let (in_a, in_b) = (t1.empty_mem.clone(), t1.u0_mem.clone());
+        let w = ip.fresh_var();
+        let phi = Formula::mem(Term::var(w), s.clone());
+        let hz = derived::a1i(&in_a, is_zero.clone());
+        let hn = derived::a1i(&in_b, not_zero.clone());
+        let out = ip.ite0_merge(&uhat, &a, &b, w, &phi, &hz, &hn).expect("the join");
+        let merged = ip.levels().unwrap().i.at(uhat.clone(), a.clone(), b.clone());
+        assert_eq!(
+            *out.concl(),
+            Formula::mem(merged, s),
+            "the merged conclusion must be about the conditional itself"
+        );
+        assert!(out.hyps().is_empty(), "both guards were discharged into the arms");
+
+        // Swapped arms: each is a true theorem, and neither is about the branch
+        // its guard selects.
+        let swap_z = derived::a1i(&in_b, is_zero);
+        let swap_n = derived::a1i(&in_a, not_zero.clone());
+        assert!(
+            ip.ite0_merge(&uhat, &a, &b, w, &phi, &swap_z, &swap_n).is_none(),
+            "an arm proved about the other branch must be refused"
+        );
+        // The zero arm stated under the nonzero guard.
+        let both_n = derived::a1i(&in_a, not_zero);
+        assert!(
+            ip.ite0_merge(&uhat, &a, &b, w, &phi, &both_n, &hn).is_none(),
+            "an arm under the wrong guard must be refused"
+        );
+    }
+
     /// **The byte-identity argument, as a test.** A level the schedule
     /// produces is answered by [`Interp::sort`] term for term, and the
     /// apparatus is never built — so a ground run mints no symbol it did not
@@ -4265,6 +4545,39 @@ mod tests {
             (Level::max(crate::ground::numeral(1), crate::ground::numeral(4)), 4),
         ] {
             assert_eq!(ip.sort_of(&l, &vars), Some(ip.sort(n)), "{l} is rung {n}");
+        }
+        // The `COD` facts take the same branch, and they are the ones that
+        // grew a symbolic arm this tranche — `crate::rec_dep::cod_at_rung`
+        // reads both on *every* route, so a `levels()` reachable from their
+        // numeral path would build the apparatus in the middle of a scheduled
+        // run and renumber every symbol minted after it. Gate A would not
+        // catch that: its rows are counts and reason strings.
+        for n in 1..4u32 {
+            let l = crate::ground::numeral(n);
+            let want = ip.sort(n);
+            let e = ip.rung_empty_mem(&l, &vars).unwrap_or_else(|| panic!("∅ ∈ U{n}"));
+            assert_eq!(*e.concl(), Formula::mem(ip.point(), want.clone()), "rung {n}");
+            let t = ip.rung_transitive(&l, &vars).unwrap_or_else(|| panic!("C₁(U{n})"));
+            assert!(t.hyps().is_empty(), "rung {n}: the ground fact is unconditional");
+        }
+        // **From `1`, and rung 0 is `None` on purpose.** `Tower::at(0)` does
+        // not exist: a `Rung` is `n ≥ 1` because `U₀ = {0,1}` is *not* a
+        // universe, and `derived::tower` says so. Nothing asks — the ground
+        // `u₁ = 0` case is `rec_dep::prop_bottom`, which never reaches `COD`,
+        // and so is the symbolic split's zero arm.
+        //
+        // Worth its own line because the ω-vocabulary is strictly *more*
+        // complete here than the ground one it is replacing: `Srt::empty_mem`
+        // and `Srt::transitive` are `∀n ∈ ω` and do cover rung 0 — that is the
+        // half of their derivation that is not the tower's. A caller at a
+        // symbolic level whose value happens to be `0` is served; a caller at
+        // the syntactic numeral `0` is not, and that asymmetry disappears at
+        // the switchover rather than needing a patch now.
+        for f in [Interp::rung_empty_mem, Interp::rung_transitive] {
+            assert!(
+                f(&mut ip, &crate::ground::numeral(0), &vars).is_none(),
+                "rung 0 has no `Rung`; if this starts answering, say which theorem it found"
+            );
         }
         assert!(
             ip.levels_built().is_none(),

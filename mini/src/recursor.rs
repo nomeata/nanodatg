@@ -168,9 +168,13 @@ pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 ///
 /// They come off this list one at a time as their `u₁` is derived. What each
 /// still owes is the split, and [`crate::rec_dep::motive_level_of`]'s header is
-/// where its measured cost is written down — it is **not** `sort_of` and
-/// `utower`, which exist, but `Interp::as_pi` at a variable rung, and it is
-/// shared with every other route here.
+/// where its measured cost is written down. **That cost is now measured rather
+/// than predicted, and it is smaller than this paragraph used to say.**
+/// `crate::rec_dep::split_bottom` builds both clauses and merges them with
+/// `Ite0`; its nonzero arm needs no collapse at all, and its zero arm needs one
+/// — `⟦Sort u₁⟧ = U₀` under the guard. `Interp::as_pi` at a variable rung is
+/// still a frontier and is still shared, but it is what a *field-carrying*
+/// constructor costs, not what the split costs.
 pub(crate) fn ensure(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,

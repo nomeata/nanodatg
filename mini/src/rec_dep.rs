@@ -369,24 +369,42 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
 ///   settles a successor guard with no case split at all, and
 ///   [`crate::interp::Interp::pi_dprod_at`] collapses the term — which is why
 ///   this module now reaches its split rather than the `&[u32]` boundary.
-/// * **Every `Π` under the minor premises.**
-///   [`crate::interp::Interp::as_pi`] dispatches on the term's head symbol, and
-///   at a variable rung that head is `ite0` for *every* binder whose codomain's
-///   level mentions `u₁` — which is every binder of every minor premise, since
-///   a minor premise ends in `C (ctorᵢ …)`. [`minor_at`] walks those with
-///   `as_pi` and is blind there. The guard is not a successor and cannot be
-///   settled: it is `û₁` itself, so each branch must be run under its own
-///   hypothesis (`û₁ = ∅` / `¬(û₁ = ∅)`), with the collapse applied per binder
-///   and the two conclusions merged by `Ite0`. That is the shape of the clause
-///   and it is **not** the `Π` clause's shape: there, `ite0` removed the split
-///   because `pi_imax_dep` states both cases at once; here it relocates it.
+/// * **`Π` under the minor premises — and this bullet was wrong twice, in
+///   opposite directions.** It said the guard is `û₁` at *every* binder of
+///   *every* minor premise, that [`crate::interp::Interp::as_pi`] is therefore
+///   blind at all of them, and that the clause is a per-binder collapse run
+///   twice. [`split_bottom`] was built and the corpus measured:
+///
+///   - **The nonzero arm needs no collapse and no hypothesis.** `DepRecursor`
+///     is stated behind `COD(C,V)` at an arbitrary target, and the two new
+///     `Srt` facts discharge `COD` at `srt(û₁)` for every `û₁ ∈ ω`. `pre_at`
+///     — every minor premise included — builds at a variable rung unchanged.
+///   - **The zero arm needs exactly one collapse and it is not at a binder.**
+///     `⟦Sort u₁⟧ = U₀` ([`crate::interp::Interp::sort_u0_at`]), spent once per
+///     minor premise where [`minor_at`] reaches proof irrelevance, because
+///     `point_of_proof` is stated over `U₀`.
+///   - **The per-binder frontier is real and it is 12 constants, not the
+///     queue.** With the split landed, the eliminators that still decline are
+///     `N` (7), `TwoBool` (2), `RTree` (2) and `TypeWithTypeField` (1) —
+///     every one of them a declaration with a *field-carrying* constructor,
+///     which is where [`minor_at`]'s walk opens a binder at all. A
+///     constructor with no fields has no binder to be blind at, and that is
+///     the whole of `Bool` (12) and `Color` (3), which now certify.
+///
+///   What survives of the bullet is its shape claim, and it is right: the
+///   clause runs each arm under its own hypothesis and merges with `Ite0`,
+///   where the `Π` clause's `ite0` *removed* the split. The cost estimate was
+///   the wrong part.
 ///
 /// Measured over the corpus, of the eliminators that reach a route at all:
 /// **27 take [`ensure`], 9 `crate::rec_prop`, 2 `crate::rec_nat`, 1
-/// `crate::rec_s_ix`.** `as_pi` has **42 call sites in 20 modules** and every
-/// one of them is blind at a variable rung, so the collapse is the shared
-/// frontier of this queue and of the ~70 eliminators whose declaration is
-/// itself polymorphic — not a cost this module pays alone.
+/// `crate::rec_s_ix`.** Of the 27, **15 now certify** and 12 are the
+/// per-binder frontier above. `as_pi` still has **42 call sites in 20
+/// modules** and is still blind at a variable rung, so the per-binder collapse
+/// remains the shared frontier of those 12 and of the ~70 eliminators whose
+/// declaration is itself polymorphic — but it is *not* what this route's
+/// split cost, and sizing the next tranche off the call-site count would
+/// repeat this bullet's mistake.
 pub(crate) fn motive_level_of(rec_ty: &E, np: usize, ni: usize) -> Option<Level> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &after.view() else { return None };
@@ -530,20 +548,18 @@ pub(crate) struct At {
 
 /// The bottom's term and typing, or the transport that did not fit.
 ///
-/// # The third arm is not a clause and says so
+/// # Three arms, and the third takes both clauses rather than choosing
 ///
 /// [`cx_of`] runs at **every** motive level — that is what
-/// [`crate::interp::Interp::pi_dprod_at`] bought — so a symbolic `u₁` now gets
-/// past the motive binder's type, the carrier equations and the codomain check,
-/// and stops at the one place §6.2 genuinely splits. It reports
-/// [`SYMBOLIC_SPLIT`] rather than `Gap::SymbolicLevel`, because the two say
-/// different things: the frontier is no longer *"a numeral was wanted"* but
-/// *"the `u₁ = 0` case analysis has no branch here"*, and
-/// [`motive_level_of`]'s header is what it costs.
+/// [`crate::interp::Interp::pi_dprod_at`] bought — and where `u₁` is a numeral
+/// the two arms below are §6.2's own choice. Where it is not, neither may be
+/// chosen and [`split_bottom`] takes **both**, joining them into §1.4's
+/// conditional. That arm is a clause now and not a decline; [`SYMBOLIC_SPLIT`]
+/// is still emitted, but only where one of its arms does not build.
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     let cx = cx_of(ip, site, at)?;
     if ground::as_numeral(&site.u1).is_none() {
-        return Err(Gap::Recursor(site.ind, SYMBOLIC_SPLIT, Cause::Threading))
+        return split_bottom(ip, site, at, &cx)
     }
     if at.prop {
         prop_bottom(ip, site, at, &cx)
@@ -554,9 +570,123 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
 
 /// **The eliminator's two clauses at a motive level that is neither zero nor a
 /// successor of anything known** — `LEVELPOLY.md` §1.4's conditional, owed
-/// inside the term.
+/// inside the term. Emitted where one *arm* of [`split_bottom`] does not build;
+/// the split itself no longer declines.
 pub(crate) const SYMBOLIC_SPLIT: &str =
     "dependent recursor: the u₁ = 0 split at a symbolic motive level";
+
+/// **§6.2's `u₁ = 0` split, taken inside the model** — both clauses run, each
+/// under its own kernel hypothesis, and merged into `ite0(û₁, •, drec t)`.
+///
+/// # Why this is a merge and not a choice
+///
+/// At a numeral motive level [`build`] *chooses*: `u₁ = 0` is the proof clause
+/// and everything else is the value clause. At a parameter neither may be
+/// chosen — that is `LEVELPOLY.md` §1.4, and it is the one question the ω
+/// vocabulary answers by *evaluating the case analysis in the model* rather
+/// than in the translator. So both clauses are built and the term is the
+/// conditional, which is `•` at every instantiation where `u₁` is `0` and
+/// `drec t` at every other: **one interpretation, §6.2's own, at every point of
+/// the level space at once.**
+///
+/// Neither arm is weakened to get there. The zero arm is
+/// [`prop_bottom`] verbatim; the nonzero arm is [`dep_bottom`] verbatim; the
+/// join is [`crate::interp::Interp::ite0_merge`], which is two Leibniz steps
+/// and Clavius and needs no decidability.
+///
+/// # What each arm actually spends, measured rather than predicted
+///
+/// The sizing this replaces said the collapse would have to be applied *per
+/// binder*, twice, and that `Interp::as_pi`'s 42 blind call sites were the
+/// frontier. **Both halves of that are wrong for this route, and the reason is
+/// worth keeping** — see [`motive_level_of`]'s header, which carries the
+/// correction:
+///
+/// * **The nonzero arm needs no hypothesis at all.** `DepRecursor` is stated at
+///   an arbitrary target set behind `COD(C,V)`, and `Srt::transitive` /
+///   `Srt::empty_mem` discharge `COD` at `srt(û₁)` for *every* `û₁ ∈ ω` — the
+///   `∀n ∈ ω` in those two statements is doing the work a case split was
+///   budgeted for. So `dep_bottom` builds unconditionally at a variable rung
+///   and the assumption below is spent only to shape the arm for the merge.
+/// * **The zero arm needs exactly one collapse, and it is not at a binder.**
+///   `⟦Sort u₁⟧ = U₀` ([`crate::interp::Interp::sort_u0_at`]), consumed once
+///   per minor premise at [`minor_at`]'s proof-irrelevance step, because
+///   `point_of_proof` is stated over `U₀`. `as_pi` is not reached on either arm
+///   at a field-free constructor, and where it is reached the domain is a
+///   `dprod` the walk opened itself.
+///
+/// # The store, and the one thing this must not do
+///
+/// [`dep_bottom`] normally files its abbreviation in
+/// [`crate::interp::IndApparatus::dep_elims`] so [`crate::iota_dep`] can get
+/// back to `drec`. On this path it must **not**, and does not: the eliminator's
+/// interpretation here is the `ite0`, not `drec`, so a stored equation naming
+/// `drec` would be *true about its own symbol and wrong about `⟦T.rec⟧`* — the
+/// kind of fact that composes onwards and is discovered nowhere. The ι rule at
+/// a symbolic motive level wants both arms' equations and a second merge, and
+/// that is a clause of its own.
+fn split_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
+    let split = || Gap::Recursor(site.ind, SYMBOLIC_SPLIT, Cause::Threading);
+    let g = ip.level_term(&site.u1, &site.levels).ok_or(Gap::SymbolicLevel)?;
+    let zero = ip.levels().ok_or(Gap::SymbolicLevel)?.zero();
+    let is_zero = Formula::eq(g.clone(), zero);
+    let mut scopes = Scopes::new();
+
+    // ── `û₁ = ∅`: the eliminator is a proof ─────────────────────────────────
+    let (tok, h) = scopes.assume(is_zero.clone());
+    let arm0 = ip
+        .sort_u0_at(&site.u1, &site.levels, &h)
+        .ok_or_else(|| bad(SPLIT_U0))
+        .and_then(|eq| {
+            let cx0 = Cx { sort_u0: Some(eq), ..cx.clone() };
+            prop_bottom(ip, site, at, &cx0)
+        });
+    // Discharged whether or not the arm built. The `Scopes` is local, so an
+    // early `?` would leak nothing — it would leave *this* stack unbalanced
+    // and then drop it, and the next declaration gets a fresh one. It is done
+    // anyway because "balanced on every path" is the property a reader can
+    // check locally, and "balanced on the paths that matter" is the property
+    // that stops being true when a third arm is added.
+    let (a_tm, a_thm) = match arm0 {
+        Ok(v) => v,
+        // **`h` and not a fresh `Thm::assume`.** `scope.rs`'s invariant I1 is
+        // that no other module names that constructor, and the assumption is
+        // already in hand; the discharged `φ → φ` is thrown away and only the
+        // stack's balance is wanted.
+        Err(e) => {
+            let _ = scopes.discharge_assumption(tok, &h);
+            return Err(e)
+        }
+    };
+    let hz = scopes.discharge_assumption(tok, &a_thm);
+
+    // ── `¬(û₁ = ∅)`: the eliminator is a value ──────────────────────────────
+    let (tok, h) = scopes.assume(Formula::not(is_zero.clone()));
+    let arm1 = dep_bottom(ip, site, at, cx);
+    let (b_tm, b_thm) = match arm1 {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = scopes.discharge_assumption(tok, &h);
+            return Err(e)
+        }
+    };
+    let hn = scopes.discharge_assumption(tok, &b_thm);
+
+    // ── the join ────────────────────────────────────────────────────────────
+    let w = ip.fresh_var();
+    let phi = Formula::mem(Term::var(w), at.goal.clone());
+    let out = ip.ite0_merge(&g, &a_tm, &b_tm, w, &phi, &hz, &hn).ok_or_else(split)?;
+    let term = ip.levels().ok_or(Gap::SymbolicLevel)?.i.at(g, a_tm, b_tm);
+    if *out.concl() != Formula::mem(term.clone(), at.goal.clone()) {
+        return Err(split())
+    }
+    Ok((term, out))
+}
+
+/// The zero arm cannot name `Prop`: `⟦Sort u₁⟧ = U₀` did not build under the
+/// guard, so proof irrelevance has nothing to be stated over.
+const SPLIT_U0: &str = "dependent recursor: ⟦Sort u₁⟧ = U₀ under the u₁ = 0 guard";
 
 /// The carrier equations and the binders split by role — everything both
 /// clauses need before either one starts.
@@ -651,11 +781,13 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
         v_set,
         c_in_fs,
         c_fibre,
+        sort_u0: None,
     })
 }
 
 /// The bottom's working context: the binders split by role, and the carrier
 /// equations, all at mini's own terms.
+#[derive(Clone)]
 pub(crate) struct Cx {
     pub(crate) ind: Rc<Inductive>,
     pub(crate) ps: Vec<Term>,
@@ -682,6 +814,20 @@ pub(crate) struct Cx {
     /// The constant fibre's site, so a consumer can *apply* the motive as well
     /// as name its type — `dprod_app` where this used to call `fs_app`.
     pub(crate) c_fibre: crate::interp::FibreSite,
+    /// **`Γ ⊢ ⟦Sort u₁⟧ = U₀`, present only inside the `û₁ = ∅` arm of
+    /// [`split_bottom`]** — and `None` everywhere else, including on the whole
+    /// scheduled path.
+    ///
+    /// [`cx_of`] cannot build it: it runs *before* the split and the guard is
+    /// exactly what has not been decided there. So the arm that assumes
+    /// `û₁ = ∅` fills this in on a copy, and the one consumer —
+    /// [`minor_at`]'s proof-irrelevance step — reads it or does not.
+    ///
+    /// **The `None` case is not "no collapse needed", it is "no hypothesis in
+    /// hand".** At a ground `u₁ = 0` the sort *is* `U₀` and there is nothing to
+    /// move; at a ground `u₁ ≥ 1` the `Prop` clause is not taken at all. Only
+    /// the split's zero arm both needs the equation and can have it.
+    pub(crate) sort_u0: Option<Thm>,
 }
 
 /// **The motive binder's scope typing, at the dependent product** — the
@@ -1323,13 +1469,26 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // its body. One abbreviation over the nest's own binders fixes it, exactly
     // as `zoneb`'s constructor bottom does.
     let raw = ap.apply(derived::subst_term(&dr.rec, &sub), cx.t_tm.clone());
+    // **The abstraction prefix is the level variables and then the nest's own
+    // binders**, and the first half is empty on the scheduled path.
+    // `define_abbrev` refuses a body with a free variable outside its prefix,
+    // and at a variable rung `raw` mentions `û`: `drec`'s target is
+    // `⟦Sort u₁⟧ = srt(û)`. Measured before it was fixed — the nest's five
+    // binders covered every free variable of `raw` but one, and that one was
+    // `û`. See [`crate::interp::Interp::level_var_prefix`] for why the order is
+    // the variables' own and not the map's.
+    let lvs = ip.level_var_prefix(&site.levels);
+    let mut vars: Vec<FreeVar> = lvs.iter().map(|lv| lv.v).collect();
+    vars.extend(at.vars.iter().copied());
+    let mut xs: Vec<Term> = lvs.iter().map(|lv| lv.tm.clone()).collect();
+    xs.extend(at.xs.iter().cloned());
     let (sym, ax) = {
         let (mut kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let kenv = &mut *kenv;
-        derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
+        derived::define_abbrev(kenv, &vars, &raw).ok_or_else(|| bad(TERM))?
     };
-    let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;
-    let term = ip.mk(sym, at.xs.clone());
+    let unfold = derived::inst_all(&ax, &xs).ok_or_else(|| bad(TERM))?;
+    let term = ip.mk(sym, xs.clone());
     let out = ip.retarget_subject(&mem, &unfold).ok_or_else(|| bad(TERM))?;
     if *out.concl() != Formula::mem(term.clone(), at.goal.clone()) {
         return Err(bad("dependent recursor: the eliminator did not land in the codomain"))
@@ -1341,10 +1500,17 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // gives a second symbol no equation relates to this one. Dropping it was
     // `MINI-HANDOFF.md` §2's sixth instance; [`crate::iota_dep`] is the
     // consumer.
-    if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec, crate::ground::key_levels(&site.rec_inst));
-        let target = cx.v_set.clone();
-        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
+    //
+    // **Not filed on the split path**, and this is a soundness guard rather
+    // than a coverage one: there `⟦T.rec⟧` is [`split_bottom`]'s `ite0` and not
+    // `drec`, so this equation would be true about `sym` and *wrong* about the
+    // eliminator's interpretation. See [`split_bottom`]'s header.
+    if ground::as_numeral(&site.u1).is_some() {
+        if let Some(app) = ip.ind_apparatus() {
+            let key = (site.rec, crate::ground::key_levels(&site.rec_inst));
+            let target = cx.v_set.clone();
+            app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
+        }
     }
     Ok((term, out))
 }
@@ -1357,18 +1523,27 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
 /// [`Closed::discharge`](crate::scope::Closed::discharge)'s, which is `COD`'s
 /// on the nose.
 ///
-/// **Still the ground rung, and the reason is now the caller and not the
-/// library.** The two facts this spends are `Rung::transitive` and
-/// `Rung::empty_mem`, and `derived::levels::srt::Srt` exports both of them at a
-/// **variable** rung as of this branch's first `derived` addition — `⊢ ∀n.
-/// (n ∈ ω → ∅ ∈ srt(n))` and `⊢ ∀n. (n ∈ ω → ∀y. (y ∈ srt(n) → ∀z. (z ∈ y →
-/// z ∈ srt(n))))`. What this function still lacks is a *caller* at a variable
-/// rung: [`build`] answers [`SYMBOLIC_SPLIT`] before either clause runs, so
-/// de-grounding the line below would put a second untested spelling in front of
-/// no consumer. It moves with the split and not before it.
+/// **At every rung, and the ground one is no longer a special case.** The two
+/// facts this spends are `Rung::transitive` and `Rung::empty_mem`;
+/// [`crate::interp::Interp::rung_transitive`] and
+/// [`crate::interp::Interp::rung_empty_mem`] answer with the tower's own at a
+/// numeral and with `derived::levels::srt::Srt`'s at a parameter — this
+/// branch's first `derived` addition, `⊢ ∀n ∈ ω` in both cases. The scheduled
+/// path gets the identical `Thm` it always got.
+///
+/// **That `∀n ∈ ω` is why the eliminator's value clause needs no case
+/// analysis.** `DepRecursor` hides its target behind `COD(C,V)`, and `COD` is
+/// discharged here at `srt(û₁)` whatever `û₁` is — so [`split_bottom`]'s
+/// nonzero arm is [`dep_bottom`] unchanged and unconditional, and the `u₁ = 0`
+/// split costs a hypothesis only on the *proof* side. That was budgeted as a
+/// per-binder double collapse; see [`motive_level_of`]'s header.
 pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
-    let rung = ip.prelude.tower.at(ground::as_numeral(&site.u1)? as usize)?;
-    if rung.set != cx.v_set {
+    let rung_transitive = ip.rung_transitive(&site.u1, &site.levels)?;
+    let rung_empty_mem = ip.rung_empty_mem(&site.u1, &site.levels)?;
+    // Both are stated about [`Interp::sort_of`] at `u₁`, which is what
+    // [`cx_of`] built `v_set` from; a mismatch here would be a `Cx` from
+    // another level and the two theorems would be about another sort.
+    if rung_empty_mem.concl().as_mem()?.1 != cx.v_set {
         return None
     }
     let mut scopes = Scopes::new();
@@ -1386,14 +1561,14 @@ pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> 
         (sc.term(), sc.assumption().clone())
     };
     // `app(C,x) ∈ Uₙ → ∀z. (z ∈ app(C,x) → z ∈ Uₙ)`.
-    let trans = derived::inst_all(&rung.transitive, std::slice::from_ref(&cx_at))?;
+    let trans = derived::inst_all(&rung_transitive, std::slice::from_ref(&cx_at))?;
     let over = Thm::mp(&trans, &cx_mem)?;
     let at_y = derived::inst_all(&over, std::slice::from_ref(&yt))?;
     let inner = Thm::mp(&at_y, &ym)?;
 
     let fam = scopes.close(tok_y).discharge(&inner).ok()?;
     let covers = scopes.close(tok_x).discharge(&fam).ok()?;
-    Some(derived::and_intro(&covers, &rung.empty_mem))
+    Some(derived::and_intro(&covers, &rung_empty_mem))
 }
 
 const COD: &str = "dependent recursor: COD at the motive's own sort";
@@ -1590,6 +1765,15 @@ pub(crate) fn minor_at(
         let ctor_in_w = ctor_in_carrier(ip, cx, i, &rhs)?;
         let ty_mem =
             ip.dprod_app(&cx.c_fibre, &cx.w_term, &cx.c_tm, &rhs, &cx.c_in_fs, &ctor_in_w)?;
+        // **The one place the `û₁ = ∅` hypothesis does work in this walk.**
+        // `point_of_proof` is proof irrelevance and is stated over `U₀`; the
+        // motive's codomain arrives as `⟦Sort u₁⟧`, which is `U₀` on the
+        // schedule and `srt(û₁)` at a variable rung. [`Cx::sort_u0`] is the
+        // equation between them, and it exists only under the assumption.
+        let ty_mem = match cx.sort_u0.as_ref() {
+            None => ty_mem,
+            Some(eq) => ip.retarget_set(&ty_mem, eq)?,
+        };
         let pt = ip.point_of_proof(&ty_mem, &chain)?;
         let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
         chain = ip.retarget_subject(&chain, &back)?;
