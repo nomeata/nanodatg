@@ -195,7 +195,7 @@ pub(crate) fn ensure(
     ind_name: &Name,
     ind_inst: &[u32],
     rec_name: &Name,
-    rec_inst: &[u32],
+    rec_inst: &[Level],
 ) -> Result<(), Gap> {
     let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
@@ -234,26 +234,37 @@ pub(crate) fn ensure(
     // family of sorts is not either rule and says so.
     if *num_indices != 0 {
         let ni = *num_indices as usize;
-        let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
-        return match motive_level(&rec_ty, np, ni) {
-            Some(0) => crate::rec_ix_prop::ensure(
-                c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
+        let rec_ty = ground::subst_levels(ty, lparams, rec_inst);
+        // **The two indexed routes are still on the schedule, and they are
+        // declined by the split rather than by the reader.** `motive_level_of`
+        // answers at a parameter; what neither `crate::rec_ix_prop` nor
+        // `crate::rec_ix_dep` can do is *choose between themselves* there —
+        // §6.2's `u₁ = 0` again, one construction apart. So a symbolic motive
+        // level says [`Gap::SymbolicLevel`], which is the frontier, and a
+        // binder that is not a Lean motive keeps its own label.
+        let Some(l1) = motive_level_of(&rec_ty, np, ni) else {
+            return Err(bad("indexed eliminator: the motive's binder is not a Lean motive"))
+        };
+        let ground_inst: Vec<u32> =
+            rec_inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        return match ground::as_numeral(&l1).ok_or(Gap::SymbolicLevel)? {
+            0 => crate::rec_ix_prop::ensure(
+                c, ind_name, ind_inst, rec_name, &ground_inst, np, n, ni, &rec_ty,
             ),
-            Some(_) => crate::rec_ix_dep::ensure(
-                c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
+            _ => crate::rec_ix_dep::ensure(
+                c, ind_name, ind_inst, rec_name, &ground_inst, np, n, ni, &rec_ty,
             ),
-            None => Err(bad("indexed eliminator: the motive's binder is not a Lean motive")),
         }
     }
     let ctors = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
         _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
-    let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+    let rec_ty = ground::subst_levels(ty, lparams, rec_inst);
     let depth = np + 1 + n + 1;
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("dependent recursor: arity"))?;
-    let u1 = motive_level(&rec_ty, np, 0)
+    let u1 = motive_level_of(&rec_ty, np, 0)
         .ok_or_else(|| bad("dependent recursor: the motive's binder is not a Lean motive"))?;
 
     let key = (*ind_name, crate::ground::ground_levels(ind_inst));
@@ -280,11 +291,12 @@ pub(crate) fn ensure(
         depth,
         codomain,
         u1,
+        levels: c.level_vars(),
         tr,
     };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(rec_bottom(c, &site)) };
     let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    crate::zoneb::store(c, rec_name, rec_inst, t)
+    crate::zoneb::store_at(c, rec_name, rec_inst, t)
 }
 
 // **The value-motive row's history is `INDEXED-DESIGN.md` §5.1 and
@@ -306,31 +318,68 @@ pub(crate) fn ensure(
 /// binder and §6.2's split on `u₁` is the same split, so a second reader would
 /// be a second chance to disagree.
 ///
-/// # This `Option<u32>` is the level-polymorphic frontier for every eliminator
-/// but one
+/// # The numeral is the frontier, and the reader is not
 ///
-/// `LEVELPOLY.md` §5.3: `crate::recursor::ensure` now takes the recursor's own
-/// instantiation as `&[Level]`, because the motive's level is polymorphic even
-/// at a declaration with no parameters — `Bool.rec.{u}`. `crate::recursor`'s
-/// `empty_rec` needs no `u₁` at all and is through; **every other route stops
-/// here**, and the `None` this returns at a symbolic motive sort is what they
-/// stop on.
+/// `LEVELPOLY.md` §5.3: [`ensure`] now takes the recursor's own instantiation
+/// as `&[Level]`, so this module reads the motive's level with
+/// [`motive_level_of`] and keeps *this* numeral wrapper for the routes that
+/// are still on the schedule (`crate::rec_prop`, `crate::rec_nat`,
+/// `crate::rec_s_ix`, the two indexed ones and `crate::iota_dep`). One reader,
+/// one wrapper: a second reader would be a second chance to disagree about
+/// what a Lean motive is.
 ///
-/// What they owe is not this reader — it is the *split*. [`Site::u1`] feeds
-/// `prop != (site.u1 == 0)` in [`rec_bottom`] and the same test in
-/// `crate::rec_prop`, `crate::rec_nat` and `crate::rec_s_ix`: a `Prop`-valued
-/// motive and a value-valued one are two constructions, and at a variable `u`
-/// neither branch may be taken. The replacement is §1.4's conditional **inside
-/// the target term** — `derived::levels::ite0`, the same construction the `Π`
-/// clause spends — with `⟦Sort u₁⟧` as
-/// [`crate::interp::Interp::sort_of`] rather than `Interp::sort`, and the rung
-/// as `derived::levels::utower` rather than `prelude.tower.at`. All three exist.
+/// What they owe is the *split*, not the reader. [`Site::u1`] feeds
+/// `prop != (u1 == 0)` in [`rec_bottom`] and the same test in the four sibling
+/// modules: a `Prop`-valued motive and a value-valued one are two
+/// constructions, and at a variable `u` neither branch may be taken.
+pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
+    ground::as_numeral(&motive_level_of(rec_ty, np, ni)?)
+}
+
+/// `u₁` as a **level expression** — [`motive_level`] before the numeral, and
+/// the reader every route now shares.
+///
+/// # What the split costs at a variable `u₁`, measured rather than predicted
+///
+/// This header used to say the replacement was §1.4's conditional inside the
+/// target term — `derived::levels::ite0` with [`crate::interp::Interp::sort_of`]
+/// for `⟦Sort u₁⟧` and `derived::levels::utower` for the rung — and that *"all
+/// three exist"*. **All three do exist and they are not what is missing.**
+/// Tried at this module, the split costs three things beyond them, and the
+/// third is the large one:
+///
+/// * **`cod_at_rung` at a variable rung.** It spends `Rung::transitive` and
+///   `Rung::empty_mem`; `derived::levels::srt::Srt` has neither, and neither is
+///   `UTower`'s. They are true at every rung — `srt(0) = U₀` is transitive and
+///   holds `∅`, and every successor rung is a universe — so this is a `derived`
+///   addition, not a blocker, but it *is* new mathematics and this branch had
+///   written none.
+/// * **The motive binder's own type.** `⟦T p⃗ → Sort u₁⟧` is not
+///   `dprod(·, ⟦T p⃗⟧)` at a variable rung; it is
+///   `ite0(succ(û₁), cndd(…), dprod(…))`, which [`cx_of`]'s `MOTIVE_TY` check
+///   refuses. **That one is closed** — [`crate::interp::Interp::level_nonzero`]
+///   settles a successor guard with no case split at all, and
+///   [`crate::interp::Interp::pi_dprod_at`] collapses the term — which is why
+///   this module now reaches its split rather than the `&[u32]` boundary.
+/// * **Every `Π` under the minor premises.**
+///   [`crate::interp::Interp::as_pi`] dispatches on the term's head symbol, and
+///   at a variable rung that head is `ite0` for *every* binder whose codomain's
+///   level mentions `u₁` — which is every binder of every minor premise, since
+///   a minor premise ends in `C (ctorᵢ …)`. [`minor_at`] walks those with
+///   `as_pi` and is blind there. The guard is not a successor and cannot be
+///   settled: it is `û₁` itself, so each branch must be run under its own
+///   hypothesis (`û₁ = ∅` / `¬(û₁ = ∅)`), with the collapse applied per binder
+///   and the two conclusions merged by `Ite0`. That is the shape of the clause
+///   and it is **not** the `Π` clause's shape: there, `ite0` removed the split
+///   because `pi_imax_dep` states both cases at once; here it relocates it.
 ///
 /// Measured over the corpus, of the eliminators that reach a route at all:
 /// **27 take [`ensure`], 9 `crate::rec_prop`, 2 `crate::rec_nat`, 1
-/// `crate::rec_s_ix`.** This module is therefore the next clause and it is
-/// worth four of the seven files that owe only an eliminator.
-pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
+/// `crate::rec_s_ix`.** `as_pi` has **42 call sites in 20 modules** and every
+/// one of them is blind at a variable rung, so the collapse is the shared
+/// frontier of this queue and of the ~70 eliminators whose declaration is
+/// itself polymorphic — not a cost this module pays alone.
+pub(crate) fn motive_level_of(rec_ty: &E, np: usize, ni: usize) -> Option<Level> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &after.view() else { return None };
     // **`ni + 1`, not one.** An indexed family's motive is
@@ -341,7 +390,7 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     // reported the first as the second until `RBTree` was asked.
     let inner = crate::zoneb::peel(motive, ni + 1)?;
     let Expr::Sort(l) = &inner.view() else { return None };
-    ground::as_numeral(l)
+    Some(*l)
 }
 
 /// Which eliminator is being built, and everything read off the declaration
@@ -360,7 +409,7 @@ pub(crate) struct Site {
     /// abbreviation under, because `drec`'s target is `⟦Sort u₁⟧` and `u₁` is
     /// the recursor's, not the declaration's.
     pub(crate) rec: Name,
-    pub(crate) rec_inst: Vec<u32>,
+    pub(crate) rec_inst: Vec<Level>,
     /// The constructors' names, in declaration order.
     pub(crate) ctors: Vec<Name>,
     pub(crate) np: usize,
@@ -371,8 +420,15 @@ pub(crate) struct Site {
     /// by [`rec_bottom`]; a use site fills it from the same
     /// [`crate::zoneb::peel`] and nothing it calls looks at it.
     pub(crate) codomain: E,
-    /// The motive's resultant sort; `0` is the proof clause.
-    pub(crate) u1: u32,
+    /// The motive's resultant sort. `0` is the proof clause and every other
+    /// **numeral** is the value clause; a level that still mentions a parameter
+    /// is neither, which is [`motive_level_of`]'s header.
+    pub(crate) u1: Level,
+    /// The declaration's universe parameters in the ω-vocabulary — empty on the
+    /// scheduled path, where [`Site::u1`] is always a numeral and nothing below
+    /// reads this. It is what [`crate::interp::Interp::sort_of`] needs to spell
+    /// `⟦Sort u₁⟧` when it is not.
+    pub(crate) levels: crate::interp::LevelVars,
     pub(crate) tr: Rc<Translated>,
 }
 
@@ -384,13 +440,25 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort, once from the codomain the nest actually reached.
-    let prop = match c.is_prop(&site.codomain) {
-        Ok(b) => b,
-        Err(_) => return gap(Gap::Classifier),
+    //
+    // **Both readings are numerals or neither is.** `Checker::is_prop` decides
+    // by inferring the codomain's sort and asking whether it is `0`, which at a
+    // variable rung is the very question §1.4 says may not be asked; and
+    // `site.u1 == 0` is the same question one level up. So at a symbolic motive
+    // level the cross-check is *skipped rather than guessed*, and what replaces
+    // it is [`build`]'s own arm, which takes neither clause.
+    let u1 = ground::as_numeral(&site.u1);
+    let prop = match (u1, c.is_prop(&site.codomain)) {
+        (Some(n), Ok(b)) if b != (n == 0) => {
+            return gap(bad("dependent recursor: the motive's sort and its codomain disagree"))
+        }
+        (Some(_), Ok(b)) => b,
+        (Some(_), Err(_)) => return gap(Gap::Classifier),
+        // Unread by [`build`]'s poly arm; `false` rather than an `Option`
+        // because [`At::prop`] is `minor_at`'s parameter and widening it would
+        // put the undecided case into a walk that has no clause for it.
+        (None, _) => false,
     };
-    if prop != (site.u1 == 0) {
-        return gap(bad("dependent recursor: the motive's sort and its codomain disagree"))
-    }
     let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
     let Some(goal) = cod.tm.clone() else { return gap(cod.ev.reason(Gap::NoEndpoint)) };
     let Some((xs, mems)) = c.binders(site.depth) else { return gap(Gap::NoEndpoint) };
@@ -453,14 +521,34 @@ pub(crate) struct At {
 }
 
 /// The bottom's term and typing, or the transport that did not fit.
+///
+/// # The third arm is not a clause and says so
+///
+/// [`cx_of`] runs at **every** motive level — that is what
+/// [`crate::interp::Interp::pi_dprod_at`] bought — so a symbolic `u₁` now gets
+/// past the motive binder's type, the carrier equations and the codomain check,
+/// and stops at the one place §6.2 genuinely splits. It reports
+/// [`SYMBOLIC_SPLIT`] rather than `Gap::SymbolicLevel`, because the two say
+/// different things: the frontier is no longer *"a numeral was wanted"* but
+/// *"the `u₁ = 0` case analysis has no branch here"*, and
+/// [`motive_level_of`]'s header is what it costs.
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     let cx = cx_of(ip, site, at)?;
+    if ground::as_numeral(&site.u1).is_none() {
+        return Err(Gap::Recursor(site.ind, SYMBOLIC_SPLIT, Cause::Threading))
+    }
     if at.prop {
         prop_bottom(ip, site, at, &cx)
     } else {
         dep_bottom(ip, site, at, &cx)
     }
 }
+
+/// **The eliminator's two clauses at a motive level that is neither zero nor a
+/// successor of anything known** — `LEVELPOLY.md` §1.4's conditional, owed
+/// inside the term.
+pub(crate) const SYMBOLIC_SPLIT: &str =
+    "dependent recursor: the u₁ = 0 split at a symbolic motive level";
 
 /// The carrier equations and the binders split by role — everything both
 /// clauses need before either one starts.
@@ -512,7 +600,18 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
     // and `fs` was right for as long as `⟦Π⟧` had a binder-free clause. The
     // sentence is the same sentence, one symbol along; `SCOPING.md` §10
     // predicted it in all four routes and this is the first.)*
-    let v_set = ip.sort(site.u1);
+    // *(Rewritten again at the de-grounding. `⟦Sort u₁⟧` is
+    // `Interp::sort_of`, which is `Interp::sort` term for term at a numeral, so
+    // the scheduled spelling is unchanged; and at a variable rung the motive's
+    // *type* arrives as `ite0(succ(û₁), cndd(…), dprod(…))` rather than as the
+    // product, because that is what the de-scheduled `Π` clause emits. The
+    // guard is a **successor** — `Sort u₁` lives in `Sort (u₁+1)`, which is the
+    // sentence three paragraphs up — so `Interp::level_nonzero` settles it with
+    // no case analysis at all and `Interp::pi_dprod_at` collapses the term.
+    // That is the one place on this route where §1.4's conditional comes apart
+    // for free, and it is why this function runs at every motive level.)*
+    let c_mem = collapse_motive_ty(ip, site, &c_mem)?;
+    let v_set = ip.sort_of(&site.u1, &site.levels).ok_or_else(|| bad(MOTIVE_TY))?;
     let set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
     let c_fibre = ip.const_fibre_site(&v_set).ok_or_else(|| bad(MOTIVE_TY))?;
     if set != ip.dprod_term(&c_fibre, spine.clone()) {
@@ -575,6 +674,36 @@ pub(crate) struct Cx {
     /// The constant fibre's site, so a consumer can *apply* the motive as well
     /// as name its type — `dprod_app` where this used to call `fs_app`.
     pub(crate) c_fibre: crate::interp::FibreSite,
+}
+
+/// **The motive binder's scope typing, at the dependent product** — the
+/// identity on the scheduled path, one `ite0` collapse off it.
+///
+/// `⟦T p⃗ → Sort u₁⟧` is `dprod(·, ⟦T p⃗⟧)` at a numeral `u₁` and
+/// `ite0(succ(û₁), cndd(…), dprod(…))` at a symbolic one, because
+/// [`crate::interp::Interp::pi_term_of`] emits §1.4's conditional wherever a
+/// level mentions a parameter. The two are the same set and the equation
+/// between them is one theorem: the guard is `succ(û₁)`, never zero
+/// ([`crate::interp::Interp::level_nonzero`]), so the collapse costs **no case
+/// analysis** — which is what lets [`cx_of`] run at every motive level and
+/// [`build`] report the split rather than the boundary.
+///
+/// Fail-closed at both ends: [`crate::interp::Interp::pi_dprod_at`] refuses a
+/// term that is not an `ite0` at the guard the theorem refutes, and
+/// [`crate::interp::Interp::retarget_set`] refuses an equation whose left side
+/// is not the set the membership is about. A motive whose type is some other
+/// shape declines under [`MOTIVE_TY`], exactly as it did before.
+fn collapse_motive_ty(ip: &mut Interp, site: &Site, c_mem: &Thm) -> Result<Thm, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind, w, Cause::Threading);
+    if ground::as_numeral(&site.u1).is_some() {
+        return Ok(c_mem.clone())
+    }
+    let set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
+    // `Sort u₁ : Sort (u₁+1)`, so the codomain's level — the one the `Π`
+    // clause's `ite0` guards on — is the successor and not `u₁` itself.
+    let ne = ip.level_nonzero(&site.u1.succ(), &site.levels).ok_or_else(|| bad(MOTIVE_TY))?;
+    let eq = ip.pi_dprod_at(&set, &ne).ok_or_else(|| bad(MOTIVE_TY))?;
+    ip.retarget_set(c_mem, &eq).ok_or_else(|| bad(MOTIVE_TY))
 }
 
 const SPINE: &str = "dependent recursor: the type former's spine";
@@ -1205,7 +1334,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // `MINI-HANDOFF.md` §2's sixth instance; [`crate::iota_dep`] is the
     // consumer.
     if let Some(app) = ip.ind_apparatus() {
-        let key = (site.rec, crate::ground::ground_levels(&site.rec_inst));
+        let key = (site.rec, crate::ground::key_levels(&site.rec_inst));
         let target = cx.v_set.clone();
         app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
     }
@@ -1219,8 +1348,14 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
 /// other target and no other theorem is needed. The `∀`/`→` shape is
 /// [`Closed::discharge`](crate::scope::Closed::discharge)'s, which is `COD`'s
 /// on the nose.
+///
+/// **Still the ground rung, and that is the boundary rather than an
+/// oversight.** `Rung::transitive` and `Rung::empty_mem` are the two facts, and
+/// `derived::levels::srt::Srt` exports neither — see [`motive_level_of`]'s
+/// header. A variable rung needs them stated over `srt(n̄)`, which is a
+/// `derived` addition this route has no caller for until the split is built.
 pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
-    let rung = ip.prelude.tower.at(site.u1 as usize)?;
+    let rung = ip.prelude.tower.at(ground::as_numeral(&site.u1)? as usize)?;
     if rung.set != cx.v_set {
         return None
     }

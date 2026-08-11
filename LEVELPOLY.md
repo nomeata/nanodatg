@@ -1312,15 +1312,20 @@ Of the eliminators that reach a route at all:
 | `crate::rec_nat` | 2 | `097` |
 | `crate::rec_s_ix` | 1 | — |
 
-**`rec_dep` at a symbolic motive level is the next clause and is worth four
-files.** What all four routes owe is not the *reader* — `motive_level` — but
-the **split**: `prop != (site.u1 == 0)` picks between two constructions, a
+What all four routes owe is not the *reader* — `motive_level` — but the
+**split**: `prop != (site.u1 == 0)` picks between two constructions, a
 `Prop`-valued motive and a value-valued one, and at a variable `u` neither
 branch may be taken. The replacement is §1.4's conditional inside the target
 term — `derived::levels::ite0`, the same construction the `Π` clause spends —
 with `Interp::sort_of` for `⟦Sort u₁⟧` and `derived::levels::utower` for the
-rung in place of `prelude.tower.at`. All three exist; none is consumed here
-yet, and that is the honest statement of what is left.
+rung in place of `prelude.tower.at`.
+
+This paragraph used to end *"all three exist; none is consumed here yet, and
+that is the honest statement of what is left"*, and it sized `rec_dep` at four
+files. **All three do exist and none of them is the obstacle.** The next
+subsection is the measurement that says what is, taken by de-grounding
+`rec_dep` and running it — the sixth size correction on this branch, and again
+not about feasibility.
 
 The remaining eleven zone-A-clean files are blocked on something else and are
 named so the next tranche does not size them together: `037_prodType`,
@@ -1364,6 +1369,93 @@ also blocks the de-grounding is deleted rather than widened.
 **No fundamental blocker was found in this tranche either.** Nothing the
 ω-vocabulary could not state came up; what came up is a boundary type and an
 eliminator whose motive level nobody had counted.
+
+##### `rec_dep` de-grounded: the motive binder comes apart, and the real frontier is `as_pi`
+
+`rec_dep::ensure` takes `&[Level]`, `motive_level_of` returns a `Level`,
+`Site::u1` is a level expression and `Site::levels` carries the ω-variables.
+**All 27 of `rec_dep`'s eliminators are past the boundary and past `cx_of`** —
+the motive binder's type, the carrier equations, the codomain check, all at a
+variable rung.
+
+| | + the first eliminator | **+ `rec_dep` de-grounded** |
+|---|---|---|
+| zone-B constants owed | 362 | 362 |
+| interpreted at their own levels | 121 | 121 |
+| `symbolic-level` | 235 | **208** |
+| `recursor(…: the u₁ = 0 split …)` | — | **27** |
+| whole exports certified | 23 of 89 | 23 of 89 |
+
+`235 − 208 = 27` exactly, which is the arm census's own `rec_dep` figure
+reproduced from the other side. Every other poly column is byte-identical per
+file and `open` is 0; Gate A is byte-identical. **This tranche moves a reason
+axis and not a coverage one**, and saying so is the point: `zoneBOk` did not
+rise and a report that implied it had would be worse than no report.
+
+###### The one thing that came apart for free
+
+`cx_of` refused at a variable rung, and not for a level reason: the motive
+binder's scope typing is about `⟦T p⃗ → Sort u₁⟧`, which the de-scheduled `Π`
+clause spells `ite0(succ(û₁), cndd, dprod)` — **not** `dprod(·, ⟦T p⃗⟧)`, which
+is what the `MOTIVE_TY` check compares against. The guard is a *successor*,
+because `Sort u₁` inhabits `Sort (u₁+1)`, and a successor is never zero. So
+`Interp::level_nonzero` (`derived::recursion::succ_ne_zero`, premise
+`level_in_omega` at the predecessor) settles it with **no case analysis at
+all**, and `Interp::pi_dprod_at` (`Ite0::when_nonzero`) takes the term back to
+the product. That is the whole of what let 27 eliminators reach their split.
+
+###### What is left, and why it is not the shape the `Π` clause's win was
+
+**`Interp::as_pi` dispatches on a term's head symbol**, and at a variable rung
+that head is `ite0`. Measured: **42 call sites in 20 modules** — every minor
+premise (`minor_at`), every constructor bottom (`zoneb`), every ι rule
+(`iota_dep`), `quot_classes`, `rec_acc*`, `ctor_ix`, `fun_eta` — and all of
+them blind there. A minor premise ends in `C (ctorᵢ …)`, so **every** binder of
+**every** minor premise has a codomain level mentioning `u₁`, and the walk
+meets an `ite0` at each one.
+
+Those guards are `û₁` itself and cannot be settled the way the motive's can.
+The clause is therefore: run each branch under its own kernel hypothesis
+(`û₁ = ∅` / `¬(û₁ = ∅)`, `mini/src/scope.rs`'s `Scopes::assume`, exactly as
+`Checker::poly` carries `u ∈ ω`), collapse each binder under that hypothesis,
+discharge, and merge the two conclusions with `Ite0`. Three further costs,
+each concrete:
+
+* **`Srt` has no `transitive` and no `empty_mem`.** `cod_at_rung` spends
+  `Rung::transitive` and `Rung::empty_mem`; `derived::levels::srt::Srt` exports
+  neither and neither is `UTower`'s. Both are true at every rung — `srt(0)` is
+  `U₀`, transitive and holding `∅`; every successor rung is a universe — and
+  the derivation is `Order::cases` plus the universe facts. **This is the first
+  `derived` addition this strand needs**, and it is modest.
+* **The `Prop` half of the collapse costs a registration.** `Interp::pi_kit`'s
+  `cndd` is *not* `Interp::cond_site`'s (one body shape, two `FnSym`s — see
+  `pi_kit`'s own header), so `as_pi` has no entry for it. A `CondSite` over the
+  fibre site's `b` with `PiRules::cndd`/`cndd_ax` closes it; deliberately not
+  landed here, because nothing consumes it until the split does.
+* **The collapse is recursive over the level expression.** Under
+  `¬(û₁ = ∅)` an outer binder's guard is `(imax k u₁)̂ = ite0(û₁, ∅, k̂ ∪ û₁)`,
+  which needs `¬(k̂ ∪ û₁ = ∅)` from `Order::max_ub`; under `û₁ = ∅` every such
+  level is `∅` outright, since `imax ℓ 0 = 0`.
+
+**This is not the `Π` clause's shape and the difference is worth naming.**
+There, `ite0` *removed* the split: `pi_imax_dep` states both cases in one
+theorem, so the de-scheduled arm came out shorter than the scheduled one. Here
+`ite0` **relocates** it. The two eliminator clauses consume the interpretations
+of the minor premises, and those are themselves `ite0`s at every binder, so the
+undecidable question reappears once per binder and must be answered twice, once
+under each guard. The branch's thesis is not damaged — nothing here is
+unstatable in the ω-vocabulary, and no fundamental blocker turned up — but
+`rec_dep` is **not** assembly in the sense the previous four clauses were.
+
+###### It is one frontier, not `rec_dep`'s bill
+
+The same `as_pi` blindness stands between this route and `rec_prop`
+(`036`, `078`), `rec_nat` (`097`), `rec_s_ix`, **and** the ~70 eliminators
+whose declaration is itself polymorphic, whose seven interior `as_numeral`
+calls are the *other* half of their obstacle. So the collapse is the next
+tranche's unit of work and it should be built once, at `Interp`, rather than
+per route — which is why `level_nonzero` and `pi_dprod_at` were landed there
+and not inside `rec_dep`.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

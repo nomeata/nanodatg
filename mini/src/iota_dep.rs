@@ -178,13 +178,18 @@ pub(crate) fn fire(
         ind: ind_name,
         inst: ind_inst.clone(),
         rec: *rec,
-        rec_inst: rec_inst.to_vec(),
+        // The use site is a **ground** one: `whnf` reduces a redex whose levels
+        // the schedule has already substituted, so `Site::u1` is a numeral and
+        // `Site::levels` is empty. Both fields are widened for
+        // `crate::rec_dep::ensure`'s sake and neither changes what this reads.
+        rec_inst: crate::ground::ground_levels(rec_inst),
         ctors: ctors.clone(),
         np,
         n,
         depth,
         codomain,
-        u1,
+        u1: crate::ground::numeral(u1),
+        levels: c.level_vars(),
         tr,
     };
 

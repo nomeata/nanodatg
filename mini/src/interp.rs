@@ -2025,6 +2025,80 @@ impl Interp {
         Some(lp.srt_at(t))
     }
 
+    /// **`Γ ⊢ ¬(ℓ̂ = ∅)` at a level that is syntactically a successor** — the
+    /// one place a de-scheduled `ite0` guard can be settled *without* a case
+    /// split.
+    ///
+    /// `LEVELPOLY.md` §1.4's conditional is undecidable at a parameter, which
+    /// is the whole reason [`Interp::pi_term_of`] emits it. But `succ ℓ` is a
+    /// level Lean writes on its own, and it is never zero: `Sort u` inhabits
+    /// `Sort (u+1)`, so **every `Π` whose codomain is a sort** — the motive
+    /// binder of every eliminator, `C : T p⃗ → Sort u₁` — has `ℓ₂ = u₁ + 1` and
+    /// takes the value clause at every `u₁`, including `0`.
+    ///
+    /// `derived::recursion::succ_ne_zero` is the fact, and its premise is
+    /// [`Interp::level_in_omega`] at the *predecessor*, so the conclusion
+    /// carries exactly the `uᵢ ∈ ω` hypotheses that level mentions.
+    ///
+    /// `None` at any other level former, and deliberately so: `max`, `imax` and
+    /// a bare parameter are all zero at some instantiation, and a function that
+    /// guessed at them would hand back a theorem about a level it cannot see.
+    /// A caller that needs those settles them by hypothesis and
+    /// [`Ite0`](derived::levels::ite0::Ite0)'s two halves.
+    pub fn level_nonzero(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
+        let LevelView::Succ(a) = l.view() else { return None };
+        let ta = self.level_term(&a, vars)?;
+        let ma = self.level_in_omega(&a, vars)?;
+        let lp = self.levels()?;
+        let out =
+            Thm::mp(&derived::inst_all(&lp.r.peano.succ_ne_zero, std::slice::from_ref(&ta))?, &ma)?;
+        let want = Formula::not(Formula::eq(lp.succ_of(ta), lp.zero()));
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// **`Γ ⊢ ⟦Π x:A. B⟧ = dprod(q⃗,⟦A⟧)`** — the de-scheduled `Π` term's value
+    /// clause, unlocked by `Γ ⊢ ¬(ℓ̂₂ = ∅)`.
+    ///
+    /// # What this is for, and it is not the typing
+    ///
+    /// [`Interp::pi_typing_of`] certifies `ite0(ℓ̂₂, cndd, dprod)` in one
+    /// theorem and needs no clause. Everything *downstream* of a `Π` does:
+    /// [`Interp::as_pi`] dispatches on the term's **head symbol**, and at a
+    /// variable rung that head is `ite0` rather than either clause's, so `as_pi`
+    /// answers `None` and the forty-odd sites that walk an interpreted `Π` —
+    /// every minor premise, every constructor bottom, every ι rule — are blind.
+    /// That is the frontier the `Π` clause left behind: the *formation* rule is
+    /// clause-free, the *elimination* of the term is not.
+    ///
+    /// This is the value half of the way back. Given the guard refuted, one
+    /// [`Ite0::when_nonzero`](derived::levels::ite0::Ite0) says the term **is**
+    /// the dependent product, whose head is `fibre_by_sym`-registered, so
+    /// [`Interp::as_pi`] decomposes it exactly as it does a scheduled one.
+    /// [`Interp::retarget_set`] carries a membership along the equation.
+    ///
+    /// The `Prop` half is *not* built here, and that is the boundary rather
+    /// than an omission: `cndd`'s symbol is [`Interp::pi_kit`]'s own and is not
+    /// in [`Interp::as_pi`]'s table (see `pi_kit`'s header — one body shape,
+    /// two `FnSym`s), so unlocking it costs a registration this branch has no
+    /// consumer for yet.
+    ///
+    /// Nothing is trusted: the term must be an `ite0` at the guard the theorem
+    /// refutes, and the conclusion is compared against the equation expected.
+    pub fn pi_dprod_at(&mut self, t: &Term, nonzero: &Thm) -> Option<Thm> {
+        let lp = self.levels()?;
+        let (f, args) = self.parts_of(t)?;
+        if f != lp.i.sym || args.len() != 3 {
+            return None
+        }
+        let want_guard = Formula::not(Formula::eq(args[0].clone(), lp.zero()));
+        if *nonzero.concl() != want_guard {
+            return None
+        }
+        let out = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, nonzero)?;
+        let want = Formula::eq(t.clone(), args[2].clone());
+        (*out.concl() == want).then_some(out)
+    }
+
     // ────────────────────────────────────────────────────── application ──
 
     /// `⟦f a⟧ = app(⟦f⟧, ⟦a⟧)` on the non-proof branch of §6.2.
@@ -2230,6 +2304,25 @@ impl Interp {
     /// `Dep`, told apart by which fibre symbol** — which is what
     /// [`Interp::fibre_by_sym`] is for, and is `QUOT-MODEL.md` §2.1's own
     /// invariant. An `fs` term is not an interpreted `Π` and answers `None`.
+    ///
+    /// # This is the de-scheduled route's frontier, and it is here rather than
+    /// in any clause
+    ///
+    /// The dispatch is on the **head symbol**, and at a variable rung
+    /// [`Interp::pi_term_of`] emits `ite0(ℓ̂₂, cndd, dprod)` — §1.4's
+    /// conditional, whose head is neither table's. So a `Π` the de-scheduled
+    /// clause *interprets and certifies* does not come apart again, and the
+    /// **42 call sites of this function, in 20 modules** — every minor premise,
+    /// every constructor bottom, every ι rule — are blind on that route.
+    ///
+    /// That is not a defect of this function: `Dep` and `Prop` are two clauses
+    /// and answering either would be deciding `ℓ₂ = 0`, which is the one
+    /// question a parameter forbids. The way back is to settle the guard and
+    /// collapse the term first — [`Interp::level_nonzero`] and
+    /// [`Interp::pi_dprod_at`] where the level is a *successor*, which needs no
+    /// case analysis and is what the eliminator's motive binder is; a case split
+    /// on `û₁ = ∅` where it is not. `crate::rec_dep::motive_level_of`'s header
+    /// carries the measurement.
     pub fn as_pi(&self, t: &Term) -> Option<PiShape> {
         let (f, mut args) = self.parts_of(t)?;
         if let Some(site) = self.fibre_by_sym.get(&f) {

@@ -96,16 +96,36 @@
 //! The second half is where this route now is. `crate::recursor::empty_rec` is
 //! through — it never reads `u₁`, so `Empty.rec.{u}` costs
 //! [`crate::interp::Interp::sort_of`] and the already-landed `Π` clause and
-//! nothing else — and `033_empty` is clean on the strength of it. **Every other
-//! eliminator stops at `crate::rec_dep::motive_level`**, whose header says what
-//! they owe: not the reader, the `u₁ = 0` *split*, as §1.4's conditional inside
-//! the term.
+//! nothing else — and `033_empty` is clean on the strength of it.
 //!
 //! Of the eliminators that reach a route at all: **27 `rec_dep`, 9 `rec_prop`,
 //! 2 `rec_nat`, 1 `rec_s_ix`**. Seven tutorial files are clean but for one
-//! eliminator each — four of them `rec_dep`, two `rec_prop`, one `rec_nat` —
-//! so `rec_dep` at a symbolic motive level is the next clause and is worth
-//! four files.
+//! eliminator each — four of them `rec_dep`, two `rec_prop`, one `rec_nat`.
+//!
+//! # Where `rec_dep` stops now, and it is not the boundary
+//!
+//! `crate::rec_dep::ensure` takes `&[Level]`. **All 27** of its eliminators are
+//! past the `&[u32]` boundary and past `crate::rec_dep::cx_of` — the motive
+//! binder's type, the carrier equations, the codomain check, all at a variable
+//! rung — and every one of them now reports §6.2's `u₁ = 0` split by name
+//! instead of `symbolic-level`, which fell 235 → **208**, exactly 27. The
+//! `zoneBOk` column did not move, and that is the honest shape of the tranche:
+//! a reason axis, not a coverage one.
+//!
+//! What made `cx_of` reach is one collapse with **no case analysis in it**:
+//! `⟦T p⃗ → Sort u₁⟧` is `ite0(succ(û₁), cndd, dprod)` at a variable rung, and
+//! its guard is a *successor*, so
+//! [`crate::interp::Interp::level_nonzero`] settles it outright and
+//! [`crate::interp::Interp::pi_dprod_at`] takes the term back to the product.
+//!
+//! What is left is measured in `crate::rec_dep::motive_level_of`'s header and
+//! it is **larger than `sort_of` and `utower`**, both of which exist and
+//! neither of which is the obstacle: [`crate::interp::Interp::as_pi`]
+//! dispatches on a term's head symbol, that head is `ite0` at every binder
+//! whose codomain level mentions `u₁` — which is every binder of every minor
+//! premise — and its **42 call sites in 20 modules** are blind there. That is
+//! one frontier shared by this queue and by the ~70 eliminators whose
+//! declaration is itself polymorphic, not a cost `rec_dep` pays alone.
 //!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
@@ -1104,6 +1124,64 @@ mod tests {
         );
     }
 
+    /// **A class-(T) eliminator's motive binder comes apart at a symbolic
+    /// motive level** — `crate::rec_dep::collapse_motive_ty`, and the reason
+    /// axis it moves.
+    ///
+    /// `T.rec.{u}` used to stop at `crate::recursor::ensure`'s `numerals`
+    /// predicate, which is the `&[u32]` **boundary** and says nothing about the
+    /// eliminator. It now runs `crate::rec_dep::cx_of` at the variable rung —
+    /// the motive's type `⟦T → Sort u⟧` is `ite0(succ(û), cndd, dprod)` there,
+    /// collapsed by [`crate::interp::Interp::level_nonzero`] and
+    /// [`crate::interp::Interp::pi_dprod_at`] with no case analysis — and stops
+    /// at §6.2's own `u₁ = 0` split, which is a construction and not a
+    /// boundary.
+    ///
+    /// # The axis, and why this cannot go red on the cure
+    ///
+    /// `DECISIONS.md` (2026-08-10): a fixture may not assert that something
+    /// stays broken, and *distance in the backlog is not safety*. So this does
+    /// **not** pin the split's own reason string — the next clause is scheduled
+    /// to remove it, and an eliminator that certifies is not in
+    /// [`PolyLedger::zone_b_blocked`] at all, so every assertion below still
+    /// holds when it does.
+    ///
+    /// What is pinned is the two reasons this tranche **retired**, and each
+    /// corresponds to one mutation:
+    ///
+    /// * `symbolic-level` — the boundary put back, i.e. `rec_dep::ensure` taking
+    ///   numerals again;
+    /// * `…the motive's type is not T p⃗ → Sort u₁` — the collapse deleted from
+    ///   `cx_of`, which leaves the `ite0` where the product is expected and
+    ///   declines under a label that is *false* about the declaration.
+    ///
+    /// Neither can be reintroduced by progress. Three constructors, so the
+    /// declaration is a real class-(T) one with a real `decl_rect` behind it
+    /// rather than a shape two atoms could imitate.
+    #[test]
+    fn an_eliminators_motive_binder_comes_apart_at_a_symbolic_motive_level() {
+        let (env, d) = nullary_ind(&["a", "b", "c"]);
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        // The type former, three constructors and `T.rec` — every one accounted
+        // for, which is what makes the reason table below the whole story.
+        assert_eq!(led.zone_b_consts, 5, "{:?}", led.rows());
+        owed_is_met_or_explained(&led);
+        assert_eq!(led.open, 0, "the eliminator's route left no assumption open");
+        for key in led.zone_b_blocked.keys() {
+            assert_ne!(
+                key, "symbolic-level",
+                "the eliminator is past the &[u32] boundary; this is it put back: {:?}",
+                led.rows()
+            );
+            assert!(
+                !key.contains("the motive's type is not"),
+                "the motive binder's type must collapse at a variable rung: {:?}",
+                led.rows()
+            );
+        }
+    }
+
     /// **A `mutual` block is recorded and never handed to `zoneb::ensure`** —
     /// and this is a *soundness* guard, not a coverage one.
     ///
@@ -1309,6 +1387,80 @@ mod tests {
             assert_eq!(led.value_ev_ok, 1, "Sort u → Sort {k} uncertified: {:?}", led.rows());
             assert_eq!(led.open, 0, "Sort u → Sort {k} left an assumption open");
         }
+    }
+
+    /// **A `Π` at a variable rung comes apart again once its guard is
+    /// settled** — [`crate::interp::Interp::level_nonzero`] and
+    /// [`crate::interp::Interp::pi_dprod_at`].
+    ///
+    /// The `Π` clause certifies `ite0(ℓ̂₂, cndd, dprod)` in one theorem and
+    /// needs no clause to do it. **Everything downstream of a `Π` does**:
+    /// [`crate::interp::Interp::as_pi`] dispatches on the head symbol, and at a
+    /// variable rung the head is `ite0`. This is the way back on the value
+    /// side, and the case it is built for is the one Lean writes by itself: a
+    /// codomain that is a *sort*, `ℓ₂ = ℓ + 1`, which is never zero.
+    ///
+    /// Three successors and not one — `u+1`, `u+2` and `max(u,v)+1` — because
+    /// two would pass under a `level_nonzero` that read only the outermost
+    /// `succ` and ignored what is under it, and the third is the one whose
+    /// premise needs `Order::max_in_omega` rather than the parameter's own
+    /// hypothesis.
+    ///
+    /// Non-vacuity, three ways: the collapsed right-hand side must **decompose
+    /// as a `Π`** where the `ite0` does not; the equation's left side must be
+    /// the term the clause actually built, not one rebuilt here; and the
+    /// theorem must carry exactly the level hypotheses of the parameters its
+    /// level mentions.
+    ///
+    /// The last case is the boundary and is asserted from the other side: a
+    /// bare parameter `ℓ₂ = u` is **not** settled, and must not be. `Sort u`
+    /// is `Prop` at `u = 0` and a universe above it, so a construction that
+    /// answered there would be claiming a clause it cannot see.
+    #[test]
+    fn a_pi_over_a_sort_comes_apart_at_a_variable_rung() {
+        let env = Environment::empty();
+        let (u, v) = (Level::param(n("u")), Level::param(n("v")));
+        let mut ip = Interp::new();
+        let mut c = Checker::poly(&env, &mut ip, &[n("u"), n("v")]).expect("poly");
+        // `∀ x : Sort u. Sort b` — the codomain is `Sort b`, so the level the
+        // `ite0` guards on is `ℓ₂ = b + 1`. That is the whole reason a motive
+        // binder is decidable: Lean writes the codomain as a sort and a sort's
+        // own level is a successor.
+        let cases = [("u+1", u), ("u+2", u.succ()), ("max(u,v)+1", Level::max(u, v))];
+        let mut got = Vec::new();
+        for (label, b) in cases {
+            let t = c.infer_type(&forall(sort(u), sort(b))).expect("infer");
+            got.push((label, b.succ(), t.tm.clone().unwrap_or_else(|| panic!("{label}: no ⟦Π⟧"))));
+        }
+        let vars = c.level_vars();
+        drop(c);
+
+        for (label, l2, pi) in got {
+            let ne = ip
+                .level_nonzero(&l2, &vars)
+                .unwrap_or_else(|| panic!("{label}: ¬(ℓ̂₂ = ∅) is owed at a successor"));
+            // Exactly the parameters the level mentions, and no others.
+            let want_hyps = if label == "max(u,v)+1" { 2 } else { 1 };
+            assert_eq!(ne.hyps().len(), want_hyps, "{label}: the level hypotheses carried");
+            let eq = ip
+                .pi_dprod_at(&pi, &ne)
+                .unwrap_or_else(|| panic!("{label}: the ite0 did not collapse"));
+            let (lhs, rhs) = eq.concl().as_eq().expect("an equation");
+            assert_eq!(lhs, pi, "{label}: the equation must be about the term the clause built");
+            assert!(
+                matches!(ip.as_pi(&rhs), Some(crate::interp::PiShape::Dep { .. })),
+                "{label}: the collapsed Π must decompose, which is the whole point"
+            );
+        }
+        // `Sort u` is `Prop` at `u = 0`; neither half may be claimed.
+        assert!(
+            ip.level_nonzero(&u, &vars).is_none(),
+            "a bare parameter is zero at some instantiation and must not be settled"
+        );
+        assert!(
+            ip.level_nonzero(&Level::zero(), &vars).is_none(),
+            "…nor may `0`, whose ite0 takes the other branch"
+        );
     }
 
     /// **The type's slot and the value's slot are the slots they came from.**

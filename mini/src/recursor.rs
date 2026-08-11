@@ -158,12 +158,19 @@ pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 /// is why the type of *this* parameter is where the de-grounding starts and
 /// not at `ind_inst`.
 ///
-/// **Every route below except [`empty_rec`] still wants numerals, and each is
-/// declined by one predicate rather than half-threaded.** `numerals` is that
-/// predicate; a route reaching it with a symbolic motive level answers
-/// [`Gap::SymbolicLevel`], which is a reason and not a silence. They come off
-/// this list one at a time as their `u₁` is derived — [`crate::rec_dep`]'s
-/// `Site::u1` and the `prop != (u1 == 0)` split are what each of them owes.
+/// **Two routes are off the numeral list and the rest are not.**
+/// [`empty_rec`] never reads `u₁` at all, and [`crate::rec_dep`] now takes
+/// `&[Level]` too: its `Site::u1` is a level expression, `cx_of` runs at a
+/// variable rung, and what it stops at is §6.2's own `u₁ = 0` split rather than
+/// this boundary. `numerals` is the predicate for the rest; a route reaching it
+/// with a symbolic motive level answers [`Gap::SymbolicLevel`], which is a
+/// reason and not a silence.
+///
+/// They come off this list one at a time as their `u₁` is derived. What each
+/// still owes is the split, and [`crate::rec_dep::motive_level_of`]'s header is
+/// where its measured cost is written down — it is **not** `sort_of` and
+/// `utower`, which exist, but `Interp::as_pi` at a variable rung, and it is
+/// shared with every other route here.
 pub(crate) fn ensure(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
@@ -253,7 +260,7 @@ pub(crate) fn ensure(
     if empty {
         return empty_rec(c, ind_name, ind_inst, rec_name, rec_inst)
     }
-    crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
+    crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
 }
 
 /// **The eliminator of a declaration with no constructors** —
@@ -291,10 +298,11 @@ pub(crate) fn ensure(
 /// # The motive's level is never read, and that is why this is the first
 /// eliminator off the ground schedule
 ///
-/// Every other route in this module reaches [`crate::rec_dep::motive_level`]
-/// and splits on `u₁ = 0` — a `Prop`-valued motive and a value-valued one are
-/// two constructions — so a symbolic `u` leaves them with no branch to take
-/// until the split becomes the `ite0` term §1.4 describes. This one has no
+/// Every other route in this module reaches
+/// [`crate::rec_dep::motive_level_of`] and splits on `u₁ = 0` — a `Prop`-valued
+/// motive and a value-valued one are two constructions — so a symbolic `u`
+/// leaves them with no branch to take until the split becomes the `ite0` term
+/// §1.4 describes. This one has no
 /// split: the obligation is discharged from the major premise alone by
 /// `EmptyDecl::anything`, whose `φ` is the caller's, and `•` is the bottom term
 /// at every `u`. `u` appears only in `⟦Sort u⟧` inside the motive's *type*,
