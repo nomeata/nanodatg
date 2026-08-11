@@ -8095,3 +8095,23 @@ Two things follow for whoever wires it up.
   named piece of missing work, alongside identifying `⟦Nat.ble⟧` — the imported
   `brecOn` nest — with `Compare::ble`, which is what `derived::nat::uniqueness`
   is for.
+
+### Reproduced at `71b608a`, where it becomes the largest origin in the ledger
+
+Re-measured after origin 1 was split into its three shapes, and after
+`iota_assume` was generalised into `origin_assume`/`NANODA_ASSUME`. The ledger
+is unchanged — 15 734 gaps, 2 232 escapes, 159 803 derived — and the deletion
+reproduces to the gap: `NANODA_ASSUME='accelerated Nat op at LITERAL'` gives
+12 775, a fall of **2 959**. With origin 1 no longer counted as one population
+the ranking reads
+
+| origin | own | relayed | sub-tree |
+|---|---:|---:|---:|
+| **iota: … accelerated Nat op at LITERAL operands** | **466** | **2 695** | **3 161** |
+| iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 280 | 2 680 |
+| proj_reduce | 659 | 1 808 | 2 467 |
+| iota: no interpretation — several constructors | 286 | 1 858 | 2 144 |
+
+so **`Nat.ble` at literal operands is the single largest origin anywhere in the
+ledger** — and the only one of the four whose construction is a fact about
+numerals rather than about recursor interpretation.
