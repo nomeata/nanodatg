@@ -1623,6 +1623,17 @@ const DEGEN_NESTS: &str = "recursors given a DEGENERATE nest";
 const DEGEN_FIRED: &str = "ι sites the DEGENERATE rule computed";
 const DEGEN_REBUILT: &str = "cached degenerate recursors declined: not over this carrier";
 const GEN_TPOLICY: &str = "…declined (recursor): T-policy 2/3, HYP not dischargeable";
+/// The **dependent** path's rows — the arm that picks up what `T`-policy 3
+/// declines. Read and asserted exactly like the degenerate path's, for the
+/// same reason, and with one row the others do not have: `DEP_ASKED` counts the
+/// sites the arm was *reached* at, so that `asked == 0` (the dispatch never got
+/// here) and `asked > fired` (it did and the derivation refused) are two
+/// different failures rather than one silent zero.
+const DEP_NESTS: &str = "recursors given a DEPENDENT nest";
+const DEP_FIRED: &str = "ι sites the DEPENDENT rule computed";
+const DEP_ASKED: &str = "…DEPENDENT ι sites the arm was asked at";
+const DEP_REBUILT: &str = "cached dependent recursors declined: not over this carrier";
+const DEP_RECURSIVE: &str = "…declined (DEPENDENT recursor): a recursive constructor";
 /// The four rows that say a per-thread store was consulted and **not** used.
 /// Every one of them is zero on `init-prelude`, and that is the statement that
 /// the interpretation is a function of `(name, ground levels)` on this corpus.
@@ -1828,6 +1839,70 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     );
     let degen_nests = path_row(DEGEN_NESTS);
     assert!(degen_nests > 0, "no degenerate recursor nest was built at all");
+    // ── The DEPENDENT arm's reach (task #126) ────────────────────────────────
+    //
+    // **53 ι sites on `init-prelude`, at 6 nests, and the 53 is not a number
+    // chosen here.** The census priced origin 3 at 286 ι sites over five
+    // declarations; `Lean.ParserDescr` is 169 of them and declines by name
+    // below (a recursive constructor), leaving 117 over four. Of those 117,
+    // 64 are sites whose major premise never reduces to a constructor at all —
+    // they move from `no interpretation — several constructors` to
+    // `the major premise is not a constructor`, a better reason and not a
+    // closure. 53 is the remainder, and it is the whole of what this arm can
+    // reach today.
+    //
+    // The ratchet is `>= 40` on the same grounds as `DEGEN_FIRED`'s `>= 350`:
+    // the exact figure moves when the interpretation does, and what must not
+    // move is that it is *large*. A firing count of one would pass every other
+    // assertion in this file.
+    let dep_fired = path_row(DEP_FIRED);
+    assert!(
+        dep_fired >= 40,
+        "the dependent ι rule computed at {dep_fired} sites, expected at least 40 — \
+         `Decidable`, `Except`, `EStateM.Result` and `Lean.Syntax.Preresolved` are its \
+         whole reachable population"
+    );
+    // **Asked, and not merely wired.** This is the row that separates "the
+    // dispatch never reached the arm" from "it reached it and the derivation
+    // refused", and it is asserted *before* the shortfall so that a zero here
+    // cannot be read as a clean run.
+    let dep_asked = path_row(DEP_ASKED);
+    assert!(
+        dep_asked >= dep_fired,
+        "the dependent arm fired {dep_fired} times but was asked only {dep_asked} — \
+         the two counters have come apart"
+    );
+    assert!(
+        dep_asked > 0,
+        "the dependent arm was never asked: `RecBottom::Dep` is wired but unreachable"
+    );
+    let dep_nests = path_row(DEP_NESTS);
+    assert!(dep_nests > 0, "no dependent recursor nest was built at all");
+    // **`Lean.ParserDescr` still declines, and that row must stay nonzero.**
+    // Its constructors are recursive, so `GuardedMinors` hands back a
+    // `define_abbrev` nest rather than `Sᵢ` and there is no `terms_at`
+    // rebuilder to state it at the recursor nest's own variables. A zero here
+    // would mean the guard had been widened past what the wiring supports.
+    let dep_recursive = path_row(DEP_RECURSIVE);
+    assert!(
+        dep_recursive > 0,
+        "no declaration declined on a recursive constructor; the dependent arm's \
+         one guard is not being enforced"
+    );
+    // **Neither of the other two arms lost anything to it.** Disjointness is
+    // the claim — `RecBottom::Dep` is dispatched *after* `General`, so it can
+    // only pick up what `t_policy` declined — and these are where it is a
+    // number. Both were at their present values before this arm existed.
+    assert!(
+        fired >= 92,
+        "the general ι rule computed at only {fired} sites — the dependent arm, which \
+         is dispatched after it, is taking declarations the general path used to serve"
+    );
+    assert!(
+        degen_fired >= 400,
+        "the degenerate ι rule computed at only {degen_fired} sites — the dependent arm \
+         is taking declarations the degenerate path used to serve"
+    );
     // **The general path did not lose anything to it.** Disjointness is the
     // claim; this is where it is a number. `fired` is asserted `>= 80` above
     // and was 92 before the degenerate arm existed, so a degenerate arm that
@@ -1845,7 +1920,7 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // the `βⱼ` one, at 5630, which the other three were downstream of.
     // A missing row would read zero and pass, so the row's presence is asserted
     // first: this must fail when the ledger changes, not go quiet.
-    for label in [GEN_SPEC_DECLINED, GEN_REC_REBUILT, DEGEN_REBUILT, NEST_DECLINED, CTOR_NEST_DECLINED] {
+    for label in [GEN_SPEC_DECLINED, GEN_REC_REBUILT, DEGEN_REBUILT, DEP_REBUILT, NEST_DECLINED, CTOR_NEST_DECLINED] {
         assert_eq!(
             row(&text, label),
             0,
@@ -1944,13 +2019,23 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // `row` rather than `rows_or_zero`: a renamed row reads zero and this
     // ratchet would pass having measured nothing. That is the defect class this
     // pass is about, and it applies to the fix as much as to the bug.
+    //
+    // **Tightened 878 → 825 on 2026-08-11**, likewise in the right direction:
+    // the dependent recursor is wired, and 117 of the 286 `no interpretation —
+    // several constructors` closed. The net is 53 and not 117, and the
+    // difference is the interesting half: 64 of the 117 land on
+    // `the major premise is not a constructor` (486 → 550) because their major
+    // premise never reduced to one. Those sites acquire a **better reason**,
+    // not a closure — the recursor was never what they were short of — and a
+    // prefix-summing ratchet is exactly what keeps that visible instead of
+    // letting a rename bank it as progress.
     const IOTA_GAPS: &str = "gap: iota";
     let iota_gaps = row(&text, IOTA_GAPS);
     assert!(
-        iota_gaps > 0 && iota_gaps <= 878,
-        "init-prelude: {iota_gaps} ι gaps, ratchet 878 — the general ι path regressed. \
-         Unlike the ledger total this one IS about this test's subject: 392 `no curried \
-         interpretation` + 486 `major premise is not a constructor`."
+        iota_gaps > 0 && iota_gaps <= 825,
+        "init-prelude: {iota_gaps} ι gaps, ratchet 825 — the general ι path regressed. \
+         Unlike the ledger total this one IS about this test's subject: 550 `major premise \
+         is not a constructor` + 169 `several constructors` + 100 `mutual` + 6 `indexed`."
     );
 }
 
@@ -2057,9 +2142,25 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // 1 147 → 867), which is exactly the kind of movement a component-named
     // guard must not claim. 2 480 in all, the census's deletion measurement of
     // that origin to the unit. Locked in rather than left slack.
+    // **Tightened 13 254 → 12 860 on 2026-08-11.** The dependent recursor is
+    // wired (`RecBottom::Dep`): the arm `t_policy` declines, at a motive that
+    // is still a variable, so `COD` is discharged by `cod_at_funspace` at
+    // `⋃⟦Sort u₁⟧ ∪ {∅}` for any motive at all and `DEP` by walking each minor
+    // premise's telescope with `app_in_fibre`. 53 ι sites, claimed where they
+    // belong — see [`the_general_iota_rule_computes_on_the_prelude`]. The other
+    // 341 of the 394 are this total's own business: the composition rows the
+    // closed clause fed (`trans` 6 457 → 6 168, `congruence` 636 → 614,
+    // `pi congruence over an admitted body premise` 867 → 821).
+    //
+    // **The forecast was a ceiling and it held.** The census priced origin 3 at
+    // 1 929 gaps and at 286 ι sites; 169 of the sites are `Lean.ParserDescr`,
+    // which declines by name on a recursive constructor, and 64 of the
+    // remaining 117 have a major premise that never reduces to a constructor —
+    // those move to a better *reason*, not to a closure. 53 sites is the whole
+    // of what was reachable, and 394 is what they were worth.
     assert!(
-        gaps > 0 && gaps <= 13254,
-        "init-prelude: {gaps} gaps, ratchet 13254 — SOME clause of the ledger regressed. \
+        gaps > 0 && gaps <= 12860,
+        "init-prelude: {gaps} gaps, ratchet 12860 — SOME clause of the ledger regressed. \
          This is the whole-ledger total and it does not say which; read the per-row gap \
          table in the report, and see the per-origin ratchets for the named subjects."
     );
@@ -2127,9 +2228,24 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // 2 232 → 2 432, and the wiring reproduces both figures exactly, which no
     // leak would. And no other row rose. A rise with no gap movement is still a
     // regression and still fails here.
+    // **2 432 → 2 464 on 2026-08-11, moved with a written trade, and it is the
+    // degenerate recursor's price again at a twelfth of the scale.**
+    //
+    // The trade: **394 gaps for 32 escapes**, 12.3 to 1 — the degenerate arm's
+    // own ratio (12.4 to 1) to two figures, which is what one expects when the
+    // mechanism is identical. It is: `fire_dep` brings the Lean spine
+    // `⟦cᵢ p⃗ f⃗⟧` to `ctorᵢ(y⃗)` through the same `ctor_spine_bridge`, whose
+    // antecedent is the arguments' own typings, and where those are not
+    // discharged the equation is conditional. `dep_minor_typed` instantiates
+    // the *same* bridge a second time, at `p⃗` and at variables, and pays the
+    // parameters' half of that antecedent from `nest_chain`. Before this the
+    // whole ι step was **admitted** and nothing counted any of it.
+    //
+    // No other row rose. A rise with no gap movement is still a regression and
+    // still fails here.
     assert!(
-        esc <= 2432,
-        "init-prelude: {esc} escapes, ratchet 2432 — SOME clause let an assumption reach the \
+        esc <= 2464,
+        "init-prelude: {esc} escapes, ratchet 2464 — SOME clause let an assumption reach the \
          boundary. Whole-ledger, like the gap ratchet above; it does not name a subject."
     );
 }
