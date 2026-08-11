@@ -4,25 +4,26 @@
 # `git apply scripts/nat-major-probe.diff` onto a scratch worktree, then
 #
 #   cargo build --release --features tg,stepcount --bin nanoda_bin
-#   ./target/release/nanoda_bin cfg.json                     # censuses, side-effect free
-#   NANODA_IOTA_ASSUME=natlit    …                           # delete Nat.ble at literals
-#   NANODA_IOTA_ASSUME=natnonlit …                           # delete Nat.beq, operands not literal
-#   NANODA_IOTA_ASSUME=natop     …                           # both
-#   NANODA_IOTA_ASSUME=notctor   …                           # the OfNat.ofNat/projection residue
-#   NANODA_NAT_CMP_MIN=256       …                           # withhold GMP beq/ble under 256
+#   ./target/release/nanoda_bin cfg.json                       # censuses, side-effect free
+#   NANODA_ASSUME='accelerated Nat op at LITERAL' …            # delete Nat.ble at literals
+#   NANODA_ASSUME='accelerated Nat op, operands not literal' … # delete Nat.beq, the rest
+#   NANODA_ASSUME='accelerated Nat op' …                       # both
+#   NANODA_ASSUME='major premise is not a constructor' …       # the OfNat.ofNat residue
+#   NANODA_NAT_CMP_MIN=256 …                                   # withhold GMP beq/ble under 256
 #
 # `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
 # `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`.
+# `NANODA_ASSUME` is the tree's own deletion knob (`origin_assume`), which
+# matches an origin by substring; this probe only has to split the reason
+# string for it to become deletable per constituent.
 #
 # What it adds:
 #
 #   * `derive_iota_core` returns THREE reason strings where it returned one, so
 #     `origin_bit` gives each its own bit and the sub-tree column prices each
 #     separately: an accelerated `Nat` op at literal operands, the same at
-#     non-literal operands, and the residue. `iota_assume` gains the matching
-#     keys, so each is deleted alone and its prediction checked against its own
-#     deletion. The split is read off `NameCache` — the same pointers
-#     `try_reduce_nat` matches — not off a spelling.
+#     non-literal operands, and the residue. The split is read off `NameCache` —
+#     the same pointers `try_reduce_nat` matches — not off a spelling.
 #   * `NAT_MAJOR` / `NAT_INST` — the firings by operand *shape* and by operand
 #     *value*, which is what refuted the brief: 55 distinct `Nat.ble` instances,
 #     every operand <= 12.
@@ -33,8 +34,9 @@
 #     "is the acceleration what blocks this origin". It is not: the origin is
 #     unchanged at 466 own / 3 161 sub-tree, and the ledger is 148 gaps worse.
 #
-# Ledger byte-identical with the censuses in and no env var set: 15 734 gaps,
-# 2 232 escapes, 159 803 derived.
+# Ledger byte-identical with the censuses in and no environment variable set:
+# 15 734 gaps, 2 232 escapes, 159 803 derived — at `c31c707` where the numbers
+# were taken and again at `71b608a` after origin 1 was split.
 diff --git a/checker/src/tc.rs b/checker/src/tc.rs
 index a444b2f..38192c5 100644
 --- a/checker/src/tc.rs
@@ -102,10 +104,10 @@ index a444b2f..38192c5 100644
 +    s
 +}
 diff --git a/checker/src/tg.rs b/checker/src/tg.rs
-index cef12d7..ccde5dc 100644
+index 46c50a0..252ea96 100644
 --- a/checker/src/tg.rs
 +++ b/checker/src/tg.rs
-@@ -12222,6 +12222,67 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+@@ -12298,6 +12298,67 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                  let mut g = NOT_CTOR_NAMES.lock().expect("not_ctor_names poisoned");
                  *g.entry(format!("{kind:<11} {sp}")).or_insert(0u64) += 1;
              }
@@ -173,22 +175,7 @@ index cef12d7..ccde5dc 100644
              return Err("iota: the major premise is not a constructor")
          };
          let idx = c.ctor_idx as usize;
-@@ -16842,6 +16903,14 @@ fn iota_assume(why: &str) -> bool {
-         // origin, so a combined run cannot check a single prediction.
-         Some("nonest") => why == "iota: this recursor has no curried interpretation",
-         Some("notctor") => why == "iota: the major premise is not a constructor",
-+        // PROBE (uncommitted): origin 2, split by head constant.
-+        Some("natlit") => why == "iota: the major premise is an accelerated Nat op at LITERAL operands",
-+        Some("natnonlit") => why == "iota: the major premise is an accelerated Nat op, operands not literal",
-+        Some("natop") => why.starts_with("iota: the major premise is an accelerated Nat op"),
-+        Some("notctor2") => {
-+            why == "iota: the major premise is not a constructor"
-+                || why.starts_with("iota: the major premise is an accelerated Nat op")
-+        }
-         Some(_) => true,
-     }
- }
-@@ -16856,6 +16925,14 @@ static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+@@ -16986,6 +17047,14 @@ static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
  #[cfg(feature = "stepcount")]
  static NOT_CTOR_NAMES: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
      std::sync::Mutex::new(std::collections::BTreeMap::new());
@@ -203,7 +190,7 @@ index cef12d7..ccde5dc 100644
  /// What the major premise's head is when it is not a constructor — the second
  /// origin's census.
  static NOT_CTOR: [std::sync::atomic::AtomicU64; 10] =
-@@ -16978,6 +17055,38 @@ pub fn origin_report() -> String {
+@@ -17178,6 +17247,38 @@ pub fn origin_report() -> String {
              }
          }
      }
