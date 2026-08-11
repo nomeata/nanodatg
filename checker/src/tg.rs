@@ -543,8 +543,15 @@ pub enum TgCert {
         /// `conj(R ++ [h]) = conj(R) ∧ h` puts them.
         hyps: Vec<Formula>,
     },
-    /// A step that was taken on trust, tagged with why.
-    Admitted(&'static str),
+    /// A step that was taken on trust, tagged with why — and with the bitmask of
+    /// the **originating** gaps it descends from.
+    ///
+    /// A rule that reports a gap because a premise was already one inherits that
+    /// premise's mask; a rule that fails on its own merits mints a bit of its
+    /// own. That distinction is the whole of [`origin_report`], and it is why
+    /// the mask is on the certificate rather than in a side table: it has to
+    /// travel with the gap through every rule that relays it.
+    Admitted(&'static str, u32),
 }
 
 /// Cloning a conditional certificate creates a *second* obligation, and the
@@ -561,7 +568,7 @@ impl Clone for TgCert {
                 CONDITIONAL_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 TgCert::Conditional { thm: thm.clone(), hyps: hyps.clone() }
             }
-            TgCert::Admitted(r) => TgCert::Admitted(r),
+            TgCert::Admitted(r, m) => TgCert::Admitted(r, *m),
         }
     }
 }
@@ -575,7 +582,7 @@ impl TgCert {
     pub fn thm(&self) -> Option<&Thm> {
         match self {
             TgCert::Proved(t) => Some(t),
-            TgCert::Conditional { .. } | TgCert::Admitted(_) => None,
+            TgCert::Conditional { .. } | TgCert::Admitted(..) => None,
         }
     }
     /// Whether this certificate is a complete, unconditional derivation.
@@ -601,7 +608,7 @@ impl TgCert {
         match self {
             TgCert::Proved(t) => t.hyps(),
             TgCert::Conditional { thm, .. } => thm.hyps(),
-            TgCert::Admitted(_) => &[],
+            TgCert::Admitted(..) => &[],
         }
     }
 }
@@ -3786,7 +3793,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 note_consumed();
                 CondEq::new(thm.clone(), hyps.clone())
             }
-            TgCert::Admitted(_) => None,
+            TgCert::Admitted(..) => None,
         }
     }
 
@@ -4133,8 +4140,40 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // on `Drop`: a `Drop` impl on the backend would make `TypeChecker`'s
         // borrow of its context live to the end of scope, which breaks callers
         // that legitimately reuse the context afterwards.
+        self.note_admit_m(reason, 0)
+    }
+
+    /// [`Self::note_admit`], told what its premises descended from.
+    ///
+    /// `premask` is the union of the origin masks of whichever premises were
+    /// already gaps, or 0 when none was — so **0 means this rule originates the
+    /// gap** and anything else means it **relays** one. That is the whole
+    /// partition [`origin_report`] rests on.
+    ///
+    /// **Read off the premises, not off the reason string.** The two do not
+    /// agree: 68 of `init-prelude`'s gaps carry a reason that reads like an
+    /// origin (`pi congruence: two Πs of undetermined sort`, and others whose
+    /// wording names a shape rather than a missing premise) and are in fact
+    /// relays, because the rule reached its shape check only after a premise had
+    /// already gapped. Counting by row name puts the relayed total at 11 043;
+    /// counting by mask puts it at **11 111**, and the mask is the one that is
+    /// a fact about the derivation.
+    fn note_admit_m(&mut self, reason: &'static str, premask: u32) -> TgCert {
+        use std::sync::atomic::Ordering::Relaxed;
         merge_one(reason);
-        TgCert::Admitted(reason)
+        let mask = if premask == 0 {
+            let b = origin_bit(reason);
+            ORIGINATED[b.trailing_zeros() as usize].fetch_add(1, Relaxed);
+            b
+        } else {
+            if premask.count_ones() == 1 {
+                SUBTREE[premask.trailing_zeros() as usize].fetch_add(1, Relaxed);
+            } else {
+                SUBTREE_MULTI.fetch_add(1, Relaxed);
+            }
+            premask
+        };
+        TgCert::Admitted(reason, mask)
     }
 
     /// A 0-ary "numeral" term standing for an index. These are opaque tags, not
@@ -12063,6 +12102,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the recursor is not applied to its major premise")
         }
         let Some(nest) = self.rec_nest(ctx, name, levels) else {
+            // **The largest origin in the gap ledger** (792 own, 5 517 with the
+            // sub-tree it feeds). Which recursors, and how many distinct ones:
+            // a bounded list is a reachable tranche and an unbounded one is
+            // not. It is 109 on `init-prelude`. See [`origin_report`].
+            #[cfg(feature = "stepcount")]
+            {
+                let sp = self.spell(ctx, name);
+                let mut g = NO_NEST.lock().expect("no_nest poisoned");
+                *g.entry(sp.to_string()).or_insert(0u64) += 1;
+            }
             return Err("iota: this recursor has no curried interpretation")
         };
 
@@ -12128,9 +12177,32 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // produced.
         let (cfun, ctor_args) = ctx.unfold_apps(args[major]);
         let Expr::Const { name: cname, .. } = ctx.read_expr(cfun) else {
+            // **The second origin** (486 own, 3 286 with its sub-tree). What
+            // *is* the major premise's head, if not a constant? The answer
+            // decides whether this is a reduction that did not happen or a
+            // shape the rule was never going to serve — and on `init-prelude`
+            // it is 485 the former, 1 a projection, and nothing else at all.
+            #[cfg(feature = "stepcount")]
+            NOT_CTOR[match ctx.read_expr(cfun) {
+                Expr::Sort { .. } => 0usize,
+                Expr::Lambda { .. } => 1,
+                Expr::Pi { .. } => 2,
+                Expr::Local { .. } => 3,
+                Expr::Let { .. } => 4,
+                Expr::Proj { .. } => 5,
+                Expr::NatLit { .. } => 6,
+                Expr::StringLit { .. } => 7,
+                _ => 8,
+            }]
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Err("iota: the major premise is not a constructor")
         };
         let Some(Declar::Constructor(c)) = self.decls.get_declar(&cname) else {
+            // A constant head that is *not* a constructor — the major premise
+            // did not reduce, rather than being unreachable in shape. This is
+            // 485 of the 486, i.e. essentially the whole of this origin.
+            #[cfg(feature = "stepcount")]
+            NOT_CTOR[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Err("iota: the major premise is not a constructor")
         };
         let idx = c.ctor_idx as usize;
@@ -15594,7 +15666,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let (eq_thm, eq_hyps): (&Thm, &[Formula]) = match eq {
             TgCert::Proved(t) => (t, &[]),
             TgCert::Conditional { thm, hyps } => (thm, hyps.as_slice()),
-            TgCert::Admitted(_) => {
+            TgCert::Admitted(..) => {
                 note_prem(PremSite::ConvEq);
                 return self.ty_miss(crate::certify::TyGap::Premise)
             }
@@ -15923,6 +15995,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// from under the assumption list, so a conditional premise is checked on
     /// the same terms as an unconditional one — and anything else is a gap.
     fn symm(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, c: TgCert) -> TgCert {
+        let premask = origin_mask(&[&c]);
         let cc = self.consume(&c);
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         let why: &'static str = match cc {
@@ -15942,7 +16015,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit(why)
+        self.note_admit_m(why, premask)
     }
 
     /// Transitivity, **guarded**.
@@ -15957,6 +16030,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // Both are taken before either is inspected: a premise the rule cannot
         // use is still a premise the rule has *received*, and the escape ledger
         // counts receipt.
+        let premask = origin_mask(&[&ab, &bc]);
         let (x, y) = (self.consume(&ab), self.consume(&bc));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         let why: &'static str = match (x, y) {
@@ -15973,7 +16047,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit(why)
+        self.note_admit_m(why, premask)
     }
 
     /// Congruence for application, **guarded**.
@@ -15998,6 +16072,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// bridge failures, as the module docs used to claim; those are unchanged.
     fn app_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, f: TgCert, arg: TgCert) -> TgCert {
         let s = self.pre.ap.app;
+        let premask = origin_mask(&[&f, &arg]);
         let (cf, cx) = (self.consume(&f), self.consume(&arg));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         // §6.2's two clauses for application, exactly as in `lam_cong`. Two
@@ -16028,7 +16103,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit(why)
+        self.note_admit_m(why, premask)
     }
 
     /// Congruence for `λ`, by **graph extensionality**, and guarded.
@@ -16078,6 +16153,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// premise needed. That is a complete proof, not a shortcut — and it is
     /// still what closes the chains the derivation cannot reach.
     fn lam_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
+        let premask = origin_mask(&[&dom, &body]);
         let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         let why: &'static str = match self.derive_lam_cong(ctx, a, b, cd.as_ref(), cb.as_ref()) {
@@ -16089,7 +16165,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit(why)
+        self.note_admit_m(why, premask)
     }
 
     /// Congruence for `Π`, **guarded**.
@@ -16113,6 +16189,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// identically — a complete proof of the claim, needing no premise at all,
     /// and on this corpus by far the commonest way a `Π` congruence is settled.
     fn pi_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
+        let premask = origin_mask(&[&dom, &body]);
         let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         let why: &'static str = match self.derive_pi_cong(ctx, a, b, cd.as_ref(), cb.as_ref()) {
@@ -16123,7 +16200,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit(why)
+        self.note_admit_m(why, premask)
     }
 
     /// One iota contraction, derived rather than admitted where the recursor
@@ -16134,7 +16211,25 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
         match self.derive_iota(ctx, redex, reduct) {
             Ok(c) => self.cert(ctx, c),
-            Err(why) => self.note_admit(why),
+            Err(why) => {
+                // **Acquire** the ι equation as an antecedent instead of
+                // reporting a gap — the measurement that validates the
+                // sub-tree column. See [`iota_assume`]; nothing is admitted.
+                #[cfg(feature = "stepcount")]
+                if iota_assume() {
+                    let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+                    if l != r {
+                        let f = Formula::eq(l, r);
+                        if let Some(c) =
+                            CondEq::new(derived::imp_refl(f.clone()), vec![f])
+                        {
+                            IOTA_ACQUIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return self.cert(ctx, c)
+                        }
+                    }
+                }
+                self.note_admit(why)
+            }
         }
     }
 
@@ -16679,6 +16774,185 @@ fn note_binder_var(reused: bool) {
 }
 
 /// Record one step taken on trust.
+// ── Gap provenance: which clause ORIGINATES, and the sub-tree it feeds ──────
+//
+// The gap ledger is a list of *reports*, and most reports relay someone else's:
+// a rule that receives a gap as a premise reports one in turn. Counting rows
+// therefore ranks clauses by how much of the cascade passes through them, which
+// is not the same as how much closing them would buy. These three tables make
+// the difference measurable in one run, with no counterfactual:
+//
+//   * every gap that a rule originates mints a **bit**;
+//   * every gap a rule relays inherits the union of its premises' bits;
+//   * a relayed gap whose mask names exactly **one** origin is charged to that
+//     origin's sub-tree; one naming two or more is charged to `SUBTREE_MULTI`,
+//     because closing either origin alone would not remove it.
+//
+// So `sub-tree(o) = ORIGINATED[o] + SUBTREE[o]` is an exact lower bound on what
+// closing `o` removes from the ledger, and `SUBTREE_MULTI` is the part no single
+// closure reaches.
+
+/// ι equations acquired as antecedents rather than reported as gaps — the
+/// deletion measurement, not a rule. See [`iota_assume`].
+#[cfg(feature = "stepcount")]
+static IOTA_ACQUIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Whether the ι acquisition runs: `NANODA_IOTA_ASSUME`, and only in a
+/// `stepcount` build.
+///
+/// **The deletion measurement, kept in the tree because the method is worth
+/// more than any one of its answers.** A decline population is judged by
+/// removing it and reading the *whole* ledger, not by its own size: that test
+/// has twice turned this stage's "largest row" into a worth-nothing (beta's
+/// domain premise, 0; the reduct's typing, 15) and once predicted a real 8 080.
+/// What it does here is **acquire** rather than admit — the theorem is
+/// `⊢ (⟦r⟧ = ⟦r'⟧) → (⟦r⟧ = ⟦r'⟧)`, a real [`derived::imp_refl`], and the
+/// antecedent goes into the certificate where the escape ledger charges for it,
+/// so the run stays honest and the cost is visible (escapes 2 232 → 2 952).
+///
+/// Never on in any shipped configuration: `stepcount` is a measurement feature
+/// and this needs an environment variable on top of it.
+#[cfg(feature = "stepcount")]
+fn iota_assume() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NANODA_IOTA_ASSUME").is_some())
+}
+
+/// The recursors with no curried interpretation, by spelling — the top origin's
+/// own census, and the thing that says whether closing it is bounded work.
+static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// What the major premise's head is when it is not a constructor — the second
+/// origin's census.
+static NOT_CTOR: [std::sync::atomic::AtomicU64; 10] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 10];
+
+/// The originating reasons seen, in first-seen order; the index is the bit.
+static ORIGINS: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+/// Bit 31 is the overflow slot, shared by every origin past the 31st.
+const ORIGIN_OVERFLOW: usize = 31;
+static ORIGINATED: [std::sync::atomic::AtomicU64; 32] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 32];
+static SUBTREE: [std::sync::atomic::AtomicU64; 32] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 32];
+static SUBTREE_MULTI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The bit for an originating reason, assigned on first sight.
+fn origin_bit(reason: &'static str) -> u32 {
+    let mut v = ORIGINS.lock().expect("tg origins poisoned");
+    if let Some(i) = v.iter().position(|r| *r == reason) {
+        return 1u32 << i
+    }
+    if v.len() >= ORIGIN_OVERFLOW {
+        return 1u32 << ORIGIN_OVERFLOW
+    }
+    v.push(reason);
+    1u32 << (v.len() - 1)
+}
+
+/// The union of the origin masks of whichever premises are already gaps — 0 if
+/// none is, which is what marks the rule as an origin rather than a relay.
+fn origin_mask(cs: &[&TgCert]) -> u32 {
+    cs.iter().fold(0u32, |m, c| match c {
+        TgCert::Admitted(_, b) => m | b,
+        _ => m,
+    })
+}
+
+/// The ranking: every origin, its own gaps, the relays it alone accounts for,
+/// and their sum. Ordered by the sum, which is the number the choice of a
+/// tranche should be made on.
+pub fn origin_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let v = ORIGINS.lock().expect("tg origins poisoned").clone();
+    if v.is_empty() {
+        return String::new()
+    }
+    let mut rows: Vec<(u64, u64, u64, &'static str)> = v
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let (o, t) = (ORIGINATED[i].load(Relaxed), SUBTREE[i].load(Relaxed));
+            (o + t, o, t, *r)
+        })
+        .filter(|(n, _, _, _)| *n > 0)
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    let (mut so, mut st) = (0u64, 0u64);
+    for (_, o, t, _) in &rows {
+        so += o;
+        st += t;
+    }
+    let multi = SUBTREE_MULTI.load(Relaxed);
+    let mut s = String::from("gap provenance: which clause ORIGINATES, and the sub-tree it feeds\n");
+    s.push_str(&format!(
+        "  {:<78}  {:>8} {:>8} {:>8}\n",
+        "origin", "own", "relayed", "SUBTREE"
+    ));
+    for (n, o, t, r) in &rows {
+        s.push_str(&format!("  {r:<78}  {o:>8} {t:>8} {n:>8}\n"));
+    }
+    s.push_str(&format!(
+        "  {:<78}  {:>8} {:>8} {:>8}\n",
+        "TOTAL originated / solely attributed",
+        so,
+        st,
+        so + st
+    ));
+    s.push_str(&format!(
+        "  {:<78}  {:>8} {:>8} {:>8}\n",
+        "relayed gaps naming TWO OR MORE origins — no single closure removes these",
+        "", "", multi
+    ));
+    #[cfg(feature = "stepcount")]
+    {
+        let n = IOTA_ACQUIRED.load(Relaxed);
+        if n > 0 {
+            s.push_str(&format!(
+                "  ι equations ACQUIRED rather than reported (a measurement, see `iota_assume`)  {n:>8}\n"
+            ));
+        }
+    }
+    {
+        let g = NO_NEST.lock().expect("no_nest poisoned");
+        if !g.is_empty() {
+            let mut v: Vec<(&String, &u64)> = g.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1));
+            s.push_str(&format!(
+                "  the top origin, by recursor — {} distinct, {} firings\n",
+                v.len(),
+                v.iter().map(|(_, n)| **n).sum::<u64>()
+            ));
+            for (r, n) in v.iter().take(20) {
+                s.push_str(&format!("    {r:<76}  {n:>8}\n"));
+            }
+        }
+    }
+    if NOT_CTOR.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+        s.push_str("  the second origin, by what the major premise's head IS\n");
+        for (i, l) in [
+            "a sort",
+            "a lambda",
+            "a Pi",
+            "a local",
+            "a let",
+            "a projection",
+            "a nat literal",
+            "a string literal",
+            "something else",
+            "a CONSTANT that is not a constructor - it did not reduce",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let n = NOT_CTOR[i].load(Relaxed);
+            if n > 0 {
+                s.push_str(&format!("    {l:<76}  {n:>8}\n"));
+            }
+        }
+    }
+    s
+}
+
 pub fn merge_one(reason: &'static str) {
     let mut g = TOTALS.lock().expect("tg totals poisoned");
     let v = g.get_or_insert_with(Vec::new);
@@ -19018,6 +19292,7 @@ fn ht_report() -> String {
 /// Render what the TG kernel actually derived over this run.
 pub fn global_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
+    let provenance = origin_report();
     let g = TOTALS.lock().expect("tg totals poisoned");
     let proved = PROVED.load(Relaxed);
     let mut rows: Vec<(&'static str, u64)> = g.clone().unwrap_or_default();
@@ -19097,6 +19372,7 @@ pub fn global_report() -> String {
     s.push_str(&gen_report());
     s.push_str(&inst_report());
     s.push_str(&translated_report());
+    s.push_str(&provenance);
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
     }
@@ -19409,7 +19685,7 @@ mod tests {
                 let r2 = tc.def_eq(l1, l3);
                 let cert2 = r2.expect("the checker's verdict is unchanged: same id, def-eq types");
                 assert!(
-                    matches!(cert2, TgCert::Admitted(_)),
+                    matches!(cert2, TgCert::Admitted(..)),
                     "two distinct variables have no equating rule — this must stay a counted gap, got {cert2:?}"
                 );
             })
@@ -19663,7 +19939,7 @@ mod tests {
                     let r2 = tc.def_eq(x2, bool_true);
                     let cert2 = r2.expect("(λ b. b) boolId reduces to Bool.true");
                     assert!(
-                        !matches!(cert2, TgCert::Admitted(_)),
+                        !matches!(cert2, TgCert::Admitted(..)),
                         "every leg exists — the composite must not be an admission, got {cert2:?}"
                     );
                 })
