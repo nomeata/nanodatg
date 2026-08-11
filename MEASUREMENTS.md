@@ -7928,10 +7928,16 @@ same one-constructor inductive. A degenerate recursor in `derived::inductive`
 supplies both: the projection rule is that recursor at the projection motive.
 
 **So the construction already assigned for origin 1's structures is worth
-4 098 gaps — 26.0 % of the ledger — not 2 480**, provided it is built to serve
-the projection rule as well as the ι rule. That is a design constraint on that
-task, and it is the reason this tranche ends in a note to another seat rather
-than in a construction of its own.
+2 480 gaps, and the projection rule adds ~40 of `proj_reduce`'s 1 618 rather
+than all of it.** This paragraph read "worth 4 098 — 26.0 % of the ledger" until
+the construction was wired and both halves measured (see *The degenerate
+recursor is wired*, at the end of this file). The eliminator identity above is
+right and the rule fires; what is wrong is the arithmetic. `1 618` is what
+deleting the whole `proj_reduce` **row** is worth, and the degenerate recursor
+reaches 18 of its 178 projection sites — **154 decline because the projected
+subject is not an applied constructor at all**, origin 2's finding at a
+different rule. A deletion prices a row; it does not price a construction, and
+this is the first of sixteen where the two differ by an order of magnitude.
 
 (Only 178 of the 659 declines have a literal `Expr::Proj` at the redex's head;
 the rest carry the projection deeper in a spine, so the eight names are the
@@ -8201,9 +8207,11 @@ The collapse is at the *gate*, and it would be a mistake to read it as a
 collapse at the *construction*:
 
 * **One constructor** — no case analysis at all, `S.rec C f (S.mk a⃗) ⟶ f a⃗`.
-  The degenerate recursor already assigned. It serves the 400 **and** the 659
-  projections, because `(mk a⃗).i ⟶ aᵢ` is that same eliminator at the
-  projection motive. Worth 4 098.
+  The degenerate recursor already assigned. **Measured at 2 480, wired.** It
+  serves the 400 ι sites; of the 659 projections it reaches 18, because
+  `(mk a⃗).i ⟶ aᵢ` is that same eliminator at the projection motive *only where
+  the subject is a constructor application*, and at 154 of them it is not. This
+  item read "worth 4 098" before it was built.
 * **Several constructors, none nullary** — there *is* case analysis, so the
   degenerate recursor does not reach it. What these need is a `t_policy` that
   does not require a nullary constructor: some set containing every fibre of the
@@ -8227,7 +8235,7 @@ The two constructions are complementary and their populations are known:
 
 | built | gaps removed |
 |---|---:|
-| degenerate recursor only | 4 098 (26.0 %) |
+| degenerate recursor only | **2 480 (15.8 %), measured by wiring it** — read 4 098 here before it was built |
 | nullary-free `t_policy` only | 4 409 (28.0 %) |
 | **both** | **6 180 (39.3 %)** |
 
@@ -8318,7 +8326,7 @@ already assigned:
 | construction | origins served | measured |
 |---|---|---:|
 | numeral computation on literals | 1 | 3 066 |
-| degenerate recursor (one constructor) | 2 + 4 | 4 098 |
+| degenerate recursor (one constructor) | 2 + 4 | **2 480 wired**; 4 098 was the two rows' joint deletion, not this construction's reach |
 | a `t_policy` needing no nullary constructor | 3 | 1 929 |
 | **the three together** | | **≈ 9 100 of 13 502** |
 
@@ -8421,9 +8429,18 @@ constructor, `isRec` false, no indices, no nesting, fields ≥ 1).
 So the projection rule is `DegenRec::proj_computes[j]` — not a step of the ι
 derivation that happens to be exported, but the ingredient the ι rule is *built
 from*. One term-former (`decl_proj::proj_of`), one theorem, one bundle cached per
-declaration, two consumers. Pairwise measured deletions compose exactly here
-(2 480 + 1 618 = **4 098**, 26.0 % of the ledger), and by the superadditivity
-note in `origin_report`'s header that is a floor.
+declaration, two consumers.
+
+**This paragraph used to end "2 480 + 1 618 = 4 098, 26.0 % of the ledger, and
+by the superadditivity note that is a floor". It is wrong, and it was wrong
+before it was written.** Superadditivity is a property of two *deletions*
+composed; `1 618` is what deleting the whole `proj_reduce` row is worth, and the
+degenerate recursor is not that deletion. Wired and measured — *The degenerate
+recursor is wired*, at the end of this file — the ι consumer is 2 480 and the
+projection consumer reaches **18 of `proj_reduce`'s 178 projection sites**: 154
+decline because the projected subject is not an applied constructor. The eight
+structures below are the right eight and the theorem fires at every one of them;
+what the table does not say is how often the *subject* has been reduced.
 
 ### One spelling, and where it now lives
 
@@ -8439,9 +8456,10 @@ copied up, `DeclProj::build` is the one-call bundle it feeds, and
 ### What is not measured here, and what it would take
 
 **The consumer's count.** "Skip is not pass": a construction the route never
-reaches is worth nothing, and this one is not yet reached. Wiring is a
-`checker/tg.rs` change and that file had two live seats on this pass, so it is
-named:
+reaches is worth nothing, and this one was not yet reached. It is now — see *The
+degenerate recursor is wired*, at the end of this file, for the four parts as
+they landed and for the one of them that did not. Named here as it was
+specified, which is worth keeping beside what it became:
 
 * a `RecBottom::Degen(Rc<DegenRec>)` arm, gated **before** `gen_rec_bottom`'s
   `t_policy` refusal, on `ctors == 1 ∧ recs == 0`;
@@ -8456,7 +8474,11 @@ named:
   `DegenRec::proj_at` instead of the opaque `syms.proj`, and `proj_red` to fire
   `proj_computes[j]` through the same bridge. `mini` already interprets
   projections this way (`proj_data::term`, route (b)), so this is the checker
-  adopting a term-former that exists rather than a new one.
+  adopting a term-former that exists rather than a new one. **Built, measured
+  and reverted**: `proj(j, ⟦s⟧)` is an *atom* and the rules downstream read it
+  as one, so re-spelling it as a composite costs 1 744 gaps against 18 firings.
+  What the checker needs is the same rule behind a **one-argument abbreviation**
+  that keeps the atom.
 
 **What could still cost coverage at the seam.** The gate admits 103/103, so
 anything lost is checker-side plumbing shared with the general path:
@@ -8829,3 +8851,134 @@ exists the 2 597 is a measurement and not a landing. It is the same sentence
 that has been true at every stage of this chain, one step further along, and it
 is the fourth time this arc that a complete certified construction has been
 waiting on a caller.
+
+## The degenerate recursor is wired: 2 480 taken, and the projection half is refuted — 2026-08-11
+
+*Task #126, the consumer for `derived/src/inductive/degen.rs`. Baseline
+`origin/master` at `666c297`, re-measured on this tree before anything changed
+and byte-identical with every section above — **15 734 gaps / 2 232 escapes /
+159 803 derived**, arena 152/0/2. Release, `--features tg,stepcount`,
+`vendor/arena-tests/good/init-prelude.ndjson`, `num_threads: 1`. Two claims of
+the brief were tested; **the first reproduces to the unit and the second is
+refuted at measurement.***
+
+### What landed
+
+| | baseline | wired |
+|---|---:|---:|
+| gaps | 15 734 | **13 254** |
+| escapes | 2 232 | 2 432 |
+| derived kernel theorems | 159 803 | 162 483 |
+| ι sites the general rule computed | 92 | 92 |
+| ι sites the DEGENERATE rule computed | — | **400** |
+| degenerate nests built | — | 179 |
+
+**A fall of 2 480 against a deletion measurement of 2 480, and an escape rise of
+200 against a predicted 200.** The whole `iota: no interpretation — a
+ONE-CONSTRUCTOR STRUCTURE` row (400) is gone; the other 2 080 fall out of the
+composition rows it fed (`trans` 8 457 → 6 457, `pi congruence over an admitted
+body premise` 1 147 → 867). The general path's 92 did not move, which is the
+disjointness argument as a number: a one-constructor declaration's constructor
+either takes fields, and then no constructor anywhere is nullary and `t_policy`
+declines, or it does not, and then `k = 0` and the degenerate arm declines by
+name.
+
+`074_prodRecEqns` 14 gaps → 8, and it is the standing non-vacuity test: one
+degenerate nest, one ι firing, asserted `== 1` so the arm's reach is checked on
+a machine with no corpus.
+
+### The escape ratchet moved, and what it bought
+
+2 232 → 2 432, **2 480 gaps for 200 escapes**. The escapes are not new
+obligations. `fire_degen` brings `⟦S.mk p⃗ f⃗⟧` to `ctor₀(y⃗)` through the
+constructor bridge, whose antecedent is the fields' own typings; where those are
+not discharged the equation is conditional, and a conditional certificate the
+checker consumes as an answer is counted at the boundary. Before this the same ι
+step was **admitted** and nothing counted them. This is `076`'s recorded pattern
+at 400 sites, and both figures were predicted by the census before the wiring
+was written — which no leak would reproduce.
+
+### The projection consumer: built, measured, and reverted
+
+The brief priced this at **1 618** (`proj_reduce` deleted alone), composing with
+the structures' 2 480 to 4 098. Both halves of that are wrong, and the
+measurement says so in two independent ways.
+
+`interp`'s `Expr::Proj` was changed to produce `DegenRec::proj_at` instead of
+the opaque `syms.proj`, `proj_cong` was given the matching Leibniz, and a
+`degen_proj_red` was written: the same constructor bridge, one Leibniz, then
+`proj_computes[j]`. It works — it fires — and it **costs more than it closes**.
+
+| gate on `interp`'s projection spelling | projections re-spelled | reductions fired | gaps |
+|---|---:|---:|---:|
+| none (parts 1–3 only) | 0 | 0 | **13 254** |
+| the structure's type via `syn_type` | 8 100 | 18 | 14 998 |
+| monomorphic `ty_name` only, substitution-stable | 271 | 12 | 13 276 |
+
+**Why it costs.** `proj(j, ⟦s⟧)` is an *atom*, and rules downstream read it as
+one. Re-spelling it as a composite of set-theoretic projections moved 624 gaps
+into `beta: the contracted body does not match its interpretation`, 45 more into
+`beta: the lambda has no function-graph interpretation`, 39 into a §6.2 Π clause
+and 1 010 into the composition rows over them. The wide gate is also not
+substitution-stable — `syn_type` is a delta-only shadow walk that succeeds on a
+constructor application and fails on the local it was substituted into, so one
+Lean projection has two interpretations — but stability is **not** the whole
+story: the monomorphic gate is stable by construction and still costs 22 net
+against 12 firings.
+
+**Why the 1 618 is not there to be had, and this is the finding worth keeping.**
+A decline census inside the rule, at the widest gate:
+
+| of the 178 `Expr::Proj` sites `proj_reduce` admits | |
+|---|---:|
+| the rule fired | 18 |
+| **declined: the subject is NOT AN APPLIED CONSTRUCTOR** | **154** |
+| declined: no degenerate bundle for the structure | 6 |
+| declined: the constructor's bridge refused | 0 |
+| declined: the derived equation is not the claim | 0 |
+
+Zero on both of the rows that would indict the construction. The blocker is that
+`(mk a⃗).j` is not what the rule is looking at — the subject has not been reduced
+to a constructor application — which is **origin 2's finding at a different
+rule**: `Nat.ble`'s 485 of 486 were likewise "a constant that is not a
+constructor, it did not reduce". `proj_reduce`'s own 659 are 636 "the endpoints
+are not proofs" of which 18 are projections of a constructor.
+
+So the reachable prize is 18 own gaps and, at this origin's measured mid-chain
+multiplier of 2.46, roughly **40** — not 1 618. The census's deletion of
+`proj_reduce` measures what the whole *row* is worth, and the degenerate
+recursor reaches 3 % of it. **Composition of two deletions is a lower bound on
+the joint deletion; it is not a lower bound on what one construction closes**,
+and this is the first case in sixteen where the difference is the whole of the
+number.
+
+### What would make the projection half non-negative
+
+Not a different theorem — the theorem fires. Keep `⟦s.j⟧` an **atom**: one
+`define_abbrev` per `(declaration, j)` of arity one, `⊢ πₛⱼ(z) = πⱼ(z)`, minted
+through `mk` so its shape is in `parts`. Then the graph interpretation, §6.2's
+clauses and beta all see the same shape they see today and the reduction unfolds
+it once. That removes the 1 744, and leaves ~40 to collect. It was not built
+here because the number does not justify the risk to a path worth 2 480, and
+because the measurement above says the 154 unreduced subjects — a `whnf`
+question, not a construction one — are where this origin actually lives.
+
+### For the seat behind this one (link 4 of the numeral bridge)
+
+Two things this changes for you, and one it does not.
+
+**The baseline moved: 13 254 / 2 432 / 162 483, arena 152/0/2.** The numeral
+bridge's chain measurement above is against 15 734, so its −2 597 is a figure
+about the old ledger. Measure the chain again from here rather than subtracting.
+
+**The interaction the section above anticipated does not arrive.** It records
+that deleting `proj_reduce` re-originated a third of its relays at literal
+arithmetic (`nat_eq` 66 → 391), and predicted that closing the projection path
+would raise the Nat origin in your favour. The projection path is **not** wired,
+for the reason measured above, so `proj_reduce` is unmoved at 659 and `nat_eq`
+unmoved at 44. Nothing here has fed you anything.
+
+**What does not change** is the ι path: `gap: iota: the major premise is not a
+constructor` is 486 before this tranche and 486 after. Origin 2 is untouched by
+the degenerate recursor, which is what disjointness predicted — the two ι rows
+name different failures, and this one closed only its own.

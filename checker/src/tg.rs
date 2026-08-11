@@ -677,6 +677,12 @@ impl CondEq {
     fn proves(&self, l: &Term, r: &Term) -> bool { self.as_eq() == Some((l.clone(), r.clone())) }
 }
 
+/// [`TgBackend::ctor_spine_bridge`]'s five results, named because two ι paths
+/// destructure them: the spine equation `⊢ H → (⟦cᵢ p⃗ f⃗⟧ = ctorᵢ(y⃗,r⃗))`, the
+/// constructor's own `Hᵢ^ctor` under the same `H`, the assumption list `H`, and
+/// the arguments split by the field mask into plain and recursive.
+type CtorBridgeAt = (CondEq, Option<Thm>, Vec<Formula>, Vec<Term>, Vec<Term>);
+
 /// `h₁ ∧ … ∧ hₙ`, left-nested; `None` for the empty list.
 fn conj_of(hyps: &[Formula]) -> Option<Formula> {
     let mut it = hyps.iter();
@@ -13309,7 +13315,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         spine: &Term,
         ps: &[Term],
         order: &[Slot],
-    ) -> Result<(CondEq, Option<Thm>, Vec<Formula>, Vec<Term>, Vec<Term>), &'static str> {
+    ) -> Result<CtorBridgeAt, &'static str> {
         let np = ps.len();
         let mut ctor_hyps: Vec<Formula> = Vec::new();
         let Expr::Const { name: cname, levels: clevels, .. } = ctx.read_expr(cfun) else {
