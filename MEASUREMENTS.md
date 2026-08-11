@@ -9257,9 +9257,74 @@ than trusting either alone.
 ### What the census does *not* say
 
 It says the construction builds over the corpus's declarations. It does not say
-the consumer can *fire* it: the port still has to discharge `COD` at the motive
-binder's `Sort u₁`, `DEPᵢ` per constructor against `guards.dep_parts[i]`, and
-`Hᵢ` at the use site, and retarget the major onto the carrier. Those are
-checker-side plumbing, and the honest precedent is the degenerate recursor,
+the consumer can *fire* it. The honest precedent is the degenerate recursor,
 where the gate admitted 103 of 103 and the wiring still had to be measured
 separately before the 2 480 was real.
+
+### The port, mapped — and it is not a port
+
+`mini/src/rec_dep.rs` + `iota_dep.rs` are the working reference, and reading
+them settles one thing immediately: **the reference cannot be transcribed.**
+Excluding comments and tests they are ~1 650 code lines, of which ~610 are not
+skippable, and they are written against `mini::interp::Interp` — a different
+object from `checker`'s `TgBackend`. The facilities the bulk of them stand on:
+
+| mini facility | mini uses | `tg.rs` |
+|---|---:|---:|
+| `Interp::retarget_set` / `retarget_subject` | 116 / 55 | 0 / 0 |
+| `Interp::as_pi` (`PiShape`), reading which §6.2 clause built a level | 56 | 0 |
+| `Interp::dprod_app` / `cond_app` | 37 / 45 | **0 / 0** |
+| `crate::scope::Scopes` | 118 | 0 |
+
+`minor_at` — 266 lines, the single largest piece, shared by both clauses and
+both sites — is written entirely in those four.
+
+**But `tg.rs` has its own, under other names, and one of them is the same
+function.** `gen_minor_typed` *is* the checker's `minor_at`: it already mints
+the field variables `y⃗`, the recursive variables `t⃗` **and the induction-
+hypothesis variables `v⃗`**, walks the `βⱼ` defining equations instantiated at
+`p⃗`, builds the curried domain chain, obtains `⟦Sᵢ⟧`'s typing from the nest's
+own domain obligation, and carries the carrier bridge's assumptions. Likewise
+`mem_along` is `retarget_set`, `nest_chain` is `beta_spine` at a recursor,
+`ceq_leibniz`/`u_congr` are the congruence surface, and `abbrev_defs` +
+`RecNest` are `DepElim`'s channel from nest-build to ι site.
+
+So the delta is bounded and nameable, which is the useful output of reading the
+reference:
+
+1. **`dprod_app`** — from `f ∈ dprod(B,A)` and `a ∈ A` infer
+   `app(f,a) ∈ app(B,a)`. `tg.rs` builds `dprod` terms everywhere (it is §6.2's
+   `Π` clause, 200 mentions) and has **no elimination rule for them**. mini's is
+   ~20 lines over `dprod_def`, which the checker also holds. *This is the one
+   genuinely missing primitive, and everything else waits on it*: `DEPᵢ`'s
+   codomain is `app(C, ctorᵢ(y⃗,t⃗))` and its induction hypotheses are
+   `vⱼ ∈ app(C,tⱼ)`, so the minor's type is a real dependent product where
+   `gen_minor_typed` today builds an iterated `fs` — and declines outright when
+   a field's type is dependent (*"HYP undischargeable — dependent constructor
+   field"*).
+2. **`DEPᵢ` as the claim** — `gen_minor_typed` checks its result against
+   `premise::minor_typed_at`; the dependent arm checks against
+   `guards.dep_parts[i]`, which `derived` already exports.
+3. **`COD` at the motive's own sort** — `⟦Sort u₁⟧`, with `u₁` read off the
+   **motive binder** of the recursor's type, not off `rec_inst[0]`. mini's
+   `motive_level` is 7 lines; its `cod_at_rung` is ~30 and uses `Scopes`, which
+   the checker would do with `gen_under` and the `u_*` family instead.
+4. **The elimination channel** — mini's `DepElim { sym, ax, target }`, keyed by
+   `(recursor, instantiation)`, is the only route from the nest's bottom back to
+   `drec` at the ι site. `RecBottom::Dep` carrying the bundle is the checker's
+   version, exactly as `RecBottom::Degen` was.
+
+**What is skippable for a first cut**, measured against the corpus: the
+function-typed-slot machinery (`crossings`, `push_into_pi`, `pull_from_pi`,
+`ih_transport`, `ih_leg`) is ~510 of mini's ~1 650 lines and serves no
+declaration in this population; `prop_bottom` (44 lines) is the `u₁ = 0` clause
+and mini's own header records it as unreachable because a proof spine never
+arrives with an interpretation. Both of mini's flagged declines — a
+`Prop`-valued motive and an indexed family — are off the path here, which the
+five declarations confirm.
+
+**And the disjointness check carries over.** `RecBottom::Dep` belongs after
+`General` in `rec_bottom`, picking up exactly what `t_policy` declines, so
+`GEN_IOTAS` staying at 92 and `DEGEN_IOTAS` at 400 are the two numbers that say
+the three arms have not taken each other's work — the same check that made the
+degenerate recursor's disjointness a measurement rather than an assertion.
