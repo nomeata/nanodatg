@@ -5826,3 +5826,127 @@ this construction's reach on Mathlib is **one class of four declarations**, and
 it is not a coverage question but a certifiability one: W with a `B` that can
 see the label's data is `WFromPaths.lean`, which costs `Classical.choice` on
 every constant, and §8.16 took the tagged construction over it deliberately.
+
+### 8.16.6 Stage 1 of the untagged arm — the two constructions are one
+
+**Verdict: `WFromPaths.lean` is `WTagged.lean` at `K := A` and `tg := id`.**
+§8.16 has presented them as two constructions with two bills since it was
+written, and the *bills* are two — but the construction is one, and the
+untagged arm is therefore an instantiation of the fragment already spliced
+rather than a second fragment.
+`scripts/inductive-basis/WUntagged.lean` is stage 1 and it is green.
+
+**Why now.** §8.16 measured the trade — the untagged path decides `x.1 = a` at
+the *label* type, which is `Classical.propDecidable` — and declined it because
+`Classical.choice` was uncovered. It is covered: `derived/src/choice/epsilon.rs`
+(rule 7) stands on `kernel`'s 0-ary Henkin constant, and
+`waiting:axiom(Classical.choice)` on `mini/tests/fixtures/standard_axioms.lean`
+went 4 → 2 → 0. So the ceiling §8.16 put on the residue is no longer a ceiling,
+and what was a certifiability question is a coverage question again.
+
+#### The two things that had to be checked
+
+* **`K` may live at `Type w`.** The core was written `{K : Type}` because `Nat`
+  is, and the untagged instantiation needs `K := A : Type u`. Widening the
+  three binders costs **no proof change at all** — `Edge`, `PTree` and `W` land
+  at `Type (max w u)`, which normalises to `Type u` at both `w := 0` (the
+  tagged arm, `K := Nat`) and `w := u` (untagged, `K := A`). The core in
+  `WUntagged.lean` is `w_core.lean`'s with exactly that edit and every proof
+  byte-identical.
+* **`DecidableEq A` is the entire price.** `WT.decEqAll α := fun a b =>
+  Classical.propDecidable (a = b)`, one declaration, and `#print axioms` puts
+  the untagged ι rules at `[propext, Classical.choice, Quot.sound]` against the
+  tagged ones' `[propext, Quot.sound]`. **Two columns, not an average**: the
+  ~50 arm-C skeletons and the arm-W targets that are tag-factored stay
+  choice-free at the arm; only a declaration that *needs* the untagged
+  instantiation pays.
+
+#### What is actually new — the branch scheme
+
+The carrier is not the hard part. At the tag scheme `Tel` is a function of the
+**tag**, which is exactly why a recursive field's binders may not mention the
+constructor's fields. Untagged, `B' : A → Type u`, so
+
+```text
+Tel a j := Nat.rec (motive := fun t => D t → Nat → Type u) … a.1 a.2
+```
+
+— the cascade is still on the tag, but **the data is an argument of the
+motive**, and each arm receives that constructor's own `D t` to project out of.
+That one change is the whole delta; the dispatch, the eta lemma and the ι rules
+follow it. `WUntagged.lean`'s `Tm` carries every hazard at once: a child whose
+binder is field 0 (`WType`'s and `Term`'s shape), a constructor with **two**
+children of which only the first has binders, a non-recursive field *between*
+the one the binder mentions and the child, and a base constructor.
+
+**All three ι rules are `WT.Wrec_iota` and nothing else.** `F`'s arms transport
+along their constructor's eta lemma, and at an ι rule that equation is between
+a dispatch and itself — so the proof is `rfl` by definitional proof
+irrelevance and the `cast` computes away. The recursor is checked against
+Lean's own `Tm.rec`: the file substitutes the model's carrier and constructors
+into the type Lean minted and asks `isDefEq`, which is §4's oracle 3 in one
+step.
+
+#### The mutations, and the one that is green
+
+| mutation | result |
+|---|---|
+| `Tel` reads a constant bound instead of the label's data | red at three sites |
+| `mix`'s second IH read from branch 0 instead of branch 1 | red |
+| the eta transport dropped from `F`'s `app` arm | red |
+| `D`'s junk-**tag** arm inhabited | red |
+| `Tel`'s junk-**branch-index** arm inhabited | red |
+| `Tel`'s junk-**tag** arm inhabited | **green** |
+
+The green row is a fact about the scheme and not a hole in the pin. A label at
+a junk tag is already impossible — `A = Σ' t, D t` and `D`'s own junk arm is
+empty — so `Tel` is never asked at a tag no constructor has. §8.16.2's "junk
+uninhabited in both directions" is therefore one requirement on `D` and one on
+`Tel`, and only the **branch-index** half of `Tel`'s is a requirement at all;
+within a real tag the index does range over all of `Nat`.
+
+#### What it closes, and the one it does not
+
+Three of §8.16.5's nine: `WType`, `PSet` and `FirstOrder.Language.Term`, which
+are precisely the declines reading `B factors through the tag: no` with
+`carrier is Type u: yes`.
+
+**`PFunctor.Approx.CofixA` is not one of them, and the census row that groups
+it with them is about which job would close it rather than which guard stops
+it.** It is an **indexed** family and declines at arm C's erasure guard, long
+before `tagFactored` is asked:
+
+```text
+intro {n} : ∀ (a : F.A), (F.B a → CofixA F n) → CofixA F (n+1)
+```
+
+has its recursive occurrence under a binder, and `eraseCtorTy`/`spineSwap`
+replace a recursive field's *whole domain* — there is nothing to replace. This
+scheme would model the skeleton that erasure *would* produce (`Skel | intro :
+∀ a, (F.B a → Skel) → Skel` is `WType F`), so `Iso.requires` would be met; what
+is missing is the erasure. That is an **infinitary arm C** — `eraseCtorTy`
+walking into a field's own forall-telescope to replace only the final
+`T p⃗ e⃗`, and `good`, its minor and the carve proof carrying a slot whose
+clause is `∀ b, good (f b) ι⃗` and whose induction hypothesis is
+`∀ b, motive ι⃗ (f b)`. **Two jobs, not one**, and the untagged arm alone takes
+the census to **6**, not to 5.
+
+#### What remains, named
+
+Stage 1 is done; stage 2 is the transcription, and it is bounded:
+
+1. **The fragment**, `modelgen/tests/w_core.lean`: widen `K` to `Type w`, add
+   `WT.decEqAll` and a sixth `--#export` root, re-export. Deliberately **not
+   landed here** — it grows the fragment by `Classical.propDecidable`'s closure
+   and `Iso.requires` obliges every W target to model whatever inductives that
+   brings, so it is dead weight until a consumer exists.
+2. **Five level lists in `Simple.lean`** — `wCoreSelf`, `wCoreSup`, `wCoreRec`,
+   `wCoreIota` gain the `K` level; the tagged arm passes `0`.
+3. **The arm, parameterised rather than duplicated.** `wTelN`'s type becomes
+   `∀ p⃗, A p⃗ → Nat → Sort w`, `wTgN` becomes the identity, `wDecEq` becomes
+   `decEqAll (A p⃗)`, and `wTelTy`, `wDispAt`, `wCtorParts`, `wMkF` and the eta
+   lemma thread the label where they thread the tag. The guard is `armW`'s with
+   `tagFactored` **false** instead of true, so the tagged path is untouched and
+   stays choice-free.
+4. **`envprobe … C` on the emitted file**, as §8.16.5 needed it: the untagged
+   arm splices and defers, and `addChecked` cannot see output position.
