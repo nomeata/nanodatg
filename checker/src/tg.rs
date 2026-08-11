@@ -2229,6 +2229,12 @@ struct Shared {
     /// precedent, and for the same reason: most declarations that mention a
     /// recursor never reduce one.
     gen_recs: HashMap<(u32, Vec<Term>), Option<Rc<GenRec>>>,
+    /// The **degenerate** recursors, on the same key and the same lazy rule.
+    /// A `None` here is not a decline of the declaration, only of this path:
+    /// [`TgBackend::rec_bottom`] falls through to the general arm, which has
+    /// its own memo. Kept separate for exactly that reason — one map with two
+    /// meanings of `None` would make the fall-through unrepresentable.
+    degen_recs: HashMap<(u32, Vec<Term>), Option<Rc<DegenBottom>>>,
 
     // ── Constants, canonicalised per thread ──────────────────────────────────
     //
@@ -2585,6 +2591,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             list_rec: None,
             gen_inds: HashMap::new(),
             gen_recs: HashMap::new(),
+            degen_recs: HashMap::new(),
             opaque_syms: HashMap::new(),
             param_syms: HashMap::new(),
             idx_syms: HashMap::new(),
@@ -3132,6 +3139,12 @@ fn same_bottom(a: &RecBottom, b: &RecBottom) -> bool {
         (RecBottom::General(gx, tx), RecBottom::General(gy, ty)) => {
             pair_ptr_eq((gx, tx), (gy, ty))
         }
+        // One `Rc` and not two: a degenerate bottom carries no `GenTyNest`, and
+        // the [`DegenBottom`] it is holds its own [`GenInd`], which is what
+        // [`TgBackend::degen_rec_bottom`]'s guard compared before handing it
+        // back. The nest's term is `DegenRec::value_of` at this very bundle, so
+        // a different `Rc` is a different term.
+        (RecBottom::Degen(x), RecBottom::Degen(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
 }
@@ -3247,6 +3260,26 @@ enum RecBottom {
     /// `app-spine(⟦T⟧,p⃗) = ind(p⃗)` at symbols *this* backend has registered,
     /// and the pointer test is what says the adopted nest is over them.
     General(Rc<GenRec>, Rc<GenTyNest>),
+    /// **The degenerate path**: one constructor, no recursive field, so the
+    /// eliminator is the inverse of the constructor and the nest's bottom is a
+    /// *term* — `drec(s,z) = app(…app(s, π₀ z)…, π_{k-1} z)` — rather than a
+    /// function-set applied to the major premise.
+    ///
+    /// It sits **before** [`Self::General`] in [`TgBackend::rec_bottom`] and
+    /// the two do not overlap, which is a fact about `t_policy` rather than a
+    /// choice: a one-constructor declaration's only constructor either takes
+    /// fields, in which case there is no nullary constructor anywhere and the
+    /// general arm declines with [`Decline::TPolicy`], or it does not, in which
+    /// case `k = 0` and *this* arm declines by name and leaves it to policy 1's
+    /// real W-recursor. Nothing is taken away from the general path by trying
+    /// this one first, and [`derived::inductive::DegenRec::build`] mints no
+    /// symbol, so the attempt costs nothing when it fails.
+    ///
+    /// Unlike [`Self::General`] there is no [`GenTyNest`] beside it. The ι rule
+    /// is stated at `ctor₀(y⃗)` with no `p⃗` in it at all, so it never needs
+    /// `app-spine(⟦T⟧,p⃗) = ind(p⃗)` — the one thing that made a general bottom
+    /// per backend twice over.
+    Degen(Rc<DegenBottom>),
 }
 
 /// **A general inductive declaration, translated** — the spec the derived layer
@@ -3433,6 +3466,20 @@ struct GenRec {
     core: Rc<RecCore>,
 }
 
+/// **The degenerate recursor of one declaration**, with the carrier it
+/// eliminates — [`derived::inductive::DegenRec`], for a declaration with one
+/// constructor and no recursive field.
+///
+/// Structurally [`GenRec`] minus the [`RecCore`], and the absence is the point:
+/// `DegenRec` is not defined by recursion, so it needs no W-recursor, no
+/// function-space and no target. What is left is the carrier — needed only to
+/// spell `ctor₀(y⃗)` and the projections out of it — and the bundle of
+/// theorems, which are unconditional and mention no parameter.
+struct DegenBottom {
+    gi: Rc<GenInd>,
+    dr: Rc<derived::inductive::DegenRec>,
+}
+
 /// **Why the general inductive path declined a declaration.**
 ///
 /// Every one of these leaves the constant opaque, exactly as before the path
@@ -3610,6 +3657,22 @@ static GEN_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 static GEN_REC_GUARD_MISS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// ι sites the general rule computed — the deliverable, counted.
 static GEN_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Recursor nests bottoming out in [`RecBottom::Degen`].
+static DEGEN_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Cached degenerate recursors whose carrier is not the one this backend has.
+static DEGEN_GUARD_MISS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **ι sites the degenerate rule computed.** The deliverable of the whole path,
+/// and the number the wiring is worth nothing without: an arm that is built,
+/// tested and never *reached* reports every test green. It is printed
+/// unconditionally once the path has been consulted at all — see
+/// [`gen_report`] — and `checker/src/tests/degen.rs` asserts it non-zero on a
+/// fixture that reduces one.
+static DEGEN_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Projections the degenerate bundle's own term-former spelled — the second
+/// consumer's reach, counted apart from its firings.
+static DEGEN_PROJS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **Projection reductions the degenerate bundle's rule computed.**
+static DEGEN_PROJ_RED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 
 
@@ -3639,6 +3702,15 @@ fn gen_report() -> String {
         GEN_REC_GUARD_MISS.load(Relaxed),
     );
     row(&mut s, "ι sites the general rule computed", GEN_IOTAS.load(Relaxed));
+    // The degenerate path's four rows, printed **whether or not they are zero**
+    // once the general path has been consulted. A wired arm that is never
+    // reached is the failure this project has recorded fourteen times, and a
+    // row that disappears when it reads zero is how it stays unnoticed.
+    row(&mut s, "recursors given a DEGENERATE nest", DEGEN_RECS.load(Relaxed));
+    row(&mut s, "cached degenerate recursors declined: not over this carrier", DEGEN_GUARD_MISS.load(Relaxed));
+    row(&mut s, "ι sites the DEGENERATE rule computed", DEGEN_IOTAS.load(Relaxed));
+    row(&mut s, "projections given the degenerate term-former", DEGEN_PROJS.load(Relaxed));
+    row(&mut s, "projection reductions the DEGENERATE rule computed", DEGEN_PROJ_RED.load(Relaxed));
     for d in Decline::ALL {
         let n = DECLINES[d as usize].load(Relaxed);
         if n > 0 {
@@ -3824,6 +3896,32 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             lifted.push(reassume(&c.thm, &c.hyps, &hyps)?);
         }
         CondEq::new(u_congr(&mut self.env_mut(), f, &lifted, h.as_ref())?, hyps)
+    }
+
+    /// **Leibniz over a term-former too big to be one `FnSym`**, keeping the
+    /// assumptions.
+    ///
+    /// [`Self::ceq_congr`] needs a symbol and an equation per argument. `πⱼ(z)`
+    /// is a *composite* — `π₁(π₂ʲ(π₂(π₁ z)))`, and `π₁`/`π₂` are themselves
+    /// composites mentioning their argument twice — and `drec(s,z)` mentions
+    /// `z` in `k` separate projection spines. Congruence per symbol would be a
+    /// chain per layer with every occurrence moved separately; one Leibniz over
+    /// a hole moves all of them at once.
+    ///
+    /// The caller supplies `ga`, the term-former at the left-hand side, and
+    /// `gx`, the same at a hole variable `x` it minted. **Nothing is taken on
+    /// its word.** `Thm::eq_leibniz` yields `⊢ a = b → (ga = gx[a/x] → ga =
+    /// gx[b/x])`, and the antecedent is discharged with `⊢ ga = ga`; so a `gx`
+    /// that is not the caller's claimed term-former at `x` makes that discharge
+    /// fail and this return `None`. What comes back therefore always ends at a
+    /// term the caller can chain against, and a wrong pair costs a gap.
+    fn ceq_leibniz(&mut self, ab: &CondEq, x: FreeVar, ga: Term, gx: Term) -> Option<CondEq> {
+        let h = conj_of(&ab.hyps);
+        let (a, b) = ab.as_eq()?;
+        let leib = Thm::eq_leibniz(a, b, x, Formula::eq(ga.clone(), gx));
+        let step = u_mp(&u_a1i(&leib, h.as_ref()), &ab.thm, h.as_ref())?;
+        let out = u_mp(&step, &u_a1i(&Thm::eq_refl(ga), h.as_ref()), h.as_ref())?;
+        CondEq::new(out, ab.hyps.clone())
     }
 
     /// `⊢ H → ⟦e⟧ = •` — **§6.2's soundness clause for proofs, derived rather
@@ -6160,7 +6258,126 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if self.list_rec_shape(ctx, name).is_some() {
             return Some(RecBottom::List(self.list_recursor()?))
         }
+        // **The degenerate arm, ahead of the general one and ahead of
+        // `t_policy`** — which is the whole point of it, since the shape it
+        // serves is precisely the one `t_policy` has nothing to offer. The two
+        // populations are disjoint (see [`RecBottom::Degen`]), so this is not a
+        // priority between two candidates; it is a dispatch on the declaration's
+        // shape, and a decline here leaves the environment exactly as it found
+        // it.
+        if let Some(d) = self.degen_rec_bottom(ctx, name, levels) {
+            return Some(RecBottom::Degen(d))
+        }
         self.gen_rec_bottom(ctx, name, levels).map(|(g, tn)| RecBottom::General(g, tn))
+    }
+
+    /// **The degenerate recursor** for `name` — one constructor, no recursive
+    /// field, at least one field — or `None`, which is a fall-through to
+    /// [`Self::gen_rec_bottom`] rather than a decline of the declaration.
+    ///
+    /// The preamble is [`Self::gen_rec_bottom`]'s and has to be: the same
+    /// eliminator-class consistency check, the same level split, the same
+    /// hand-written-recogniser seam, the same [`Self::gen_ind`]. What it does
+    /// **not** do is the part that costs:
+    ///
+    /// * no `t_policy` gate. The declaration has one constructor, so there is
+    ///   nothing to branch over and no motive point to site — the question the
+    ///   gate asks is not asked here at all. **This is the arm's reason for
+    ///   existing**, and it is why the sibling construction for "several
+    ///   constructors, none nullary" fits *beside* this rather than inside it:
+    ///   that one is a question about `carrier_at` and the target, and nothing
+    ///   below reads either.
+    /// * no [`Self::gen_ty_nest`]. The ι rule mentions no parameter, so it never
+    ///   needs `app-spine(⟦T⟧,p⃗) = ind(p⃗)`.
+    /// * no [`Self::rec_core`]. There is no W-recursor here.
+    ///
+    /// # The three declines, by name
+    ///
+    /// `k = 0` and a recursive field are declined **here** rather than left to
+    /// [`derived::inductive::DegenRec::build`]'s own guards, because both have
+    /// a right answer somewhere else and the caller has to reach it: a
+    /// fieldless one-constructor declaration is `t_policy` 1's, with a real
+    /// W-recursor behind it, and a recursive one needs an induction hypothesis
+    /// and is `GenRecursor`'s. Two or more constructors never reaches this
+    /// function's body.
+    fn degen_rec_bottom(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<DegenBottom>> {
+        let Some(Declar::Recursor(r)) = self.decls.get_declar(name) else { return None };
+        if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return None
+        }
+        let ind_name = r.all_inductives[0];
+        if self.recognised_ind(ctx, &ind_name) {
+            return None
+        }
+        let ind = self.decls.get_inductive(&ind_name)?;
+        // The shape gate, read off the **export** before anything is built or
+        // translated. `ctors == 1` is the half that decides which construction
+        // this is; the recursive half needs the translation and is checked
+        // below, where `CtorSpec::recs` says it exactly.
+        if ind.all_ctor_names.len() != 1 {
+            return None
+        }
+        let ind_lp = ctx.read_levels(ind.info.uparams).len();
+        let rec_lp = ctx.read_levels(r.info.uparams).len();
+        let given = ctx.read_levels(levels);
+        if rec_lp != ind_lp + 1 || given.len() != rec_lp {
+            return None
+        }
+        let ind_levels = ctx.alloc_levels_slice(&given[1..]);
+        let gi = self.gen_ind(ctx, ind_name, ind_levels)?;
+        if gi.ind.spec.ctors.len() != 1
+            || r.num_minors != 1
+            || r.rec_rules.len() != 1
+            || r.num_params as usize != gi.param_vars.len()
+        {
+            note_decline(Decline::Shape);
+            return None
+        }
+        let c = &gi.ind.spec.ctors[0];
+        // Both of these are somebody else's, by name — see the header.
+        if c.recs != 0 || c.args.is_empty() {
+            return None
+        }
+        let ind_lv = self.interp_levels(ctx, ind_levels);
+        let key = (self.name_key(ind_name)?, ind_lv);
+        let hit = self.shared.borrow().degen_recs.get(&key).cloned();
+        if let Some(d) = hit {
+            match &d {
+                // `gen_ind`'s guard re-walks the declaration and hands back a
+                // fresh `Rc` when the `βⱼ` bodies did not survive; a bundle
+                // built over the previous one states its rules at terms this
+                // backend never produces. `GenRec`'s reasoning exactly.
+                Some(d) if !Rc::ptr_eq(&d.gi, &gi) => {
+                    DEGEN_GUARD_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                _ => return d,
+            }
+        }
+        let mach = self.machine()?;
+        let built = {
+            let m = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::DegenRec::build(&mut env, &m, &gi.ind).ok()
+        };
+        let out = built.map(|dr| Rc::new(DegenBottom { gi, dr: Rc::new(dr) }));
+        if out.is_some() {
+            DEGEN_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            note_decline(Decline::Build);
+        }
+        // Never replace a bundle with a decline — `gen_ind_inner`'s rule.
+        {
+            let mut sh = self.shared.borrow_mut();
+            if out.is_some() || !matches!(sh.degen_recs.get(&key), Some(Some(_))) {
+                sh.degen_recs.insert(key, out.clone());
+            }
+        }
+        out
     }
 
     /// **The general recursor** for `name`, if the declaration it eliminates is
@@ -6359,7 +6576,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             vars.push(v);
             cur = ctx.inst(body, &[local]);
         }
-        if vars.len() < 4 {
+        // **How shallow a nest this bottom can sit at.** Four for the three
+        // hand-written arms and the general one, which all read `vars[1]` and
+        // `vars[2]` as minor premises and need a major premise below them.
+        // A degenerate recursor has **one** minor premise, so its shallowest
+        // nest is `motive, minor, major` — three, and at `np = 0` that is every
+        // parameterless structure in the corpus (`Char.rec`, `PLift.rec`).
+        // Three is still enough for the tuple below, whose deepest index is 2.
+        let min_depth = if matches!(bottom, RecBottom::Degen(_)) { 3 } else { 4 };
+        if vars.len() < min_depth {
             return None
         }
 
@@ -6385,7 +6610,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Some(Declar::Recursor(r)) => r.num_params as usize,
             _ => return None,
         };
-        if depth < np + 4 {
+        if depth < np + min_depth {
             return None
         }
         let bottom_body = match &bottom {
@@ -6430,6 +6655,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     g.gr.rec_of(&m, &g.gi.ind, &g.core.r, &ps, &minors, &t_policy)?
                 };
                 ap.apply(rec_term, major)
+            }
+            // `t_last(p⃗,C,s,b) := drec(s,b)` — and there is no `ap.apply` around
+            // it, because `drec` is **not a function-set applied to the major
+            // premise**. It is the minor premise applied to the projections of
+            // `b`, a term in both, which is why this bottom needs no target and
+            // asks `t_policy` nothing.
+            //
+            // The layout is `np` parameters, the motive, **one** minor, the
+            // major: `depth == np + 3` on the nose, and a recursor whose data
+            // says otherwise declines rather than indexes into a shape it does
+            // not have.
+            RecBottom::Degen(d) => {
+                if depth != np + 3 {
+                    return None
+                }
+                let minor = Term::var(vars[np + 1]);
+                let mach = self.machine()?;
+                let m = mach.borrow();
+                d.dr.value_of(&m, &d.gi.ind, &minor, &major).ok()?
             }
         };
 
@@ -12332,6 +12576,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // reduction either way.
         let n_ctors = match &nest.bottom {
             RecBottom::General(g, _) => g.gi.ind.spec.ctors.len(),
+            RecBottom::Degen(_) => 1,
             _ => 2,
         };
         if idx >= n_ctors || ctor_args.len() != cnp + c.num_fields as usize {
@@ -12375,6 +12620,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 ctx, &gr, &tn, nest, cfun, args, &ta, &doms, &obligations, idx, &cparams,
                 &fields,
             )?,
+            // Neither `nest` nor `obligations` is passed, and both absences are
+            // load-bearing. The nest is what `fire_general` re-enters for a
+            // recursive call, and there is none; the obligations are what it
+            // discharges `HYP` and the carrier bridge from, and it has neither.
+            RecBottom::Degen(d) => {
+                self.fire_degen(ctx, &d, cfun, args, &ta, idx, &cparams, &fields)?
+            }
         };
         let Some(lhs_chain) = self.ceq_trans(&chain, &fired) else {
             return Err("iota: chaining the computation rule failed")
@@ -12895,135 +13147,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             (def, None, Vec::new(), Vec::new())
         } else {
-            let Expr::Const { name: cname, levels: clevels, .. } = ctx.read_expr(cfun) else {
-                return Err("iota: the major premise is not a constructor")
-            };
-            // The bridge is a by-product of building the constructor's nest, so
-            // the constant has to have been interpreted at least once. `interp`
-            // is cached, and `ta[major]` has already forced it; this is the line
-            // that says so rather than relying on it.
-            let _ = self.interp(ctx, cfun);
-            let clv = self.interp_levels(ctx, clevels);
-            let Some(br) = self.gen_ctor_bridges.get(&(cname, clv)).cloned() else {
-                return Err("iota: the constructor has no bridge to the carrier's term")
-            };
-            // `mem` is present exactly when the constructor has fields — the
-            // `Ctx(None)` discipline on both sides — and the bridge's own
-            // parameter count must be this declaration's.
-            if br.vars.len() != np + fields.len()
-                || br.order != order
-                || br.np != np
-                || br.mem.is_some() != !fields.is_empty()
-            {
-                return Err("iota: the constructor's bridge is about another constructor")
-            }
-            if cparams.len() != np {
-                return Err("iota: the major premise is not applied to the declaration's parameters")
-            }
-            // The spine is `⟦cᵢ p⃗ f⃗⟧`, parameters first, so the bridge is
-            // instantiated at both — and the parameters must be the *recursor's*,
-            // or `Hᵢ^ctor` would be stated about a different instantiation than
-            // the ι rule asks for.
-            let mut tf: Vec<Term> = cparams.iter().map(|p| self.interp(ctx, *p)).collect();
-            if tf != ps {
-                return Err("iota: the constructor's parameters are not the recursor's")
-            }
-            tf.extend(fields.iter().map(|f| self.interp(ctx, *f)).collect::<Vec<_>>());
-            let cargs: Vec<ExprPtr<'t>> =
-                cparams.iter().chain(fields.iter()).copied().collect();
-            let Some(spine_inst) = derived::inst_all(&br.spine, &tf) else {
-                return Err("iota: instantiating the constructor's bridge failed")
-            };
-            let mem_inst = match &br.mem {
-                None => None,
-                Some(m) => match derived::inst_all(m, &tf) {
-                    Some(m) => Some(m),
-                    None => return Err("iota: instantiating the constructor's bridge failed"),
-                },
-            };
-            let Some((ante, spine_eq)) = spine_inst.concl().as_imp() else {
-                return Err("iota: the constructor's bridge is not conditional")
-            };
-            if let Some(mi) = &mem_inst {
-                match mi.concl().as_imp() {
-                    Some((ante2, _)) if ante2 == ante => {}
-                    _ => {
-                        return Err(
-                            "iota: the constructor's two bridges do not share an antecedent",
-                        )
-                    }
-                }
-            }
-            if spine_eq.as_eq().map(|(l, _)| l) != Some(ta[major].clone()) {
-                return Err("iota: the constructor's bridge is not about this spine")
-            }
-
-            // Discharge the shared antecedent, atom by atom, from the arguments'
-            // own typing obligations — read off the instantiated formula rather
-            // than rebuilt, so a dependent field's type is whatever the bridge
-            // says it is.
-            let mut atoms: Vec<Formula> = Vec::with_capacity(cargs.len());
-            let mut cur = ante.clone();
-            for _ in 1..cargs.len() {
-                let Some((a, rest)) = as_and(&cur) else {
-                    return Err("iota: the constructor's antecedent is not a conjunction")
-                };
-                atoms.push(a);
-                cur = rest;
-            }
-            atoms.push(cur);
-            let mut parts: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(cargs.len());
-            for (f, atom) in atoms.iter().enumerate() {
-                let Some((subj, dom)) = atom.as_mem() else {
-                    return Err("iota: the constructor's antecedent is not a membership")
-                };
-                if subj != tf[f] {
-                    return Err("iota: the constructor's antecedent is about another field")
-                }
-                let Some(o) = self.mem_obligation(ctx, cargs[f], &tf[f], &dom) else {
-                    return Err("iota: a constructor field has no typing to rest on")
-                };
-                ctor_hyps = merge_hyps(&ctor_hyps, &o.1);
-                parts.push(o);
-            }
-            let ch = conj_of(&ctor_hyps);
-            let mut restated: Vec<Thm> = Vec::with_capacity(parts.len());
-            for (thm, hs) in &parts {
-                let Some(r) = reassume(thm, hs, &ctor_hyps) else {
-                    return Err("iota: restating a constructor field's typing failed")
-                };
-                restated.push(r);
-            }
-            let mut acc = restated.pop().expect("a nest with a level has an argument");
-            while let Some(p) = restated.pop() {
-                let Some(both) = u_and_intro(&p, &acc, ch.as_ref()) else {
-                    return Err("iota: assembling the constructor's premises failed")
-                };
-                acc = both;
-            }
-            if u_concl(&acc, ch.as_ref()) != Some(ante) {
-                return Err("iota: the constructor's assembled premise is not the one it asks for")
-            }
-            let Some(eq) = u_syl(&acc, &spine_inst, ch.as_ref()) else {
-                return Err("iota: discharging the constructor's bridge failed")
-            };
-            let hc = match &mem_inst {
-                None => None,
-                Some(mi) => match u_syl(&acc, mi, ch.as_ref()) {
-                    Some(h) => Some(h),
-                    None => return Err("iota: discharging the constructor's bridge failed"),
-                },
-            };
-            let Some(eq) = CondEq::new(eq, ctor_hyps.clone()) else {
-                return Err("iota: the constructor's bridge does not have the assumed shape")
-            };
-            let (mut ys, mut ts) = (Vec::new(), Vec::new());
-            for (f, slot) in order.iter().enumerate() {
-                match slot {
-                    Slot::Plain => ys.push(tf[np + f].clone()),
-                    Slot::Rec => ts.push(tf[np + f].clone()),
-                }
-            }
+            let (eq, hc, hs, ys, ts) =
+                self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?;
+            ctor_hyps = hs;
             (eq, hc, ys, ts)
         };
 
@@ -13148,6 +13274,302 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         GEN_IOTAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(acc)
+    }
+
+    /// **The Lean spine of a constructor with fields, brought to the carrier's
+    /// own `ctorᵢ(y⃗,r⃗)`** — [`GenCtorBridge`] instantiated at the use site's
+    /// own arguments, with its antecedent discharged from their typings.
+    ///
+    /// Two ι paths ask exactly this, and they have to ask it the same way or the
+    /// two sides of an equation would rest on differently-spelled assumptions:
+    /// [`Self::fire_general`] at a constructor of any declaration the general
+    /// recursor eliminates, and [`Self::fire_degen`] at the single constructor
+    /// of a one-constructor one. This was `fire_general`'s inline `else` branch
+    /// until the second caller existed; it is moved rather than copied.
+    ///
+    /// Returns the spine equation `⊢ H → (⟦cᵢ p⃗ f⃗⟧ = ctorᵢ(y⃗,r⃗))`, the
+    /// constructor's own `Hᵢ^ctor` under the same `H`, the assumption list `H`
+    /// itself, and the arguments split by the field mask. **The caller decides
+    /// what to do with `Hᵢ^ctor`**: the general rule needs it to type the step
+    /// into `T`, and the degenerate one has no use for it at all — which is the
+    /// whole content of the diagnosis, so it is returned rather than consumed
+    /// here.
+    ///
+    /// The `np == 0` **field-free** case is *not* here: `⟦cᵢ⟧` then abbreviates
+    /// the carrier's term outright and there is no bridge to instantiate. That
+    /// stays inline at its one caller, because the degenerate path declines a
+    /// fieldless constructor by name (`k = 0` is `t_policy` 1's).
+    #[allow(clippy::too_many_arguments)]
+    fn ctor_spine_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        cfun: ExprPtr<'t>,
+        cparams: &[ExprPtr<'t>],
+        fields: &[ExprPtr<'t>],
+        spine: &Term,
+        ps: &[Term],
+        order: &[Slot],
+    ) -> Result<(CondEq, Option<Thm>, Vec<Formula>, Vec<Term>, Vec<Term>), &'static str> {
+        let np = ps.len();
+        let mut ctor_hyps: Vec<Formula> = Vec::new();
+        let Expr::Const { name: cname, levels: clevels, .. } = ctx.read_expr(cfun) else {
+            return Err("iota: the major premise is not a constructor")
+        };
+        // The bridge is a by-product of building the constructor's nest, so
+        // the constant has to have been interpreted at least once. `interp`
+        // is cached, and the caller's `spine` has already forced it; this is the
+        // line that says so rather than relying on it.
+        let _ = self.interp(ctx, cfun);
+        let clv = self.interp_levels(ctx, clevels);
+        let Some(br) = self.gen_ctor_bridges.get(&(cname, clv)).cloned() else {
+            return Err("iota: the constructor has no bridge to the carrier's term")
+        };
+        // `mem` is present exactly when the constructor has fields — the
+        // `Ctx(None)` discipline on both sides — and the bridge's own
+        // parameter count must be this declaration's.
+        if br.vars.len() != np + fields.len()
+            || br.order.as_slice() != order
+            || br.np != np
+            || br.mem.is_some() != !fields.is_empty()
+        {
+            return Err("iota: the constructor's bridge is about another constructor")
+        }
+        if cparams.len() != np {
+            return Err("iota: the major premise is not applied to the declaration's parameters")
+        }
+        // The spine is `⟦cᵢ p⃗ f⃗⟧`, parameters first, so the bridge is
+        // instantiated at both — and the parameters must be the *recursor's*,
+        // or `Hᵢ^ctor` would be stated about a different instantiation than
+        // the ι rule asks for.
+        let mut tf: Vec<Term> = cparams.iter().map(|p| self.interp(ctx, *p)).collect();
+        if tf.as_slice() != ps {
+            return Err("iota: the constructor's parameters are not the recursor's")
+        }
+        tf.extend(fields.iter().map(|f| self.interp(ctx, *f)).collect::<Vec<_>>());
+        let cargs: Vec<ExprPtr<'t>> =
+            cparams.iter().chain(fields.iter()).copied().collect();
+        let Some(spine_inst) = derived::inst_all(&br.spine, &tf) else {
+            return Err("iota: instantiating the constructor's bridge failed")
+        };
+        let mem_inst = match &br.mem {
+            None => None,
+            Some(m) => match derived::inst_all(m, &tf) {
+                Some(m) => Some(m),
+                None => return Err("iota: instantiating the constructor's bridge failed"),
+            },
+        };
+        let Some((ante, spine_eq)) = spine_inst.concl().as_imp() else {
+            return Err("iota: the constructor's bridge is not conditional")
+        };
+        if let Some(mi) = &mem_inst {
+            match mi.concl().as_imp() {
+                Some((ante2, _)) if ante2 == ante => {}
+                _ => {
+                    return Err(
+                        "iota: the constructor's two bridges do not share an antecedent",
+                    )
+                }
+            }
+        }
+        if spine_eq.as_eq().map(|(l, _)| l) != Some(spine.clone()) {
+            return Err("iota: the constructor's bridge is not about this spine")
+        }
+
+        // Discharge the shared antecedent, atom by atom, from the arguments'
+        // own typing obligations — read off the instantiated formula rather
+        // than rebuilt, so a dependent field's type is whatever the bridge
+        // says it is.
+        let mut atoms: Vec<Formula> = Vec::with_capacity(cargs.len());
+        let mut cur = ante.clone();
+        for _ in 1..cargs.len() {
+            let Some((a, rest)) = as_and(&cur) else {
+                return Err("iota: the constructor's antecedent is not a conjunction")
+            };
+            atoms.push(a);
+            cur = rest;
+        }
+        atoms.push(cur);
+        let mut parts: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(cargs.len());
+        for (f, atom) in atoms.iter().enumerate() {
+            let Some((subj, dom)) = atom.as_mem() else {
+                return Err("iota: the constructor's antecedent is not a membership")
+            };
+            if subj != tf[f] {
+                return Err("iota: the constructor's antecedent is about another field")
+            }
+            let Some(o) = self.mem_obligation(ctx, cargs[f], &tf[f], &dom) else {
+                return Err("iota: a constructor field has no typing to rest on")
+            };
+            ctor_hyps = merge_hyps(&ctor_hyps, &o.1);
+            parts.push(o);
+        }
+        let ch = conj_of(&ctor_hyps);
+        let mut restated: Vec<Thm> = Vec::with_capacity(parts.len());
+        for (thm, hs) in &parts {
+            let Some(r) = reassume(thm, hs, &ctor_hyps) else {
+                return Err("iota: restating a constructor field's typing failed")
+            };
+            restated.push(r);
+        }
+        let mut acc = restated.pop().expect("a nest with a level has an argument");
+        while let Some(p) = restated.pop() {
+            let Some(both) = u_and_intro(&p, &acc, ch.as_ref()) else {
+                return Err("iota: assembling the constructor's premises failed")
+            };
+            acc = both;
+        }
+        if u_concl(&acc, ch.as_ref()) != Some(ante) {
+            return Err("iota: the constructor's assembled premise is not the one it asks for")
+        }
+        let Some(eq) = u_syl(&acc, &spine_inst, ch.as_ref()) else {
+            return Err("iota: discharging the constructor's bridge failed")
+        };
+        let hc = match &mem_inst {
+            None => None,
+            Some(mi) => match u_syl(&acc, mi, ch.as_ref()) {
+                Some(h) => Some(h),
+                None => return Err("iota: discharging the constructor's bridge failed"),
+            },
+        };
+        let Some(eq) = CondEq::new(eq, ctor_hyps.clone()) else {
+            return Err("iota: the constructor's bridge does not have the assumed shape")
+        };
+        let (mut ys, mut ts) = (Vec::new(), Vec::new());
+        for (f, slot) in order.iter().enumerate() {
+            match slot {
+                Slot::Plain => ys.push(tf[np + f].clone()),
+                Slot::Rec => ts.push(tf[np + f].clone()),
+            }
+        }
+        Ok((eq, hc, ctor_hyps, ys, ts))
+    }
+
+    /// **The ι rule of a one-constructor, non-recursive declaration** —
+    /// `S.rec C f (S.mk a⃗) ⟶ f a⃗`, derived.
+    ///
+    /// Read this beside [`Self::fire_general`]; the interest is entirely in what
+    /// is missing. That method spends most of its length on four things, and
+    /// **none of them is here**:
+    ///
+    /// | `fire_general` does | why | here |
+    /// |---|---|---|
+    /// | `t_policy`, then `rec_of` at the target | the W-recursor's values must land in a set | no target — `drec` is a term |
+    /// | `carrier_at` and `gen_ty_bridge`, `⟦T p⃗⟧ = ind(p⃗)` both ways | `HYP` is stated at the raw `W` | nothing is stated at `W` |
+    /// | `gen_minor_typed`, once per constructor | the step must be typed into `T` | no `T`, no step |
+    /// | `nest_chain` again per recursive field | the ι rule mentions `grec` again | no recursive field |
+    ///
+    /// What is left is two steps. The constructor's Lean spine is brought to
+    /// `ctor₀(y⃗)` by the **same** [`Self::ctor_spine_bridge`] the general path
+    /// uses — so the assumptions are spelled identically at both — and one
+    /// Leibniz walks that equation into every projection of the nest's bottom.
+    /// Then [`derived::inductive::DegenRec::iota`], instantiated at the minor
+    /// premise and the fields, is the rest. It is **unconditional**: the only
+    /// assumptions the result carries are the fields' own typings, which the
+    /// bridge needed and this rule does not.
+    ///
+    /// The bridge's `Hᵢ^ctor` is deliberately dropped on the floor here. It is
+    /// not that it would be harmless to carry: an unused conjunct in the
+    /// assumption set is an escape at the boundary, so carrying it would cost
+    /// the ledger something for a premise no theorem below asks for.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_degen(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &DegenBottom,
+        cfun: ExprPtr<'t>,
+        args: &[ExprPtr<'t>],
+        ta: &[Term],
+        idx: usize,
+        cparams: &[ExprPtr<'t>],
+        fields: &[ExprPtr<'t>],
+    ) -> Result<CondEq, &'static str> {
+        let major = args.len() - 1;
+        let ind = d.gi.ind.clone();
+        let np = d.gi.param_vars.len();
+        if idx != 0 {
+            return Err("iota: the constructor is not one this backend computes")
+        }
+        // Layout: `np` parameters, the motive, one minor, the major premise —
+        // the same shape `rec_nest` built the bottom at, asserted again here
+        // because the two must agree for the chain to meet.
+        if ta.len() != np + 3 {
+            return Err("iota: the degenerate recursor is not applied to its own arguments")
+        }
+        let minor = ta[np + 1].clone();
+        let order = ind.spec.ctors[0].order.clone();
+        let k = ind.spec.ctors[0].args.len();
+        if ind.spec.ctors[0].recs != 0 || k == 0 || fields.len() != k {
+            return Err("iota: the constructor is not applied to its own fields")
+        }
+        let ps: Vec<Term> = ta[..np].to_vec();
+
+        // ── `⟦S.mk p⃗ f⃗⟧ = ctor₀(⟦f⃗⟧)`, and its own premises ─────────────────
+        let (ctor_eq, _hc, _hyps, ys_c, ts_c) =
+            self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?;
+        if !ts_c.is_empty() || ys_c.len() != k {
+            return Err("iota: the constructor's fields are not all plain")
+        }
+
+        // ── One Leibniz, into every projection of `drec(s, ·)` at once ───────
+        let mach = match self.machine() {
+            Some(m) => m,
+            None => return Err("iota: the general apparatus is unavailable"),
+        };
+        let hole = self.env_mut().fresh_var();
+        let Some((spine, ctor_term)) = ctor_eq.as_eq() else {
+            return Err("iota: the constructor's bridge is not an equation")
+        };
+        let (at_spine, at_hole) = {
+            let m = mach.borrow();
+            let at_spine = d.dr.value_of(&m, &ind, &minor, &spine);
+            let at_hole = d.dr.value_of(&m, &ind, &minor, &Term::var(hole));
+            match (at_spine, at_hole) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => return Err("iota: the degenerate recursor's value could not be built"),
+            }
+        };
+        let Some(moved) = self.ceq_leibniz(&ctor_eq, hole, at_spine, at_hole) else {
+            return Err("iota: rewriting the major premise under the projections refused")
+        };
+
+        // ── The rule, at the minor premise and the fields ────────────────────
+        //
+        // `∀s ∀y⃗` and nothing else — no parameter spine, because `ctor₀(y⃗)` has
+        // no parameter in it. The claim is checked on the nose: `value_of` at
+        // `ctor₀(⟦f⃗⟧)` is the left-hand side by construction, and
+        // `applied_minor` at the fields is the right-hand side the reduct
+        // contracts to.
+        let mut at: Vec<Term> = vec![minor.clone()];
+        at.extend(ys_c.iter().cloned());
+        let Some(rule) = derived::inst_all(&d.dr.iota, &at) else {
+            return Err("iota: instantiating the degenerate computation rule failed")
+        };
+        let want = {
+            let m = mach.borrow();
+            let Ok(lhs) = d.dr.value_of(&m, &ind, &minor, &ctor_term) else {
+                return Err("iota: the degenerate recursor's value could not be built")
+            };
+            let rhs = derived::inductive::applied_minor(
+                &self.pre.ap.clone(),
+                &order,
+                &minor,
+                &ys_c,
+                &[],
+                &[],
+            );
+            Formula::eq(lhs, rhs)
+        };
+        if *rule.concl() != want {
+            return Err("iota: the degenerate computation rule is not about this instance")
+        }
+        let Some(rule) = CondEq::plain(rule) else {
+            return Err("iota: the degenerate computation rule is not an equation")
+        };
+        let Some(out) = self.ceq_trans(&moved, &rule) else {
+            return Err("iota: the nest does not reduce to the minor premise at the constructor")
+        };
+        DEGEN_IOTAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(out)
     }
 
     /// `⊢ H → (⟦T p⃗⟧ = ind(p⃗))` at the ι site's own parameters, with `H` the
