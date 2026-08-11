@@ -17,6 +17,7 @@ pub mod pi_store;
 pub mod level;
 pub mod mini;
 pub mod name;
+mod panic_capture;
 pub mod parser;
 pub mod pretty_printer;
 pub mod quot;

@@ -93,6 +93,10 @@ pub struct Facts {
 
 pub struct Loaded {
     pub decls: Vec<Declaration>,
+    /// The one checker schedule computed for this parse. The mini-form map
+    /// below is derived from this same value; routed checking must not compute
+    /// or publish a second schedule.
+    pub checker_schedule: std::sync::Arc<Instantiations>,
     /// Per declaration name, the ground instantiations the pre-pass demands.
     /// Unused in step (b); the interpretation store of step (c) is keyed on it.
     pub schedule: HashMap<Name, Vec<Inst>>,
@@ -273,17 +277,8 @@ pub fn load(path: &Path) -> LR<Loaded> { load_with(path, LoadOptions::default())
 
 /// [`load`], with the frontend's one gate open or shut.
 pub fn load_with(path: &Path, opts: LoadOptions) -> LR<Loaded> {
-    // The panic hook is process-global, so swapping it must be serialised or
-    // two concurrent loads can leave the silencing hook installed for good.
-    // The lock covers the whole catch window; parsing is not on any hot path.
-    static HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let p = path.to_path_buf();
-    let guard = HOOK.lock().unwrap_or_else(|e| e.into_inner());
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let r = std::panic::catch_unwind(move || load_inner(&p, opts));
-    std::panic::set_hook(hook);
-    drop(guard);
+    let r = crate::panic_capture::catch_silent(move || load_inner(&p, opts));
     match r {
         Ok(v) => v,
         Err(_) => Err(declined("checker's parser panicked (assertion in parser.rs)")),
@@ -338,7 +333,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
     // incomparable integers, so the two must be the same context. Installing
     // the export file *is* opening it — see `crate::mini::arena`.
     let ef = crate::mini::arena::install_export_file(ef);
-    let insts = Instantiations::compute(ef);
+    let insts = crate::instantiations::publish(Instantiations::compute(ef));
 
     {
         let mut cv = Cv::new();
@@ -558,7 +553,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
                 Declar::Constructor(_) | Declar::Recursor(_) => {}
             }
         }
-        Ok(Loaded { decls, schedule, facts, export_recs })
+        Ok(Loaded { decls, checker_schedule: insts, schedule, facts, export_recs })
     }
 }
 

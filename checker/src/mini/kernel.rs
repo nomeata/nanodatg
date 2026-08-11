@@ -4864,6 +4864,39 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
     }
 }
 
+/// Install a non-inductive declaration after another checker accepted it.
+///
+/// The unified pipeline dispatches definitions, theorems, opaque definitions,
+/// and axioms to nanoda exactly once. Mini's syntactic environment still has
+/// to learn those declarations because a later mini-routed inductive may refer
+/// to them. This function performs only that installation: it deliberately
+/// does not infer a type, compare a value, or apply mini's acceptance rules.
+/// The duplicate check is an environment invariant, not a second type check.
+pub fn install_checked_noninductive(env: &mut Environment, decl: &Declaration) -> R<()> {
+    match decl {
+        Declaration::Axiom { name, lparams, ty } => env.insert_new(
+            *name,
+            ConstantInfo::Opaque { lparams: lparams.clone(), ty: *ty },
+        ),
+        Declaration::Def { name, lparams, ty, value, kind } => {
+            let cinfo = match kind {
+                DefKind::Def | DefKind::Theorem => ConstantInfo::Def {
+                    lparams: lparams.clone(),
+                    ty: *ty,
+                    value: *value,
+                },
+                DefKind::Opaque => {
+                    ConstantInfo::Opaque { lparams: lparams.clone(), ty: *ty }
+                }
+            };
+            env.insert_new(*name, cinfo)
+        }
+        Declaration::Quot | Declaration::Inductive { .. } | Declaration::Mutual { .. } => {
+            Err(format!("{} is an inductive construction, not a nanoda-routed declaration", decl.name()))
+        }
+    }
+}
+
 /// **Nested or not**, which is a property of the constructor types and not of
 /// anything the export flags for us.
 ///

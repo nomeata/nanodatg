@@ -1,11 +1,11 @@
-//! **Routing, pinned** (ENV-UNIFY.md §5 track D; `mini/src/route.rs`) — the
-//! policy split, the force flags, both crossing directions, the counted
-//! fallback and the stray sweep, each against a named file.
+//! **Routing, pinned** (ENV-UNIFY.md §5 track D;
+//! [`nanoda_lib::mini::route`]) — the policy split, both crossing directions,
+//! and one-pass ownership and coverage accounting, each against a named file.
 //!
 //! Behind `--features tg` because the checker's evidence path exists only
 //! with its backend compiled in; `ci/check.sh` runs it with
-//! `cargo test -p mini --features tg`. Every routed run owns its thread
-//! (`run_routed` installs the shared core as the checker's per-thread
+//! `cargo test -p nanoda_lib --features tg`. Every routed run owns its thread
+//! (the routed driver installs the shared core as the checker's per-thread
 //! signature), which `check_file_deep_with` provides — so each test below is
 //! one file, one thread, exactly like production.
 
@@ -47,34 +47,14 @@ fn cross_field(out: &Outcome, k: &str) -> u64 {
         .expect("a number")
 }
 
-/// **The policy function, pinned with three atoms** — the three modes over
-/// one file, because two modes pass under a policy that ignores the flag and
-/// hardcodes one split. `034_boolType` is one inductive and one definition,
-/// so every cell below is attributable to a kind:
-///
-/// * `ForceMini` walks both groups on mini and hands the checker nothing —
-///   the historical mini run (6 published entries, the number
-///   `envshare_tg.rs` pins for the unrouted seam test);
-/// * `ForceChecker` hands mini nothing (0 mini entries);
-/// * `Split` sends the inductive to mini (its 5 Bool-family entries and no
-///   def entry) and the definition to the checker.
+/// `034_boolType` is one inductive and one definition: split sends the
+/// construction to mini and the definition to nanoda, exactly once each.
 #[test]
-fn the_flag_forces_either_engine_and_split_routes_by_kind() {
+fn split_routes_once_by_kind() {
     let export = corpus().join("good/tutorial/034_boolType.ndjson");
     if skip_guard::absent(&export) {
         return
     }
-    let fm = routed(&export, Mode::ForceMini);
-    let rep = fm.route.as_ref().expect("route report");
-    assert_eq!((rep.to_mini, rep.to_checker), (2, 0), "{}", rep.row());
-    assert_eq!(cross_field(&fm, "miniEntries"), 6, "{}", rep.cross);
-    assert_eq!(cross_field(&fm, "checkerEntries"), 0, "{}", rep.cross);
-
-    let fc = routed(&export, Mode::ForceChecker);
-    let rep = fc.route.as_ref().expect("route report");
-    assert_eq!((rep.to_mini, rep.to_checker), (0, 2), "{}", rep.row());
-    assert_eq!(cross_field(&fc, "miniEntries"), 0, "{}", rep.cross);
-
     let sp = routed(&export, Mode::Split);
     let rep = sp.route.as_ref().expect("route report");
     assert_eq!((rep.to_mini, rep.to_checker), (1, 1), "{}", rep.row());
@@ -150,49 +130,27 @@ fn a_typing_crosses_from_the_checker_to_mini_under_split() {
     assert_eq!(cross_field(&out, "incoherent"), 0, "{}", rep.cross);
 }
 
-/// **A mini decline falls back to the checker — counted and named, never
-/// silent.** The fixture is the corpus's one surviving decliner
-/// (`squash_at_nonzero_sigma`, see `mini/tests/dump.rs`): `Squash` is
-/// routed to mini by kind, mini records `ind-spec(Squash: class (P) above
-/// Prop)`, and the driver hands the group to the checker. Three cells make
-/// the event unfakeable:
-///
-/// * the fallback row carries the name *and* mini's own reason;
-/// * `declinesUnfallen` is empty — the checker really had the group;
-/// * `strays` is empty — the sweep found nothing unvouched-for, which is
-///   the cell that goes red if the fallback records the event without
-///   actually running the checker (the group would be neither covered by
-///   mini nor claimed, and the sweep would check and name it).
+/// A mini-owned inductive decline remains untranslated debt. It is never
+/// handed to nanoda as a second validation pass.
 #[test]
-fn a_mini_decline_falls_back_to_the_checker_counted_and_named() {
+fn a_mini_decline_does_not_fall_back() {
     let out = routed(&fixture("squash_at_nonzero_sigma.ndjson"), Mode::Split);
     assert!(out.verdict.is_accepted(), "{:?}", out.verdict);
     let rep = out.route.as_ref().expect("route report");
-    assert_eq!(
-        rep.fallbacks_to_checker,
-        vec![("Squash".to_string(), "ind-spec(Squash: class (P) above Prop)".to_string())],
-        "{}",
-        rep.row()
-    );
-    assert!(rep.declines_unfallen.is_empty(), "{}", rep.row());
-    assert!(rep.strays.is_empty(), "{}", rep.row());
+    assert!(rep.to_mini > 0, "{}", rep.row());
+    assert!(out.untranslated().declarations > 0, "{}", rep.row());
+    assert!(rep.unclaimed.is_empty(), "{}", rep.row());
 }
 
-/// **The stray sweep: a group neither engine was routed is checked and
-/// named.** The natural population is exactly one declaration shape: an
-/// unused non-standard axiom, which mini's frontend drops before the
-/// evidence pass (`run.rs`'s retain — `unusedAx` is in `ignored axioms`,
-/// not in mini's walked declarations) while the checker's export still
-/// carries it. Under `Split` the sweep finds it unvouched-for, checks it on
-/// the checker, and names it. Goes red if the sweep is dropped — silently
-/// unvalidated coverage is the failure mode this cell exists to forbid.
+/// An unused axiom is still a declaration in the unified product and is
+/// dispatched to nanoda in the loop; no post-loop sweep is needed.
 #[test]
-fn an_unrouted_export_group_is_swept_and_named_a_stray() {
+fn an_unused_axiom_is_dispatched_in_the_loop() {
     let out = routed(&fixture("route_unused_axiom.ndjson"), Mode::Split);
     assert!(out.verdict.is_accepted(), "{:?}", out.verdict);
     let rep = out.route.as_ref().expect("route report");
-    assert_eq!(rep.strays, vec!["unusedAx".to_string()], "{}", rep.row());
-    assert!(rep.fallbacks_to_checker.is_empty(), "{}", rep.row());
+    assert!(rep.to_checker > 0, "{}", rep.row());
+    assert!(rep.unclaimed.is_empty(), "{}", rep.row());
 }
 
 /// **A checker-routed declaration is checked at every scheduled σ, not just
@@ -427,7 +385,7 @@ fn nominal_blind(t: &kernel::Term) -> String {
 /// shapes one dispatch keys that the other, walking the same file, never
 /// produces (different normal form, or different skeletonise-vs-opaque
 /// decisions). `#[ignore]`d: a measurement run, minutes over the corpus;
-/// `cargo test -p mini --features tg skeleton_key_divergence -- --ignored
+/// `cargo test -p nanoda_lib --features tg skeleton_key_divergence -- --ignored
 /// --nocapture` reproduces it.
 ///
 /// # The `lam` column no longer measures anything, and that is the result
@@ -624,29 +582,4 @@ fn run_checker(export: &Path) {
     let _ = std::fs::remove_file(&cfg_path);
     let (export_file, _skipped) = config.to_export_file().expect("export parses");
     export_file.check_all_declars();
-}
-
-/// **`ForceMini` reproduces the unrouted evidence run.** Same file, one
-/// unrouted and one force-mini walk, and the whole evidence ledger must
-/// agree row for row — the factoring of `Ledger::run`'s loop body into
-/// `walk_decl` (this arc's one refactor of existing behaviour) is pinned
-/// here to have changed nothing. `084_projProp1` because it is the richest
-/// of the pinned files: 4 declarations, 20 published entries, projections
-/// and props in the walk.
-#[test]
-fn force_mini_reproduces_the_unrouted_evidence_run() {
-    let export = corpus().join("good/tutorial/084_projProp1.ndjson");
-    if skip_guard::absent(&export) {
-        return
-    }
-    let plain = check_file_deep_with(&export, Options::default());
-    let fm = routed(&export, Mode::ForceMini);
-    assert_eq!(plain.verdict, fm.verdict);
-    let (a, b) = (plain.ledger.expect("accepted"), fm.ledger.expect("accepted"));
-    assert_eq!(a.row(), b.row());
-    assert_eq!(a.evidence_row(), b.evidence_row());
-    assert_eq!(a.untranslated.row(), b.untranslated.row());
-    assert_eq!(a.conv_row(), b.conv_row());
-    let rep = fm.route.expect("route report");
-    assert_eq!(rep.to_checker, 0, "{}", rep.row());
 }

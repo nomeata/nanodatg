@@ -4,17 +4,15 @@
 //! # Interface
 //!
 //! ```text
-//! ef.routed_schedule()                  -> Arc<Instantiations>
 //! ef.check_declar_scheduled(d, &sched)                 one declaration, every σ
-//! RoutedChecker::new(&ef)               -> RoutedChecker
+//! RoutedChecker::new(&ef, schedule)     -> RoutedChecker
 //! rc.check_anchor(name)                 -> Option<usize>
-//! rc.check_strays(&known)               -> Vec<String>
+//! rc.unclaimed()                        -> Vec<String>
 //! ```
 //!
-//! The routed driver lives in `mini` (`mini/src/route.rs`), because `mini`
-//! already depends on this crate and not the other way around. **The
-//! `ExportFile` is the caller's, and it is the one `mini`'s own load parsed
-//! and installed as its arena** (`mini::arena::installed_export_file`) — one
+//! The routed driver lives in [`crate::mini::route`]. **The `ExportFile` is
+//! the caller's, and it is the one the former mini loader parsed and installed
+//! as its arena** (`mini::arena::installed_export_file`) — one
 //! parse, one arena, one `NameKey` identity across both engines; this module
 //! does not construct a `Config` or read the file, and must not grow the
 //! ability to, because a second parse is what made "the same declaration"
@@ -63,16 +61,6 @@ use crate::instantiations::Instantiations;
 use crate::util::ExportFile;
 
 impl<'p> ExportFile<'p> {
-    /// The instantiation schedule, computed and **published** once — the
-    /// first half of what [`ExportFile::check_all_declars`] does before any
-    /// checking, exposed so a driver that interleaves engines can do the same
-    /// and then check one declaration at a time. Publishing before any check
-    /// is load-bearing for the same reason it is there: the backend reports
-    /// interpreted instantiations against the published schedule.
-    pub fn routed_schedule(&self) -> Arc<Instantiations> {
-        crate::instantiations::publish(Instantiations::compute(self))
-    }
-
     /// Check `d` at every instantiation the schedule requires of it — the
     /// per-declaration step of `check_all_declars`, exposed for the routed
     /// driver. Mirrors `tc.rs`'s private `check_declar_all`, including its
@@ -181,14 +169,13 @@ pub struct RoutedChecker<'x, 'p> {
     schedule: Arc<Instantiations>,
     /// Route anchor → indices into `ef.declars`, file order within a group.
     groups: HashMap<String, Vec<usize>>,
-    /// Anchors in first-appearance file order, for the stray sweep.
+    /// Anchors in first-appearance file order, for the coverage observation.
     order: Vec<String>,
     claimed: HashSet<String>,
 }
 
 impl<'x, 'p> RoutedChecker<'x, 'p> {
-    pub fn new(ef: &'x ExportFile<'p>) -> Self {
-        let schedule = ef.routed_schedule();
+    pub fn new(ef: &'x ExportFile<'p>, schedule: Arc<Instantiations>) -> Self {
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
         let mut order = Vec::new();
         for (i, d) in ef.declars.values().enumerate() {
@@ -204,9 +191,8 @@ impl<'x, 'p> RoutedChecker<'x, 'p> {
 
     /// Check every export entry anchored to `anchor`, in file order, at every
     /// scheduled instantiation, and mark the group claimed. `None` when no
-    /// export entry anchors to that name — a driver-side declaration the
-    /// export never saw (an encoder-generated one, say), which the caller
-    /// must route back to the engine that owns it, counted.
+    /// export entry anchors to that name. That is a routing invariant failure:
+    /// the caller must report it, never repair it by dispatching elsewhere.
     pub fn check_anchor(&mut self, anchor: &str) -> Option<usize> {
         let idxs = self.groups.get(anchor)?;
         let mut n = 0;
@@ -226,20 +212,14 @@ impl<'x, 'p> RoutedChecker<'x, 'p> {
         }
     }
 
-    /// **The stray sweep.** Every anchor neither claimed nor present in
-    /// `known` (the driver's own declaration names) is a group no routing
-    /// decision ever covered — it is *checked here*, so nothing is silently
-    /// unvalidated, and *returned by name*, so the driver can count it.
-    pub fn check_strays(&mut self, known: &HashSet<String>) -> Vec<String> {
-        let anchors: Vec<String> = self
-            .order
+    /// Anchors no declaration-loop dispatch claimed. This is an observation,
+    /// not a post-loop validation sweep: the unified checker must never repair
+    /// missed dispatch by running a second type-check pass.
+    pub fn unclaimed(&self) -> Vec<String> {
+        self.order
             .iter()
-            .filter(|a| !self.claimed.contains(*a) && !known.contains(*a))
+            .filter(|a| !self.claimed.contains(*a))
             .cloned()
-            .collect();
-        for a in &anchors {
-            self.check_anchor(a);
-        }
-        anchors
+            .collect()
     }
 }

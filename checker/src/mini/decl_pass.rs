@@ -9,11 +9,12 @@
 //! ```
 //!
 //! [`crate::mini::run::check_file_with_interp`] is the one caller, and the pipeline it
-//! runs is this module's shape: **parse, schedule, drop the unused axioms, then
-//! one loop over the declarations.** There is no whole-file acceptance pass and
-//! no whole-file interpretation pass; there is one pass, and each declaration
-//! goes through zone A's kernel and the evidence walk before the next one is
-//! looked at.
+//! runs is this module's shape: **parse, schedule, then one loop over the
+//! declarations.** The historical `--naive` policy filters unused axioms before
+//! entering the loop; the default policy dispatches every declaration. There
+//! is no whole-file acceptance pass and no whole-file interpretation pass.
+//! Each declaration is accepted by its selected engine and its evidence is
+//! produced before the next declaration is looked at.
 //!
 //! # What that buys, and it is the only thing that changed
 //!
@@ -83,8 +84,10 @@
 //!
 //! # The two environments
 //!
-//! [`Pass::env`] is **zone A's**: the file's declarations as `kernel::add`
-//! accepted them, each `Tᵢ` of a `mutual … end` block a real inductive.
+//! [`Pass::env`] is the selected checker's syntactic environment: mini-owned
+//! declarations after `kernel::add`, and nanoda-owned declarations copied in
+//! without a second check, each `Tᵢ` of a `mutual … end` block a real
+//! inductive.
 //! [`Pass::xenv`] is the **evidence pass's**: the same, with each encoded
 //! block's constants replaced by the encoding's definitions. Before the fusion
 //! the second was one `env.clone()` with the encodings written over it; there is
@@ -107,7 +110,7 @@ use crate::mini::env::{Declaration, Environment};
 use crate::mini::expr::Name;
 use crate::mini::interp::Interp;
 use crate::mini::ledger::Ledger;
-use crate::mini::route::Driver;
+use crate::mini::route::{Driver, Pick};
 
 /// What one declaration did to the run.
 pub enum Step {
@@ -159,8 +162,8 @@ impl Prefix {
 
 /// The state the per-declaration loop carries between declarations.
 pub struct Pass {
-    /// **Zone A's environment.** Grown by `kernel::add`, one declaration at a
-    /// time; this is what the acceptance verdict is about.
+    /// **The accepted syntactic environment.** Grown by the engine selected
+    /// for each declaration; this is what later mini-owned constructions see.
     pub env: Environment,
     /// **The evidence pass's environment.** See the module header.
     pub xenv: Environment,
@@ -171,7 +174,7 @@ pub struct Pass {
     /// The ledger the evidence half accumulates. Handed to the outcome **only**
     /// on an accepted file.
     pub led: Ledger,
-    /// Declarations `kernel::add` accepted — the verdict line's count.
+    /// Declarations the selected engine accepted — the verdict line's count.
     pub accepted: usize,
     /// The armed blocker fired: the evidence half is over, the acceptance half
     /// goes on so that the count above and the verdict stay what they were.
@@ -236,15 +239,23 @@ impl Pass {
 
     /// **The loop body.** Accept `d`, then certify it.
     pub(crate) fn step(&mut self, d: &Declaration, ip: &mut Interp, driver: &mut Driver) -> Step {
-        if let Err(msg) = crate::mini::kernel::add(&mut self.env, d) {
+        let pick = match driver.accept(&mut self.env, d) {
+            Ok(pick) => pick,
+            Err(msg) => {
             // **A budget refusal is a decline.** See
             // [`crate::mini::kernel::BUDGET_DECLINE`]. Classified here because this
             // is the one place a kernel-pass error becomes a verdict.
-            if msg.starts_with(crate::mini::kernel::BUDGET_DECLINE) {
-                return Step::Declined { reason: format!("{} while checking {}", msg, d.name()) }
+                if msg.starts_with(crate::mini::kernel::BUDGET_DECLINE) {
+                    return Step::Declined {
+                        reason: format!("{} while checking {}", msg, d.name()),
+                    }
+                }
+                if msg.starts_with("routing invariant:") {
+                    return Step::Declined { reason: msg }
+                }
+                return Step::Rejected { name: d.name().to_string(), msg }
             }
-            return Step::Rejected { name: d.name().to_string(), msg }
-        }
+        };
         self.accepted += 1;
         if !self.evidence {
             return Step::Continue
@@ -268,8 +279,8 @@ impl Pass {
         debug_assert_eq!(
             self.xenv.consts.len(),
             self.env.consts.len() + self.xenv_extra,
-            "the evidence pass's environment drifted from zone A's at {} — \
-             `introduced` is missing a name `kernel::add` inserted",
+            "the evidence pass's environment drifted from acceptance at {} — \
+             `introduced` is missing an installed name",
             d.name()
         );
 
@@ -280,7 +291,7 @@ impl Pass {
         // there by the `modelgen` filter (`MODELGEN.md` §1), so all that is
         // built here is the side table saying which model constant carries
         // `⟦T⟧`, `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧`, and the σ those constants have to
-        // be interpreted at. `mini/src/nested_splice.rs` says why the table
+        // be interpreted at. `crate::mini::nested_splice` says why the table
         // cannot be a name rule.
         //
         // Before the expansion and not after: the model contains a
@@ -303,7 +314,7 @@ impl Pass {
         // site reads. There is nothing to copy afterwards.
         //
         // A block the encoder declines stays as it was and `fill_declaration`
-        // records its reason. `mini/src/mutual_aux.rs` is the whole of it, and
+        // records its reason. `crate::mini::mutual_aux` is the whole of it, and
         // that module never names a `Term` or a `Thm`.
         let from = self.xdecls.len();
         {
@@ -318,7 +329,7 @@ impl Pass {
             // itself off there.
             *xenv_extra += xenv.consts.len() - before;
         }
-        self.walk(from, ip, driver);
+        self.walk(from, ip, driver, pick);
         Step::Continue
     }
 
@@ -339,18 +350,18 @@ impl Pass {
             let new = expander.append_rules(env, xenv, schedule);
             xdecls.extend_from_slice(new);
         }
-        self.walk(from, ip, driver);
+        self.walk(from, ip, driver, Pick::Mini);
     }
 
     /// The evidence walk over `xdecls[from..]`, unless the armed blocker has
     /// already stopped it.
-    fn walk(&mut self, from: usize, ip: &mut Interp, driver: &mut Driver) {
+    fn walk(&mut self, from: usize, ip: &mut Interp, driver: &mut Driver, pick: Pick) {
         let Pass { xdecls, xenv, schedule, led, blocked, .. } = self;
         for d in &xdecls[from..] {
             if *blocked {
                 return
             }
-            if driver.step(xenv, schedule, ip, led, d) {
+            if driver.evidence(pick, xenv, schedule, ip, led, d) {
                 *blocked = true;
             }
         }
@@ -411,7 +422,7 @@ impl Pass {
     pub fn mutual_rules(&self) -> usize { self.expander.rules }
 }
 
-/// **Every name `kernel::add(env, d)` brought into `env`.**
+/// **Every name accepting `d` brought into `env`.**
 ///
 /// Two sources and they are genuinely different:
 ///

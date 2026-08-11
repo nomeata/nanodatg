@@ -2,14 +2,17 @@
 //!
 //! # Interface
 //!
-//! [`check_file`] is what both `mini/src/main.rs` and `mini/tests/tutorial.rs`
-//! call. It reproduces `Main.lean`'s `runKernel` in its strict (non-`--liberal`)
+//! [`check_file`] is the library entry point used by the checker binary and
+//! its former-mini regression tests. It reproduces `Main.lean`'s `runKernel`
+//! in its strict (non-`--liberal`)
 //! mode: declarations in file order, the first rejection ends the run.
 //!
-//! **The pipeline is: parse, schedule, drop the unused axioms, then one
-//! per-declaration loop.** Each declaration is checked by zone A's kernel,
-//! interpreted, and added to the environment before the next is looked at;
-//! there is no whole-file acceptance pass and no whole-file interpretation pass.
+//! **The pipeline is: parse, schedule, then one per-declaration loop.** In the
+//! default checker, each declaration is dispatched exactly once: inductive
+//! constructions to the former mini implementation, all other declarations
+//! to nanoda. `--naive` selects the historical mini-only policy, including its
+//! unused-axiom filtering. There is no whole-file acceptance pass and no
+//! whole-file interpretation pass.
 //! [`crate::mini::decl_pass`] is the loop body and carries the argument for each of
 //! the orderings that had to be answered to fuse them, and
 //! [`Outcome::prefix`] is what the fusion buys: on a mid-file stop, everything
@@ -37,13 +40,14 @@
 //! kernel has accepted the file, and the comment at the site says why the
 //! order is load-bearing.
 //!
-//! **The second cause needs the axiom to be *used*.** A non-standard axiom
-//! nothing in the file refers to is ignored — kernel-checked like any other
-//! declaration, then dropped before the interpretation pass, so it is not
-//! translated and schedules no pair — and named in
+//! **In `--naive`, the second cause needs the axiom to be *used*.** A
+//! non-standard axiom nothing in the file refers to is ignored, so it is not
+//! translated and schedules no pair, and is named in
 //! [`crate::mini::ledger::Ledger::ignored_axioms`] so the skip is visible.
 //! [`crate::mini::unused_axiom`] is the rule, the argument that it is a narrowing
 //! rather than a reversal, and the enumeration of what "refers to" covers.
+//! The default checker does not apply this mini-only filter: every axiom is an
+//! ordinary declaration and is dispatched to nanoda.
 //!
 //! [`Options::block`] adds the blocking mode of MINI-DESIGN.md §0.6. It is not
 //! a verdict either: a blocked file was *accepted*, and the report says which
@@ -148,9 +152,9 @@ pub struct Outcome {
     /// lives.
     pub dump: Option<String>,
     /// The routing ledger, when [`Options::route`] asked for a routed run:
-    /// who got what, the counted fallbacks, the stray sweep, and the shared
-    /// store's crossing report. `None` on an unrouted run and on a file that
-    /// was declined or rejected before the evidence pass.
+    /// who got what, any export anchors left unclaimed, and the shared stores'
+    /// evidence reports. `None` on an unrouted run and on a file that was
+    /// declined or rejected before the evidence pass.
     pub route: Option<crate::mini::route::RouteReport>,
 }
 
@@ -259,8 +263,17 @@ pub fn check_file_with_interp(
     // The list is carried to [`Ledger::ignored_axioms`] below rather than
     // discarded: `#64`'s lesson is that a declaration with no scheduled pair is
     // invisible, and this one has none by construction.
-    let ignored_axioms: Vec<String> = axioms.unused.iter().map(|n| n.to_string()).collect();
-    if !axioms.unused.is_empty() {
+    let naive = opts.route.is_none();
+    let ignored_axioms: Vec<String> = if naive {
+        axioms.unused.iter().map(|n| n.to_string()).collect()
+    } else {
+        Vec::new()
+    };
+    // `--naive` preserves mini's historical unused-axiom policy. The unified
+    // checker dispatches every axiom to nanoda like every other ordinary
+    // declaration; dropping one here would mean the one declaration loop never
+    // made a decision for it.
+    if naive && !axioms.unused.is_empty() {
         let drop: std::collections::HashSet<crate::mini::expr::Name> =
             axioms.unused.iter().copied().collect();
         loaded.decls.retain(
@@ -279,7 +292,7 @@ pub fn check_file_with_interp(
     // claim, made silently, on the axis that is supposed to be exact. So the
     // file is checked to the end and *then* declined; the evidence half is
     // switched off for it, which is what it always was on this path.
-    let declining = !axioms.used.is_empty();
+    let declining = naive && !axioms.used.is_empty();
     crate::mini::blocker::arm(opts.block);
     let mut ip = ip;
     // Names for the dump have to be switched on *before* the pass, because the
@@ -292,7 +305,11 @@ pub fn check_file_with_interp(
     // declarations, same schedule, same `Interp` — each group walked by the
     // engine the policy picks, the checker driven over the same core in the
     // same walk. One loop, a policy choice inside it.
-    let mut driver = crate::mini::route::Driver::new(&mut ip, opts.route);
+    let mut driver = crate::mini::route::Driver::new(
+        &mut ip,
+        opts.route,
+        loaded.checker_schedule.clone(),
+    );
     let mut pass = crate::mini::decl_pass::Pass::new(&loaded.decls, &loaded.schedule, !declining);
     let mut stopped: Option<Verdict> = None;
     for decl in &loaded.decls {
@@ -322,12 +339,14 @@ pub fn check_file_with_interp(
     // declaration that caused it. The certified prefix is on the outcome; the
     // ledger is not, for MINI-DESIGN.md §0's reason.
     let stopped = stopped.or_else(|| {
-        axioms.used.first().map(|n| Verdict::Declined { reason: format!("non-standard axiom: {n}") })
+        declining.then(|| Verdict::Declined {
+            reason: format!("non-standard axiom: {}", axioms.used[0]),
+        })
     });
     if let Some(verdict) = stopped {
-        // No route report either, and for the ledger's reason: every row on it
-        // — who got what, the fallbacks, the strays — is a statement about a
-        // completed evidence pass over a file mini accepted.
+        // No route report either, and for the ledger's reason: its dispatch
+        // counts and end-of-run store observations describe a completed pass
+        // over a file the selected checker accepted.
         drop(driver);
         return (
             Outcome {
@@ -345,7 +364,7 @@ pub fn check_file_with_interp(
     }
     let (blocked, accepted) = (pass.blocked, pass.accepted);
     let route_report = driver.finish(&mut ip, &mut pass.led, blocked);
-    // `env` is **zone A's** and not the evidence pass's, which is the
+    // `env` is the accepted syntactic environment and not the evidence pass's, which is the
     // distinction `elim_audit` needs: it is an oracle over the file's own
     // inductives, and an encoded block's members are definitions in the other
     // one.

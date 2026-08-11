@@ -71,7 +71,7 @@ fn main() {
         args.into_iter().partition(|a| a.starts_with("--"));
     let verbose = flags.iter().any(|f| f == "--verbose");
     let block = flags.iter().any(|f| f == "--block");
-    // **The mutual gate.** `mini/src/convert.rs`'s `LoadOptions` carries the
+    // **The mutual gate.** `crate::mini::convert::LoadOptions` carries the
     // argument for why this is a flag and not the default; in one line, the
     // exit-2 population is the arena's contract and shrinking it is a change to
     // make on purpose.
@@ -80,7 +80,7 @@ fn main() {
     // one: `--mutual` opens a block whose recursor rules the kernel derives,
     // and `--nested` opens a declaration whose `T.rec_1` carries an ι rule on
     // another type's constructors that no acceptance-side check justifies.
-    // `mini/src/nested.rs`'s header says which is which.
+    // `crate::mini::nested`'s header says which is which.
     let nested = flags.iter().any(|f| f == "--nested");
     // Named for the call site: a run that only cares whether the file was
     // accepted says so, and gets `Main.lean`'s three codes and no fourth.
@@ -110,10 +110,10 @@ fn main() {
     // path: inductive groups use the implementation developed in mini and all
     // other declarations use nanoda's checker, in one declaration loop. The
     // old mini-only checker remains reachable under the deliberately plain
-    // name `--naive`; it is an oracle and fallback, not a second product.
+    // name `--naive`; it is a comparison oracle, not a second product or pass.
     let naive = flags.iter().any(|f| f == "--naive");
-    if naive && val("--route").is_some() {
-        eprintln!("--naive cannot be combined with --route");
+    if val("--route").is_some() {
+        eprintln!("--route was removed; use the default split checker or --naive");
         std::process::exit(2);
     }
     if !naive && !cfg!(feature = "tg") {
@@ -122,17 +122,7 @@ fn main() {
         );
         std::process::exit(2);
     }
-    let route = match val("--route") {
-        None if naive => None,
-        None => Some(nanoda_lib::mini::route::Mode::Split),
-        Some("split") => Some(nanoda_lib::mini::route::Mode::Split),
-        Some("mini") => Some(nanoda_lib::mini::route::Mode::ForceMini),
-        Some("checker") => Some(nanoda_lib::mini::route::Mode::ForceChecker),
-        Some(other) => {
-            eprintln!("--route={other}: expected split, mini or checker");
-            std::process::exit(2);
-        }
-    };
+    let route = (!naive).then_some(nanoda_lib::mini::route::Mode::Split);
     let only = val("--dump-only").map(str::to_string);
     let sigma = val("--dump-sigma").map(|s| {
         s.split(',').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect::<Vec<u32>>()
@@ -142,7 +132,7 @@ fn main() {
     if paths.len() != 1 {
         eprintln!(
             "usage: checker [--naive] [--verbose] [--block] [--acceptance-only] [--mutual] [--nested] \
-             [--no-modelgen] [--modelgen=<path>] [--route=split|mini|checker] \
+             [--no-modelgen] [--modelgen=<path>] \
              [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
@@ -193,7 +183,7 @@ fn main() {
     }
     if verbose {
         // **The certified prefix, on every verdict** — including a rejection,
-        // which is the whole reason the number exists. `mini/src/decl_pass.rs`
+        // which is the whole reason the number exists. `crate::mini::decl_pass`
         // says what it counts and why it is not a ledger.
         println!("{}", out.prefix.row());
         // Machine-readable, one key=value per tab, for `mini/tests/tutorial.rs`.
@@ -231,7 +221,7 @@ fn main() {
             println!("{}", l.frame_row());
         }
     }
-    // The routed run's own rows, printed whenever `--route` asked for one:
+    // The unified run's own rows:
     // the routing ledger, the shared store's crossing report, and (verbose)
     // the checker's global evidence report.
     if let Some(r) = &out.route {
