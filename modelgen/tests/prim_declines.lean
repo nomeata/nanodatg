@@ -2,12 +2,16 @@
    decline path of `Modelgen/Simple.lean`, each asserting the refusal and
    its printed reason:
 
-   * `MixI` — an indexed subsingleton with an **index-variable field**: a
-     fresh constructor argument that literally *is* one of the output's
-     indices, which the subsingleton rule admits but the packed-equation
-     model substitutes only when Lean's front end has already promoted it to
-     a parameter. Promotion is blocked here because the fresh index sits
-     after a non-promotable one.
+   * `MixI` — an indexed subsingleton with a **pivot**: a fresh constructor
+     argument that literally *is* one of the output's indices, with a proof
+     field whose type mentions it. **No longer a refusal.** The packed-equation
+     model substitutes the recursor's own index argument for such a field and
+     equates only at the positions that are not pivots, so `MixI` is a model
+     and `tests/prim_idx.lean` is the grid that whole axis is measured on. What
+     it still pins is the *promotion* fact its old header recorded: Lean's
+     front end turns a leading bare-variable index into a parameter, so a pivot
+     is only reachable behind a position that cannot be promoted, and here the
+     fresh index sits after a constant one.
    * `Branch` — a **branching** recursive constructor (two recursive fields)
      and `Binder` — a recursive occurrence **under a binder** — are **no longer
      refusals**. They are the two shapes this file was built to refuse, the
@@ -26,15 +30,20 @@
      is refused there: its index is `Inf.mk a` rather than one of the
      constructor's own data fields, so the graph route's inversion cannot be
      stated at an arbitrary index. `prim_graph.lean`'s `BadC` is the same
-     refusal reached deliberately rather than by accident.
+     refusal reached deliberately rather than by accident, and
+     `prim_idx.lean`'s `Rxh` is this one written deliberately. **Arm F now
+     models the same index shape and arm G does not**, which is the whole of
+     what is left of this tranche's boundary (`MODELGEN.md` §8.17).
    * `SvIx` — a carrier whose index telescope is **hidden behind a
-     definition** *and* whose constructor's indices are its own fields. The
-     hidden telescope is no longer a refusal — the shape check unfolds it, and
-     `prim_shapes.lean`'s `Sv` is the positive — so what this pins is that the
-     decline that remains is arm F's **index-variable field**, at its right
-     reason. Before the unfolding it declined as "does not land in a sort",
-     which named the wrong obstruction; eighteen Mathlib declarations at the
-     30M prefix (`CategoryTheory.Presieve.ofArrows` and its kin) sat behind
+     definition** *and* whose constructor's indices are its own fields.
+     **Neither half is a refusal any more**: the shape check unfolds the
+     telescope (`prim_shapes.lean`'s `Sv` is that positive) and the pivot split
+     models the field-dependent indices, so this is now the cell where the two
+     compose. It is kept for that: the unfolding and the pivot analysis are two
+     different passes and this is the only occupant that runs the second on the
+     first's output. Before the unfolding it declined as "does not land in a
+     sort", which named the wrong obstruction; eighteen Mathlib declarations at
+     the 30M prefix (`CategoryTheory.Presieve.ofArrows` and its kin) sat behind
      that wrong reason.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
@@ -54,9 +63,19 @@
    `PE`, `PM`, `PF`, `PT` and `PI`. `False` is no longer a refusal either;
    it is derived, and models.
 
-   The basis-primitive exemption and the name guard have their fixtures in
-   the corpus run (`Eq` and `Nat` decline as basis on `init-prelude`) and in
-   `mutual_keying`'s pattern respectively. -/
+   The basis-primitive **exemption** and the name guard have their fixtures in
+   the corpus run (`Eq` and `Nat` are exempt on `init-prelude`) and in
+   `mutual_keying`'s pattern respectively. The exemption is reported on its own
+   row now and is not counted a decline: it is what makes the construction
+   well-founded rather than a shape it cannot reach (`MODELGEN.md` §8.17).
+
+   **Two of this file's refusals became models in the tranche that split the
+   index axis** — `MixI` and `SvIx` above — and the paragraph each carries says
+   so where a reader meets it rather than in an appendix. The decline path they
+   used to occupy, arm F's "index-variable field", **no longer exists**: it was
+   not a bound but a missing case. What replaces them as this file's
+   subsingleton refusals is `Inf.below` alone, and `prim_idx.lean` carries the
+   rest of the grid. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

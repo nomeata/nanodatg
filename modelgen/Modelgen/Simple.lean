@@ -922,17 +922,36 @@ assumption has already cost this file two attempts (see
 [`Modelgen.pairArm`]). A `PSigma` application is stable under everything the
 elaborator does to it, so destructuring it is safe. -/
 
+/-- `Σ'(x₁ : A₁) … A_n` over a **subsequence** `sel` of an opened index
+telescope, right-nested, with the last selected index's *type* as the final
+component — so a one-element selection packs to that type alone, with no
+`PSigma` at all. Closed over the *selected* telescope entries and over nothing
+else: an unselected index stays free, which is exactly what the subsingleton
+arms need when some index positions are **pivots** — positions the model
+substitutes rather than equates — whose variables remain in scope while the
+rest are packed around them (`Fmid` in `tests/prim_idx.lean` is the shape that
+pins it: a pivot sitting *between* two dependent non-pivots, so the second
+selected type still mentions the first while the pivot between them is
+skipped).
+
+`packTyOf` is this at the full telescope, and every call site that packs every
+index goes on using it. -/
+partial def packTyAt (is : Array Expr) (sel : Array Nat) (k : Nat) :
+    GenM (Expr × Level) := do
+  let x := is[sel[k]!]!
+  let ty ← ityp x
+  let ℓ ← ilevel ty
+  if k + 1 == sel.size then return (ty, ℓ)
+  let (inner, ℓi) ← packTyAt is sel (k + 1)
+  let β ← mkLambdaFVars #[x] inner
+  return (psigmaT ℓ ℓi ty β,
+    (mkLevelMax' (mkLevelMax' (.succ .zero) ℓ) ℓi).normalize)
+
 /-- `Σ'(x₁ : A₁) … A_n` over an opened index telescope, right-nested, with the
 last index's *type* as the final component — so a one-index telescope packs to
 that type alone, with no `PSigma` at all. Closed over the telescope. -/
-partial def packTyOf (is : Array Expr) (k : Nat) : GenM (Expr × Level) := do
-  let ty ← ityp is[k]!
-  let ℓ ← ilevel ty
-  if k + 1 == is.size then return (ty, ℓ)
-  let (inner, ℓi) ← packTyOf is (k + 1)
-  let β ← mkLambdaFVars #[is[k]!] inner
-  return (psigmaT ℓ ℓi ty β,
-    (mkLevelMax' (mkLevelMax' (.succ .zero) ℓ) ℓi).normalize)
+def packTyOf (is : Array Expr) (k : Nat) : GenM (Expr × Level) :=
+  packTyAt is (Array.range is.size) k
 
 /-- Read a `PSigma` application apart: its two levels, its `α` and its `β`. -/
 def psigmaParts (R : Expr) : GenM (Level × Level × Expr × Expr) := do
@@ -2181,8 +2200,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let skelCtorN := fun (j : Nat) => Name.str skelN s!"c_{j}"
   let nc := exportCtors.size
 
-  if primBasis.contains tname then
-    badShape "a basis primitive (the exemption that makes the construction well-founded)"
+  if primBasis.contains tname then declineWith .basisExempt
 
   -- The guard runs on the **emitted** name and, where the two differ, on the
   -- built one too: the first is the contract this run must not break and the
@@ -2447,20 +2465,51 @@ application of {tname}"
     -- out of the basis. Nothing is declined here.
     pure ()
 
-  -- ── arm G's shape, settled before anything is spliced ──
-  -- A recursive subsingleton's fields are proofs and data that is *literally*
-  -- one of the conclusion's indices. Which is which, and which index each data
-  -- field is, is what the graph arm's `GraphInv` is stated by; a data field the
-  -- index does not determine is `AccFromChoice.lean`'s one non-uniform case and
-  -- is declined here rather than mis-emitted.
-  let armG := (route matches PrimRoute.prop) && large && nc == 1 && isRec
+  -- ── the singleton's index shape, settled before anything is spliced ──
+  --
+  -- **One analysis for two arms**, because the two limits that used to be
+  -- stated separately are one limit. A large-eliminating one-constructor
+  -- `Prop` is exactly a declaration each of whose fields is either a *proof*
+  -- or a piece of *data that is literally one of the conclusion's index
+  -- arguments* — that is the kernel's own subsingleton rule
+  -- (`vendor/nanoda_lib-upstream/src/inductive.rs`, `large_elim_test_aux`: the
+  -- non-`Prop` telescope elements must be a **subset** of the applied
+  -- parameters and indices, by identity and not by occurrence), and it is what
+  -- makes a model possible at all. A model of a `Prop` can extract its proof
+  -- fields by small elimination and has *no way whatever* to extract data, so
+  -- the index vector is the only place data can come back from.
+  --
+  -- Each index position is therefore one of two things:
+  --
+  -- * a **pivot** — literally one of the constructor's data fields. The model
+  --   recovers that field by reading the recursor's own index argument, so it
+  --   **substitutes** rather than quantifies. `Acc`'s `x`, `IsHomLift`'s `a`,
+  --   `b` and `φ`.
+  -- * anything else — an arbitrary expression over the parameters, the data
+  --   fields and the *proof* fields: `BadC`'s constant `N.z`, `IsHomLift`'s
+  --   `p.obj a`, `Acc.below`'s `Acc.intro x h`, `Inf.below`'s `Inf.mk a`.
+  --   Such a position carries nothing the substitution can use and is
+  --   discharged instead by a **Henry-Ford equation at the non-pivot
+  --   subsequence** — which is what arm F's carrier already was, back when the
+  --   arm demanded that *every* position be of this kind.
+  --
+  -- Read that way the two arms' old refusals were the same refusal seen from
+  -- the two ends: arm F took only all-non-pivot index vectors and arm G took
+  -- only all-pivot ones, and everything in between — `MixI`, `SvIx`,
+  -- `IsHomLift`, every `.below` Lean mints beside a recursive `Prop`, and
+  -- `Acc.below` — fell through the gap between them. `tests/prim_idx.lean` is
+  -- the grid; `MODELGEN.md` §8.17 is the derivation.
+  let armGRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
+  let armFNonRec := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
   let mut gIsData : Array Bool := #[]
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
   let mut gNf := 0
-  if armG then
-    for n in graphNames do taken n
-    let (a, b, cc) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+  -- The index positions that are **not** pivots, in telescope order.
+  let mut gNonPiv : Array Nat := #[]
+  if armGRec || armFNonRec then
+    if armGRec then for n in graphNames do taken n
+    let (a, b, cc, npv) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
       let tele ← instForall cty ps
       let nfg := numForalls tele
@@ -2472,6 +2521,7 @@ application of {tname}"
         let idx := args.extract np args.size
         let mut isD : Array Bool := #[]
         let mut pos : Array Nat := #[]
+        let mut piv : Array Bool := (Array.range ni).map fun _ => false
         for i in [0:nfg] do
           if (← ilevel (← ityp fs[i]!)).normalize.isZero then
             isD := isD.push false
@@ -2480,18 +2530,56 @@ application of {tname}"
             let mut at? : Option Nat := none
             for k in [0:ni] do
               if idx[k]! == fs[i]! then at? := some k
+            -- **Unreachable through the kernel, and kept anyway.** The rule
+            -- above is what mints the large eliminator this arm is modelling,
+            -- so a data field that is not an index arrives only from a
+            -- hand-written export. It is a decline with a reason rather than a
+            -- wrong model.
             let some k := at?
-              | badShape s!"{cn} has a data field the graph route cannot recover: it is \
-not itself one of the conclusion's indices, so inversion would need the index's \
-injectivity (AccFromChoice.lean's one non-uniform case)"
+              | badShape s!"{cn} has a data field that is not one of the conclusion's \
+index arguments, so nothing in the model can recover it — the kernel's own \
+subsingleton rule refuses that shape and mints no large eliminator for it"
             isD := isD.push true
             pos := pos.push k
-        for k in [0:ni] do
-          unless (Array.range nfg).any (fun i => isD[i]! && pos[i]! == k) do
-            badShape s!"{cn}'s index {k} is not one of its own data fields, so the \
-graph route's inversion cannot be stated at an arbitrary index"
-        return (isD, pos, flds.map (·.rec?))
-    gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size
+            piv := piv.set! k true
+        -- **A pivot's own type may not mention a non-pivot index**, and this
+        -- is the one place the two halves fail to compose. The model reads a
+        -- data field off the recursor's index argument, so that argument has
+        -- to *have* the field's type — and at index position `j` it has index
+        -- `j`'s declared type at the caller's earlier indices. Where those are
+        -- pivots, the substitution has already made them the field's own; where
+        -- one is a non-pivot, the caller's index is an arbitrary term and only
+        -- the equation says it is the constructor's, so the field would have to
+        -- be transported before it could be used. `tests/prim_idx.lean`'s
+        -- `Fmid` is the occupant: `Fmid : (α : Type) → α → α → Prop` with
+        -- `mk (x : N) : Fmid N x N.z`, whose pivot `x : N` sits at an index
+        -- whose declared type is the *ground* index before it. Both corpus
+        -- targets clear it — `IsHomLift`'s `φ : a ⟶ b` names only pivots and
+        -- `Acc.below`'s `a : α` only a parameter.
+        forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+          for j in [0:ni] do
+            if piv[j]! then
+              let jt ← ityp is[j]!
+              for m in [0:ni] do
+                if !piv[m]! && jt.containsFVar is[m]!.fvarId! then
+                  badShape s!"{cn}'s index {j} is one of its own data fields but its \
+type mentions index {m}, which is not — so the field cannot be read off the index \
+without a transport the model does not build"
+        return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!))
+    gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
+
+  -- **Arm G is still the all-pivot half**, and that is now a named boundary
+  -- rather than an unexamined one: the graph route's `GraphInv ι⃗ t val`
+  -- concludes `val = step f⃗ g⃗`, whose right-hand side lands at the
+  -- constructor's own index expressions, and with a non-pivot position among
+  -- them the two sides sit at different indices and the equation needs a
+  -- transport along the same packed equation arm F carries. `MODELGEN.md`
+  -- §8.17 writes that construction out; it is not built here.
+  let armG := armGRec
+  if armG && !gNonPiv.isEmpty then
+    badShape s!"{exportCtors[0]!.1}'s index {gNonPiv[0]!} is not one of its own data \
+fields, so the graph route's inversion cannot be stated at an arbitrary index (the \
+packed non-pivot equation arm F carries is not threaded through the graph)"
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
@@ -2514,7 +2602,14 @@ graph route's inversion cannot be stated at an arbitrary index"
   -- `TagS4` are the two- and three-field occupants that were added to ask, and
   -- the sequential extraction below is correct at all three — kernel-accepted,
   -- statements compared, and red under the field-order mutations.
-  let armF := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
+  --
+  -- **Any index shape**, too. The arm's index vector used to have to be built
+  -- from the parameters alone; it may now carry **pivots** — positions that
+  -- are literally one of the constructor's data fields — anywhere in the
+  -- telescope, which is what brings `MixI`, `SvIx` and
+  -- `CategoryTheory.Functor.IsHomLift` inside. The analysis above is what says
+  -- which positions those are; everything below reads `gNonPiv`.
+  let armF := armFNonRec
 
   -- **Arm C**: an indexed family at a never-zero sort, carved out of its own
   -- index erasure. `MODELGEN.md` §8.15 and
@@ -2892,73 +2987,100 @@ data tower would have to hold a type the branch tower cannot see"
     -- then grants a `Sort w` motive, and the model has to deliver it — the
     -- Church fold cannot, since it only eliminates into `Prop`.
     --
-    -- Carrier: the constructor's `Prop` fields, Church-conjoined with **one**
-    -- `Eq` at the whole index telescope packed into a `PSigma`
-    -- ([`Modelgen.packTyOf`]) — the Henry-Ford equation, stated once because
-    -- a later index's type may mention an earlier one:
+    -- **The index vector splits in two** (the analysis above): the *pivot*
+    -- positions, each literally one of the constructor's data fields, and the
+    -- rest. The model **substitutes** at the pivots — that is the only way a
+    -- data field can come back at all, since a `Prop`'s proof yields nothing
+    -- but proofs — and equates at the rest. So the carrier quantifies the
+    -- constructor's `Prop` fields *at the pivots already supplied*, and
+    -- Church-conjoins them with **one** `Eq` at the **non-pivot subsequence**
+    -- packed into a `PSigma` ([`Modelgen.packTyAt`]) — the Henry-Ford
+    -- equation, stated once because a later index's type may mention an
+    -- earlier one:
     --
-    --     T' p⃗ ι⃗ := ∀ r : Prop, (∀ f⃗, Eq Pk (pack ι⃗_ctor) (pack ι⃗) → r) → r
+    --     T' p⃗ ι⃗ := ∀ r : Prop,
+    --                 (∀ h⃗[d⃗ := ι⃗_piv],
+    --                    Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → r) → r
     --
-    -- Recursor: extract the fields by small elimination (their target is a
-    -- `Prop`, so no large eliminator for ∃/∧ is consumed), extract the
-    -- equation the same way, and discharge the indices with a single
-    -- `Eq.rec` whose motive rebuilds a carrier proof at each packed point.
-    -- Every mismatch between the rebuilt proof and the caller's is closed by
-    -- proof irrelevance, and `pack (unpack y) ≡ y` by structure eta is what
-    -- makes the motive typecheck at all. ι is `Eq.refl`: at the constructor
-    -- the stored equation *is* `Eq.refl`, and `Eq.rec`'s own ι rule fires.
+    -- At **no** pivots this is exactly what the arm was before — the
+    -- subsequence is the whole telescope and `h⃗` is every field — which is
+    -- what makes the generalisation additive rather than a rewrite. At **no
+    -- non-pivots** (`Fall` in `tests/prim_idx.lean`) there is nothing left to
+    -- equate: the carrier is a bare Church conjunction, the recursor is the
+    -- minor applied to the recovered fields, and no `Eq.rec` is built.
+    --
+    -- Recursor: read the data fields off the recursor's own index arguments,
+    -- extract the proof fields by small elimination (their target is a `Prop`,
+    -- so no large eliminator for ∃/∧ is consumed), extract the equation the
+    -- same way, and discharge the non-pivot indices with a single `Eq.rec`
+    -- whose motive rebuilds a carrier proof at each packed point. Every
+    -- mismatch between the rebuilt proof and the caller's is closed by proof
+    -- irrelevance — and so is every mismatch between a proof field as the
+    -- carrier binds it and as the extraction recovers it, which is what lets
+    -- the equation mention proof fields (`Inf.below`'s `Inf.mk a`). `pack
+    -- (unpack y) ≡ y` by structure eta is what makes the motive typecheck at
+    -- all. ι is `Eq.refl`: at the constructor the stored equation *is*
+    -- `Eq.refl`, the pivots are the constructor's own fields, and `Eq.rec`'s
+    -- own ι rule fires.
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
-    let (_, cty0) := exportCtors[0]!
+    let (cn0, cty0) := exportCtors[0]!
+    let nonPiv := gNonPiv
+    let nnp := nonPiv.size
 
-    -- Everything below is built at a parameter scope and an index scope.
-    let atScope := fun {α : Type} (k : Array Expr → Array Expr → Expr → Level → GenM α) =>
-      withParams fun ps => do
-        forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-          let (pk, ℓpk) ← packTyOf is 0
-          k ps is pk ℓpk
+    -- The index vector a walked result type ends at, at either head: the
+    -- export's `T p⃗ ι⃗` or the model's own `T._model.self p⃗ ι⃗`.
+    let idxOfRes := fun (hd : Name) (res : Expr) => do
+      let args := res.getAppArgs
+      unless res.getAppFn.isConstOf hd && args.size == np + ni do
+        badShape s!"{cn0} does not end in {hd} at {np} parameters and {ni} indices"
+      pure (args.extract np args.size)
 
-    -- The constructor's own index expressions must be built from the
-    -- parameters alone. An *index-variable field* — a fresh variable that is
-    -- literally one of the output's indices — is admitted by the
-    -- subsingleton rule but is not handled here; Lean's front end promotes
-    -- such a field to a parameter whenever it can, so it is rare.
-    let ctorIdxAt := fun (ps : Array Expr) => do
+    -- The constructor's field telescope with the **data fields substituted**
+    -- from an index vector — [`Modelgen.ctorFieldsAux`], the same walk arm G's
+    -- `GraphInv` is stated by. `fs` is every field (substituted or bound),
+    -- `bnd` only the bound ones, and `res` the conclusion at them.
+    let fieldsAt := fun (ps is : Array Expr)
+        (k : Array Expr → Array Expr → Expr → GenM Expr) => do
       let tele ← instForall cty0 ps
-      let nf := numForalls tele
-      forallBoundedTelescope tele (some nf) fun fs res => do
-        let args := res.getAppArgs
-        unless res.getAppFn.isConstOf tname && args.size == np + ni do
-          badShape s!"{exportCtors[0]!.1} does not end in {tname} at {np} parameters \
-and {ni} indices"
-        let idx := args.extract np args.size
-        for e in idx do
-          if fs.any (fun f => e.containsFVar f.fvarId!) then
-            badShape s!"{exportCtors[0]!.1} has an index-variable field: its index \
-expressions mention its own fields, which the packed-equation model substitutes only \
-when the front end has already promoted them to parameters"
-        for f in fs do
-          unless (← ilevel (← ityp f)).normalize.isZero do
-            badShape s!"{exportCtors[0]!.1} has a field that is not a proposition, so \
-the subsingleton rule that minted {ern} does not hold of it"
-        pure idx
+      ctorFieldsAux true gIsData gIdxPos is (numForalls tele) 0 tele #[] #[] k
 
-    -- `∀ f⃗, Eq Pk (pack ι⃗_ctor) (pack ι⃗) → r`, the encoding's one minor.
-    let minorTyAt := fun (ps is : Array Expr) (pk : Expr) (ℓpk : Level) (r : Expr) => do
-      let tele ← instForall cty0 ps
-      let nf := numForalls tele
-      let idx ← ctorIdxAt ps
-      let lhs ← packChain ni pk idx 0
-      let rhs ← packChain ni pk is 0
-      forallBoundedTelescope tele (some nf) fun fs _ => do
-        mkForallFVars fs (.forallE `heq (eqi.mk' ℓpk pk lhs rhs) r .default)
+    -- **`Pk`, the packed non-pivot type, at a given index vector.** Its
+    -- component types may mention the *pivots*, which [`Modelgen.packTyAt`]
+    -- deliberately leaves free, so it is built once at an opened telescope and
+    -- then instantiated. `none` when every index is a pivot.
+    let pkAt := fun (ps : Array Expr) (vs : Array Expr) => do
+      if nnp == 0 then return (none : Option (Expr × Level))
+      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+        let (pkT, ℓ) ← packTyAt is nonPiv 0
+        pure (some (pkT.replaceFVars is vs, ℓ))
 
-    let carrierAt := fun (ps is : Array Expr) (pk : Expr) (ℓpk : Level) =>
-      withLocalDeclD `r (.sort .zero) fun r => do
-        mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk ℓpk r) r .default)
+    -- `∀ h⃗, Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → …`, the encoding's one
+    -- minor, as a binder-introducing continuation so that the equation is
+    -- built at the *bound* proof fields rather than at a stand-in.
+    let underMinor := fun (ps is : Array Expr) (pk? : Option (Expr × Level))
+        (mk : Array Expr → Expr → GenM Expr)
+        (k : Array Expr → Option Expr → GenM Expr) =>
+      fieldsAt ps is fun fs bnd res => do
+        match pk? with
+        | none => mk bnd (← k fs none)
+        | some (pk, ℓpk) => do
+          let idx ← idxOfRes tname res
+          let lhs ← packChain nnp pk (nonPiv.map (idx[·]!)) 0
+          let rhs ← packChain nnp pk (nonPiv.map (is[·]!)) 0
+          withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
+            mk (bnd.push h) (← k fs (some h))
+    let allTy : Array Expr → Expr → GenM Expr := fun xs e => mkForallFVars xs e
+    let lamF : Array Expr → Expr → GenM Expr := fun xs e => mkLambdaFVars xs e
+    let minorTyAt := fun (ps is : Array Expr) (pk? : Option (Expr × Level)) (r : Expr) =>
+      underMinor ps is pk? allTy (fun _ _ => pure r)
 
     -- ── the carrier ──
-    let selfVal ← atScope fun ps is pk ℓpk => do
-      mkLambdaFVars (ps ++ is) (← carrierAt ps is pk ℓpk)
+    let selfVal ← withParams fun ps => do
+      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+        let pk? ← pkAt ps is
+        let body ← withLocalDeclD `r (.sort .zero) fun r => do
+          mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk? r) r .default)
+        mkLambdaFVars (ps ++ is) body
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -2966,19 +3088,25 @@ the subsingleton rule that minted {ern} does not hold of it"
     out := out.push dSelf
 
     -- ── the constructor ──
+    -- Its own index vector is `ι⃗_ctor` at its own fields, so the pivots the
+    -- carrier substitutes come back as exactly those fields and the stored
+    -- equation is `Eq.refl`.
     let ty := restore tbl cty0
     let cval ← withParams fun ps => do
       let rtele ← instForall ty ps
       let nf := numForalls rtele
-      forallBoundedTelescope rtele (some nf) fun fs _ => do
-        forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-          let (pk, ℓpk) ← packTyOf is 0
-          let idx ← ctorIdxAt ps
-          let pkc ← packChain ni pk idx 0
-          let body ← withLocalDeclD `r (.sort .zero) fun r => do
-            withLocalDeclD `k (← minorTyAt ps idx pk ℓpk r) fun kk =>
-              mkLambdaFVars #[r, kk] (mkAppN kk (fs.push (eqi.refl' ℓpk pk pkc)))
-          mkLambdaFVars (ps ++ fs) body
+      forallBoundedTelescope rtele (some nf) fun fs res => do
+        let idx ← idxOfRes selfN res
+        let pk? ← pkAt ps idx
+        let bnd := ((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!)
+        let args ← match pk? with
+          | none => pure bnd
+          | some (pk, ℓpk) => do
+            pure (bnd.push (eqi.refl' ℓpk pk (← packChain nnp pk (nonPiv.map (idx[·]!)) 0)))
+        let body ← withLocalDeclD `r (.sort .zero) fun r => do
+          withLocalDeclD `k (← minorTyAt ps idx pk? r) fun kk =>
+            mkLambdaFVars #[r, kk] (mkAppN kk args)
+        mkLambdaFVars (ps ++ fs) body
     let dCtor := Declaration.defnDecl
       { name := ctorN 0, levelParams := lparams, type := ty, value := cval
         hints := ← hintsFor cval, safety := .safe }
@@ -2993,41 +3121,59 @@ the subsingleton rule that minted {ern} does not hold of it"
       let minor := bs[np + 1]!
       let idxs := bs.extract (np + 1 + nc) (np + 1 + nc + ni)
       let t := bs[bs.size - 1]!
-      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-        let (pkT, ℓpk) ← packTyOf is 0
-        let pk := pkT.replaceFVars is idxs
-        let idx ← ctorIdxAt ps
-        let pkc ← packChain ni pk idx 0
-        let tele ← instForall cty0 ps
-        let nf := numForalls tele
-        -- extract the fields, sequentially: a later field's type is
-        -- instantiated at the earlier extractions.
-        let eqTy := eqi.mk' ℓpk pk pkc (← packChain ni pk idxs 0)
-        let mut es : Array Expr := #[]
-        let mut curT := tele
-        for _ in [0:nf] do
-          let .forallE _ ft rest _ := curT | badShape "telescope shorter than its field count"
-          let i := es.size
-          let proj ← forallBoundedTelescope tele (some nf) fun fs _ => do
-            withLocalDeclD `h eqTy fun h => mkLambdaFVars (fs.push h) fs[i]!
-          es := es.push (mkAppN t #[ft, proj])
-          curT := rest.instantiate1 es[i]!
-        -- and the equation
-        let eqProj ← forallBoundedTelescope tele (some nf) fun fs _ =>
-          withLocalDeclD `h eqTy fun h => mkLambdaFVars (fs.push h) h
-        let heq := mkAppN t #[eqTy, eqProj]
+      let pk? ← pkAt ps idxs
+      let tele ← instForall cty0 ps
+      let nf := numForalls tele
+      -- **Recover the fields.** A data field is the recursor's own index
+      -- argument at that field's pivot position — nothing is extracted,
+      -- because nothing could be. A proof field is extracted, sequentially: a
+      -- later field's type is instantiated at the earlier recoveries, and the
+      -- projector is written at the carrier's own minor telescope so that a
+      -- field whose type mentions a *data* field is asked for at the index and
+      -- not at a stand-in.
+      let mut es : Array Expr := #[]
+      let mut curT := tele
+      for i in [0:nf] do
+        let .forallE _ ft rest _ := curT | badShape "telescope shorter than its field count"
+        let v ←
+          if gIsData[i]! then pure idxs[gIdxPos[i]!]!
+          else do
+            let proj ← underMinor ps idxs pk? lamF fun fs _ => pure fs[i]!
+            pure (mkAppN t #[ft, proj])
+        es := es.push v
+        curT := rest.instantiate1 v
+      -- the proof fields alone, in telescope order: what the carrier's minor
+      -- binds and what the rebuilt carrier proof below is applied to.
+      let esBnd := ((Array.range nf).filter (!gIsData[·]!)).map (es[·]!)
+      -- the constructor's index vector at the recovered fields
+      let idxE ← idxOfRes tname (← instForall (← instForall cty0 ps) es)
+      match pk? with
+      | none =>
+        -- Every index is a pivot: `ι⃗_ctor` at the recovered fields **is**
+        -- `ι⃗`, and `T._model.ctor_0 es` is `t` by proof irrelevance.
+        mkLambdaFVars bs (mkAppN minor es)
+      | some (pk, ℓpk) => do
+        let pkc ← packChain nnp pk (nonPiv.map (idxE[·]!)) 0
+        let pki ← packChain nnp pk (nonPiv.map (idxs[·]!)) 0
+        let eqTy := eqi.mk' ℓpk pk pkc pki
+        let heq := mkAppN t #[eqTy, ← underMinor ps idxs pk? lamF
+          fun _ h? => pure h?.get!]
         -- one `Eq.rec` at the packed point: the motive rebuilds a carrier
         -- proof at each `y`, and `pack (unpack y) ≡ y` makes it typecheck.
+        -- Only the **non-pivot** slots move with `y`; the pivots are the
+        -- recursor's own index arguments throughout, which is why no transport
+        -- is needed on the fields.
         let fam := fun (y : Expr) (h : Expr) => do
-          let ys ← unpackChain ni pk y
+          let ys ← unpackChain nnp pk y
+          let mut full := idxs
+          for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
           let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
-            withLocalDeclD `k (← minorTyAt ps ys pk ℓpk r) fun kk =>
-              mkLambdaFVars #[r, kk] (mkAppN kk (es.push h))
-          pure (mkAppN motive (ys.push rebuilt))
+            withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
+              mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+          pure (mkAppN motive (full.push rebuilt))
         let motiveE ← withLocalDeclD `y pk fun y => do
           withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
             mkLambdaFVars #[y, hy] (← fam y hy)
-        let pki ← packChain ni pk idxs 0
         mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal

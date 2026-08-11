@@ -363,8 +363,11 @@ declarations on the first Type-route model, `Opt`). **No model splices a
 the `False`-Π singleton, and the `PULiftP` carrier's eta is a recursor call.
 `PU`'s count dropping 7 → 4 and `UL`'s 5 → 4 is that, measured.
 `prim_declines` pins every refusal path and its printed reason; `P` inside it
-is the control that says the guard is not refusing everything. `Eq` declines
-as basis in all four, because all four declare it.
+is the control that says the guard is not refusing everything. `Eq` is
+**exempt** in all four, because all four declare it — its own row in the
+report and not a decline (`MODELGEN.md` §8.17), which is why the expected list
+below reads `exempt ++ declined` and why one extra check per row says nothing
+but a basis primitive reaches the first of the two.
 
 `prim_graph` is **arm G** — the recursive subsingleton by the graph of its own
 recursion, the arm that took `Acc` out of the basis. Its counts are the twelve
@@ -389,7 +392,14 @@ which is the re-modelling guard.
 model; `Inf.below` is not, and neither are the other `.below` declarations
 Lean mints for these shapes — their index is `T.mk a` rather than one of the
 constructor's own data fields, so inversion cannot be stated at an arbitrary
-index. `BadC` is the same refusal reached deliberately.
+index. `BadC` is the same refusal reached deliberately, and `prim_idx`'s `Rxh`
+and `Rvx` are `Inf.below` and `Acc.below` written deliberately.
+**That reason is now arm G's alone.** Arm F models the same index shapes — a
+pivot anywhere in the telescope, an expression over a data or a proof field
+beside it — so `MixI` and `SvIx` in `prim_declines` moved from its declines to
+its models in the same commit that added `prim_idx`, and the decline path they
+occupied no longer exists. `prim_idx` is the grid; `MODELGEN.md` §8.17 is the
+derivation and the two arms' shared statement of the limit.
 `BoxF` is still a decline and **declines for a different reason than it used
 to**. The planner's level equality is complete now
 ([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
@@ -408,7 +418,7 @@ def expectedPrim : List Row :=
        ("Dec", 6), ("Conj", 4), ("TagS2", 4), ("TagS", 4), ("PT", 8),
        ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
-      [ ("Eq", "prim model shape: a basis primitive")])
+      [ ("Eq", "prim model: a basis primitive")])
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
   -- built to refuse — a branching constructor and a recursive occurrence under
@@ -426,16 +436,44 @@ def expectedPrim : List Row :=
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
        ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6), ("_wcore.HEq", 4),
-       ("_wcore.PProd", 4), ("Binder", 12)],
-      [ ("Eq", "prim model shape: a basis primitive")
-      , ("MixI", "prim model shape: MixI.mk has an index-variable field")
+       ("_wcore.PProd", 4), ("MixI", 4), ("Binder", 12), ("SvIx", 4)],
+      [ ("Eq", "prim model: a basis primitive")
       , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
-      , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")
-      , ("SvIx", "prim model shape: SvIx.mk has an index-variable field")])
+      , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")])
+  -- **The index axis**, as a grid rather than as the shapes the corpus
+  -- happens to have (`MODELGEN.md` §8.17, `tests/prim_idx.lean`'s header).
+  -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
+  -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
+  -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
+  -- index expression over a proof field — and arm G's declines but for `Rv`.
+  --
+  -- **Three counts here are the arms, not the cells.** `Rv` is 17 because it
+  -- is the first arm-G model in the file and carries the splice (`PSigma`,
+  -- `Nonempty`, `Classical.choice`, the quotient and a derived `funext`);
+  -- `Inf` behind it is 12, arm G's twelve declarations with nothing left to
+  -- splice; `N` is 9 for the `Type` route's own basis. Every arm-F cell is 4 —
+  -- `self`, `ctor_0`, `rec_0`, `iota_0_0` — including `Fall3`, whose carrier
+  -- packs nothing and whose recursor builds no `Eq.rec`.
+  --
+  -- The seven declines are arm G's one limit, six times over plus `Fmid`.
+  -- `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written deliberately;
+  -- `Inf.below`, `Rv.below` and `Rvx.below` are the same shape arriving by
+  -- accident, which is the fixture saying the boundary is where it says it is.
+  , ("prim_idx",
+      [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Inf", 12), ("Fam", 4),
+       ("Fg", 4), ("Fall3", 4), ("Fxh", 4), ("Fdep", 4), ("Fdup", 4)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("Rvx", "prim model shape: Rvx.intro's index 1 is not one of its own data fields")
+      , ("Rxh", "prim model shape: Rxh.mk's index 0 is not one of its own data fields")
+      , ("Rxh.below", "prim model shape: Rxh.below.mk's index 0 is not one of its own")
+      , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
+      , ("Rv.below", "prim model shape: Rv.below.mk's index 1 is not one of its own")
+      , ("Fmid", "prim model shape: Fmid.mk's index 1 is one of its own data fields but its type mentions index 0")
+      , ("Rvx.below", "prim model shape: Rvx.below.intro's index 1 is not one of its own")])
   , ("prim_graph",
       [("G1", 15), ("Nonempty", 4), ("G4", 15), ("Ac", 13), ("N", 8),
        ("G3", 13), ("G2", 13), ("G5", 13)],
-      [ ("Eq", "prim model shape: a basis primitive")
+      [ ("Eq", "prim model: a basis primitive")
       , ("G4.below", "prim model shape: G4.below.mk's index 1 is not one of its own")
       , ("BadC", "prim model shape: BadC.mk's index 0 is not one of its own")
       , ("BadC.below", "prim model shape: BadC.below.mk's index 0 is not one of its own")
@@ -445,8 +483,8 @@ def expectedPrim : List Row :=
       , ("G5.below", "prim model shape: G5.below.mk's index 3 is not one of its own")
       , ("G2.below", "prim model shape: G2.below.mk's index 1 is not one of its own")])
   , ("prim_graph_pre", [("Ac", 13), ("Nonempty", 4)],
-      [ ("PSigma", "prim model shape: a basis primitive")
-      , ("Eq", "prim model shape: a basis primitive")
+      [ ("PSigma", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")
       , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
@@ -480,8 +518,8 @@ def expectedPrim : List Row :=
        ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 4), ("True", 4),
        ("Or", 6), ("Iff", 4), ("WellFounded", 4),
        ("Bool", 6), ("HEq", 4), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
-      [ ("Nat", "prim model shape: a basis primitive")
-      , ("Eq", "prim model shape: a basis primitive")])
+      [ ("Nat", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")])
   -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
   -- the three rows below the models are the arm's boundaries.
   -- Every `X._model.skel` beside an `X` is the spliced index erasure being
@@ -531,7 +569,7 @@ def expectedPrim : List Row :=
        ("Two2", 8), ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
        ("Sm3", 8), ("Sm3._model.skel", 12), ("Br", 8), ("Br._model.skel", 12),
        ("Tri3", 8), ("Tri3._model.skel", 6)],
-      [ ("Eq", "prim model shape: a basis primitive")
+      [ ("Eq", "prim model: a basis primitive")
       -- withdrawn: the erasure is bare and still does not model, and the
       -- reason carried is the *skeleton's* own rather than "it did not model"
       , ("IBox", "prim model shape: the spliced inductive IBox._model.skel did \
@@ -575,7 +613,7 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4), ("Wty", 10),
        ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
-      [ ("Eq", "prim model shape: a basis primitive")])
+      [ ("Eq", "prim model: a basis primitive")])
   -- **§5.1's sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
@@ -658,7 +696,7 @@ def expectedPrim : List Row :=
        ("Ix", 15), ("Ix._model.0", 14), ("Ix._model.0._model.tag", 6),
        ("Ix._model.0._model.aux", 12),
        ("Ix._model.0._model.aux._model.skel", 16)],
-      [ ("Eq", "prim model shape: a basis primitive")
+      [ ("Eq", "prim model: a basis primitive")
       , ("OK._model.0._model.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")
       , ("Flat._model.0._model.aux", "prim model shape: the spliced inductive \
@@ -700,8 +738,8 @@ def expectedPrim : List Row :=
        ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
        ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4)],
-      [ ("PSigma", "prim model shape: a basis primitive")
-      , ("Eq", "prim model shape: a basis primitive")])
+      [ ("PSigma", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")])
   ]
 
 structure TAcc where
@@ -738,7 +776,13 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
   -- axis 1: the counts, in order
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
   a := check a (got == want) s!"{name}: models are {got}, expected {want}"
-  let gotD := rep.declined.toList.map fun (n, w) => (n.toString, w)
+  -- **Exempt then declined.** The basis primitives are their own row in the
+  -- report now (`MODELGEN.md` §8.17) and this list covers both, so a row that
+  -- names `Eq` still pins it; the extra claim below is that nothing but a
+  -- basis primitive ever lands in the exempt row.
+  let gotD := (rep.exempt ++ rep.declined).toList.map fun (n, w) => (n.toString, w)
+  a := check a (rep.exempt.all fun (n, _) => Modelgen.primBasis.contains n)
+    s!"{name}: the exempt row holds a non-basis name: {rep.exempt.map (·.1)}"
   -- By **prefix**: which shape stopped the generator is the claim, and a
   -- kernel diagnostic quoted inside the message is not.
   let declinesMatch :=

@@ -45,6 +45,13 @@ namespace Modelgen
 structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
+  /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`],
+  `MODELGEN.md` §8.17). `Eq`, `Nat`, `PSigma` and `PULiftP` are the primitives
+  the third construction is written in, so a run leaves them unmodelled *by
+  definition*; counting them among the declines made every census in §8 report
+  a number it then had to walk back in the next sentence. Reported on their own
+  lines and counted in their own row. -/
+  exempt : Array (Name × String) := #[]
   /-- **Prelude constants the input did not declare and a model spliced in**,
   per declaration. `Eq`, the quotient and `Quot.sound` come out under Lean's
   own names and `funext` under the model's; `Modelgen.ensureEq` and
@@ -392,6 +399,13 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     setEnv saved
     if canWait && dec.isLateWait && !(← primLateReady reserved) then
       return ((out, rep, pending), true)
+    -- **Exempt is not declined.** A basis primitive is what the construction
+    -- is written in, so its absence from the models is the thing that makes
+    -- the construction well-founded rather than a shape it cannot reach; it
+    -- gets its own row and is out of the decline count (`MODELGEN.md` §8.17).
+    if dec matches .basisExempt then
+      return ((out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
+        pending), false)
     return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
       pending), false)
   | .ok is =>

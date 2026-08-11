@@ -116,6 +116,9 @@ def report (o : Opts) (rep : Modelgen.Report) : IO Unit := do
   -- input's (`MODELGEN.md` §1.5).
   for (n, ns) in rep.spliced do
     IO.eprintln s!"{n}: prelude spliced — {", ".intercalate (ns.map toString).toList}"
+  -- **Exempt before declined, and never counted with it.** A basis primitive
+  -- is unmodelled by definition (`MODELGEN.md` §8.17).
+  for (n, why) in rep.exempt do IO.eprintln s!"{n}: exempt — {why}"
   for (n, why) in rep.declined do IO.eprintln s!"{n}: declined — {why}"
   unless rep.stmtChecked == 0 do
     IO.eprintln s!"statements: {rep.stmtChecked} compared against the installed recursors' \

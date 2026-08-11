@@ -107,6 +107,17 @@ inductive Decline where
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
   | cyclicMimics
+  /-- **A basis primitive, which is exempt rather than declined.** `Eq`,
+  `Nat`, `PSigma` and `PULiftP` are what the third construction is *written
+  in*; modelling one of them would either be circular or would put a second
+  `Eq` in the output. Their absence from the models is what makes the
+  construction well-founded, so it is not a gap and a census that counts it as
+  one is misleading — every table in `MODELGEN.md` §8 that reported "N
+  declines" had to say "of which three are closed by definition" in the next
+  breath. It is its own constructor so that the *report* can keep it in its own
+  row ([`Modelgen.Report.exempt`]) and the decline count can mean what it
+  says. -/
+  | basisExempt
   | malformed (msg : String)
   deriving Inhabited
 
@@ -125,6 +136,9 @@ def Decline.labelAs (what : String) : Decline → String
   | .nameTaken n => s!"{what} model name taken ({n})"
   | .nameLost n => s!"{what} model name lost to a normalized-name collision ({n})"
   | .cyclicMimics => s!"{what} model with mutually recursive occurrences"
+  | .basisExempt =>
+    s!"{what} model: a basis primitive (the exemption that makes the construction \
+well-founded)"
   | .malformed m => s!"{what} model shape: {m}"
 
 /-- The word that reaches a report line for a **nested** declaration's model. -/
