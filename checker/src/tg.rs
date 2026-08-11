@@ -2734,6 +2734,16 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Where each lambda occurrence sits.
     lam_sites: HashMap<ExprPtr<'t>, LamSite<'t>>,
     /// Where each dependent-`Π` occurrence sits.
+    /// **The dependent development, instantiated at a use site's arguments.**
+    ///
+    /// Keyed by the argument vector `p⃗, C, S⃗, T` and by which theorem was
+    /// asked for — `Some(i)` the `i`-th ι rule, `None` the `⊢ drec = drec` the
+    /// term is read off. Instantiating is `Thm::ax_inst` once per variable and
+    /// each one **opens the whole theorem**, which for `Lean.ParserDescr` is
+    /// fourteen opens of a very large derivation; the same ι site's arguments
+    /// recur across the reductions inside one declaration, so this is a memo
+    /// and not a cache of convenience. Per backend, like every other memo here.
+    dep_insts: HashMap<(Option<usize>, Vec<Term>), Thm>,
     pi_sites: HashMap<ExprPtr<'t>, PiSite>,
     /// Where each `Prop`-valued `∀` occurrence sits.
     prop_sites: HashMap<ExprPtr<'t>, PropSite>,
@@ -3531,9 +3541,25 @@ struct DegenBottom {
 /// [`TgBackend::dep_target`].
 struct DepBottom {
     gi: Rc<GenInd>,
-    gr: Rc<derived::inductive::GenRecursor>,
     dr: Rc<derived::inductive::DepRecursor>,
     core: Rc<RecCore>,
+    /// **The development, already closed over `p⃗, C, S⃗, T`.**
+    ///
+    /// [`TgBackend::dep_subst`] instantiates these at a use site's own terms,
+    /// and the generalisation half of that does not depend on the use site at
+    /// all — it is one `Formula::close` per variable over the whole dependent
+    /// derivation, which for `Lean.ParserDescr` is fourteen closes over a very
+    /// large theorem. Doing it per ι site cost **more than the entire rest of
+    /// the run**: `Term::open`/`close` were 18 % of cycles and the corpus went
+    /// from 210 G instructions to 428 G. Hoisted here, it is paid once per
+    /// declaration and each site pays only its `inst_all`.
+    ///
+    /// `refl` is `⊢ drec = drec` closed the same way — see
+    /// [`TgBackend::dep_rec_at`], which reads the term back off it.
+    iota_gen: Vec<Thm>,
+    refl_gen: Thm,
+    /// The variables the two above are closed over, outermost first.
+    gvars: Vec<FreeVar>,
 }
 
 /// **Why the general inductive path declined a declaration.**
@@ -3856,6 +3882,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             idxs: HashMap::new(),
             parts: HashMap::new(),
             lam_sites: HashMap::new(),
+            dep_insts: HashMap::new(),
             pi_sites: HashMap::new(),
             prop_sites: HashMap::new(),
             undet_sites: HashMap::new(),
@@ -6751,11 +6778,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 &core.iota,
                 &core.funspace,
             )?;
-            let dr = derived::inductive::DepRecursor::build(&mut env, &m, &gi.ind, &gr, &core.r)?;
-            Some((gr, dr))
+            derived::inductive::DepRecursor::build(&mut env, &m, &gi.ind, &gr, &core.r)
         };
-        let out = built.map(|(gr, dr)| {
-            Rc::new(DepBottom { gi, gr: Rc::new(gr), dr: Rc::new(dr), core })
+        // **`gr` is not kept.** It was, until `dep_rec_at` replaced the
+        // `rec_of` rebuild with a substitution: nothing downstream needs the
+        // general recursor as an object any more, only the dependent
+        // development stated over it, and `DepRecursor::build` has already
+        // refused any `gr` that was not the one it derived against
+        // (`GenRecursor::is_over`). Holding it would be provenance nothing
+        // reads.
+        let out = built.map(|dr| {
+            let mut gvars: Vec<FreeVar> = gi.ind.params.clone();
+            gvars.push(dr.motive);
+            gvars.extend(dr.minors.iter().copied());
+            gvars.push(dr.target);
+            let iota_gen =
+                dr.iota.iter().map(|t| derived::gen_all(&gvars, t)).collect::<Vec<_>>();
+            let refl_gen = derived::gen_all(&gvars, &Thm::eq_refl(dr.rec.clone()));
+            Rc::new(DepBottom { gi, dr: Rc::new(dr), core, iota_gen, refl_gen, gvars })
         });
         if out.is_some() {
             DEP_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -6825,40 +6865,48 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// was present under another name. `app_in_fibre` was `dprod_app`; this is
     /// `terms_at`, spelled as instantiation.
     fn dep_subst(
-        &self,
+        &mut self,
         dp: &DepBottom,
         ps: &[Term],
         c: &Term,
         minors: &[Term],
         t: &Term,
-        thm: &Thm,
+        which: Option<usize>,
     ) -> Option<Thm> {
         let ind = &dp.gi.ind;
         if minors.len() != dp.dr.minors.len() || ps.len() != ind.params.len() {
             return None
         }
-        let mut gvars: Vec<FreeVar> = ind.params.clone();
-        gvars.push(dp.dr.motive);
-        gvars.extend(dp.dr.minors.iter().copied());
-        gvars.push(dp.dr.target);
         let mut at: Vec<Term> = ps.to_vec();
         at.push(c.clone());
         at.extend(minors.iter().cloned());
         at.push(t.clone());
-        derived::inst_all(&derived::gen_all(&gvars, thm), &at)
+        if at.len() != dp.gvars.len() {
+            return None
+        }
+        let key = (which, at.clone());
+        if let Some(hit) = self.dep_insts.get(&key) {
+            return Some(hit.clone())
+        }
+        let closed = match which {
+            None => &dp.refl_gen,
+            Some(i) => dp.iota_gen.get(i)?,
+        };
+        let out = derived::inst_all(closed, &at)?;
+        self.dep_insts.insert(key, out.clone());
+        Some(out)
     }
 
     /// [`Self::dep_subst`] at `⊢ drec = drec`, read back as the term.
     fn dep_rec_at(
-        &self,
+        &mut self,
         dp: &DepBottom,
         ps: &[Term],
         c: &Term,
         minors: &[Term],
         t: &Term,
     ) -> Option<Term> {
-        let refl = Thm::eq_refl(dp.dr.rec.clone());
-        let at = self.dep_subst(dp, ps, c, minors, t, &refl)?;
+        let at = self.dep_subst(dp, ps, c, minors, t, None)?;
         at.concl().as_eq().map(|(l, _)| l)
     }
 
@@ -14419,46 +14467,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the general apparatus is unavailable")
         };
 
-        // **Register every constructor's declared field types in this
-        // backend's `abbrev_defs`**, before anything reads them.
-        //
-        // `dep_minor_typed` may have to *contract* a field's declared type down
-        // to the minor premise's binder — a defaulted field is `optParam A d`
-        // on the constructor and plain `A` on the recursor — and
-        // [`Self::target_head_step`] does that by looking the head constant's
-        // defining equation up in `abbrev_defs`. That map is **per backend**,
-        // filled as a side effect of `interp`, while `GenInd::betas` comes from
-        // the *thread's* cache and may have been built by another declaration's
-        // backend entirely. So the equation can be missing here for a term this
-        // backend is nonetheless reasoning about, and the contraction declines
-        // with "the head is opaque" through no fault of the term.
-        //
-        // Interpreting each constructor's declared type is what fills it, and
-        // `interp` is memoised per backend, so after the first ι site of a
-        // declaration this costs a hash lookup. Nothing is taken from the
-        // result — it is called for the registration alone.
-        if let Expr::Const { name: cn0, levels: clv0, .. } = ctx.read_expr(cfun) {
-            if let Some(Declar::Constructor(cd)) = self.decls.get_declar(&cn0) {
-                let ind_name = cd.inductive_name;
-                let names: Vec<NamePtr<'t>> = match self.decls.get_inductive(&ind_name) {
-                    Some(id) => id.all_ctor_names.iter().copied().collect(),
-                    None => Vec::new(),
-                };
-                for cn in names {
-                    let Some(Declar::Constructor(c)) = self.decls.get_declar(&cn) else { continue };
-                    let (uparams, cty) = (c.info.uparams, c.info.ty);
-                    let mut cur = ctx.subst_expr_levels(cty, uparams, clv0);
-                    while let Expr::Pi { binder_name, binder_style, binder_type, body, .. } =
-                        ctx.read_expr(cur)
-                    {
-                        let _ = self.interp(ctx, binder_type);
-                        let local = ctx.mk_unique(binder_name, binder_style, binder_type);
-                        cur = ctx.inst(body, &[local]);
-                    }
-                }
-            }
-        }
-
         // ── The target, and `drec` at it ─────────────────────────────────────
         //
         // The **same** function the nest's bottom used, at the same binder, for
@@ -14605,7 +14613,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // The **same** substitution that produced `drec` above — see
         // [`Self::dep_subst`]. That the term and the rule come out of one
         // operation is the point: they cannot be about two `drec`s.
-        let Some(rule) = self.dep_subst(dp, &ps, &c, &minors, &t, &dp.dr.iota[idx]) else {
+        let Some(rule) = self.dep_subst(dp, &ps, &c, &minors, &t, Some(idx)) else {
             return Err("iota: instantiating the dependent computation rule failed")
         };
         // `PRE` at these terms is **read off the instantiated rule**, never
