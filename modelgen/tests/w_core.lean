@@ -13,9 +13,9 @@ asks the fragment to gain. Without it a generator would have to mint an
 enumeration inductive per declaration and prove its decidable equality, which
 `Iso.requires` would then oblige the run to model in turn. -/
 
---#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
+--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat WT.decEqAll
 
-universe u v
+universe u v w
 
 namespace WT
 
@@ -37,15 +37,15 @@ mentions only `A` and `K` — and once one definition needs it explicit, mixing
 the two through section variables is more confusing than the repetition. -/
 
 /-- One step of a path: which constructor-tag, and which of its branches. -/
-abbrev Edge (K : Type) (B' : K → Type u) : Type u := Σ t : K, B' t
+abbrev Edge (K : Type w) (B' : K → Type u) : Type (max w u) := Σ t : K, B' t
 
 /-- A raw tree: a partial labelling of paths. The label at a path is the
 **whole** `A`, so nothing about the constructor's data is lost by recording
 only the tag on the path itself. -/
-abbrev PTree (K : Type) (B' : K → Type u) (A : Type u) : Type u :=
+abbrev PTree (K : Type w) (B' : K → Type u) (A : Type u) : Type (max w u) :=
   List (Edge K B') → Option A
 
-variable {K : Type} {A : Type u} {B' : K → Type u}
+variable {K : Type w} {A : Type u} {B' : K → Type u}
 
 def subt (t : PTree K B' A) (x : Edge K B') : PTree K B' A := fun p => t (x :: p)
 
@@ -76,7 +76,7 @@ theorem Good.post {tg : A → K} {t : PTree K B' A} (h : Good tg t) : Step tg (G
   h (Step tg (Good tg)) (fun _u hu => Step.mono (fun _v hv => Good.pre hv) hu)
 
 /-- The carrier. `B'` is explicit because nothing else determines it. -/
-def W (B' : K → Type u) (tg : A → K) : Type u := {t : PTree K B' A // Good tg t}
+def W (B' : K → Type u) (tg : A → K) : Type (max w u) := {t : PTree K B' A // Good tg t}
 
 /-- The raw tree of a node labelled `a` with children `f`.
 
@@ -229,5 +229,14 @@ theorem Wrec_iota (a : A) (f : B' (tg a) → W B' tg) :
   Wrec_key F (sup a f) a f rfl
 
 end Rec
+
+/-- **`DecidableEq` at any type at all**, and the untagged arm's entire price.
+`K := A` with `tg := id` needs the guard `x.1 = a` decided at the *label*, and
+nothing decides it — so it is `Classical.propDecidable`, and every constant
+downstream of it carries `Classical.choice`. The tagged arm passes
+`instDecidableEqNat` instead and stays at `[propext, Quot.sound]`; the two
+columns are the whole reason both roots are exported. -/
+noncomputable def decEqAll (α : Sort u) : DecidableEq α :=
+  fun a b => Classical.propDecidable (a = b)
 
 end WT

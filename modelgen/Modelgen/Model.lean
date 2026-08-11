@@ -2232,11 +2232,26 @@ Everything else stays prefixed, and that is deliberate down to the
 sub-namespaces: the fragment carries `Eq.symm`, `Eq.mpr`, `Eq.subst`,
 `Quot.liftOn`, `Nat.brecOn` and nine more under those roots, and sharing
 *those* would redeclare constants a real input has. The list is names, not
-prefixes. -/
+prefixes.
+
+**`Classical.choice` is the third axiom and `Nonempty` is its `Iff`.** The
+untagged instantiation of the W core (§8.16.6) decides equality at the label
+with `Classical.propDecidable`, so the fragment's closure now reaches
+`Classical.choice` — and `mini/src/axiom.rs`'s [`clause_for`] selects it by that
+exact name, one `NameView::Str` comparison against `Classical` and `choice`, so
+a `_wcore.Classical.choice` is a non-standard axiom and is declined downstream.
+Its *statement* is `∀ {α : Sort u}, Nonempty α → α`, and the same argument one
+level down puts `Nonempty` and its two names here beside `Iff`'s: a
+`Classical.choice` under Lean's name whose antecedent is `_wcore.Nonempty`
+would be worse than a decline, because the name is what the clause keys on.
+Everything else the closure gained — `Classical.em`, `Classical.propDecidable`,
+`Classical.choose` and twenty more — is an ordinary declaration and stays
+prefixed. -/
 def wCoreShared : Std.HashSet Name := Std.HashSet.ofList
   [`Eq, `Eq.refl, `Eq.rec, `Iff, `Iff.intro, `Iff.rec,
    `Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound, `propext,
-   `Nat, `Nat.zero, `Nat.succ, `Nat.rec]
+   `Nat, `Nat.zero, `Nat.succ, `Nat.rec,
+   `Classical.choice, `Nonempty, `Nonempty.intro, `Nonempty.rec]
 
 /-- One fragment name as it is spliced. -/
 def wCoreName (n : Name) : Name := if wCoreShared.contains n then n else wCoreRoot ++ n
@@ -2265,6 +2280,12 @@ one `K` the scheme uses. Prefixed like any other ordinary definition: the
 instance is not a name anything downstream keys on, unlike the axioms, and a
 `_wcore` copy of it cannot collide with an input that has its own. -/
 def wCoreDecEqNat : Name := wCoreRoot ++ `instDecidableEqNat
+/-- **`DecidableEq` at any type at all** — `Classical.propDecidable` behind one
+name, and the untagged instantiation's entire price (`MODELGEN.md` §8.16.6).
+Prefixed for the same reason `instDecidableEqNat` is; what may *not* be
+prefixed is the `Classical.choice` underneath it, which is why that name is on
+[`Modelgen.wCoreShared`]. -/
+def wCoreDecEqAll : Name := wCoreRoot ++ `WT.decEqAll
 /-- **`funext` under the prefix** — the arm's one per-constructor cost, and the
 reason it is taken from the fragment rather than derived beside the model:
 [`Modelgen.funextDecl`] would splice a second `funext` at the same `Eq`, and

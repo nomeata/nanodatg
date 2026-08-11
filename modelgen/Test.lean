@@ -412,14 +412,15 @@ def expectedPrim : List Row :=
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
   -- built to refuse — a branching constructor and a recursive occurrence under
-  -- a binder — and arm W (`MODELGEN.md` §8.16) models both. `Branch` is 170
+  -- a binder — and arm W (`MODELGEN.md` §8.16) models both. `Branch` is 213
   -- declarations because it is the first W target in the file and so the one
   -- that carries the W core; `Binder` behind it is its own dozen.
   --
-  -- `_wcore.Acc` is 13 here against `prim_w`'s 15 because this file declares a
-  -- `Nonempty` of its own, so `Acc`'s graph arm splices none.
+  -- `_wcore.Acc` is 13 at every one of these rows now: the fragment carries
+  -- `Nonempty` and `Classical.choice` itself since §8.16.6 widened it, so the
+  -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
-      [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4), ("Branch", 170),
+      [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4), ("Branch", 213),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
@@ -448,30 +449,36 @@ def expectedPrim : List Row :=
       , ("Eq", "prim model shape: a basis primitive")
       , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
-  -- `WTagged.lean`'s five roots — the export `lean4export` emits for
-  -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat`, 19
-  -- inductive blocks and 2 axioms — and the W arm's plan is to splice it and
-  -- model what it splices.
+  -- the core's six roots — the export `lean4export` emits for
+  -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
+  -- WT.decEqAll`, 20 inductive blocks and 3 axioms — and the W arm's plan is
+  -- to splice it and model what it splices.
   --
-  -- **The fifth root is why this row is worth re-reading rather than
-  -- re-running.** It is the `DecidableEq Nat` the tag scheme needs, and it
-  -- brought 11 declarations with it — but no inductive, which is exactly why
-  -- the entries below are unchanged. Had it brought one, this row would have
-  -- had to gain a line or the arm would be emitting an unmodelled inductive.
-  -- This row is what says that plan is sound: **every inductive the core
-  -- reaches models**, except the two that are the basis exemption. If one of
-  -- them stops modelling, the W arm would be emitting an unmodelled inductive
-  -- in front of a consumer and this row is where that is noticed.
+  -- **The last two roots are why this row is worth re-reading rather than
+  -- re-running.** `instDecidableEqNat` is the `DecidableEq Nat` the tagged
+  -- instantiation needs and brought 11 declarations and **no** inductive;
+  -- `WT.decEqAll` is the untagged one's `DecidableEq A` (§8.16.6) and brought
+  -- 44 and **one**, `Nonempty`. That one is why this row is a row: had nobody
+  -- checked, the arm would be emitting an unmodelled inductive. This row is
+  -- what says the plan is sound — **every inductive the core reaches models**,
+  -- except the two that are the basis exemption.
   --
-  -- `Acc` is the interesting entry twice over: it is 14 declarations because
-  -- it is arm G's graph route, and it is **the only model in the fragment that
-  -- spends `Classical.choice`** (`MODELGEN.md` §8.16). One declaration, shared
-  -- by every W target, and the whole of the choice question for this arm.
+  -- `Acc` is the interesting entry three times over. It is 12 declarations
+  -- because it is arm G's graph route and this input has both the `Nonempty`
+  -- and the `Classical.choice` it would otherwise splice; it is **the only
+  -- model in the fragment that spends `Classical.choice`** at the tagged
+  -- instantiation; and it is **last in the list rather than in the middle**,
+  -- because those two are declared *after* it here — `Acc` arrives through
+  -- `WellFounded.fix` and `Nonempty` only through `Classical.propDecidable`.
+  -- That is §8.16.5's class, a primitive that is late rather than a name that
+  -- is lost, and [`Modelgen.lateSpliceNames`] is what holds the model back
+  -- until the input has caught up. Without that it is a decline, and this row
+  -- is where the difference shows.
   , ("w_core",
       [("Subtype", 6), ("List", 6), ("Sigma", 4), ("Option", 6), ("Exists", 4),
        ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 4), ("True", 4),
-       ("Or", 6), ("Iff", 4), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 4),
-       ("Bool", 6), ("HEq", 4), ("PProd", 4)],
+       ("Or", 6), ("Iff", 4), ("WellFounded", 4),
+       ("Bool", 6), ("HEq", 4), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
       [ ("Nat", "prim model shape: a basis primitive")
       , ("Eq", "prim model shape: a basis primitive")])
   -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
@@ -504,13 +511,13 @@ def expectedPrim : List Row :=
   , ("prim_carve",
       [("N", 9), ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
        ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6),
-       ("Mx", 8), ("Mx._model.skel", 170),
+       ("Mx", 8), ("Mx._model.skel", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
-       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
        ("Two2", 8), ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
        ("Sm3", 8), ("Sm3._model.skel", 12), ("Br", 8), ("Br._model.skel", 12),
        ("Tri3", 8), ("Tri3._model.skel", 6)],
@@ -542,24 +549,27 @@ def expectedPrim : List Row :=
   -- **The eighteen rows between it and `Q` are the fragment being modelled in
   -- turn** — `Iso.requires`' rule, the same one arm C's skeleton is under. A
   -- row going missing here is arm W emitting an unmodelled inductive in front
-  -- of a consumer. `Iff` and `Nonempty` carry no prefix on purpose: the first
-  -- is one of the sixteen names the fragment shares with the input, the second
-  -- is spliced by `_wcore.Acc`'s own model, which is arm G and the one place in
-  -- this row that spends `Classical.choice`.
+  -- of a consumer. `Iff`, `Nonempty` and `Classical.choice` carry no prefix on
+  -- purpose: they are among the twenty names the fragment shares with the
+  -- input, because `mini/src/axiom.rs` keys on an axiom's exact name and on the
+  -- exact statement under it.
   --
-  -- `Bad` is the boundary and stays a decline: `tagFactored` is false for it,
-  -- so there is no `B' : K → Type u` to give the core.
+  -- **`Bad`, `Wty` and `Utd` are the untagged instantiation** (§8.16.6) and
+  -- were this row's one decline until it landed. `Wty` is `WType`, which is
+  -- what the corpus actually declined. Nothing in this row's counts says which
+  -- instantiation a target took — `#print axioms` does, and that is the report
+  -- the section carries: these three at `[propext, Classical.choice,
+  -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
   , ("prim_w",
-      [("Tree", 173), ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+      [("Tree", 218), ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
-       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Q", 8), ("P", 6), ("Wt", 20),
-       ("Dep", 12), ("Br", 12)],
-      [ ("Eq", "prim model shape: a basis primitive")
-      , ("Bad", "prim model shape: Bad.lim has a recursive field that is not a bare \
-          occurrence of Bad")])
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4), ("Wty", 10),
+       ("P", 6), ("Q", 8), ("Wt", 20),
+       ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
+      [ ("Eq", "prim model shape: a basis primitive")])
   -- **§5.1's sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
@@ -604,13 +614,13 @@ def expectedPrim : List Row :=
   --   container with no recursive field of its own.
   , ("nest_fam_arg",
       [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model.skel", 6),
-       ("RB", 170),
+       ("RB", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
-       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
        ("RB2", 6), ("Ctr", 4),
        ("OK", 13), ("OK._model.0", 12), ("OK._model.0._model.tag", 6),
        ("JT", 15), ("JT._model.0", 14), ("JT._model.0._model.tag", 6),
@@ -677,13 +687,13 @@ def expectedPrim : List Row :=
        ("MA._model.tag", 8), ("MA._model.aux", 16),
        ("MA._model.aux._model.skel", 14),
        ("Nd._model.0._model.tag", 6), ("Nd._model.0._model.aux", 12),
-       ("Nd._model.0._model.aux._model.skel", 174),
+       ("Nd._model.0._model.aux._model.skel", 219),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
-       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4)],
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4)],
       [ ("PSigma", "prim model shape: a basis primitive")
       , ("Eq", "prim model shape: a basis primitive")])
   ]

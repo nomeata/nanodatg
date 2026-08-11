@@ -31,10 +31,32 @@
      beside a branching pair: the data tower is a dependent Σ-chain and this is
      what says so.
 
-   `Bad` is the boundary from the other side and stays a decline: its
-   infinitary child's binder type mentions an **earlier field**, so the branch
-   type does not factor through the tag and there is no `B' : K → Type u` to
-   give the core. `Modelgen.tagFactored` is the test and this is its fixture. -/
+   **The last three are the untagged instantiation** (`MODELGEN.md` §8.16.6):
+   the same core at `K := A` and `tg := id`, where the branch type sees the
+   whole label and a child's binders may therefore mention the constructor's
+   own non-recursive fields. `Modelgen.tagFactored` is false for each of them
+   and `Modelgen.labelFactored` is true, which is the two-column split — these
+   three model at `[propext, Classical.choice, Quot.sound]` where every target
+   above stays at `[propext, Quot.sound]`.
+
+   * `Bad` — one label-dependent child (`PFam k → Bad`) beside a plain one, and
+     a base constructor. It was this file's decline until the untagged arm
+     landed.
+   * `Wty` — `WType` itself, which is what the corpus actually declines: a
+     **parameter family** `β : α → Type u` at a level parameter, so the branch
+     tower's own universe is variable and the label's data is a `α` rather than
+     a ground type.
+   * `Utd` — every remaining hazard at once. `mk` has **two** children whose
+     binders read **different** fields of the same label, so the branch-index
+     cascade and the data projections are exercised together and a dispatch
+     that reads branch 1's tower out of field 0 is not the same term. `gap` has
+     data **on both sides** of a label-dependent child, so the projection the
+     binder needs is not at depth 1. `nil` is the base constructor.
+
+   The boundary is now one field further out and `Utd` is not it: what neither
+   instantiation reaches is a child whose binders mention an earlier
+   **recursive** field, since the label carries no children for `Tel` to read
+   one from. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
@@ -84,3 +106,11 @@ inductive Dep : Type where
 inductive Bad : Type where
   | tip : Bad
   | lim : (k : P) → (PFam k → Bad) → Bad → Bad
+
+inductive Wty (α : Type u) (β : α → Type u) : Type u where
+  | mk : (a : α) → (β a → Wty α β) → Wty α β
+
+inductive Utd : Type where
+  | nil : Utd
+  | mk : (k : P) → (j : P) → (PFam k → Utd) → (PFam j → Utd) → Utd
+  | gap : (k : P) → (PFam k → Utd) → Q → Utd → Utd

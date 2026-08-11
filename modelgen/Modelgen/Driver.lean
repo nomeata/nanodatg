@@ -292,28 +292,44 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
-/-- The quotient-side names deriving `funext` may splice
-([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
-and wherever a pad at a level `dsingOk` cannot build is discharged by
-transport — `PUnit`'s and `PULift`'s shapes. -/
-def fxNames : List Name := [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound]
+/-- **The names beyond the basis that a prim model may splice** — the ones
+[`Modelgen.primReady`] does not cover and that an input may therefore declare
+*later* than the model that needs them.
 
-/-- [`Modelgen.primReady`]'s question, asked of the quotient. Not folded into
-`primReady` itself: most prim models never touch `funext`, and waiting on the
-quotient for all of them would move every pre-`Quot` model of a `Quot`-late
-export for no reason. -/
-def primFxReady (reserved : Std.HashSet Name) : MetaM Bool := do
+Two groups, and they are one list because the wait is the same wait:
+
+* the quotient-side names deriving `funext` may splice
+  ([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
+  and wherever a pad at a level `dsingOk` cannot build is discharged by
+  transport — `PUnit`'s and `PULift`'s shapes.
+* `Nonempty` and `Classical.choice`, which **arm G** splices
+  (`MODELGEN.md` §8.12) and which the W core's fragment now also carries. An
+  input that declares `Acc` before `Nonempty` — `modelgen/tests/w_core.ndjson`
+  is one, since the fragment's `Acc` comes in through `WellFounded.fix` and its
+  `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
+  to `prim model name taken (Nonempty)`. That is §8.16.5's class exactly: a
+  primitive that is **late**, not a name that is lost. -/
+def lateSpliceNames : List Name :=
+  [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+   `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
+
+/-- [`Modelgen.primReady`]'s question, asked of the late names. Not folded into
+`primReady` itself: most prim models never touch `funext` or choice, and
+waiting on the quotient for all of them would move every pre-`Quot` model of a
+`Quot`-late export for no reason. This is asked only of a model that has
+already *declined* at one of these names. -/
+def primLateReady (reserved : Std.HashSet Name) : MetaM Bool := do
   let env ← getEnv
-  for n in fxNames do
+  for n in lateSpliceNames do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
-/-- Did the model stop at a quotient name the replay has not reached? That is
-a **wait**, not a decline: the input's own quotient is coming, and the model
+/-- Did the model stop at a late name the replay has not reached? That is
+a **wait**, not a decline: the input's own is coming, and the model
 is generated after it, exactly as a mutual model waits for the input's own
 `Eq`. -/
-def Decline.isFxWait : Decline → Bool
-  | .nameTaken n => fxNames.contains n
+def Decline.isLateWait : Decline → Bool
+  | .nameTaken n => lateSpliceNames.contains n
   | _ => false
 
 /-- One simple inductive's model from the primitives, generated and
@@ -322,7 +338,7 @@ accounted for — the third construction, [`Modelgen.primIso`], behind
 composition (the single inductives the other two constructions emit).
 
 `canWait` says whether the caller can hold the model back: a decline at a
-quotient name the replay has not reached ([`Modelgen.Decline.isFxWait`]) then
+quotient name the replay has not reached ([`Modelgen.Decline.isLateWait`]) then
 comes back as `true` in the second component — recorded nowhere, generated
 later — instead of a decline. The composition and the end-of-file drain pass
 `false`: there, nothing more is coming.
@@ -374,7 +390,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   match res with
   | .error dec =>
     setEnv saved
-    if canWait && dec.isFxWait && !(← primFxReady reserved) then
+    if canWait && dec.isLateWait && !(← primLateReady reserved) then
       return ((out, rep, pending), true)
     return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
       pending), false)
@@ -450,7 +466,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
 [`Modelgen.runFilter`]'s `waitingPrim` queue, named because
 [`Modelgen.primCompose`] now returns entries for it. The leading `Bool` says
 *which* wait: `false` for the basis ([`Modelgen.primReady`]) and `true` for the
-quotient behind `funext` ([`Modelgen.primFxReady`]). -/
+quotient behind `funext` ([`Modelgen.primLateReady`]). -/
 abbrev PrimJob := Bool × Name × List Name × Nat × Expr × Array (Name × Expr)
 
 /-- **The composition's third step**: the single inductives a mutual model
@@ -552,7 +568,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
   -- Simple inductives (`--prim-models`) waiting for the input's own basis
   -- declarations. The leading `Bool` says *which* wait: `false` for the basis
   -- ([`Modelgen.primReady`]) and `true` for the quotient behind `funext`
-  -- ([`Modelgen.primFxReady`]) — kept apart so a model that never touches
+  -- ([`Modelgen.primLateReady`]) — kept apart so a model that never touches
   -- `funext` is not moved past a `Quot` it does not need.
   -- **The composition's third step queues here too** ([`Modelgen.PrimJob`]'s
   -- type): a `T._model.tag` or `T._model.aux` whose model needs a primitive the
@@ -712,9 +728,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
         if primModels && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           if ← primReady reserved then
-            let (st, fxWait) ← genPrim t.name t.levelParams t.numParams t.type ctors
+            let (st, lateWait) ← genPrim t.name t.levelParams t.numParams t.type ctors
               reserved true (out, rep, pending)
-            if fxWait then
+            if lateWait then
               waitingPrim := waitingPrim.push
                 (true, t.name, t.levelParams, t.numParams, t.type, ctors)
             else
@@ -740,14 +756,14 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
     -- discovers the need.
     if !waitingPrim.isEmpty then
       let basisOk ← primReady reserved
-      let fxOk ← primFxReady reserved
-      if basisOk || fxOk then
+      let lateOk ← primLateReady reserved
+      if basisOk || lateOk then
         let mut keep : Array (Bool × Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
         for job in waitingPrim do
-          let (needsFx, n, lp, np, ty, ctors) := job
-          if (if needsFx then fxOk else basisOk) then
-            let (st, fxWait) ← genPrim n lp np ty ctors reserved true (out, rep, pending)
-            if fxWait then
+          let (needsLate, n, lp, np, ty, ctors) := job
+          if (if needsLate then lateOk else basisOk) then
+            let (st, lateWait) ← genPrim n lp np ty ctors reserved true (out, rep, pending)
+            if lateWait then
               keep := keep.push (true, n, lp, np, ty, ctors)
             else
               (out, rep, pending) ← pure st

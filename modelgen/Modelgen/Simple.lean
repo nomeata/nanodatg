@@ -1084,6 +1084,61 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
       i := i + 1
     return true
 
+/-- **Does `B` factor through the whole label?** — the same question as
+[`Modelgen.tagFactored`], asked of the *untagged* instantiation of the same
+core, and the guard arm W actually runs on.
+
+`MODELGEN.md` §8.16.6: `WFromPaths.lean` is `WTagged.lean` at `K := A` and
+`tg := id`, so there is one construction and two bills. At `K := A` the branch
+type is `B' : A → Sort w` and `A` is the tag *paired with that constructor's
+non-recursive fields*, so a recursive field's binders may mention those fields
+freely — `Tel` reads them back out of the label's own data. What they still may
+not mention is an earlier **recursive** field: the label carries no children,
+so there is nowhere for `Tel` to read one from.
+
+`tagFactored` implies this, and the difference between the two is exactly the
+two columns the report prints. A declaration this admits and `tagFactored`
+refuses is modelled at `[propext, Classical.choice, Quot.sound]`, because
+`WT.decEqAll` is `Classical.propDecidable`; one it admits *and* `tagFactored`
+admits keeps `instDecidableEqNat` and stays at `[propext, Quot.sound]`.
+
+Non-throwing, for the same reason `tagFactored` is. -/
+def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) : Bool :=
+  exportCtors.all fun (_, cty) => Id.run do
+    let mut t := cty
+    for _ in [0:np] do
+      match t with
+      | .forallE _ _ b _ => t := b
+      | _ => return false
+    -- Which of this constructor's own fields are recursive, by position. The
+    -- test is `mentionsAny` on the *written* domain, exactly as
+    -- [`Modelgen.eraseCtorTy`] and `wShapeOf` ask it, so all three agree about
+    -- which fields the two towers split the telescope into.
+    let mut recAt : Array Bool := #[]
+    let mut u := t
+    while u matches .forallE .. do
+      let .forallE _ dom b _ := u | unreachable!
+      recAt := recAt.push (mentionsAny #[tname] dom)
+      u := b
+    let mut i := 0
+    while t matches .forallE .. do
+      let .forallE _ dom b _ := t | unreachable!
+      if recAt[i]! then
+        -- Same de Bruijn bookkeeping as `tagFactored`'s: with `j` of the
+        -- domain's own binders opened, loose index `j + m` is the field at
+        -- position `i - 1 - m`. Only the recursive ones are refused.
+        let mut d := headNorm dom
+        let mut j := 0
+        while d matches .forallE .. do
+          let .forallE _ z db _ := d | unreachable!
+          for m in [0:i] do
+            if recAt[i - 1 - m]! && z.hasLooseBVar (j + m) then return false
+          d := db
+          j := j + 1
+      t := b
+      i := i + 1
+    return true
+
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
@@ -2353,18 +2408,24 @@ graph route's inversion cannot be stated at an arbitrary index"
   -- Three further conditions, each a real limit of the scheme rather than a
   -- convenience:
   --
-  -- * **`tagFactored`.** The core's branch type is `B' : K → Type u` at
-  --   `K = Nat` with `tg = PSigma.fst`, so it is a function of the *tag* and
-  --   cannot see the label's data. A recursive field whose binder telescope
-  --   mentions an earlier field — `(n : Nat) → (Fin n → T) → T` — has a branch
-  --   type that does not factor through the tag, and there is no `B'` to give
-  --   the core. These are the corpus's four irreducible declarations.
-  -- * **the carrier is `Type u`.** `WT.W.{u}` fixes `A` and `B'` at `Type u`;
-  --   a never-zero `w` that is not a successor has no such `u`.
+  -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
+  --   `tg : A → K`, and the arm runs it at **two** instantiations of one
+  --   construction (`MODELGEN.md` §8.16.6). At `K := Nat`, `tg := PSigma.fst`
+  --   the branch type is a function of the *tag* and cannot see the label's
+  --   data, which is [`Modelgen.tagFactored`]; at `K := A`, `tg := id` it sees
+  --   all of it and only an earlier *recursive* field is out of reach, which is
+  --   [`Modelgen.labelFactored`]. The guard is the weaker one and
+  --   `tagFactored` picks the column: the tagged instantiation takes
+  --   `instDecidableEqNat` and stays at `[propext, Quot.sound]`, the untagged
+  --   one takes `WT.decEqAll` and pays `Classical.choice`.
+  -- * **the carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'` at `Type u`;
+  --   a never-zero `w` that is not a successor has no such `u`. The untagged
+  --   instantiation needs it twice over, since `K := A` is then at `Type u` too.
   -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
   --   by, so it never reaches here.
+  let wTagged := tagFactored tname np exportCtors
   let armW := (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear
-    && tagFactored tname np exportCtors && w.normalize.dec.isSome
+    && labelFactored tname np exportCtors && w.normalize.dec.isSome
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
   let wDN := Name.str model "wD"
@@ -2399,6 +2460,12 @@ graph route's inversion cannot be stated at an arbitrary index"
   -- `Type u` for the `Sort w` the carrier is at. Meaningless — and unused —
   -- unless `armW`, which is where `w.normalize.dec` is checked.
   let uL := w.normalize.dec.getD .zero
+  -- **The core's `K` level**, and the one place the two instantiations differ
+  -- in the level lists rather than in a term: `K = Nat : Type 0` tagged and
+  -- `K = A p⃗ : Type u` untagged. The core's own binders are
+  -- `WT.W.{u,w}`, `WT.sup.{u,w}`, `WT.Wrec.{u,v,w}` and
+  -- `WT.Wrec_iota.{u,v,w}` with `w` last, so every list below gains it there.
+  let wKL := if wTagged then Level.zero else uL
 
   -- **Constructor `k`'s field split**, as positions into its own telescope.
   -- The data tower holds the non-recursive fields and the branch tower the
@@ -2440,23 +2507,40 @@ data tower would have to hold a type the branch tower cannot see"
   -- terms so that `self`, every constructor and `rec_0` name them instead of
   -- carrying a copy.
   let wDAt : Array Expr → Expr := fun ps => mkAppN (.const wDN us) ps
-  let wTelFn : Array Expr → Expr → GenM Expr := fun ps t =>
-    withLocalDeclD `j wNatT fun j =>
-      mkLambdaFVars #[j] (mkAppN (.const wTelN us) (ps ++ #[t, j]))
-  let wBAt : Array Expr → Expr → GenM Expr := fun ps t =>
-    return psigmaT (.succ .zero) w wNatT (← wTelFn ps t)
   let wAAt : Array Expr → Expr := fun ps => mkAppN (.const wAN us) ps
-  let wBFn : Array Expr → Expr := fun ps => mkAppN (.const wBN us) ps
-  let wTgAt : Array Expr → Expr := fun ps => mkAppN (.const wTgN us) ps
-  let wDecEq : Expr := .const wCoreDecEqNat []
-  let wSup : Array Expr → Expr → Expr → Expr := fun ps a f =>
-    mkAppN (.const wCoreSup [uL]) #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, a, f]
-  -- `⟨t, d⟩ : A p⃗` and `⟨j, tel⟩ : B' p⃗ t`, with the tag and the branch index
-  -- as *expressions* — the recursor's cascade needs both at a variable index.
+  -- `⟨t, d⟩ : A p⃗`, with the tag as an *expression* — the recursor's cascade
+  -- needs it at a variable index. `A` is `Σ' t : Nat, D p⃗ t` in **both**
+  -- instantiations: what the untagged one changes is `K`, not the label.
   let wLabel : Array Expr → Expr → Expr → Expr := fun ps t d =>
     psigmaMk (.succ .zero) w wNatT (wDAt ps) t d
-  let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps t j tel =>
-    return psigmaMk (.succ .zero) w wNatT (← wTelFn ps t) j tel
+  -- **The core's `K`, and the value in it a constructor's branch type is taken
+  -- at.** Tagged: `Nat`, and the value is the tag. Untagged: the label type
+  -- itself, and the value is that constructor's whole label — which is why
+  -- everything below threads `key` where the tagged transcription threaded a
+  -- `Nat` literal. `wKeyOf` is the *only* place the two differ.
+  let wKTy : Array Expr → Expr := fun ps => if wTagged then wNatT else wAAt ps
+  let wKeyOf : Array Expr → Nat → Expr → Expr := fun ps k d =>
+    if wTagged then natNumeral k else wLabel ps (natNumeral k) d
+  let wTelFn : Array Expr → Expr → GenM Expr := fun ps key =>
+    withLocalDeclD `j wNatT fun j =>
+      mkLambdaFVars #[j] (mkAppN (.const wTelN us) (ps ++ #[key, j]))
+  let wBAt : Array Expr → Expr → GenM Expr := fun ps key =>
+    return psigmaT (.succ .zero) w wNatT (← wTelFn ps key)
+  let wBFn : Array Expr → Expr := fun ps => mkAppN (.const wBN us) ps
+  let wTgAt : Array Expr → Expr := fun ps => mkAppN (.const wTgN us) ps
+  -- **`DecidableEq K`, and the whole of the second bill.** `MODELGEN.md`
+  -- §8.16.6: one declaration, `[propext, Quot.sound]` on the left of it and
+  -- `[propext, Classical.choice, Quot.sound]` on the right.
+  let wDecEq : Array Expr → Expr := fun ps =>
+    if wTagged then .const wCoreDecEqNat []
+    else mkApp (.const wCoreDecEqAll [w]) (wAAt ps)
+  let wSup : Array Expr → Expr → Expr → Expr := fun ps a f =>
+    mkAppN (.const wCoreSup [uL, wKL])
+      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, a, f]
+  -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
+  -- reason.
+  let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps key j tel =>
+    return psigmaMk (.succ .zero) w wNatT (← wTelFn ps key) j tel
   let wSelfAt : Array Expr → Expr := fun ps => mkAppN (.const selfN us) ps
 
   -- The two towers, at a parameter scope.
@@ -2465,11 +2549,31 @@ data tower would have to hold a type the branch tower cannot see"
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
       wTowerTy w (nrs.map (fs[·]!)) 0
-  let wTelTy : Array Expr → Nat → Nat → GenM Expr := fun ps k r => do
-    let (_, rcs) ← wShapeOf k
+  -- **The data tower's components, read out of a label's data** — the values
+  -- the branch tower's binder types are written in terms of wherever only the
+  -- label is in hand, which is everywhere but a constructor's own body.
+  let wNrProjs : Array Expr → Nat → Expr → GenM (Array Expr) := fun ps k d => do
+    let (nrs, _) ← wShapeOf k
+    let tele ← instForall exportCtors[k]!.2 ps
+    forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
+      wTowerProjs w (nrs.map (fs[·]!)) 0 d #[]
+  -- **Constructor `k`'s recursive field `r`, at its own non-recursive fields
+  -- replaced by `nrv`** — and this substitution is the untagged arm.
+  --
+  -- Tagged, `Tel` is a function of the tag and `labelFactored`'s stronger
+  -- sibling guarantees the domain mentions no field at all, so `replaceFVars`
+  -- finds nothing and the tagged transcription is byte-identical. Untagged, the
+  -- domain may mention the constructor's non-recursive fields — `WType.mk`'s
+  -- `β a → WType β` is the shape — and what stands in their place is whatever
+  -- the caller has: the fields themselves inside the constructor, the label's
+  -- projections inside `F`.
+  let wRecDom : Array Expr → Nat → Nat → Array Expr → GenM Expr := fun ps k r nrv => do
+    let (nrs, rcs) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-      forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => wTowerTy w zs 0
+      return (← ityp fs[rcs[r]!]!).replaceFVars (nrs.map (fs[·]!)) nrv
+  let wTelTy : Array Expr → Nat → Array Expr → Nat → GenM Expr := fun ps k nrv r => do
+    forallTelescope (← wRecDom ps k r nrv) fun zs _ => wTowerTy w zs 0
 
   -- **The dispatch cascade at tag `k`**, as a function of the branch index:
   -- `wDispAt ps k child sc : Tel p⃗ k sc → T._model.self p⃗`. `child r zs vs` is
@@ -2477,36 +2581,34 @@ data tower would have to hold a type the branch tower cannot see"
   -- where a constructor is being built, and `f ⟨r, ⟨z⃗⟩⟩` where the recursor
   -- is. One builder for both is what makes the eta lemma's `rfl` hold: the
   -- term the lemma's left side reduces to is *this* term.
-  let wDispAt : Array Expr → Nat → (Nat → Array Expr → Array Expr → GenM Expr) →
-      Expr → GenM Expr := fun ps k child sc => do
+  let wDispAt : Array Expr → Nat → Expr → Array Expr →
+      (Nat → Array Expr → Array Expr → GenM Expr) → Expr → GenM Expr :=
+    fun ps k key nrv child sc => do
     let (_, rcs) ← wShapeOf k
-    let tag := natNumeral k
     let selfTy := wSelfAt ps
-    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[tag, jj])
+    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let s ← ilevel (.forallE `tel (dom (natNumeral 0)) selfTy .default)
     let motAt : Nat → GenM Expr := fun r =>
       withLocalDeclD `j wNatT fun j =>
         mkLambdaFVars #[j] (.forallE `tel (dom (natSuccs r j)) selfTy .default)
     let armAt : Nat → GenM Expr := fun r => do
-      let tele ← instForall exportCtors[k]!.2 ps
-      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-        forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
-          withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
-            mkLambdaFVars #[tel] (← child r zs (← wTowerProjs w zs 0 tel #[]))
+      forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
+        withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
+          mkLambdaFVars #[tel] (← child r zs (← wTowerProjs w zs 0 tel #[]))
     let junkAt : Expr → GenM Expr := fun t =>
       withLocalDeclD `tel (dom (natSuccs rcs.size t)) fun tel => do
         mkLambdaFVars #[tel] (← emptyAtElim eqi w w selfTy tel)
     natCascade s rcs.size motAt armAt junkAt 0 sc
-  -- The same, packaged as `fun b : B' p⃗ k => …`. The eta lemma below is
+  -- The same, packaged as `fun b : B' p⃗ key => …`. The eta lemma below is
   -- stated against **these** `b.1` and `b.2`, so the two must be built here.
-  let wDispLam : Array Expr → Nat → (Nat → Array Expr → Array Expr → GenM Expr) →
-      GenM Expr := fun ps k child => do
-    let tag := natNumeral k
-    let β ← wTelFn ps tag
-    withLocalDeclD `b (← wBAt ps tag) fun b => do
+  let wDispLam : Array Expr → Nat → Expr → Array Expr →
+      (Nat → Array Expr → Array Expr → GenM Expr) → GenM Expr :=
+    fun ps k key nrv child => do
+    let β ← wTelFn ps key
+    withLocalDeclD `b (← wBAt ps key) fun b => do
       let b1 := psigmaFst (.succ .zero) w wNatT β b
       let b2 := psigmaSnd (.succ .zero) w wNatT β b
-      mkLambdaFVars #[b] (mkApp (← wDispAt ps k child b1) b2)
+      mkLambdaFVars #[b] (mkApp (← wDispAt ps k key nrv child b1) b2)
 
   -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
   -- glue. `MODELGEN.md` §8.16 and `WEmitted.lean`'s middle section: it is
@@ -2517,16 +2619,16 @@ data tower would have to hold a type the branch tower cannot see"
   -- and the right is `f ⟨r, tel⟩`, and those are the same term by that eta
   -- once more and by the terminating unit's own canonicity. Off the end of the
   -- telescope the branch is uninhabited and the arm is its eliminator.
-  let wEtaAt : Array Expr → Nat → Expr → GenM Expr := fun ps k f => do
+  let wEtaAt : Array Expr → Nat → Expr → Array Expr → Expr → GenM Expr :=
+    fun ps k key nrv f => do
     let (_, rcs) ← wShapeOf k
-    let tag := natNumeral k
     let selfTy := wSelfAt ps
-    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[tag, jj])
+    let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-      return mkApp f (← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 vs))
+      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 vs))
     let stmt : Expr → Expr → GenM Expr := fun jj tel => do
-      let lhs := mkApp (← wDispAt ps k child jj) tel
-      return eqi.mk' w selfTy lhs (mkApp f (← wBranch ps tag jj tel))
+      let lhs := mkApp (← wDispAt ps k key nrv child jj) tel
+      return eqi.mk' w selfTy lhs (mkApp f (← wBranch ps key jj tel))
     let motAt : Nat → GenM Expr := fun r =>
       withLocalDeclD `j wNatT fun j => do
         let jj := natSuccs r j
@@ -2534,25 +2636,23 @@ data tower would have to hold a type the branch tower cannot see"
           mkForallFVars #[tel] (← stmt jj tel)
         mkLambdaFVars #[j] body
     let armAt : Nat → GenM Expr := fun r => do
-      let tele ← instForall exportCtors[k]!.2 ps
-      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-        forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
-          withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
-            mkLambdaFVars #[tel]
-              (eqi.refl' w selfTy (mkApp f (← wBranch ps tag (natNumeral r) tel)))
+      forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
+        withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
+          mkLambdaFVars #[tel]
+            (eqi.refl' w selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
     let junkAt : Expr → GenM Expr := fun t => do
       let jj := natSuccs rcs.size t
       withLocalDeclD `tel (dom jj) fun tel => do
         mkLambdaFVars #[tel] (← emptyAtElim eqi .zero w (← stmt jj tel) tel)
-    let β ← wTelFn ps tag
-    let bTy ← wBAt ps tag
+    let β ← wTelFn ps key
+    let bTy ← wBAt ps key
     let pointwise ← withLocalDeclD `b bTy fun b => do
       let b1 := psigmaFst (.succ .zero) w wNatT β b
       let b2 := psigmaSnd (.succ .zero) w wNatT β b
       mkLambdaFVars #[b] (mkApp (← natCascade .zero rcs.size motAt armAt junkAt 0 b1) b2)
     let cod ← withLocalDeclD `x bTy fun x => mkLambdaFVars #[x] selfTy
     return mkAppN (.const wCoreFunext [w, w])
-      #[bTy, cod, ← wDispLam ps k child, f, pointwise]
+      #[bTy, cod, ← wDispLam ps k key nrv child, f, pointwise]
 
   -- **One constructor's label and dispatch, from its own field vector** — the
   -- constructor's body, and the two arguments the ι rule hands `Wrec_iota`.
@@ -2563,7 +2663,12 @@ data tower would have to hold a type the branch tower cannot see"
       let tower ← wTowerMk w nrv 0 nrv
       let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
         return (mkAppN fields[rcs[r]!]! vs).headBeta
-      return (wLabel ps (natNumeral k) tower, ← wDispLam ps k child)
+      -- The branch tower is written at the constructor's **own** fields here
+      -- rather than at projections of the tower it just built: the two are
+      -- definitionally equal by `PSigma`'s ι rule, and the fields are what the
+      -- dispatch's children are applied to anyway.
+      return (wLabel ps (natNumeral k) tower,
+              ← wDispLam ps k (wKeyOf ps k tower) nrv child)
 
   -- **`F`, the minor the core's recursor takes** — one `Nat.rec` cascade over
   -- the tag whose motive must be well-typed at *every* tag, the eta lemma's
@@ -2571,18 +2676,26 @@ data tower would have to hold a type the branch tower cannot see"
   -- of `D`. This is the term `WEmitted.lean` exists to have shown builds.
   let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
     let selfTy := wSelfAt ps
-    -- The frame every arm and the motive share: `(d : D p⃗ t) (f : B' p⃗ t → self)
-    -- (ih : (b : B' p⃗ t) → C (f b))`, and the label `⟨t, d⟩` built from `d`.
-    let frame : Expr → (Expr → Expr → Expr → Expr → GenM Expr) → GenM Expr :=
+    -- The frame every arm and the motive share: `(d : D p⃗ t)
+    -- (f : B' p⃗ key → self) (ih : (b : B' p⃗ key) → C (f b))`, and the label
+    -- `⟨t, d⟩` built from `d`.
+    --
+    -- **`d` is introduced before the branch type is written**, which the
+    -- tagged transcription had no reason to do: untagged, `key` *is* the label
+    -- and the label holds `d`. The core asks for `B' (tg ⟨t,d⟩)`, and `key` is
+    -- that reduced — `t` tagged, `⟨t,d⟩` untagged.
+    let frame : Expr → (Expr → Expr → Expr → Expr → Expr → GenM Expr) → GenM Expr :=
       fun tag k => do
-        let bt ← wBAt ps tag
         withLocalDeclD `d (mkAppN (.const wDN us) (ps ++ #[tag])) fun d => do
+          let a := wLabel ps tag d
+          let key := if wTagged then tag else a
+          let bt ← wBAt ps key
           withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
             let ihT ← withLocalDeclD `b bt fun b =>
               mkForallFVars #[b] (mkApp motive (mkApp f b))
-            withLocalDeclD `ih ihT fun ih => k d f ih (wLabel ps tag d)
+            withLocalDeclD `ih ihT fun ih => k d f ih a key
     let motBody : Nat → Expr → GenM Expr := fun kk t =>
-      frame (natSuccs kk t) fun d f ih a =>
+      frame (natSuccs kk t) fun d f ih a _ =>
         mkForallFVars #[d, f, ih] (mkApp motive (wSup ps a f))
     let s ← withLocalDeclD `t wNatT fun t => do ilevel (← motBody 0 t)
     let motAt : Nat → GenM Expr := fun kk =>
@@ -2590,25 +2703,25 @@ data tower would have to hold a type the branch tower cannot see"
     let armAt : Nat → GenM Expr := fun kk => do
       let (nrs, rcs) ← wShapeOf kk
       let tag := natNumeral kk
-      frame tag fun d f ih a => do
+      frame tag fun d f ih a key => do
+        -- **The data tower's components come first**, because untagged they are
+        -- what the branch tower's own binder types are written in terms of —
+        -- `WType.mk`'s child is `β a → WType β` and the `a` here is `d.1`.
+        let projs ← wNrProjs ps kk d
         -- the children and their induction hypotheses, read off `f` and `ih`
         let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-          return mkApp f (← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 vs))
-        let disp ← wDispLam ps kk child
+          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 vs))
+        let disp ← wDispLam ps kk key projs child
         let tele ← instForall exportCtors[kk]!.2 ps
         let nf := numForalls tele
-        let (projs, kids, ihs) ← forallBoundedTelescope tele (some nf) fun fs _ => do
-          let nrv := nrs.map (fs[·]!)
-          let projs ← wTowerProjs w nrv 0 d #[]
-          let mut kids : Array Expr := #[]
-          let mut ihs : Array Expr := #[]
-          for r in [0:rcs.size] do
-            let (kd, ihv) ← forallTelescope (← ityp fs[rcs[r]!]!) fun zs _ => do
-              let bv ← wBranch ps tag (natNumeral r) (← wTowerMk w zs 0 zs)
-              return (← mkLambdaFVars zs (mkApp f bv), ← mkLambdaFVars zs (mkApp ih bv))
-            kids := kids.push kd
-            ihs := ihs.push ihv
-          return (projs, kids, ihs)
+        let mut kids : Array Expr := #[]
+        let mut ihs : Array Expr := #[]
+        for r in [0:rcs.size] do
+          let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
+            let bv ← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 zs)
+            return (← mkLambdaFVars zs (mkApp f bv), ← mkLambdaFVars zs (mkApp ih bv))
+          kids := kids.push kd
+          ihs := ihs.push ihv
         -- Lean's minor takes the fields in declaration order and then the
         -- hypotheses, which is what the two towers have to be re-interleaved
         -- into: the data tower's components and the branch tower's children
@@ -2626,13 +2739,13 @@ data tower would have to hold a type the branch tower cannot see"
         -- children**, which is `sup ⟨k, d⟩ dispatch` and not `sup ⟨k, d⟩ f`.
         -- The eta lemma is what closes that, and it is the one place this arm
         -- spends anything the tuple tower does not.
-        let h ← wEtaAt ps kk f
-        let αf := Expr.forallE `b (← wBAt ps tag) selfTy .default
+        let h ← wEtaAt ps kk key projs f
+        let αf := Expr.forallE `b (← wBAt ps key) selfTy .default
         mkLambdaFVars #[d, f, ih]
           (← transportAlong eqi v w αf disp f h base fun z => pure (mkApp motive (wSup ps a z)))
     let junkAt : Expr → GenM Expr := fun t => do
       let tag := natSuccs nc t
-      frame tag fun d f ih a => do
+      frame tag fun d f ih a _ => do
         mkLambdaFVars #[d, f, ih] (← emptyAtElim eqi v w (mkApp motive (wSup ps a f)) d)
     withLocalDeclD `a (wAAt ps) fun a => do
       let a1 := psigmaFst (.succ .zero) w wNatT (wDAt ps) a
@@ -3142,11 +3255,16 @@ the subsingleton rule that minted {ern} does not hold of it"
     -- ════ arm W: branching and infinitary, out of the spliced W core ════
     --
     -- `MODELGEN.md` §8.16, transcribed from
-    -- `scripts/inductive-basis/WEmitted.lean`. Six definitions, the
-    -- constructors, one `Nat.rec` cascade for `rec_0` and one `WT.Wrec_iota`
-    -- per rule. Everything below is at the *tag* scheme: `K = Nat`, junk
-    -- uninhabited in both directions, and both towers ending at exactly
-    -- `Sort w`.
+    -- `scripts/inductive-basis/WEmitted.lean` and — for the untagged
+    -- instantiation — `scripts/inductive-basis/WUntagged.lean`. Six
+    -- definitions, the constructors, one `Nat.rec` cascade for `rec_0` and one
+    -- `WT.Wrec_iota` per rule. Junk uninhabited in both directions and both
+    -- towers ending at exactly `Sort w`, at either instantiation.
+    --
+    -- **The two differ in four declarations and nowhere else** (§8.16.6):
+    -- `Tel`'s and `B'`'s domain (the tag, or the whole label), `tg` (the first
+    -- projection, or the identity) and `DecidableEq K`. `D` and `A` are
+    -- literally the same term.
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for n in [wDN, wTelN, wBN, wAN, wTgN, wFN] do taken n
 
@@ -3207,30 +3325,80 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     addChecked dD
     out := out.push dD
 
-    -- ── `Tel` — tag ↦ branch index ↦ that child's binder telescope ──
+    -- ── `A` — the label, tag paired with that constructor's data ──
+    -- **Emitted before `Tel` at the untagged instantiation**, because there
+    -- `Tel` and `B'` are indexed by the label rather than by the tag and would
+    -- name a constant that is not yet in the environment. At the tagged one it
+    -- keeps its old place, so nothing about that emission moves.
+    let aTyD ← withParams fun ps => mkForallFVars ps (.sort w)
+    let aVal ← withParams fun ps =>
+      mkLambdaFVars ps (psigmaT (.succ .zero) w wNatT (wDAt ps))
+    let dA := Declaration.defnDecl
+      { name := wAN, levelParams := lparams, type := aTyD, value := aVal
+        hints := ← hintsFor aVal, safety := .safe }
+    unless wTagged do
+      addChecked dA
+      out := out.push dA
+
+    -- ── `Tel` — the branch type's telescope, at a key and a branch index ──
     -- Two cascades, and the inner one is what `WGeneric.lean` has no analogue
     -- of: a branch index past a constructor's recursive-field count must be as
     -- empty as a tag past the constructor count, or `W` acquires children no
     -- constructor produces and the model is strictly bigger than the target.
+    --
+    -- **Untagged, the outer cascade's motive takes the data as an argument.**
+    -- That is `MODELGEN.md` §8.16.6's whole delta and the one thing the tag
+    -- scheme has no analogue of: the cascade is still on the tag — a `Nat`, so
+    -- still `Nat.rec` — but each arm receives that constructor's own `D t` and
+    -- projects the fields its children's binders mention out of it.
+    let telKey : Name := if wTagged then `t else `a
     let telTyD ← withParams fun ps => mkForallFVars ps
-      (.forallE `t wNatT (.forallE `j wNatT (.sort w) .default) .default)
+      (.forallE telKey (wKTy ps) (.forallE `j wNatT (.sort w) .default) .default)
     let telVal ← withParams fun ps =>
-      withLocalDeclD `t wNatT fun t => withLocalDeclD `j wNatT fun j => do
-        let arm : Nat → GenM Expr := fun k => do
-          natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
-            (wTelTy ps k) junkTy 0 j
-        mkLambdaFVars (ps ++ #[t, j])
-          (← natCascade (.succ w) nc (fun _ => pure unitMot) arm junkTy 0 t)
+      withLocalDeclD telKey (wKTy ps) fun a => withLocalDeclD `j wNatT fun j => do
+        if wTagged then
+          let arm : Nat → GenM Expr := fun k => do
+            natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
+              (wTelTy ps k #[]) junkTy 0 j
+          mkLambdaFVars (ps ++ #[a, j])
+            (← natCascade (.succ w) nc (fun _ => pure unitMot) arm junkTy 0 a)
+        else
+          let dAt : Expr → Expr := fun t => mkAppN (.const wDN us) (ps ++ #[t])
+          -- `fun t => D p⃗ (succ^kk t) → Nat → Sort w`, which lands in `Sort w+1`
+          -- exactly as the tagged motive does.
+          let motAt : Nat → GenM Expr := fun kk =>
+            withLocalDeclD `t wNatT fun t => mkLambdaFVars #[t]
+              (.forallE `d (dAt (natSuccs kk t))
+                (.forallE `j wNatT (.sort w) .default) .default)
+          let armAt : Nat → GenM Expr := fun k =>
+            withLocalDeclD `d (dAt (natNumeral k)) fun d =>
+              withLocalDeclD `jj wNatT fun jj => do
+                mkLambdaFVars #[d, jj]
+                  (← natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
+                    (wTelTy ps k (← wNrProjs ps k d)) junkTy 0 jj)
+          -- **The junk tag's arm is a constant and need not be empty**, which
+          -- `WUntagged.lean` measured: `A = Σ' t, D t` and `D`'s own junk arm
+          -- is already `PEmpty`, so `Tel` is never asked at a tag no
+          -- constructor has. It is written empty anyway; the requirement that
+          -- is load-bearing is the *branch index* one above, and that one is
+          -- `junkTy`.
+          let junkAt : Expr → GenM Expr := fun t =>
+            withLocalDeclD `d (dAt (natSuccs nc t)) fun d =>
+              withLocalDeclD `jj wNatT fun jj => mkLambdaFVars #[d, jj] (emptyAt w)
+          let a1 := psigmaFst (.succ .zero) w wNatT (wDAt ps) a
+          let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
+          mkLambdaFVars (ps ++ #[a, j])
+            (mkApp (mkApp (← natCascade (.succ w) nc motAt armAt junkAt 0 a1) a2) j)
     let dTel := Declaration.defnDecl
       { name := wTelN, levelParams := lparams, type := telTyD, value := telVal
         hints := ← hintsFor telVal, safety := .safe }
     addChecked dTel
     out := out.push dTel
 
-    -- ── `B'`, `A` and `tg` ──
+    -- ── `B'` and `tg` ──
     let bTyD ← withParams fun ps =>
-      mkForallFVars ps (.forallE `t wNatT (.sort w) .default)
-    let bVal ← withParams fun ps => withLocalDeclD `t wNatT fun t => do
+      mkForallFVars ps (.forallE telKey (wKTy ps) (.sort w) .default)
+    let bVal ← withParams fun ps => withLocalDeclD telKey (wKTy ps) fun t => do
       mkLambdaFVars (ps.push t) (← wBAt ps t)
     let dB := Declaration.defnDecl
       { name := wBN, levelParams := lparams, type := bTyD, value := bVal
@@ -3238,19 +3406,18 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     addChecked dB
     out := out.push dB
 
-    let aTyD ← withParams fun ps => mkForallFVars ps (.sort w)
-    let aVal ← withParams fun ps =>
-      mkLambdaFVars ps (psigmaT (.succ .zero) w wNatT (wDAt ps))
-    let dA := Declaration.defnDecl
-      { name := wAN, levelParams := lparams, type := aTyD, value := aVal
-        hints := ← hintsFor aVal, safety := .safe }
-    addChecked dA
-    out := out.push dA
+    if wTagged then
+      addChecked dA
+      out := out.push dA
 
+    -- `PSigma.fst` at the tag scheme and the identity at the label scheme —
+    -- `WFromPaths.lean` is `WTagged.lean` at `tg := id`, and this line is where
+    -- that reading is cashed.
     let tgTyD ← withParams fun ps =>
-      mkForallFVars ps (.forallE `a (wAAt ps) wNatT .default)
+      mkForallFVars ps (.forallE `a (wAAt ps) (wKTy ps) .default)
     let tgVal ← withParams fun ps => withLocalDeclD `a (wAAt ps) fun a => do
-      mkLambdaFVars (ps.push a) (psigmaFst (.succ .zero) w wNatT (wDAt ps) a)
+      mkLambdaFVars (ps.push a)
+        (if wTagged then psigmaFst (.succ .zero) w wNatT (wDAt ps) a else a)
     let dTg := Declaration.defnDecl
       { name := wTgN, levelParams := lparams, type := tgTyD, value := tgVal
         hints := ← hintsFor tgVal, safety := .safe }
@@ -3259,7 +3426,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
 
     -- ── the carrier ──
     let selfVal ← withParams fun ps => mkLambdaFVars ps
-      (mkAppN (.const wCoreSelf [uL]) #[wNatT, wAAt ps, wBFn ps, wTgAt ps])
+      (mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps])
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -3312,8 +3479,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let major := bs[bs.size - 1]!
-      mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v])
-        #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, bs[np]!,
+      mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v, wKL])
+        #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, bs[np]!,
           mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)), major])
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
@@ -3898,8 +4065,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         let proof ←
           if armW then do
             let (a, disp) ← wCtorParts ps j fields
-            pure (mkAppN (.const wCoreIota [uL, v])
-              #[wNatT, wAAt ps, wBFn ps, wDecEq, wTgAt ps, motive,
+            pure (mkAppN (.const wCoreIota [uL, v, wKL])
+              #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, motive,
                 mkAppN (.const wFN recLs) pre, a, disp])
           else if !armG then pure (eqi.refl' v α lhs) else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
