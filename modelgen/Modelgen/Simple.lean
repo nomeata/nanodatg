@@ -1142,13 +1142,19 @@ def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr))
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
-    (tagged : Bool := true) (typeU : Bool := true) : GenM (Option Nat) := do
-  -- **The W arm's bill, printed at the decline that names W.** `tagged` is
-  -- [`Modelgen.tagFactored`] for the whole declaration: yes and the tagged
-  -- construction models it at `[propext, Quot.sound]`, which is covered; no
-  -- and it needs the classical route, which spends `Classical.choice` and is
-  -- not certifiable. Two populations, so the census counts two numbers.
+    (tagged : Bool := true) (typeU : Bool := true) (labelled : Bool := true) :
+    GenM (Option Nat) := do
+  -- **The W arm's bill, printed at the decline that names W**, and it is two
+  -- questions since §8.16.7 because the arm runs the one core at two
+  -- instantiations. `labelled` is [`Modelgen.labelFactored`] and is the one
+  -- that decides *whether* W reaches the declaration; `tagged` is
+  -- [`Modelgen.tagFactored`] and decides only *what it costs* — yes and the
+  -- model is `[propext, Quot.sound]`, which is covered; no and it spends
+  -- `Classical.choice` on top. Two populations, so the census counts two
+  -- numbers, and a decline that reads `through the tag: no` alone is a model
+  -- rather than a gap.
   let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}\
+; through the label: {if labelled then "yes" else "no"}\
 ; carrier is Type u: {if typeU then "yes" else "no"}"
   let mut cur := tele
   let mut slot : Option Nat := none
@@ -2296,6 +2302,8 @@ a domain that is not recursive"
         domain to replace, and `why` says which this is); \
         erasure linear: no; B factors through the tag: \
         {if tagFactored tname np exportCtors then "yes" else "no"}\
+        ; through the label: \
+        {if labelFactored tname np exportCtors then "yes" else "no"}\
         ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}\
         ; why: {erasureWhy.getD "-"}"
     -- Recursion is carried by the tuple tower ([`Modelgen.recSlotOf`]), which
@@ -3577,8 +3585,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let slots : Array (Option Nat) ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
-        recSlotOf tname np cn (numForalls tele) tele (tagFactored tname np exportCtors)
-          w.normalize.dec.isSome
+        recSlotOf tname np cn (numForalls tele) tele wTagged
+          w.normalize.dec.isSome (labelFactored tname np exportCtors)
     let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
     let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
     -- **A recursive declaration with no base constructor**, which Lean accepts

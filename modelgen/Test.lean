@@ -457,11 +457,12 @@ def expectedPrim : List Row :=
   -- **The last two roots are why this row is worth re-reading rather than
   -- re-running.** `instDecidableEqNat` is the `DecidableEq Nat` the tagged
   -- instantiation needs and brought 11 declarations and **no** inductive;
-  -- `WT.decEqAll` is the untagged one's `DecidableEq A` (§8.16.6) and brought
-  -- 44 and **one**, `Nonempty`. That one is why this row is a row: had nobody
-  -- checked, the arm would be emitting an unmodelled inductive. This row is
-  -- what says the plan is sound — **every inductive the core reaches models**,
-  -- except the two that are the basis exemption.
+  -- `WT.decEqAll` is the untagged one's `DecidableEq A` (§8.16.6) and took the
+  -- export from 163 records to 208, of which exactly **one** is an inductive,
+  -- `Nonempty`. That one is why this row is a row: had nobody checked, the arm
+  -- would be emitting an unmodelled inductive. This row is what says the plan
+  -- is sound — **every inductive the core reaches models**, except the two
+  -- that are the basis exemption.
   --
   -- `Acc` is the interesting entry three times over. It is 12 declarations
   -- because it is arm G's graph route and this input has both the `Nonempty`
@@ -856,13 +857,16 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       cs := cs.push (ds.size > 100,
         s!"the W core splice added {ds.size} records, where the fragment parses to \
            {nFrag} and prim_carve supplies only its own Eq")
-      -- **The fifth root arrived and is visible.** The other four are the
-      -- construction; this one is the `DecidableEq Nat` the tag scheme needs
-      -- and that the other four's closure cannot reach, because all four take
-      -- the instance as a parameter.
-      cs := cs.push (((← getEnv).find? Modelgen.wCoreDecEqNat).isSome,
-        s!"{Modelgen.wCoreDecEqNat} is missing after the splice — the tag scheme \
-           has no decidable equality and every W target would have to prove one")
+      -- **The fifth and sixth roots arrived and are visible.** The other four
+      -- are the construction; these two are the `DecidableEq K` each
+      -- instantiation needs and that the other four's closure cannot reach,
+      -- because all four take the instance as a parameter —
+      -- `instDecidableEqNat` at `K := Nat` and `WT.decEqAll` at `K := A`
+      -- (`MODELGEN.md` §8.16.7).
+      for k in [Modelgen.wCoreDecEqNat, Modelgen.wCoreDecEqAll] do
+        cs := cs.push (((← getEnv).find? k).isSome,
+          s!"{k} is missing after the splice — one of the two instantiations has \
+             no decidable equality and every W target on it would have to prove one")
       for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
         cs := cs.push (((← getEnv).find? k).isSome,
           s!"{k} is not visible to Environment.find? after the splice")
@@ -881,17 +885,29 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       -- rename is one list and either mistake is one entry in it.
       for n in [Modelgen.wCoreRoot ++ `propext, Modelgen.wCoreRoot ++ `Quot.sound,
                 Modelgen.wCoreRoot ++ `Eq, Modelgen.wCoreRoot ++ `Iff,
-                Modelgen.wCoreRoot ++ `Nat, Modelgen.wCoreRoot ++ `Quot] do
+                Modelgen.wCoreRoot ++ `Nat, Modelgen.wCoreRoot ++ `Quot,
+                Modelgen.wCoreRoot ++ `Classical.choice,
+                Modelgen.wCoreRoot ++ `Nonempty] do
         cs := cs.push (((← getEnv).find? n).isNone,
-          s!"{n} exists — a shared name was renamed, and the six roots are shared \
-             for a reason `MODELGEN.md` §8.16 spells out")
-      for n in [`propext, `Quot.sound, `Eq, `Iff, `Nat, `Quot] do
+          s!"{n} exists — a shared name was renamed, and the eight roots are shared \
+             for a reason `MODELGEN.md` §8.16 and §8.16.7 spell out")
+      for n in [`propext, `Quot.sound, `Eq, `Iff, `Nat, `Quot,
+                `Classical.choice, `Nonempty] do
         cs := cs.push (((← getEnv).find? n).isSome, s!"{n} is missing after the splice")
-      -- The statement of the axiom the whole exclusion list is about.
+      -- The statements of the two axioms the whole exclusion list is about.
+      -- `propext`'s must be at Lean's `Eq` and `Iff`, and `Classical.choice`'s
+      -- at Lean's `Nonempty` — the name is what `mini/src/axiom.rs` keys the
+      -- clause on, so a trusted name carrying a `_wcore` statement is worse
+      -- than a decline (§8.16.7).
       if let some ci := (← getEnv).find? `propext then
         let us := ci.type.getUsedConstants
         cs := cs.push (us.contains `Eq && us.contains `Iff,
           s!"propext's statement mentions {us} — it must be Lean's, at Lean's Eq and Iff")
+      if let some ci := (← getEnv).find? `Classical.choice then
+        let us := ci.type.getUsedConstants
+        cs := cs.push (us.contains `Nonempty,
+          s!"Classical.choice's statement mentions {us} — it must be Lean's, at \
+             Lean's Nonempty")
     return cs
   let (cs, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)
     { fileName := "<test>", fileMap := default } { env }

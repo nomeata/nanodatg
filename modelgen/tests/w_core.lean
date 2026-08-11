@@ -1,17 +1,34 @@
-/- The tagged W core, as a module, so that `lean4export` can emit it and
-`modelgen` can splice it. `--#export` lists the five roots and the exporter
-takes their transitive closure — which is what makes this a fragment of ~200
-declarations rather than the whole of `Init`.
+/- The W core, as a module, so that `lean4export` can emit it and `modelgen`
+can splice it. `--#export` lists the six roots and the exporter takes their
+transitive closure — which is what makes this a fragment of ~250 declarations
+rather than the whole of `Init`.
 
-The fifth root is not part of the construction: `instDecidableEqNat` is the
-`DecidableEq K` instance the generator needs at `K := Nat`, and **the closure of
-the other four cannot reach it**, because all four take the instance as a
-*parameter*. `scripts/inductive-basis/WGeneric.lean` settles why `K := Nat` is
-the tag type — `Nat` is already shared with the input by the splice, so it
-costs no new fragment inductive — and this line is the one thing that scheme
-asks the fragment to gain. Without it a generator would have to mint an
-enumeration inductive per declaration and prove its decidable equality, which
-`Iso.requires` would then oblige the run to model in turn. -/
+**One construction, two instantiations.** The core below is generic in `K`,
+`B' : K → Type u` and `tg : A → K`, and `MODELGEN.md` §8.16.6 is the finding
+that the tagged and untagged W are that one core at `K := Nat, tg := PSigma.fst`
+and at `K := A, tg := id`. `K : Type w` and not `K : Type` for exactly that
+reason, and widening it cost no proof change at all: `Edge`, `PTree` and `W`
+land at `Type (max w u)`, which normalises to `Type u` at `w := 0` and at
+`w := u` alike.
+
+**The last two roots are not part of the construction**; they are the
+`DecidableEq K` each instantiation needs, and **the closure of the other four
+cannot reach either**, because all four take the instance as a *parameter*.
+
+* `instDecidableEqNat` is the tagged one's. `WGeneric.lean` settles why
+  `K := Nat` is the tag type — `Nat` is already shared with the input by the
+  splice, so it costs no new fragment inductive. Without this root a generator
+  would have to mint an enumeration inductive per declaration and prove its
+  decidable equality, which `Iso.requires` would then oblige the run to model.
+* `WT.decEqAll` is the untagged one's, and it is `Classical.propDecidable`. It
+  takes the export from 163 records to 208 — **45 more**, of which exactly one
+  is an inductive (`Nonempty`) and one an axiom (`Classical.choice`). Those two
+  are why `Test.lean`'s `w_core` row asserts that `Nonempty` models, and why
+  `Modelgen.wCoreShared` gained both names beside `propext` and `Iff`.
+
+Both are exported, and which a target takes is `Modelgen.tagFactored`'s answer:
+the tagged column stays at `[propext, Quot.sound]` and only a declaration that
+*needs* the untagged instantiation pays `Classical.choice`. -/
 
 --#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat WT.decEqAll
 

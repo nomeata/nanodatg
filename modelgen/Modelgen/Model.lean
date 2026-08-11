@@ -2186,8 +2186,8 @@ already declares one is a kernel rejection; prefixing makes the core
 self-contained and costs only duplicates. -/
 def wCoreRoot : Name := `_wcore
 
-/-- **The twelve names the fragment shares with the input under Lean's own —
-and the list is exactly these because of what the two axioms' statements
+/-- **The twenty names the fragment shares with the input under Lean's own —
+and the list is exactly these because of what the three axioms' statements
 mention.**
 
 `MODELGEN.md` §8.16 sized this list at six: the four quotient names, which the

@@ -99,7 +99,7 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
       for d in ds do n := n + d.getNames.length
       IO.println s!"W splice: {n} constants, all through addChecked"
       for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota,
-                Modelgen.wCoreDecEqNat] do
+                Modelgen.wCoreDecEqNat, Modelgen.wCoreDecEqAll] do
         IO.println s!"  {k}: {if ((← getEnv).find? k).isSome then "present" else "MISSING"}"
     | .error e => IO.println s!"W splice DECLINED: {e.label}"
   discard <| Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)

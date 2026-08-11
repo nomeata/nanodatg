@@ -4622,12 +4622,21 @@ errors, 0 warnings, 15 `#print axioms` and an asserted dependency closure.
 
 This matters more than an axiom count usually would, because the three axioms
 are no longer interchangeable. `propext` was certified; `Quot.sound` is
-covered; **`Classical.choice` has been refuted** as a term of the checker's
+covered; **`Classical.choice` had been refuted** as a term of the checker's
 language — a choice function is never unique, `define` requires `∃!`, so the
 choice function is carried as a free variable under a hypothesis, every theorem
 through it stays hypothetical, and `Sealed` refuses hypothetical theorems.
-A model that spends it is modelled and **not certifiable, indefinitely**. So
-the bill is the difference between a model and a certificate, and
+A model that spent it was modelled and not certifiable.
+
+**That ceiling is gone and this paragraph is the historical reading.**
+`derived/src/choice/epsilon.rs` (rule 7) stands on `kernel`'s 0-ary Henkin
+constant and took `waiting:axiom(Classical.choice)` on
+`mini/tests/fixtures/standard_axioms.lean` from 4 to 0 — so all three axioms
+are covered, the choice question is a *cost* question rather than a
+certifiability one, and §8.16.6 is where the untagged construction the rest of
+this section declines is taken up again. What stands unchanged below is the
+reason to prefer the tagged construction wherever it reaches: it spends less.
+So the bill was the difference between a model and a certificate, and
 
 > a W model at `[propext, Quot.sound]` is both.
 
@@ -4887,8 +4896,10 @@ for the checked replay from empty, +3.5 %).
   against the file on disk byte for byte. That one check is the only thing
   between a fragment change and a silently stale tool, and every other check in
   that function passes on a stale one.
-* **Everything gets a `_wcore` prefix except sixteen names under four roots,
-  and the list above six of them was got wrong at the sizing.** The fragment's
+* **Everything gets a `_wcore` prefix except twenty names under six roots, and
+  the list above six of them was got wrong at the sizing.** (Sixteen under four
+  until §8.16.7 added `Classical.choice` and `Nonempty`, by the same argument.)
+  The fragment's
   names are Lean core's, so splicing `List` into an input that already declares
   one is a kernel rejection; prefixing makes the core self-contained and costs
   only duplicates.
@@ -5808,24 +5819,28 @@ a **different position in the file** is precisely the kind of change that check
 cannot see, and only a replay from nothing can. A deferred model that landed
 before something it uses would be a `unknown constant` here and is not.
 
-**The 9, in full** — the standing residue of the third construction on Mathlib,
-every one classified:
+**The 9, in full** — the residue of the third construction on Mathlib *at this
+commit*, every one classified. §8.16.7 is where three of them stop being
+declines and the row below that names four is corrected to three:
 
 | what | count | which |
 |---|---|---|
-| **not tag-factored** — the true W-types | 4 | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
+| **not tag-factored** — the true W-types | 3 | `WType`, `PSet`, `FirstOrder.Language.Term` |
+| **infinitary and indexed** — arm C's erasure guard, not `tagFactored`'s | 1 | `PFunctor.Approx.CofixA` |
 | basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
 | singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
-Three classes, and **two of them are closed by definition**: the basis
+Four classes, and **two of them are closed by definition**: the basis
 exemption is what makes the construction well-founded and must stay unmodelled,
 and the two singleton boundaries are arm G's and arm F's own limits — an index
 that is not one of the constructor's data fields, and index expressions that
 mention the constructor's own fields. So the *whole* remaining question about
-this construction's reach on Mathlib is **one class of four declarations**, and
-it is not a coverage question but a certifiability one: W with a `B` that can
-see the label's data is `WFromPaths.lean`, which costs `Classical.choice` on
-every constant, and §8.16 took the tagged construction over it deliberately.
+this construction's reach on Mathlib is **two classes of four declarations
+between them**: three whose `B` needs to see the label's data, which is
+`WFromPaths.lean` and costs `Classical.choice` on every constant — §8.16 took
+the tagged construction over it deliberately, §8.16.6 found the two are one
+construction and §8.16.7 landed it — and one that is indexed and infinitary,
+which no arm reaches at all.
 
 ### 8.16.6 Stage 1 of the untagged arm — the two constructions are one
 
@@ -5950,3 +5965,128 @@ Stage 1 is done; stage 2 is the transcription, and it is bounded:
    stays choice-free.
 4. **`envprobe … C` on the emitted file**, as §8.16.5 needed it: the untagged
    arm splices and defers, and `addChecked` cannot see output position.
+
+### 8.16.7 The untagged arm, generated — stage 2
+
+**Verdict: arm W now runs the one core at both instantiations, and the three
+declines that were `tagFactored`'s are models.** The four steps above are done
+and the estimate held: the guard, four declarations of the six, and one new
+shape. [`Modelgen.labelFactored`] is the arm's guard and
+[`Modelgen.tagFactored`] picks the bill.
+
+Three and not four: §8.16.5's census row groups `PFunctor.Approx.CofixA` with
+the W-types, and §8.16.6 is where that was corrected — it is *indexed* and
+declines at arm C's erasure guard, before `tagFactored` is asked. Nothing here
+touches it.
+
+#### Where the two instantiations differ, in full
+
+`D` and `A` are literally the same term at both, and so are the constructors,
+`wF`, `rec_0` and every ι rule up to which constants they name. What differs:
+
+| | `K := Nat`, `tg := PSigma.fst` | `K := A`, `tg := id` |
+|---|---|---|
+| `T._model.wTel` | `∀ p⃗, Nat → Nat → Sort w` | `∀ p⃗, A p⃗ → Nat → Sort w` |
+| `T._model.wB` | `∀ p⃗, Nat → Sort w` | `∀ p⃗, A p⃗ → Sort w` |
+| `T._model.wtg` | `PSigma.fst` | the identity |
+| `DecidableEq K` | `instDecidableEqNat` | `WT.decEqAll (A p⃗)` |
+| the core's level lists | `…, 0` | `…, u` |
+| the ι rules' axioms | `[propext, Quot.sound]` | `+ Classical.choice` |
+
+**The one new shape is `Tel`'s outer cascade**, and it is stage 1's: the
+cascade is still a `Nat.rec` on the tag — the tag is still a `Nat`, and `A` is
+still `Σ' t : Nat, D t` — but its motive is `fun t => D p⃗ t → Nat → Sort w`, so
+each arm receives that constructor's own data and projects out the fields its
+children's binders mention. In the generator that is
+[`Modelgen.primIso`]'s `wRecDom`: constructor `k`'s recursive field `r` with
+its non-recursive fields replaced by whatever the caller has in their place —
+the fields themselves inside a constructor's own body, the label's projections
+inside `F`. **It is the identity wherever `tagFactored` holds**, because there
+the domain mentions no field at all — so every term the tagged path builds is
+the term it built before, and the conditional on `A`'s position keeps the
+declaration order too. That is an argument and not a measurement: what *is*
+measured is that the tagged targets' statements and recursors still compare
+clean (`prim_w`: 72 statements, 10 recursors, 0 differing) and that their
+`#print axioms` is still `[propext, Quot.sound]`.
+
+`A` is emitted before `Tel` at the untagged instantiation and after `B'` at the
+tagged one, which is the only other thing that moves: untagged, `Tel` and `B'`
+name `A` in their own types.
+
+#### The guard, and a boundary that cannot be written down
+
+`labelFactored` is `tagFactored` weakened to refuse only a recursive field's
+binder mentioning an earlier **recursive** field — the label carries the
+constructor's data but no children, so that is the one thing `Tel` cannot read.
+
+**No fixture refuses it, and the reason is worth recording rather than
+papering over.** The shape is not writable in Lean source: a genuinely
+dependent `(Fam x → T)` needs `Fam : T → Type` before `T`, and the degenerate
+`((fun _ : T => P) x → T)` is beta-reduced by the elaborator to `(P → T)`
+before it reaches the export — measured, not assumed. What can carry it is an
+input that already holds a redex, which is §5.1's class (`nest_fam_arg`'s `Key`
+and `Zeta`), so the guard is not dead code; it is a precondition with no
+Lean-writable counterexample. And it is not load-bearing for soundness either:
+the mutation that removes the substitution `wRecDom` performs is a kernel
+*rejection* — `declaration has free variables` — at `wTel`, so a generator that
+ignored the precondition declines rather than emits.
+
+Like `tagFactored`, it reads a field's own head through
+[`Modelgen.headNorm`] but not its binders' — a binder type that mentions an
+earlier field only inside a redex is refused. That is conservative in the safe
+direction: a decline, never a model.
+
+#### The mutations, measured against the generator
+
+`tests/prim_w.lean` gained `Wty` — `WType` itself, at a parameter family and a
+level parameter, which is what the corpus actually declined — and `Utd`, whose
+`mk` has **two** children whose binders read **different** fields of one label
+and whose `gap` has data on both sides of a label-dependent child. `Bad`, which
+was this file's one decline, is the third.
+
+| mutation | caught at |
+|---|---|
+| the branch tower stops reading the label's data | `wTel`, at all three |
+| it reads the data, but always field 0 | `ctor_1`, at **`Utd` alone** |
+| the key's label collapsed onto tag 0 | `ctor_1` (`Bad`, `Utd`) |
+| `Tel`'s junk **branch index** inhabited | `ctor_0`, at every W target |
+| `F`'s frame keeps the tagged key | `wF`, at all three |
+| `Tel`'s junk **tag** inhabited | **green** |
+
+**The second row is why `Utd` exists.** `Bad` and `Wty` have one non-recursive
+field each, and a dispatch that reads every child's tower out of field 0 is
+*right* when there is only one field to read: both stay green under that
+mutation and only `Utd`, whose two children read `k` and `j`, goes red. A
+fixture with one datum cannot pin *which* datum is read.
+
+**The last row is stage 1's green and must stay green.** A label at a junk tag
+is already impossible — `A = Σ' t, D t` and `D`'s junk arm is empty — so `Tel`
+is never asked at a tag no constructor has. §8.16.2's "junk uninhabited in both
+directions" is one requirement on `D` and one on `Tel`, and only the
+**branch-index** half of `Tel`'s is a requirement at all.
+
+The *consistent* tag collapse — §8.16.2's last row, the one mutation with no
+type error behind it — is not re-measured here and does not need to be: the tag
+assignment, the cascade arity and the ι rule are the same generator code at
+both instantiations, and the untagged analogue of a *partial* collapse is row
+three above.
+
+#### Two things the fragment change cost, neither of them free
+
+**`Classical.choice` and `Nonempty` are now shared names.** §8.16's sizing of
+`wCoreShared` at six, corrected to sixteen when `Eq` and `Iff` went on it, is
+the argument again one level down: `mini/src/axiom.rs`'s `clause_for` selects
+the choice clause by the exact name `Classical.choice`, so a `_wcore` copy is a
+non-standard axiom and is declined downstream — and its *statement* is
+`∀ {α : Sort u}, Nonempty α → α`, so a `Classical.choice` under Lean's name
+whose antecedent is `_wcore.Nonempty` is worse than a decline. Twenty names.
+
+**And that made a late primitive of `Nonempty`.** `w_core.ndjson`'s own `Acc`
+arrives through `WellFounded.fix`; its `Nonempty` arrives only through
+`Classical.propDecidable`, which is later. Arm G's model of `Acc` therefore lost
+to `prim model name taken (Nonempty)` — §8.16.5's class exactly, a primitive
+that is late rather than a name that is lost. `fxNames` is now
+[`Modelgen.lateSpliceNames`] and carries the choice names beside the quotient's;
+the wait fires only for a model that has *already declined* at one of them, so
+no model that does not touch them moves. `Test.lean`'s `w_core` row is where the
+difference shows: `Acc` is last in the list rather than in the middle.
