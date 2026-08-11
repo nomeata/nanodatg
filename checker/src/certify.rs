@@ -263,7 +263,16 @@ pub trait Certifier<'t, 'p> {
     /// label of the reduction. Deleting the fall-through made those twenty
     /// visible; this method is where they are supposed to be answered.
     ///
-    /// ## What the premises are, and why they are these
+    /// ## Subject reduction evidence
+    ///
+    /// `reduced_subject` is the subject constructor exposed by the checker's
+    /// own whnf pass together with that pass's certificate. It is handed over,
+    /// never recomputed by the backend. `wants_proj_red_subject` is the cheap
+    /// readiness query which keeps recording from exposing a trace to a backend
+    /// that cannot consume it; its default is false, so other backends retain
+    /// the old cost and behaviour.
+    ///
+    /// ## What the proof premises are, and why they are these
     ///
     /// A backend that interpreted structures would want the constructor's own
     /// computation rule and would need none of the parameters below. This one
@@ -292,15 +301,25 @@ pub trait Certifier<'t, 'p> {
     /// The default delegates to [`Certifier::admit`] under `proj_reduce`, so a
     /// backend with nothing to say reports the gap it always reported, under the
     /// name of the reduction rather than the name of the site that noticed.
+    fn wants_proj_red_subject(
+        &mut self,
+        _ctx: &mut TcCtx<'t, 'p>,
+        _ty_name: crate::util::NamePtr<'t>,
+        _reduced_subject: ExprPtr<'t>,
+    ) -> bool {
+        false
+    }
+
     fn proj_red(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
         reduct: ExprPtr<'t>,
+        reduced_subject: Option<(ExprPtr<'t>, Self::Cert)>,
         redex_proof: Option<crate::tc::Proof<'t, Self::Typing>>,
         reduct_proof: Option<crate::tc::Proof<'t, Self::Typing>>,
     ) -> Self::Cert {
-        let _ = (redex_proof, reduct_proof);
+        let _ = (reduced_subject, redex_proof, reduct_proof);
         self.admit(ctx, redex, reduct, Admit::ProjRed.name())
     }
 

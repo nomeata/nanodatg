@@ -28,6 +28,13 @@ struct MajorStep<'t, C> {
     trace: TracePtr<'t, C>,
 }
 
+/// The field selected by a projection reduction and, when the subject moved,
+/// the exact whnf trace which exposed its constructor.
+struct ProjectionStep<'t, C> {
+    field: ExprPtr<'t>,
+    subject: TracePtr<'t, C>,
+}
+
 impl<'t, C> MajorStep<'t, C> {
     /// The redex with the major premise replaced by what it reduced to.
     ///
@@ -725,17 +732,79 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         out
     }
 
-    fn reduce_proj(&mut self, idx: usize, structure: ExprPtr<'t>, cheap: bool) -> Option<ExprPtr<'t>> {
-        let mut structure = if cheap { self.whnf_no_unfolding_cheap_proj(structure) } else { self.whnf(structure) };
-        if let StringLit { ptr, .. } = self.ctx.read_expr(structure) {
+    fn reduce_proj(
+        &mut self,
+        ty_name: NamePtr<'t>,
+        idx: usize,
+        structure: ExprPtr<'t>,
+        cheap: bool,
+    ) -> Option<ProjectionStep<'t, Cert<'t, 'p>>> {
+        let (mut reduced, trace) = if cheap {
+            self.whnf_no_unfolding_reduce(structure, true)
+        } else {
+            self.whnf_reduce(structure)
+        };
+        let after_whnf = reduced;
+        if let StringLit { ptr, .. } = self.ctx.read_expr(reduced) {
             if let Some(s) = self.str_lit_to_ctor_reducing(ptr) {
-                structure = s;
+                reduced = s;
             }
         }
-        let (_, name, _, args) = self.ctx.unfold_const_apps(structure)?;
+        let (_, name, _, args) = self.ctx.unfold_const_apps(reduced)?;
         let ConstructorData { num_params, .. } = self.env.get_constructor(&name)?;
         let i = (*num_params as usize) + idx;
-        Some(args.get(i).copied().unwrap())
+        let field = args.get(i).copied().unwrap();
+        // The string-literal rescue is not traced, so it cannot license a
+        // claim about the rescued constructor. Preserve the old projection
+        // rule in that case. Ordinary subject reduction records its exact
+        // trace; the readiness gate below decides whether exposing every rule
+        // in it is non-increasing for the active backend.
+        let subject = if reduced == after_whnf
+            && self.certifier.wants_proj_red_subject(self.ctx, ty_name, reduced)
+            && self.projection_subject_ready(&trace)
+        {
+            trace
+        } else {
+            None
+        };
+        Some(ProjectionStep { field, subject })
+    }
+
+    /// Whether exposing this trace to projection certification can avoid
+    /// asking an independently unsupported rule.
+    ///
+    /// Delta/beta/zeta/sort are the established reduction rules. A nested
+    /// projection is admitted only when *its own* structure has authoritative
+    /// mini evidence. Iota stays behind the gate: exposing the unsupported
+    /// structural-recursion trace in `proj_reduced_carrier` adds 28 gaps before
+    /// the outer projection can decline. Once that iota family certifies, this
+    /// is the single gate to widen.
+    fn projection_subject_ready(&mut self, trace: &TracePtr<'t, Cert<'t, 'p>>) -> bool {
+        let Some(trace) = trace else { return true };
+        match &trace.node {
+            Node::One(Rule::Beta | Rule::Zeta | Rule::Delta | Rule::Sort) => true,
+            Node::One(Rule::ProjRed) => {
+                let (head, _) = self.ctx.unfold_apps(trace.from);
+                let Expr::Proj { ty_name, structure, .. } = self.ctx.read_expr(head) else {
+                    return false
+                };
+                self.certifier.wants_proj_red_subject(self.ctx, ty_name, structure)
+            }
+            Node::One(Rule::Iota | Rule::Admitted(_)) => false,
+            Node::Seq(l, r) => {
+                self.projection_subject_ready(&Some(l.clone()))
+                    && self.projection_subject_ready(&Some(r.clone()))
+            }
+            Node::Cong(sub) => self.projection_subject_ready(&Some(sub.clone())),
+            Node::ProjRed(sub) => {
+                let (head, _) = self.ctx.unfold_apps(trace.from);
+                let Expr::Proj { ty_name, .. } = self.ctx.read_expr(head) else {
+                    return false
+                };
+                self.certifier.wants_proj_red_subject(self.ctx, ty_name, sub.to)
+                    && self.projection_subject_ready(&Some(sub.clone()))
+            }
+        }
     }
 
     pub(crate) fn infer_then_whnf(&mut self, e: ExprPtr<'t>, flag: InferFlag, site: Dropped) -> ExprPtr<'t> {
@@ -1457,6 +1526,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let sub = sub.clone();
                 self.cong_cert(t.from, t.to, &sub)
             }
+            Node::ProjRed(sub) => {
+                let sub = sub.clone();
+                self.proj_red_step(t.from, t.to, Some(&sub))
+            }
         }
     }
 
@@ -1557,7 +1630,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             // to say about iota inherit `Certifier::iota`'s default, which
             // admits.
             Rule::Iota => self.iota_step(a, b),
-            Rule::ProjRed => self.proj_red_step(a, b),
+            Rule::ProjRed => self.proj_red_step(a, b, None),
             Rule::Admitted(site) => self.admit(a, b, site),
         }
     }
@@ -1683,10 +1756,6 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 return (whnfd, acc)
             }
         }
-    }
-
-    fn whnf_no_unfolding_cheap_proj(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
-        self.whnf_no_unfolding_reduce(e, true).0
     }
 
     pub fn whnf_no_unfolding(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
@@ -1834,17 +1903,26 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
         let (e_fun, args) = self.ctx.unfold_apps(e);
         let (should_cache, eprime, trace) = match self.ctx.read_expr(e_fun) {
-            Proj { idx, structure, .. } =>
-                if let Some(field) = self.reduce_proj(idx, structure, cheap_proj) {
+            Proj { ty_name, idx, structure, .. } =>
+                if let Some(proj) = self.reduce_proj(ty_name, idx, structure, cheap_proj) {
                     crate::stepcount::bump(crate::stepcount::Kind::Proj);
-                    let e1 = self.ctx.foldl_apps(field, args.into_iter());
+                    let carry_subject = args.is_empty();
+                    let e1 = self.ctx.foldl_apps(proj.field, args.into_iter());
                     // A backend rule, not an admission: `Certifier::proj_red` is
                     // asked, and reports its own gap when it cannot answer. The
                     // premises it may want are gathered in `proj_red_step`, at
                     // certification time — not here, where most callers want the
                     // reduct and nothing else and inferring both endpoints would
                     // be work no conclusion rests on.
-                    let step = reduct::one(Rule::ProjRed, e, e1);
+                    // TG's computation package concludes the projection
+                    // itself. A projection subsequently applied to arguments
+                    // needs an additional application-congruence leg; until
+                    // that leg is recorded, keep the old whole-step rule.
+                    let step = if carry_subject && proj.subject.is_some() {
+                        reduct::proj_red(e, e1, proj.subject)
+                    } else {
+                        reduct::one(Rule::ProjRed, e, e1)
+                    };
                     let (r, rest) = self.whnf_no_unfolding_reduce(e1, cheap_proj);
                     (true, r, reduct::then(step, rest))
                 } else {
@@ -2273,11 +2351,31 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// `has_type_a` route, which is the banned one. It is also strictly more
     /// informative: `syn_type` is a delta-only transcription of inference, so
     /// where it gives up inference does not.
-    fn proj_red_step(&mut self, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> DefEq<'t, 'p> {
+    fn proj_red_step(
+        &mut self,
+        redex: ExprPtr<'t>,
+        reduct: ExprPtr<'t>,
+        subject: Option<&Rc<Trace<'t, Cert<'t, 'p>>>>,
+    ) -> DefEq<'t, 'p> {
+        let reduced_subject = if let Some(subject) = subject {
+            let (head, _) = self.ctx.unfold_apps(redex);
+            let Expr::Proj { structure, .. } = self.ctx.read_expr(head) else {
+                return self.admit(redex, reduct, Admit::Whnf)
+            };
+            if structure != subject.from || structure == subject.to {
+                return self.admit(redex, reduct, Admit::Whnf)
+            }
+            let Some(cert) = self.trace_cert(subject) else {
+                return self.admit(redex, reduct, Admit::Whnf)
+            };
+            Some((subject.to, cert))
+        } else {
+            None
+        };
         let l = self.proof_witness(redex, PropAt::Sigma);
         let r = self.proof_witness(reduct, PropAt::Sigma);
         crate::certify::bump_certified();
-        Some(self.certifier.proj_red(self.ctx, redex, reduct, l, r))
+        Some(self.certifier.proj_red(self.ctx, redex, reduct, reduced_subject, l, r))
     }
 
     /// Decide whether `x` and `y` are definitionally equal, returning a

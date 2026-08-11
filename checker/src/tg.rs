@@ -2176,6 +2176,14 @@ impl EnvCore {
         true
     }
 
+    /// Whether mini published a translation at this exact joint key. Unlike
+    /// [`Self::projection_evidence`], this is a pure readiness query: reduction
+    /// recording must not eagerly build the expensive projection package when
+    /// no caller may ever ask for its certificate.
+    fn has_projection_translation(&self, key: &crate::const_store::ConstKey) -> bool {
+        self.projections.borrow().translated.contains_key(key)
+    }
+
     /// The field count of a mini-published class-(T) structure, independent of
     /// ground level instantiation. The tuple projection operator is the shared
     /// machine's at every level; this lookup therefore decides the
@@ -13553,18 +13561,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Ok((acc, terms, cur))
     }
 
-    /// Consume mini's constructor projection computation rule for a direct
-    /// constructor redex. Subject reductions are deliberately outside this
-    /// first tranche: the checker currently hands `proj_red` only the two
-    /// endpoints, not the certificate for the subject's own whnf trace.
-    fn derive_direct_projection(
+    /// Consume mini's constructor projection computation rule, optionally
+    /// after the checker's certified subject reduction. The latter is the
+    /// authoritative whnf trace handed through `Certifier::proj_red`; this
+    /// method performs no Lean reduction and never re-enters the checker.
+    fn derive_projection_computation(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
         reduct: ExprPtr<'t>,
+        reduced_subject: Option<(ExprPtr<'t>, CondEq)>,
     ) -> Result<CondEq, &'static str> {
-        let Expr::Proj { ty_name, idx, structure, .. } = ctx.read_expr(redex) else {
+        let Expr::Proj { ty_name, idx, structure: original, .. } = ctx.read_expr(redex) else {
             return Err("projection: the redex is not a projection")
+        };
+        let (structure, subject_leg) = match reduced_subject {
+            Some((reduced, leg)) => {
+                let want = (self.interp(ctx, original), self.interp(ctx, reduced));
+                if !leg.proves(&want.0, &want.1) {
+                    return Err("projection: the subject certificate has the wrong endpoints")
+                }
+                (reduced, Some(leg))
+            }
+            None => (original, None),
         };
         let (head, _) = ctx.unfold_apps(structure);
         let Expr::Const { name: ctor_name, levels, .. } = ctx.read_expr(head) else {
@@ -13591,9 +13610,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if abbrev.as_eq().map(|(a, _)| a) != Some(bottom) {
             return Err("projection: the constructor abbreviation is about another bottom")
         }
-        let structure_eq = self
+        let direct_structure_eq = self
             .ceq_trans(&spine, &abbrev)
             .ok_or("projection: chaining the constructor abbreviation failed")?;
+        let structure_eq = match subject_leg {
+            Some(leg) => self
+                .ceq_trans(&leg, &direct_structure_eq)
+                .ok_or("projection: chaining the subject reduction failed")?,
+            None => direct_structure_eq,
+        };
 
         let mach = self.machine().ok_or("projection: the shared machine is unavailable")?;
         let m = mach.borrow();
@@ -19649,11 +19674,24 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// — the reduction's own name. This method is the site that noticed *and*
     /// the site that is at fault, which is the property `admit`'s deleted
     /// fall-through did not have.
+    fn wants_proj_red_subject(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty_name: NamePtr<'t>,
+        reduced_subject: ExprPtr<'t>,
+    ) -> bool {
+        let (head, _) = ctx.unfold_apps(reduced_subject);
+        let Expr::Const { levels, .. } = ctx.read_expr(head) else { return false };
+        self.const_key(ctx, ty_name, levels)
+            .is_some_and(|key| self.core.has_projection_translation(&key))
+    }
+
     fn proj_red(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
         reduct: ExprPtr<'t>,
+        reduced_subject: Option<(ExprPtr<'t>, TgCert)>,
         redex_proof: Option<crate::tc::Proof<'t, TgTyping>>,
         reduct_proof: Option<crate::tc::Proof<'t, TgTyping>>,
     ) -> TgCert {
@@ -19674,7 +19712,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // a direct constructor redex, consume the computation theorem retained
         // in that declaration's shared projection package. No acceptance
         // check, fallback checker, or parallel TG carrier is involved.
-        if let Ok(out) = self.derive_direct_projection(ctx, redex, reduct) {
+        let reduced_subject = reduced_subject.and_then(|(subject, cert)| {
+            self.consume(&cert).map(|cert| (subject, cert))
+        });
+        if let Ok(out) = self.derive_projection_computation(ctx, redex, reduct, reduced_subject) {
             return self.cert(ctx, out)
         }
         #[cfg(feature = "stepcount")]

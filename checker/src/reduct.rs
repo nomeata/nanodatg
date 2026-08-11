@@ -141,6 +141,17 @@ pub(crate) enum Node<'t, C> {
     /// that the endpoints really are one spine differing only at the inner
     /// reduction's own endpoints before it builds anything.
     Cong(Rc<Trace<'t, C>>),
+    /// A projection computation whose subject had to reduce before the
+    /// constructor became visible. The inner trace is exactly that subject
+    /// reduction; the outer node remains the single projection step from the
+    /// original redex to its field.
+    ///
+    /// Keeping the trace here (rather than asking `proj_red` to normalise the
+    /// subject again) preserves the memo's "reduce once, certify on demand"
+    /// contract. [`crate::tc::TypeChecker::trace_cert`] checks that `sub.from`
+    /// really is the redex's subject before handing its certificate to the
+    /// backend.
+    ProjRed(Rc<Trace<'t, C>>),
 }
 
 /// A reduction, where `None` means the empty one.
@@ -193,6 +204,7 @@ pub(crate) fn fully_ruled<'t, C>(t: &TracePtr<'t, C>) -> bool {
                 fully_ruled(&Some(l.clone())) && fully_ruled(&Some(r.clone()))
             }
             Node::Cong(sub) => fully_ruled(&Some(sub.clone())),
+            Node::ProjRed(sub) => fully_ruled(&Some(sub.clone())),
         },
     }
 }
@@ -208,6 +220,24 @@ pub(crate) fn cong<'t, C>(
 ) -> TracePtr<'t, C> {
     let sub = sub?;
     Some(Rc::new(Trace { from, to, node: Node::Cong(sub), cert: RefCell::new(None) }))
+}
+
+/// A projection reduction carrying the reduction of its subject.
+///
+/// `subject` must be non-empty: an already-direct constructor projection is
+/// represented by the ordinary `One(Rule::ProjRed)` node.
+pub(crate) fn proj_red<'t, C>(
+    from: ExprPtr<'t>,
+    to: ExprPtr<'t>,
+    subject: TracePtr<'t, C>,
+) -> TracePtr<'t, C> {
+    let subject = subject?;
+    Some(Rc::new(Trace {
+        from,
+        to,
+        node: Node::ProjRed(subject),
+        cert: RefCell::new(None),
+    }))
 }
 
 /// Two reductions in sequence, in O(1) and without copying either.
