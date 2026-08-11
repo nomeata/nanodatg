@@ -82,7 +82,7 @@
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-M="${MINI_DIR:-$ROOT/mini}"
+M="${MINI_DIR:-$ROOT/checker/src/mini}"
 # Zero would make the floor unfalsifiable; 62 would make it a ratchet on a
 # number nobody owns. See "C" above.
 MIN_FILES="${MIN_FILES:-10}"
@@ -115,21 +115,21 @@ pub fn close(h: &Expr, t: &Thm, w: u32) -> Option<Thm> {
 }
 EOF
     cat > "$d/src/ev.rs" <<'EOF'
-pub use nanoda_lib::sealed::Sealed;
+pub use crate::sealed::Sealed;
 EOF
     for i in 1 2 3 4 5 6 7 8 9 10; do
       printf 'pub fn m%s() -> u32 { %s }\n' "$i" "$i" > "$d/src/mod$i.rs"
     done
   }
 
-  expect() { # expect pass|fail <name> <mini dir> [env...]
+  expect() { # expect pass|fail <name> <mini source dir> [env...]
     local want="$1" name="$2" d="$3"; shift 3
-    local rc; env MINI_DIR="$d" "$@" "$0" >/dev/null 2>&1; rc=$?
+    local rc; env MINI_DIR="$d/src" "$@" "$0" >/dev/null 2>&1; rc=$?
     if [[ "$want" == pass && $rc -eq 0 ]] || [[ "$want" == fail && $rc -ne 0 ]]; then
       if [[ "$want" == fail ]]; then echo "  ok: detects $name"; else echo "  ok: accepts $name"; fi
     else
       echo "SELFTEST FAIL: '$name' expected to $want, got rc=$rc" >&2
-      env MINI_DIR="$d" "$@" "$0" >&2
+      env MINI_DIR="$d/src" "$@" "$0" >&2
       sfails=$((sfails+1))
     fi
   }
@@ -202,12 +202,12 @@ EOF
 
 if [[ "${1:-}" == --self-test ]]; then self_test; exit $?; fi
 
-echo "checking mini's hypothesis discipline in $M"
+echo "checking the mini module's hypothesis discipline in $M"
 
 # Comments and the allowlisted module are excluded; a mention in prose calls
 # nothing, and the whole point of I1 is that one file may call these.
 scan() {
-  grep -rInE "$1" --include='*.rs' "$M/src" 2>/dev/null \
+  grep -rInE "$1" --include='*.rs' "$M" 2>/dev/null \
     | grep -v '^[^:]*/scope\.rs:' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|#!\[)'
 }
@@ -222,8 +222,8 @@ fi
 
 # scope.rs must actually be the introduction point, or I1 is vacuous and the
 # scoping machinery has been bypassed some other way.
-if ! grep -q 'Thm::assume' "$M/src/scope.rs" 2>/dev/null; then
-  fail "mini/src/scope.rs no longer calls Thm::assume — I1 is now vacuous"
+if ! grep -q 'Thm::assume' "$M/scope.rs" 2>/dev/null; then
+  fail "checker/src/mini/scope.rs no longer calls Thm::assume — I1 is now vacuous"
 else
   ok "scope.rs is the introduction point"
 fi
@@ -231,10 +231,10 @@ fi
 # ── I3 ───────────────────────────────────────────────────────────────────────
 # `Thm::gen(` is the panicking wrapper. `gen_checked` is a different token and
 # is not matched by the trailing `(`.
-if grep -rInE 'Thm::gen\(' --include='*.rs' "$M/src" 2>/dev/null \
+if grep -rInE 'Thm::gen\(' --include='*.rs' "$M" 2>/dev/null \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*)' | grep -q .; then
   fail "\`Thm::gen(\` — the panicking generalisation — is called in mini"
-  grep -rInE 'Thm::gen\(' --include='*.rs' "$M/src" >&2
+  grep -rInE 'Thm::gen\(' --include='*.rs' "$M" >&2
 else
   ok "no panicking generalisation (gen_checked only)"
 fi
@@ -242,7 +242,7 @@ fi
 # …and the partner, so the ban is not a statement about an unused door: some
 # non-comment line must actually call the fallible entry. A mini that
 # generalises nowhere passes the ban above having demonstrated nothing.
-gen_sites=$(grep -rInE 'Thm::gen_checked\(' --include='*.rs' "$M/src" 2>/dev/null \
+gen_sites=$(grep -rInE 'Thm::gen_checked\(' --include='*.rs' "$M" 2>/dev/null \
   | grep -cvE '^[^:]+:[0-9]+:[[:space:]]*(//|\*)')
 if (( gen_sites == 0 )); then
   fail "nothing in mini calls \`Thm::gen_checked(\` — I3 bans a spelling nobody was using, so it is now vacuous"
@@ -258,15 +258,15 @@ fi
 # through that one funnel: the re-export is present, and no module of mini's
 # defines a `Sealed` of its own — a second newtype would be a second funnel
 # with whatever gate its author remembered to give it.
-if ! grep -q 'pub use nanoda_lib::sealed::Sealed' "$M/src/ev.rs" 2>/dev/null; then
-  fail "mini/src/ev.rs no longer re-exports the checker's Sealed — the one-funnel identity (ENV-UNIFY B3) is gone"
+if ! grep -q 'pub use crate::sealed::Sealed' "$M/ev.rs" 2>/dev/null; then
+  fail "checker/src/mini/ev.rs no longer re-exports the checker's Sealed — the one-funnel identity (ENV-UNIFY B3) is gone"
 else
   ok "Sealed is the checker's type, re-exported"
 fi
-if grep -rInE 'struct Sealed' --include='*.rs' "$M/src" 2>/dev/null \
+if grep -rInE 'struct Sealed' --include='*.rs' "$M" 2>/dev/null \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*)' | grep -q .; then
   fail "a mini module defines its own Sealed — a second persistence funnel"
-  grep -rInE 'struct Sealed' --include='*.rs' "$M/src" >&2
+  grep -rInE 'struct Sealed' --include='*.rs' "$M" >&2
 else
   ok "no second Sealed newtype in mini"
 fi
@@ -275,9 +275,9 @@ fi
 # The same recursion and the same `--include` the three bans use, so a change
 # that blinds them blinds this too. `-I` skips anything grep would treat as
 # binary, again as above; `-l -e ''` lists every file it would have searched.
-scanned=$(grep -rIl --include='*.rs' -e '' "$M/src" 2>/dev/null | wc -l)
+scanned=$(grep -rIl --include='*.rs' -e '' "$M" 2>/dev/null | wc -l)
 if (( scanned < MIN_FILES )); then
-  fail "the scan searched $scanned file(s) under $M/src, expected at least $MIN_FILES — the bans above passed having read almost nothing"
+  fail "the scan searched $scanned file(s) under $M, expected at least $MIN_FILES — the bans above passed having read almost nothing"
 else
   ok "C $scanned files scanned"
 fi

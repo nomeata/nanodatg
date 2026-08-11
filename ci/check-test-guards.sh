@@ -37,7 +37,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Overridable so --self-test can point the scan at fixture trees.
-SCAN_DIRS="${SCAN_DIRS:-$ROOT/checker/tests $ROOT/mini/tests $ROOT/derived/tests $ROOT/kernel/tests}"
+SCAN_DIRS="${SCAN_DIRS:-$ROOT/checker/tests $ROOT/derived/tests $ROOT/kernel/tests}"
 # The guard's own source is exempt: it is where the banned shapes are supposed
 # to live.
 GUARD="${GUARD:-$ROOT/ci/skip-guard.rs}"

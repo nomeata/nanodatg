@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "derived", "checker", "mini"]
+members = ["kernel", "derived", "checker"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # `kernel` is the trusted computing base; `checker` (a fork of nanoda_lib) is
@@ -32,16 +32,16 @@ lto = true
 #
 # ── `dev` and `test` must stay byte-for-byte the same set of settings ────────
 #
-# Not a tidiness rule: `mini/tests/*` spawn the `mini` binary through
-# `CARGO_BIN_EXE_mini`, which cargo expands to the *uplift* path
-# `target/debug/mini` — and `dev` and `test` both uplift there. While the two
+# Not a tidiness rule: the checker integration tests spawn the `checker` binary
+# through `CARGO_BIN_EXE_checker`, which cargo expands to the uplift path
+# `target/debug/checker` — and `dev` and `test` both uplift there. While the two
 # profiles differed, `cargo build` put an `opt-level = 0` binary at that path
 # and `cargo test` put an `opt-level = 1` one, and whichever command ran last
 # won. Measured on this tree before the settings were matched: the two files
 # were 44 859 744 and 61 052 224 bytes and had different inodes, at one path.
 # A prebuilt test binary run straight out of `target/debug/deps/` — which is
 # what a measuring seat does, and what `perf stat` is pointed at — therefore
-# spawned whichever `mini` the last cargo command happened to leave. That
+# spawned whichever checker binary the last cargo command happened to leave. That
 # **corrupted two measurement runs before it was noticed**, and the numbers
 # looked plausible; see MEASUREMENTS.md.
 #

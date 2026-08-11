@@ -1,0 +1,569 @@
+//! **`Quot`'s interpretation clause at `Sort 0`** — the identity reading
+//! (`QUOT-MODEL.md` §2).
+//!
+//! # Interface
+//!
+//! ```text
+//! quot::prim_for(name)          -> Option<Prim>
+//! quot::build(checker, name, σ) -> Result<(), Gap>
+//! ```
+//!
+//! [`build`] is called from [`crate::mini::zoneb::ensure`] **first**, before anything
+//! else in it, because none of the four primitives is a
+//! `ConstantInfo::Inductive` and none has an `owner`: they are `add_quot`'s
+//! opaque constants, so every other branch of `ensure` answers `no-interp` on
+//! the name before reaching them. They are §6.2 *clauses* rather than
+//! translations — [`crate::mini::direct`]'s `Eq` is the shape, and the store, the
+//! `lam_nest` and the `Gap` vocabulary are the same.
+//!
+//! # The clause, and why it is forced rather than chosen
+//!
+//! At ground `u = 0`:
+//!
+//! ```text
+//! ⟦Quot α r⟧        := ⟦α⟧            (r is not consulted)
+//! ⟦Quot.mk r a⟧     := •
+//! ⟦Quot.ind β h⟧    := •
+//! ⟦Quot.lift β f h⟧ := ⟦f⟧ at lvl(β) ≥ 1,  • at lvl(β) = 0
+//! ```
+//!
+//! `⟦Quot α r⟧` and `⟦α⟧` are the **same term**, not merely provably equal
+//! sets. The equivalence-class construction cannot be the clause here and its
+//! failure is *refutable* rather than merely unproved: `⟦Sort 0⟧ = U₀ = {∅,{•}}`,
+//! so a member of it is a subset of `1`, while at any inhabited proposition
+//! `quot(1,R) = {1} ⊄ 1`. `QUOT-MODEL.md` §1.2 has the countermodel in the
+//! code's own terms and §2.2 the three soundness invariants — formation, `mk`
+//! and `Quot.ind` — that pin the value pointwise with no level restriction.
+//!
+//! # Only the formation clause is here, and that is most of the row
+//!
+//! `⟦Quot.{0}⟧` alone moves `typeEv` on **five of the six** `Quot` exports,
+//! because at `u = 0` the *types* need nothing else. `Quot.mk α r a` has type
+//! `Quot α r`, which is a `Prop`, so §6.2's **application** clause gives it `•`
+//! and the constant `⟦Quot.mk.{0}⟧` is never consulted — `⟦Quot.sound⟧`'s type
+//! comes out as `f60(⟦Eq.{0}⟧, ⟦Quot.{0}⟧, •, •, …)` with `mk` already
+//! collapsed. So the `mk`, `ind` and `lift` clauses are needed **only** where
+//! the bare constant is a declaration's *value*, which is one export each.
+//!
+//! That is worth stating because it is the opposite of how the row reads from
+//! `QUOT-MODEL.md`'s obligation table, which lists T1–T8 as a set: T1 is not
+//! the first of eight, it is the one that carries the types and the other seven
+//! are one export apiece.
+//!
+//! # `u ≥ 1` is a different clause and a different ledger row
+//!
+//! It declines as [`Gap::Quotient`], which carries the level. Every
+//! `Quot`-bearing declaration is scheduled at *both* `u = 0` and `u = 1`, so
+//! the row is roughly seven pairs and seven and neither clause alone closes an
+//! export; a reason without the level would report a half-closed row as
+//! untouched.
+//!
+//! # Keyed by name, verified against the declared type
+//!
+//! [`prim_for`] is a table on the name `ensure` was asked about. A name is not
+//! evidence and this module never treats it as one: the nest is built from the
+//! constant's **own declared type**, its depth is checked against that type,
+//! and its bottom's membership is checked against the declared codomain's
+//! interpretation. A constant called `Quot` whose type is not `add_quot`'s
+//! produces a bottom about the wrong set and is refused.
+
+use crate::mini::env::ConstantInfo;
+use crate::mini::ev::{Ev, Gap};
+use crate::mini::expr::{Name, E, NameView};
+use crate::mini::ground;
+use crate::mini::kernel::{Checker, Typing, R};
+use kernel::Thm;
+
+/// Which of the four primitives a name is.
+///
+/// `Hash` because [`crate::mini::ev::Gap::Quotient`] carries one: the `u ≥ 1` row is
+/// four clauses and the ledger has to say which is owed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Prim {
+    /// `Quot : ∀ (α : Sort u), (α → α → Prop) → Sort u`.
+    Quot,
+    /// `Quot.mk : ∀ α r (a : α), Quot α r`.
+    Mk,
+    /// `Quot.lift : ∀ α r (β : Sort v) (f : α → β) (h : …), Quot α r → β`.
+    Lift,
+    /// `Quot.ind : ∀ α r (β : Quot α r → Prop) (h : …), ∀ q, β q`.
+    Ind,
+}
+
+impl Prim {
+    /// The Lean name, for a reason key. Not `Debug`: a ledger row is read by
+    /// people who know `Quot.mk` and not `Mk`, and it is the same string
+    /// [`prim_for`] keys on.
+    pub fn name(self) -> &'static str {
+        match self {
+            Prim::Quot => "Quot",
+            Prim::Mk => "Quot.mk",
+            Prim::Lift => "Quot.lift",
+            Prim::Ind => "Quot.ind",
+        }
+    }
+
+    /// How many `Π` binders the primitive's declared type has — the depth of
+    /// the λ-nest its interpretation is. Checked against the type by
+    /// [`crate::mini::zoneb::peel`], not assumed from this table.
+    fn depth(self) -> usize {
+        match self {
+            Prim::Quot => 2,
+            Prim::Mk => 3,
+            Prim::Ind => 5,
+            // **Five, not six.** `Quot.lift`'s declared type has six binders —
+            // `α r β f h` and the major `q` — but the clause is
+            // `⟦Quot.lift α r β f h⟧ := ⟦f⟧`, whose nest stops at `f` and whose
+            // codomain is the *arrow* `Quot α r → β`. A six-deep nest is also a
+            // correct interpretation (it is this one η-expanded) and it is not
+            // the one the clause states: its bottom would be `app(⟦f⟧,⟦q⟧)` and
+            // T3 would have nothing to say about it.
+            Prim::Lift => 5,
+        }
+    }
+}
+
+/// The table. One comparison on the name, never a scan and never a shape match.
+pub fn prim_for(n: &Name) -> Option<Prim> {
+    let NameView::Str(pre, s) = n.view() else { return None };
+    match pre.view() {
+        NameView::Anon if &*s == "Quot" => Some(Prim::Quot),
+        NameView::Str(root, q) if root.is_anon() && &*q == "Quot" => match &*s {
+            "mk" => Some(Prim::Mk),
+            "lift" => Some(Prim::Lift),
+            "ind" => Some(Prim::Ind),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+const SHAPE: &str = "quotient: the primitive's declared type is not add_quot's";
+// **Four reasons where one would do, so the first refuser is the report.**
+// `Quot.ind`'s bottom is four steps and every one of them can fail for its own
+// reason; a shared string would put this branch back where it was before
+// `Checker::miss_reason` — a failure whose cause is a guess.
+const IND_BETA: &str = "quotient: Quot.ind's major does not reduce onto the carrier";
+const IND_APPLY: &str = "quotient: Quot.ind's hypothesis does not apply at the major";
+const IND_MOVE: &str = "quotient: Quot.ind's motive does not move onto the major";
+const IND_GOAL: &str = "quotient: Quot.ind's bottom is not the declared codomain";
+const LIFT_F: &str = "quotient: Quot.lift's f binder has no membership";
+const LIFT_DOM: &str =
+    "quotient: Quot.lift's f is not already a function on the quotient's domain";
+
+/// Build and store one primitive at one `σ`.
+///
+/// **One primitive per call, not the family.** The other three clauses obtain
+/// `⟦Quot α r⟧` by *inferring* their declared codomain, so `zoneb::ensure`
+/// re-enters this module for `Quot` while one of them is being built — one
+/// level deep and terminating. Building the family eagerly would replace that
+/// dependency with an ordering, and the ordering would be the thing that had to
+/// be right.
+///
+/// `inst` is the constant's **own** instantiation: `Quot`, `Quot.mk` and
+/// `Quot.ind` take `[u]`, `Quot.lift` takes `[u, v]`. `u` is first in every
+/// case — `add_quot`'s order — and the length is checked against the constant's
+/// declared parameter list rather than against the table.
+pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), Gap> {
+    let miss = || Gap::NoInterpretation(*name, inst.to_vec());
+    let bad = |w: &'static str| Gap::IndSpec(Name::simple("Quot"), w);
+    let prim = prim_for(name).ok_or_else(miss)?;
+
+    // **`Quot` and `Quot.mk` are `Opaque`; `Quot.lift` and `Quot.ind` are
+    // `Recursor`.** That is `add_quot`'s own classification and it is read
+    // here rather than assumed — the first version of this clause matched
+    // `Opaque` alone and declined the two recursors with a bare
+    // `no-interp(Quot.ind)`, which is exactly the reason
+    // `Checker::miss_reason` now makes visible.
+    //
+    // It is also why the hook sits at the *top* of `zoneb::ensure`: the
+    // ordinary path would send a `Recursor` to `crate::mini::recursor`, which is
+    // about an inductive declaration's eliminator and has nothing to say about
+    // these two.
+    let ci = c.environment().get(name).ok_or_else(miss)?;
+    if !matches!(ci, ConstantInfo::Opaque { .. } | ConstantInfo::Recursor { .. }) {
+        return Err(miss())
+    }
+    let (lparams, ty) = (ci.lparams().to_vec(), *ci.ty());
+    if lparams.len() != inst.len() {
+        return Err(miss())
+    }
+    let u = *inst.first().ok_or_else(|| bad(SHAPE))?;
+    // **The split, and it is decided by the ground numeral.** `QUOT-MODEL.md`
+    // §4.3: `u` is a numeral here because the checker runs once per ground σ,
+    // and both mis-uses are *refutable* rather than merely unproved — the
+    // classes reading at `u = 0` hits `⊢ ¬({1} ∈ U₀)` and the identity reading
+    // at `u ≥ 1` hits `sound`'s obligation at genuinely distinct elements. The
+    // evidence each branch consumes is the same threaded `⟦α⟧ ∈ ⟦Sort u⟧`, at
+    // its own rung, so a branch entered wrongly derives nothing.
+    //
+    // **All four primitives are built at `u ≥ 1`**, with one branch inside the
+    // family left out: `Quot.lift` at `v = 0` is `QUOT-MODEL.md` §6 finding 2's
+    // clause and not this one — the whole of `lift β f h` is a proof there, so
+    // `⟦Quot α r → β⟧` is a conditional singleton rather than a `dprod` and
+    // there is no `f ∈ fs(A,B)` certificate to feed `lift_in_funspace` at all.
+    // Declined by name rather than attempted; the corpus schedules `Quot.lift`
+    // at `(0,0)` and `(1,1)` only, so nothing exercises it and a guess would
+    // never be measured.
+    if u != 0 && prim == Prim::Lift && inst.get(1) == Some(&0) {
+        return Err(Gap::Quotient(u, prim))
+    }
+    // **The other three decline by their own name**, not by a shared reason:
+    // the row reports which of the four is owed rather than "quotients", and
+    // each is one export.
+
+    let lean_ty = ground::subst_ground(&ty, &lparams, inst);
+    let depth = prim.depth();
+    let cod = crate::mini::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad(SHAPE))?;
+    let sigma = inst.to_vec();
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
+        Ok(nest_bottom(c, prim, &sigma, &cod))
+    };
+    let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
+    crate::mini::zoneb::store(c, name, inst, t)
+}
+
+/// The bottom of one primitive's nest — the denoting term and its membership in
+/// the declared codomain's interpretation.
+fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Typing {
+    let ty = *cod;
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
+    let u = inst.first().copied().unwrap_or(0);
+    let Some((xs, mems)) = c.binders(prim.depth()) else { return gap(Gap::NoEndpoint) };
+
+    // **The `u ≥ 1` clauses are `crate::mini::quot_classes`' and are a different
+    // reading of every one of the four primitives**, so they branch here rather
+    // than inside the `match` below: sharing an arm would put two clauses that
+    // agree about nothing behind one comment. `build` has already declined the
+    // two that are not written, so reaching here at `u ≥ 1` means `prim` is
+    // `Quot` or `Quot.mk`.
+    if u != 0 {
+        return quot_classes_bottom(c, ty, prim, &xs, &mems, inst, cod)
+    }
+
+    match prim {
+        // **`⟦Quot α r⟧ = ⟦α⟧`, and the bottom is the binder's own scope typing
+        // returned unaltered.** No theorem is derived and no symbol is minted:
+        // `lam_nest` put `⟦α⟧` and `⊢ ⟦α⟧ ∈ ⟦Sort 0⟧` in scope two levels up,
+        // and `⟦Sort 0⟧` is exactly what the declared codomain `Sort u` denotes
+        // at `u = 0`. `r` is never consulted — that *is* the clause, and
+        // `QUOT-MODEL.md` §2.3's T1 is this line.
+        //
+        // The membership is nevertheless **checked** against the codomain's own
+        // interpretation rather than taken on trust, which is what keeps the
+        // name a key and not evidence.
+        Prim::Quot => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+            if *mems[0].concl() != kernel::Formula::mem(xs[0].clone(), cod_tm) {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            }
+            Typing { ty, tm: Some(xs[0].clone()), ev: Ev::Proved(mems[0].clone()) }
+        }
+        // **`⟦Quot.mk α r a⟧ = •`**, and `• ∈ ⟦Quot α r⟧` because `⟦a⟧` is in
+        // it and the set is a proposition — `QUOT-MODEL.md` §2.3's T2, which
+        // is `Interp::point_of_proof` and nothing else.
+        //
+        // **`⟦Quot α r⟧` is not literally `⟦α⟧`, and the note says it is.**
+        // §2.1 states the two are "the same term, not merely provably equal
+        // sets", and as a claim about the *clause* that is right; as a claim
+        // about what `infer_type` hands back it is not, because §6.2's
+        // application clause gives `⟦Quot α r⟧` as `app(app(⟦Quot.{0}⟧,⟦α⟧),⟦r⟧)`
+        // — a redex over the stored λ-graph, related to `⟦α⟧` by β and not by
+        // syntax. So the scope's `⟦a⟧ ∈ ⟦α⟧` has to be carried along that
+        // equation before `point_of_proof` applies, which is one `beta_spine`
+        // and one `retarget_set`.
+        //
+        // Nothing downstream is weakened by this: §2.1's load-bearing use is
+        // that `⟦α → β⟧` and `⟦Quot α r → β⟧` are one term because the *domain*
+        // sits in an argument slot of a shared `Π` symbol, and that is about
+        // the domain slot rather than about `Quot`'s own spine.
+        Prim::Mk => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let (Some(cod_tm), Some(cod_mem)) = (ct.tm.clone(), ct.ev.thm().cloned()) else {
+                return gap(ct.ev.reason(Gap::NoEndpoint))
+            };
+            let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
+                Some(t) => t,
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+            };
+            let (a_mem, ps, p_mems) =
+                (mems[2].clone(), vec![xs[0].clone(), xs[1].clone()], vec![mems[0].clone(), mems[1].clone()]);
+            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let point = ip.point();
+            // `⊢ ⟦Quot α r⟧ = ⟦α⟧` — β down the formation clause's own nest.
+            let Some((bot, beta)) = ip.beta_spine(&former, &ps, &p_mems) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            };
+            if bot != xs[0] || beta.concl().as_eq().map(|(l, _)| l) != Some(cod_tm.clone()) {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            }
+            let Some(back) = derived::eq_symm(&mut ip.env_mut(), &beta) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            };
+            // `⟦a⟧ ∈ ⟦Quot α r⟧`, then `⟦a⟧ = •`, then the subject moves.
+            let out = ip
+                .retarget_set(&a_mem, &back)
+                .and_then(|m| {
+                    let pt = ip.point_of_proof(&cod_mem, &m)?;
+                    let sym = derived::eq_symm(&mut ip.env_mut(), &pt)?;
+                    ip.retarget_subject(&m, &sym)
+                })
+                .filter(|t| *t.concl() == kernel::Formula::mem(point.clone(), cod_tm.clone()));
+            match out {
+                Some(t) => Typing { ty, tm: Some(point), ev: Ev::Proved(t) },
+                None => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
+            }
+        }
+        // **`⟦Quot.ind α r β h q⟧ = •`** — `QUOT-MODEL.md` §2.3's T6.
+        Prim::Ind => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+            let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
+                Some(t) => t,
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+            };
+            let (h_mem, q_mem) = (mems[3].clone(), mems[4].clone());
+            let (q_tm, ps) = (xs[4].clone(), vec![xs[0].clone(), xs[1].clone()]);
+            let (p_mems, a_in_u0) =
+                (vec![mems[0].clone(), mems[1].clone()], mems[0].clone());
+            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let point = ip.point();
+            let app_sym = ip.prelude.ap.app;
+            let bad = |w: &'static str| Gap::IndSpec(Name::simple("Quot"), w);
+
+            // `⊢ ⟦Quot α r⟧ = ⟦α⟧`, and `q` carried onto `⟦α⟧` by it — the same
+            // β step `Mk` needs, and for the same reason.
+            let Some((_, beta)) = ip.beta_spine(&former, &ps, &p_mems) else {
+                return gap(bad(IND_BETA))
+            };
+            let Some(q_in_a) = ip.retarget_set(&q_mem, &beta) else {
+                return gap(bad(IND_BETA))
+            };
+            // **`q` is its own witness.** `h : ∀a:α, β (mk a)` wants a member
+            // of `⟦α⟧`, and `q` is one — so nothing has to be produced.
+            let Some(h_set) = h_mem.concl().as_mem().map(|(_, s)| s.clone()) else {
+                return gap(bad(IND_APPLY))
+            };
+            let at_q = match ip.as_pi(&h_set) {
+                Some(crate::mini::interp::PiShape::Prop { site, dom }) => {
+                    ip.cond_app(&site, &dom, &h_mem, &q_tm, &q_in_a)
+                }
+                _ => return gap(bad(IND_APPLY)),
+            };
+            let Some(at_q) = at_q else { return gap(bad(IND_APPLY)) };
+            // …and the set onto `⟦β q⟧` along `⟦q⟧ = •` reversed. `⟦mk a⟧` is
+            // `•` at every `a`, so `h`'s fibre does not mention its binder and
+            // the application landed on `app(⟦β⟧, •)` whatever it was applied
+            // at; one congruence in `app`'s second argument is the rest.
+            let out = (|| {
+                let pt = ip.point_of_proof(&a_in_u0, &q_in_a)?;
+                let back = derived::eq_symm(&mut ip.env_mut(), &pt)?;
+                let b_tm = at_q.concl().as_mem()?.1.clone();
+                let beta_fn = ip.parts_of(&b_tm)?.1.first()?.clone();
+                let move_eq =
+                    derived::congr_arg(&mut ip.env_mut(), app_sym, &[beta_fn, point.clone()], 1, &back)?;
+                ip.retarget_set(&at_q, &move_eq)
+            })();
+            match out {
+                Some(t) if *t.concl() == kernel::Formula::mem(point.clone(), cod_tm) => {
+                    Typing { ty, tm: Some(point), ev: Ev::Proved(t) }
+                }
+                Some(_) => gap(bad(IND_GOAL)),
+                None => gap(bad(IND_MOVE)),
+            }
+        }
+        // **`⟦Quot.lift α r β f h⟧ = ⟦f⟧`, and its typing is `f`'s own
+        // certificate** — `QUOT-MODEL.md` §2.3's T3 at `v ≥ 1` and T5 at
+        // `v = 0`, which the note says cost nothing, and they do.
+        //
+        // The declared codomain is `Quot α r → β` and `f`'s declared type is
+        // `α → β`. **Those interpret to the same term**, because mini keys its
+        // `Π` machinery on the *body* shape and passes the domain as an
+        // argument slot of a shared symbol (§2.1) — so `⟦Quot α r⟧` and `⟦α⟧`
+        // being β-related rather than syntactically equal, which `Mk` had to
+        // work around, does **not** propagate here: what has to agree is the
+        // whole `Π`, and the domain slot holds whichever spelling the binder
+        // was opened at on *both* sides.
+        //
+        // **…and the note's "costs nothing" is wrong here in exactly the way
+        // it is wrong at `Mk`, which is worth stating because §2.1 makes this
+        // the load-bearing case.** The two `Π`s *are* one symbol with the
+        // domain in an argument slot — that part holds — but the argument
+        // itself is `⟦α⟧` on `f`'s side and `⟦Quot α r⟧` on the codomain's,
+        // and those are β-related rather than syntactically equal. Measured:
+        // the direct comparison declines, and the reason string
+        // `LIFT_DOM` is what said so.
+        //
+        // So T3 and T5 cost one `beta_spine` and one congruence in the domain
+        // slot — the same two steps as T2, at the `Π` symbol instead of at the
+        // membership. The domain-slot property is what makes it *one*
+        // congruence rather than a rebuild, so §2.1's mechanism is right and
+        // only its price is understated.
+        Prim::Lift => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+            let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
+                Some(t) => t,
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+            };
+            let f_mem = mems[3].clone();
+            let ps = vec![xs[0].clone(), xs[1].clone()];
+            let p_mems = vec![mems[0].clone(), mems[1].clone()];
+            let Some((subj, set)) = f_mem.concl().as_mem() else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), LIFT_F))
+            };
+            let (subj, set) = (subj.clone(), set.clone());
+            if set == cod_tm {
+                // The spellings coincided; nothing to move.
+                return Typing { ty, tm: Some(subj), ev: Ev::Proved(f_mem) }
+            }
+            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let Some((_, beta)) = ip.beta_spine(&former, &ps, &p_mems) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), LIFT_DOM))
+            };
+            let out = (|| {
+                // `⟦α⟧ = ⟦Quot α r⟧`, then one congruence in the `Π` symbol's
+                // **last** argument, which is where `dprod_term`/`cond_term`
+                // put the domain.
+                let back = derived::eq_symm(&mut ip.env_mut(), &beta)?;
+                let (sym, args) = ip.parts_of(&set)?;
+                let last = args.len().checked_sub(1)?;
+                let move_eq = derived::congr_arg(&mut ip.env_mut(), sym, &args, last, &back)?;
+                ip.retarget_set(&f_mem, &move_eq)
+            })();
+            match out {
+                Some(t) if *t.concl() == kernel::Formula::mem(subj.clone(), cod_tm) => {
+                    Typing { ty, tm: Some(subj), ev: Ev::Proved(t) }
+                }
+                _ => gap(Gap::IndSpec(Name::simple("Quot"), LIFT_DOM)),
+            }
+        }
+    }
+}
+
+/// The bottom of one primitive's nest at `u ≥ 1` — the equivalence-class
+/// reading.
+///
+/// The declared codomain is **interpreted and compared** in both arms rather
+/// than assumed, which is what keeps [`prim_for`]'s name a key and not
+/// evidence: a constant called `Quot` whose codomain is not its own parameter's
+/// sort lands in the wrong rung, and one called `Quot.mk` that does not land in
+/// its own quotient lands in the wrong set. Both are declined.
+fn quot_classes_bottom(
+    c: &mut Checker<'_, '_>,
+    ty: E,
+    prim: Prim,
+    xs: &[kernel::Term],
+    mems: &[Thm],
+    inst: &[u32],
+    cod: &E,
+) -> Typing {
+    let gap = |g: Gap| Typing { ty, tm: None, ev: Ev::missing(g) };
+    let u = inst.first().copied().unwrap_or(0);
+    let owed = |p: Prim| Gap::Quotient(u, p);
+    let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+    let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+    // `⟦Quot.{u}⟧`'s own nest, which `Mk`'s codomain is a redex over. Read
+    // before the interpretation is borrowed; `Quot`'s own arm does not need it.
+    // `⟦Quot.{u}⟧`'s own nest, which `Mk`'s codomain and `Ind`'s major are
+    // redexes over, and `⟦Quot.mk.{u}⟧`'s, which `Ind`'s minor is one over.
+    // Both read before the interpretation is borrowed; `Quot`'s own arm needs
+    // neither. `Ind`'s nest has already forced both into the store — its `h`
+    // binder's type mentions `Quot.mk` and its `q` binder's mentions `Quot`.
+    let former = (prim != Prim::Quot).then(|| c.stored_term(&Name::simple("Quot"), &[u]));
+    let mk_former =
+        (prim == Prim::Ind).then(|| c.stored_term(&Name::str(&Name::simple("Quot"), "mk"), &[u]));
+    // `⟦Eq.{v}⟧`, which `Lift`'s `h` binder's own type has already forced into
+    // the store: its body is `f a = f b`.
+    let eq_former = (prim == Prim::Lift)
+        .then(|| inst.get(1).and_then(|v| c.stored_term(&Name::simple("Eq"), &[*v])));
+    let (xs, mems) = (xs.to_vec(), mems.to_vec());
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    let Some(q) = ip.quotient() else { return gap(owed(prim)) };
+    let (a, r) = (xs[0].clone(), xs[1].clone());
+
+    match prim {
+        // `⟦Quot α r⟧ = quot(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧))`, in `⟦Sort u⟧` at the
+        // rung the declared codomain names.
+        Prim::Quot => {
+            let term = q.carrier(ip, &a, &r);
+            match q.formation(ip, u, &a, &r, &mems[0]) {
+                Some(t) if *t.concl() == kernel::Formula::mem(term.clone(), cod_tm) => {
+                    Typing { ty, tm: Some(term), ev: Ev::Proved(t) }
+                }
+                Some(_) => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
+                None => gap(owed(Prim::Quot)),
+            }
+        }
+        // `⟦Quot.mk α r a⟧ = class(⟦α⟧, R̄, ⟦a⟧)`, in the codomain's own spine.
+        Prim::Mk => {
+            let Some(Some(former)) = former else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let got = crate::mini::quot_classes::mk_at(
+                &q, ip, &former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2], &cod_tm,
+            );
+            match got {
+                Some((term, t)) => Typing { ty, tm: Some(term), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Mk)),
+            }
+        }
+        // `⟦Quot.ind α r β h q⟧ = •`, in `⟦β q⟧` by no-junk.
+        Prim::Ind => {
+            let (Some(Some(former)), Some(Some(mk_former))) = (former, mk_former) else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let point = ip.point();
+            let got = crate::mini::quot_classes::ind_at(
+                &q, ip, &former, &mk_former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[3],
+                &xs[4], &mems[4], &cod_tm,
+            );
+            match got {
+                Some(t) => Typing { ty, tm: Some(point), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Ind)),
+            }
+        }
+        // `⟦Quot.lift α r β f h⟧ = lift(⟦α⟧, R̄, ⟦f⟧)`, in the arrow the
+        // declaration's codomain interprets to.
+        Prim::Lift => {
+            let (Some(Some(former)), Some(Some(eq_former))) = (former, eq_former) else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let got = crate::mini::quot_classes::lift_at(
+                &q, ip, &former, &eq_former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2],
+                &xs[3], &mems[3], &mems[4], &cod_tm,
+            );
+            match got {
+                Some((term, t)) => Typing { ty, tm: Some(term), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Lift)),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The name table is a table, and it is exact.**
+    ///
+    /// Four accepted and four refused. The failure mode a prefix test has is
+    /// accepting `Quot.foo` — routing a declaration this clause knows nothing
+    /// about into `build` — and `Foo.Quot.mk`, doing it for a namespaced
+    /// look-alike. `Name::Anon` at the root is what rules both out, and it is
+    /// asserted rather than assumed.
+    #[test]
+    fn the_primitive_table_is_exact() {
+        let q = Name::simple("Quot");
+        assert_eq!(prim_for(&q), Some(Prim::Quot));
+        assert_eq!(prim_for(&Name::str(&q, "mk")), Some(Prim::Mk));
+        assert_eq!(prim_for(&Name::str(&q, "lift")), Some(Prim::Lift));
+        assert_eq!(prim_for(&Name::str(&q, "ind")), Some(Prim::Ind));
+        assert_eq!(prim_for(&Name::str(&q, "sound")), None, "sound is an axiom, not a primitive");
+        assert_eq!(prim_for(&Name::str(&q, "foo")), None);
+        assert_eq!(prim_for(&Name::simple("Quotient")), None);
+        let nested = Name::str(&Name::str(&Name::simple("Foo"), "Quot"), "mk");
+        assert_eq!(prim_for(&nested), None, "a namespaced look-alike is not Lean's Quot.mk");
+    }
+}

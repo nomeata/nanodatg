@@ -50,3 +50,8 @@ mimalloc = "0.1"
 name = "nanoda_bin"
 path = "src/main.rs"
 bench = false
+
+[[bin]]
+name = "checker"
+path = "src/bin/checker.rs"
+bench = false

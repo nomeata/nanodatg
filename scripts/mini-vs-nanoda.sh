@@ -113,13 +113,13 @@ if [[ ! -d "$CORPUS" ]]; then
   exit 2
 fi
 
-MINI="${MVN_MINI:-$ROOT/target/release/mini}"
+MINI="${MVN_MINI:-$ROOT/target/release/checker}"
 NANODA="${MVN_NANODA:-$ROOT/target/release/nanoda_bin}"
 # A hand run builds what it needs; a run under `ci/check-mini-vs-nanoda.sh` is
 # handed both paths and must not build, both because the harness already did and
 # because the self-test's checkers are shell scripts.
 if [[ -z "${MVN_MINI:-}${MVN_NANODA:-}" ]]; then
-  if ! out="$(cargo build --release -p mini -p nanoda_lib 2>&1)"; then
+  if ! out="$(cargo build --release -p nanoda_lib --bins 2>&1)"; then
     printf '%s\n' "$out" >&2
     echo "build failed" >&2
     exit 2
@@ -172,7 +172,7 @@ mini_verdict() {
   # point is to attribute to a port bug. No corpus export has a nested
   # inductive, so today the flag changes nothing but an exec — it is here so
   # that the day one does, the table does not start lying.
-  out="$(timeout "$TIMEOUT" "$MINI" --no-modelgen --acceptance-only "$1" 2>&1)"; rc=$?
+  out="$(timeout "$TIMEOUT" "$MINI" --naive --no-modelgen --acceptance-only "$1" 2>&1)"; rc=$?
   case $rc in
     0) echo accept;;
     1) echo reject;;

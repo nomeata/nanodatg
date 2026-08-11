@@ -48,11 +48,9 @@ if ./ci/corpus-dir.sh --link >/dev/null; then corpus_present=1; else corpus_pres
 # The trusted boundary, and the self-test proving the boundary check can fail.
 step "kernel boundary"           ./ci/check-boundary.sh
 step "boundary check self-test"  ./ci/test-boundary.sh
-# R6′ for `mini`. `check-boundary.sh` applies R6′ to `derived/` and `checker/`
-# and delegates `mini/` here — and *checks* that it does, so a workspace member
-# cannot go unscanned the way it did when this was a blanket ban. See
-# MINI-DESIGN.md §4.4.
-step "mini hypothesis discipline" ./ci/check-mini-scope.sh
+# The former mini implementation is now a module of `checker`; its additional
+# hypothesis discipline still has a dedicated, non-vacuous scan.
+step "mini-module hypothesis discipline" ./ci/check-mini-scope.sh
 # …and the self-test proving its bans and its scan floor can fail. It was the
 # last `ci/*.sh` with neither a count guard nor a self-test: its two bans are
 # pure greps, so a `mini/src` that moved would have satisfied both having read
@@ -71,11 +69,9 @@ step "encoder black box"         ./ci/check-mutual-blackbox.sh
 step "kernel builds clean"       cargo build -p kernel --all-targets
 step "kernel clippy"             cargo clippy -p kernel --all-targets -- -D warnings
 step "derived clippy"            cargo clippy -p derived --all-targets -- -D warnings
-# `mini` is new code rather than a fork, so it is held to the same standard as
-# `kernel` and `derived`; the pre-existing-lint exemption is for `checker/` only.
-# `--no-deps`: `-D warnings` would otherwise be applied to `checker`, which is
-# a fork and carries upstream's lints.
-step "mini clippy"               cargo clippy -p mini --all-targets --no-deps -- -D warnings
+# The former mini sources now compile in `nanoda_lib`; Cargo cannot apply a
+# separate lint level to one module of a crate. The checker build/test steps
+# below cover that code while retaining the upstream fork's warning policy.
 
 # `modelgen` is a Lean package `mini` **execs** at runtime, and it had no step
 # here at all until one was added — its own suite was 10 checks red on master
@@ -117,8 +113,9 @@ step "mini vs nanoda"            ./ci/check-mini-vs-nanoda.sh
 # SKIPs.
 step "mini-vs-nanoda self-test"  ./ci/check-mini-vs-nanoda.sh --self-test
 
-# Two binaries, one path. `mini/tests/*` spawn `CARGO_BIN_EXE_mini`, which is
-# the uplift path `target/debug/mini`, and `dev` and `test` both uplift there —
+# Two build profiles, one binary path. The migrated suites spawn
+# `CARGO_BIN_EXE_checker`, whose uplift path is `target/debug/checker`; `dev`
+# and `test` both uplift there —
 # so while their settings differ, `cargo build` and `cargo test` leave
 # *different* `mini` binaries at the one name and a prebuilt test binary run out
 # of `deps/` gets whichever was last. That silently corrupted two measurement
@@ -197,9 +194,7 @@ step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
 # `nanoda_lib`'s features; `kernel` and `derived` do not link `nanoda_lib` at
 # all, and `mini` links it for the export parser, the level pre-pass and the
 # shared `tg::EnvCore` — never `tc.rs`. So the feature runs are
-# `-p nanoda_lib`, plus one narrow `-p mini --features tg` step for the
-# cross-engine seam suite (`mini` declares `tg = ["nanoda_lib/tg"]` for
-# exactly that file).
+# `-p nanoda_lib`; the cross-engine seam suites now live in that package too.
 #
 # Narrowing a matrix is how coverage is lost, so the premise is checked rather
 # than believed, in three places:
@@ -235,7 +230,8 @@ step "tests (tg backend)"        cargo test -p nanoda_lib --features tg
 # ran in the plain step above. Both test files are named here because a
 # `cfg(feature)` suite a step does not select is not skipped but *absent* —
 # the defect this script's own comments document.
-step "tests (cross-engine core)" cargo test -p mini --features tg --test envshare_tg --test route_tg
+step "tests (cross-engine core)" cargo test -p nanoda_lib --features tg \
+     --test mini_envshare_tg --test mini_route_tg --test unified_cli
 
 echo
 if (( ${#skipped[@]} )); then

@@ -31,7 +31,7 @@
 //!
 //! * `NANODATG_REQUIRE_CORPUS` unset — the historical behaviour, unchanged. A
 //!   fresh clone with no corpus still gets a useful `cargo test`: the committed
-//!   fixtures under `checker/tests/fixtures` and `mini/tests/fixtures` run, so
+//!   fixtures under `checker/tests/fixtures` run, so
 //!   there is always negative coverage, exactly as `README.md` promises.
 //! * `NANODATG_REQUIRE_CORPUS=1` — a skip panics, naming the path. `ci/check.sh`
 //!   exports it *only when `vendor/arena-tests` is actually present*, so a CI

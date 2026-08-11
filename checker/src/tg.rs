@@ -22126,6 +22126,25 @@ fn ht_report() -> String {
     s
 }
 
+/// Count currently recorded TG debt for the one-file CLI process.
+///
+/// The counters are process-global and cumulative. This is deliberately not a
+/// per-`ExportFile` metric: the `checker` binary handles exactly one file in a
+/// fresh process, so its absolute value is sound there. Library callers that
+/// check several files, or tests running checks in parallel, must not attribute
+/// this value to an individual run without first introducing snapshot/delta
+/// ownership for all counters included here.
+pub fn global_gap_count() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let recorded: u64 = TOTALS
+        .lock()
+        .expect("tg totals poisoned")
+        .as_ref()
+        .map(|rows| rows.iter().map(|(_, n)| *n).sum())
+        .unwrap_or(0);
+    recorded + CONDITIONAL.load(Relaxed).saturating_sub(CONSUMED.load(Relaxed))
+}
+
 /// Render what the TG kernel actually derived over this run.
 pub fn global_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;

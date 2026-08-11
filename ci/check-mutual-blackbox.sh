@@ -71,7 +71,7 @@ cd "$ROOT"
 # **A new encoder is added here or its header's boundary claim is unchecked.**
 # `nested_ev.rs` shipped with that claim in its header for the length of one
 # commit before this line existed, which is the reason the sentence is here.
-FILES=(mini/src/mutual_aux.rs mini/src/nested.rs mini/src/nested_splice.rs)
+FILES=(checker/src/mini/mutual_aux.rs checker/src/mini/nested.rs checker/src/mini/nested_splice.rs)
 
 for f in "${FILES[@]}"; do
   if [[ ! -f "$f" ]]; then

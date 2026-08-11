@@ -4,16 +4,16 @@
 #
 # # The defect
 #
-# `mini/tests/{nested,designed,dump,mutual,tutorial,nat_equations,infinitary}.rs`
-# all spawn `env!("CARGO_BIN_EXE_mini")`. Cargo expands that, at the time it
-# compiles the test, to the **uplift** path — literally `target/debug/mini`, as
+# `checker/tests/mini_{nested,designed,dump,mutual,tutorial,nat_equations,infinitary}.rs`
+# all spawn `env!("CARGO_BIN_EXE_checker")`. Cargo expands that, at the time it
+# compiles the test, to the **uplift** path — literally `target/debug/checker`, as
 # `strings` on any of those test binaries shows. The `dev` and `test` profiles
 # both uplift into `target/debug`, so while their settings differ they produce
-# two different `mini` binaries and hardlink them, in turn, to that one name.
+# two different checker binaries and hardlink them, in turn, to that one name.
 # Measured on this tree before the profiles were matched:
 #
-#   cargo build --bin mini        target/debug/mini -> 44 859 744 bytes, opt 0
-#   cargo test  --no-run          target/debug/mini -> 61 052 224 bytes, opt 1
+#   cargo build --bin checker        target/debug/checker -> 44 859 744 bytes, opt 0
+#   cargo test  --no-run             target/debug/checker -> 61 052 224 bytes, opt 1
 #
 # Cargo itself is consistent — `cargo test` re-uplifts before it runs anything.
 # The trap is the artefact that outlives the command: a test binary sitting in
@@ -28,7 +28,7 @@
 # Cargo compares profiles by settings, not by name, so that `dev` and `test` can
 # be one unit when they agree — the deduplication is deliberate and documented
 # in cargo's own source. The root `Cargo.toml` therefore gives the two tables
-# identical contents, and then there is only one `mini` and nothing to get
+# identical contents, and then there is only one checker binary and nothing to get
 # wrong. This script is what stops the two tables drifting apart again: it
 # copies them, verbatim, into a throwaway crate with one bin and one integration
 # test, runs `cargo build` and then `cargo test --no-run`, and compares the
@@ -162,7 +162,7 @@ else
   echo "      path CARGO_BIN_EXE_<bin> names:" >&2
   echo "        after cargo build   inode/size $build_side" >&2
   echo "        after cargo test    inode/size $test_side" >&2
-  echo "      Every mini/tests suite spawns that path, and a prebuilt test binary" >&2
+  echo "      Every checker mini_* suite spawns that path, and a prebuilt test binary" >&2
   echo "      run out of target/debug/deps/ will read whichever cargo command was" >&2
   echo "      last. That silently corrupted two measurement runs once already." >&2
   echo "      Make the two tables in $MANIFEST identical again." >&2

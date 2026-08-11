@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate the designed end-to-end fixtures in `mini/tests/fixtures/`.
+# Regenerate the designed end-to-end fixtures in `checker/tests/fixtures/`.
 #
 #   scripts/export-fixture.sh                    # every .lean in the fixture dir
 #   scripts/export-fixture.sh rung_ladder.lean   # just these
@@ -75,7 +75,7 @@
 # unconditional and the diff on a non-nested fixture is empty.
 #
 # The alternative was to commit the raw export and filter at test time. That
-# was rejected: `mini/tests/fixtures`' whole point is that "the `.ndjson` is
+# was rejected: `checker/tests/fixtures`' whole point is that "the `.ndjson` is
 # checked in too, so neither `lean` nor the network is needed to run the tests"
 # (above), and filtering at test time would put a pinned Lean toolchain on the
 # critical path of `cargo test`. The cost of the choice is that a committed
@@ -93,7 +93,7 @@
 # `modelgen/Test.lean` — the counts, the kernel, the statements — measure
 # nothing. `modelgen/tests/` therefore holds the *unfiltered* export of every
 # shape it asserts on, and `modelgen/tests/export.sh` sets `MODELGEN_FILTER=0`
-# to get one. Two directories, two requirements: `mini/tests/fixtures` must be
+# to get one. Two directories, two requirements: `checker/tests/fixtures` must be
 # filtered so `cargo test` needs no Lean, `modelgen/tests` must not be so the
 # generator has something to generate.
 #
@@ -106,9 +106,9 @@
 # # Where it reads and where it writes
 #
 # `FIXTURE_DIR` is the directory the `.lean` sources are read from (default
-# `mini/tests/fixtures`) and `OUT_DIR` is where the `.ndjson` is written
+# `checker/tests/fixtures`) and `OUT_DIR` is where the `.ndjson` is written
 # (default: the same). They are separate so the five nested shapes can have
-# **one** `.lean` — in `mini/tests/fixtures`, where the Rust suite's fixture
+# **one** `.lean` — in `checker/tests/fixtures`, where the Rust suite's fixture
 # lives — and two exports, a filtered one beside the source and a raw one under
 # `modelgen/tests`. A second copy of a `.lean` would be a second thing to keep
 # in step, and `modelgen/Test.lean` cross-checks the two exports against each
@@ -125,7 +125,7 @@
 #
 # on which the export is additionally passed through `monomorph`
 # (`MONOMORPH.md`), after the `modelgen` filter and before it is written.
-# `mini/tests/fixtures/mono_prefix.lean` is the only one that does.
+# `checker/tests/fixtures/mono_prefix.lean` is the only one that does.
 #
 # It is there because the shape it measures **cannot be written in Lean**.
 # `monomorph` names the copy of a declaration at σ by prepending
@@ -143,7 +143,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURES="${FIXTURE_DIR:-$ROOT/mini/tests/fixtures}"
+FIXTURES="${FIXTURE_DIR:-$ROOT/checker/tests/fixtures}"
 OUT="${OUT_DIR:-$FIXTURES}"
 FILTER="${MODELGEN_FILTER:-1}"
 TOOLCHAIN="leanprover/lean4:v4.29.1"

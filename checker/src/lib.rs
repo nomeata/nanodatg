@@ -15,6 +15,7 @@ pub mod instantiations;
 pub mod lam_store;
 pub mod pi_store;
 pub mod level;
+pub mod mini;
 pub mod name;
 pub mod parser;
 pub mod pretty_printer;

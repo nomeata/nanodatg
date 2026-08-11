@@ -28,8 +28,7 @@ false theorem. The translator may be liberal and clever. The kernel may not.
 | `kernel/` | **yes — the entire TCB** | FOL-with-∈ kernel for TG set theory: `Thm`, `Formula`, `Term`, the rules, the axioms |
 | `derived/` | no | derived inference rules and conservative constructions |
 | | | *Nothing Lean-syntax or Lean-`Expr` specific goes here.* Any construction useful **to model type theory** does. The test is vocabulary, not motivation: a lemma stated in `Term`s and `Formula`s belongs in `derived/` even when Lean's `Π` is the reason it exists; anything mentioning `ExprPtr`, `NamePtr` or Lean's `Expr` variants stays in `checker/`. |
-| `checker/` | no | fork of nanoda_lib: parser, `Expr`, inference, defeq, reduction, and the `Certifier` proof-backend boundary |
-| `mini/` | no | a Rust port of [`lean-mini-kernel`](https://github.com/nomeata/lean-mini-kernel), where the evidence-threading design was built with no caches to confound it. **Now migrating onto `checker/`'s term representation** (PIVOT.md §1.1): expressions are hash-consed in a `checker` arena, and `mini/src/arena.rs` is the only seam. That inverts the old "changes nothing in `checker/`" rule — see PIVOT.md §6; upstream files take minimal cited edits and `git diff nanoda-upstream/master` stays the audit. See `MINI-DESIGN.md`. |
+| `checker/` | no | the one checker crate: nanoda's parser/inference/defeq path plus the former mini-kernel implementation under `src/mini/`, sharing the TG evidence backend. The `checker` binary uses split dispatch by default; `--naive` selects the historical mini-only path. |
 | `ci/` | — | boundary enforcement, and a self-test for it |
 | `scripts/` | — | corpus harness |
 
@@ -74,7 +73,7 @@ The list is empty today.
 Without it, `cargo test` still runs the committed fixtures in
 `checker/tests/fixtures/{good,bad}`, so there is always negative coverage — and
 the **41** corpus-dependent tests across `checker/tests/{corpus,tg_tutorial}.rs`
-and `mini/tests/{tutorial,dump}.rs` skip. A skip is reported by cargo as `ok`,
+and `checker/tests/mini_{tutorial,dump}.rs` skip. A skip is reported by cargo as `ok`,
 which is fine for a developer and not fine for CI, so every one of them goes
 through `ci/skip-guard.rs`: set `NANODATG_REQUIRE_CORPUS=1` and a skip becomes a
 failure naming the missing path. `ci/check.sh` exports it whenever the corpus is
@@ -87,14 +86,12 @@ nanoda, the untrusted side — inductives, recursors, `Prop`, proof irrelevance,
 quotients, mutual and nested inductives, literals — is *already implemented and
 passing*. The remaining frontier is the interpretation and the kernel.
 
-> **Read this first: `mini/` is the frontier, not `checker/`.** This section and
-> the two that follow it were last measured on 2026-08-01, hours after `mini/`
-> was created and without accounting for it. Since then `checker/src` has taken
-> **one** commit (docs and tests in `scope.rs`) against **~130** to `mini/src`;
-> `mini/` is now larger than `checker/` and is where every current corpus number
-> comes from. Today's ledger — `accept 89 / decline 2 / reject 0`,
+> **Historical measurement note.** This section and the two that follow it were
+> last measured on 2026-08-01, before the former mini implementation moved into
+> `checker/src/mini/`. That implementation is where the later corpus numbers
+> came from. Today's ledger — `accept 89 / decline 2 / reject 0`,
 > `constEv 218/218`, `unsealed 0`, `gapped 0` over the 91 tutorial exports — is
-> `mini`'s, and is carried by `MEASUREMENTS.md` and `MINI-HANDOFF.md`. The
+> from the former mini path, and is carried by `MEASUREMENTS.md` and `MINI-HANDOFF.md`. The
 > figures below are `checker`'s and are still true of `checker`; the roadmap
 > below is `checker`'s and has been overtaken on `mini`, item by item, as each
 > item now says. `MINI-DESIGN.md` §0 is the statement of what `mini` is for.
@@ -255,7 +252,7 @@ That last one is an open question, not a fix.
    `mini/src/zoneb.rs` above it, and no export on the tutorial corpus stops.
    The item as written — "the cheap next step is a constructor with two or more
    plain recursive arguments, which changes only the fibre" — is
-   `derived/tests/genrec.rs` and `mini/tests/fixtures/prop_recursive_interleaved.lean`.
+   `derived/tests/genrec.rs` and `checker/tests/fixtures/prop_recursive_interleaved.lean`.
    `checker/src/tg.rs` still runs the hand-written `Bool`/`N`/`List` recognisers
    and has not taken the general path for them.
 

@@ -8,7 +8,7 @@
 # fixtures whose coverage had been gone since `6ae6515`, and nobody was told.
 #
 #   `lake exe test`      the four oracles of `MODELGEN.md` §4 over
-#                        `modelgen/tests`, `mini/tests/fixtures`' filtered
+#                        `modelgen/tests`, `checker/tests/fixtures`' filtered
 #                        copies, `vendor/arena-tests`' `init-prelude` when it is
 #                        there, and the CLI contract of §1.4 against the built
 #                        binary. 456 checks measured 2026-08-11 (248 when this

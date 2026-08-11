@@ -111,18 +111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mini"
-version = "0.1.0"
-dependencies = [
- "derived",
- "kernel",
- "nanoda_lib",
- "num-bigint",
- "rustc-hash",
- "serde_json",
-]
-
-[[package]]
 name = "nanoda_lib"
 version = "0.4.10-beta"
 dependencies = [

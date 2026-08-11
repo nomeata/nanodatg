@@ -8,7 +8,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BIN="${MINI_BIN:-$ROOT/target/debug/mini}"
+BIN="${MINI_BIN:-$ROOT/target/debug/checker}"
 CORPUS="${1:-$ROOT/vendor/arena-tests}"
 
 # `-L`: in a worktree `vendor/arena-tests` is a symlink (`ci/corpus-dir.sh
@@ -24,7 +24,7 @@ for f in $files; do
   # `--no-modelgen`, exactly as `mini/tests/tutorial.rs` runs it: no corpus
   # export has a nested inductive, so the filter is the identity and costs an
   # exec (and a Lean toolchain this machine's worktrees do not all have).
-  out="$("$BIN" --no-modelgen --verbose --mutual "$f" 2>&1)"
+  out="$("$BIN" --naive --no-modelgen --verbose --mutual "$f" 2>&1)"
   rc=$?
   echo "== $rel rc=$rc"
   # Drop the reject message body and anything with a path in it: those are

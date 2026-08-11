@@ -420,13 +420,13 @@ fi
 # a FAIL, and lets the run below be handed both binaries by path — which is also
 # the seam the self-test uses.
 echo "building both checkers in release (shared with the arena step; ~2 min cold, ~0 s warm)"
-if ! ( cd "$ROOT" && cargo build --release -p mini -p nanoda_lib ); then
+if ! ( cd "$ROOT" && cargo build --release -p nanoda_lib --bins ); then
   echo "the release checkers do not build" >&2
   exit 1
 fi
 
 run_compare "mini vs nanoda" env MVN_CORPUS="$CORPUS" \
-  MVN_MINI="$ROOT/target/release/mini" MVN_NANODA="$ROOT/target/release/nanoda_bin" \
+  MVN_MINI="$ROOT/target/release/checker" MVN_NANODA="$ROOT/target/release/nanoda_bin" \
   "$ROOT/scripts/mini-vs-nanoda.sh"
 
 echo

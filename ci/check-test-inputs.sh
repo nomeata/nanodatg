@@ -68,10 +68,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORPUS="${CORPUS_DIR:-$("$ROOT/ci/corpus-dir.sh")}"
 MODELGEN="${MODELGEN_BIN:-$ROOT/modelgen/.lake/build/bin/modelgen}"
 CHECK_SH="${CHECK_SH:-$ROOT/ci/check.sh}"
-SCAN_DIRS="${SCAN_DIRS:-$ROOT/checker/tests $ROOT/mini/tests}"
+SCAN_DIRS="${SCAN_DIRS:-$ROOT/checker/tests}"
 # One directory per workspace member, so the self-test can point the
 # feature-matrix checks at a synthetic tree.
-MEMBER_DIRS="${MEMBER_DIRS:-$ROOT/kernel $ROOT/derived $ROOT/checker $ROOT/mini}"
+MEMBER_DIRS="${MEMBER_DIRS:-$ROOT/kernel $ROOT/derived $ROOT/checker}"
 
 self_test() {
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -330,7 +330,7 @@ echo "  $matrix feature-matrix premises checked"
 # How much is riding on this — counted, not asserted from memory, so the number
 # cannot rot the way a comment would.
 sites=$(grep -rE 'skip_guard::(absent|no_inputs|tool_absent)\b' \
-          --include='*.rs' "$ROOT/checker/tests" "$ROOT/mini/tests" 2>/dev/null \
+          --include='*.rs' "$ROOT/checker/tests" 2>/dev/null \
         | grep -vcE ':[[:space:]]*(//|\*)')
 
 missing=0
@@ -375,7 +375,7 @@ else
   missing=1
 fi
 
-echo "  $sites guarded skip sites in checker/tests and mini/tests"
+echo "  $sites guarded skip sites in checker/tests"
 
 if (( missing )); then
   echo

@@ -364,7 +364,7 @@ crate_scan() { # crate_scan <dir> <regex> [<path-substring to allow>]
   hits=$(grep -rInE "$re" --include='*.rs' "$d" 2>/dev/null \
          | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|#!\[)')
   if [[ -n "$allow" ]]; then
-    hits=$(printf '%s\n' "$hits" | grep -v "$allow")
+    hits=$(printf '%s\n' "$hits" | grep -vE "$allow")
   fi
   printf '%s' "$hits" | grep -E '.'
 }
@@ -466,9 +466,16 @@ else
   ok "checker/ I1/I3 scan $checker_files file(s)"
 fi
 CHECKER_SCOPE="${CHECKER_SCOPE:-src/scope.rs}"
-if crate_scan "$C" "$HYP_RE" "/${CHECKER_SCOPE}:" >/dev/null; then
-  fail "\`Thm::assume\`/\`Thm::implies_intr\` outside checker/$CHECKER_SCOPE"
-  crate_scan "$C" "$HYP_RE" "/${CHECKER_SCOPE}:" >&2
+CHECKER_SCOPE_ALLOW="/${CHECKER_SCOPE}:"
+# The former mini checker now lives as a checker module and retains its own
+# scope implementation. Its stricter module-local discipline is checked by
+# check-mini-scope.sh; exclude that one file from this crate-wide allowlist too.
+if [[ -f "$C/src/mini/scope.rs" ]]; then
+  CHECKER_SCOPE_ALLOW="${CHECKER_SCOPE_ALLOW}|/src/mini/scope.rs:"
+fi
+if crate_scan "$C" "$HYP_RE" "$CHECKER_SCOPE_ALLOW" >/dev/null; then
+  fail "\`Thm::assume\`/\`Thm::implies_intr\` outside the checker scope modules"
+  crate_scan "$C" "$HYP_RE" "$CHECKER_SCOPE_ALLOW" >&2
   echo "  Open a scope instead: \`crate::scope::Scopes::open\` in shipped code," >&2
   echo "  \`crate::scope::test_support::assume\` in a test." >&2
 else
@@ -512,7 +519,7 @@ fi
 # workspace is accounted for by *something*: by rules 1–5 (the kernel), by R6′
 # above, or by a named sibling script that exists and is run from ci/check.sh.
 declare -A COVERED_HERE=( [kernel]="rules 1-5" [derived]="R6' I1" [checker]="R6' I1/I3/I4" )
-declare -A COVERED_ELSEWHERE=( [mini]="ci/check-mini-scope.sh" )
+declare -A COVERED_ELSEWHERE=()
 # Both overridable so ci/test-boundary.sh can point the coverage check at a
 # fixture workspace and assert that an unscanned member is caught.
 WS_MANIFEST="${WS_MANIFEST:-$ROOT/Cargo.toml}"
