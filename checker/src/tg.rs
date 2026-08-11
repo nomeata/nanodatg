@@ -2218,6 +2218,25 @@ struct Shared {
     /// at a site that never owned it. Here the site owns exactly this list, or
     /// there is no hit.
     dep_minors: HashMap<(Term, Term, Term, usize), (Sealed, Vec<Formula>)>,
+    /// **The dependent development, instantiated at a use site's arguments.**
+    /// Keyed by the recursor term `drec` is closed over — which is what says
+    /// *which declaration's* development this is, now that the store is not
+    /// scoped to one — by the argument vector `p⃗, C, S⃗, T`, and by which
+    /// theorem was asked for: `Some(i)` the `i`-th ι rule, `None` the
+    /// `⊢ drec = drec` the term is read off. Instantiating is `Thm::ax_inst`
+    /// once per variable and each one **opens the whole theorem**, which for
+    /// `Lean.ParserDescr` is fourteen opens of a very large derivation.
+    ///
+    /// **Per thread, and that is a correction rather than a preference.** It
+    /// was per backend, "like every other memo here", and recorded as worth
+    /// 1 % on the grounds that the arguments mostly differ per site. The key
+    /// census (`scripts/dep-key-census.diff`) says what "mostly" was: of 222
+    /// sites the argument vectors take **99 distinct values, and 130 when the
+    /// backend is part of the key** — 54 declarations reduce the same seven
+    /// recursors at the same motives. The scope was the larger half of the
+    /// miss, and [`Shared::dep_minors`] measured the same 17-point gap
+    /// independently.
+    dep_insts: HashMap<(Option<usize>, Term, Vec<Term>), Sealed>,
     /// The W-type machinery, derived on first use — most developments never
     /// declare an enumeration, and the derivation is not free. The outer
     /// `Option` is "has it been attempted", the inner one "did it succeed".
@@ -2629,6 +2648,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             lam_fss: HashMap::new(),
             lam_dprods: HashMap::new(),
             dep_minors: HashMap::new(),
+            dep_insts: HashMap::new(),
             inds: None,
             ind_ty_u1: None,
             rec_core: None,
@@ -2769,16 +2789,6 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Where each lambda occurrence sits.
     lam_sites: HashMap<ExprPtr<'t>, LamSite<'t>>,
     /// Where each dependent-`Π` occurrence sits.
-    /// **The dependent development, instantiated at a use site's arguments.**
-    ///
-    /// Keyed by the argument vector `p⃗, C, S⃗, T` and by which theorem was
-    /// asked for — `Some(i)` the `i`-th ι rule, `None` the `⊢ drec = drec` the
-    /// term is read off. Instantiating is `Thm::ax_inst` once per variable and
-    /// each one **opens the whole theorem**, which for `Lean.ParserDescr` is
-    /// fourteen opens of a very large derivation; the same ι site's arguments
-    /// recur across the reductions inside one declaration, so this is a memo
-    /// and not a cache of convenience. Per backend, like every other memo here.
-    dep_insts: HashMap<(Option<usize>, Vec<Term>), Thm>,
     pi_sites: HashMap<ExprPtr<'t>, PiSite>,
     /// Where each `Prop`-valued `∀` occurrence sits.
     prop_sites: HashMap<ExprPtr<'t>, PropSite>,
@@ -3595,6 +3605,23 @@ struct DepBottom {
     refl_gen: Thm,
     /// The variables the two above are closed over, outermost first.
     gvars: Vec<FreeVar>,
+    /// **`⊢ ∀p⃗ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))`** — the `COD` half of
+    /// `PRE`, closed over the parameters, for [`TgBackend::fire_dep`]'s two
+    /// `inst_all`s to land on.
+    ///
+    /// [`derived::inductive::motive::cod_at_funspace`] consults no constructor,
+    /// no arity and no use site — only `ind` — and it is a real derivation:
+    /// `mem_bin_union`, `union_intro`, two `gen_under`s over the ambient
+    /// `(h ∧ mx) ∧ my`. It ran at **every one of the 222 ι sites**, and so did
+    /// the `Formula::close` per parameter over its result. Both are hoisted
+    /// here for the reason and by the pattern [`Self::iota_gen`] records: a
+    /// generalisation that does not mention the use site is paid once per
+    /// declaration.
+    ///
+    /// `None` is `cod_at_funspace` declining, kept as a value rather than
+    /// refusing the bottom, so the ι site still reports it under its own
+    /// message instead of vanishing into "no dependent nest".
+    cod_gen: Option<Thm>,
 }
 
 /// **Why the general inductive path declined a declaration.**
@@ -3942,7 +3969,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             idxs: HashMap::new(),
             parts: HashMap::new(),
             lam_sites: HashMap::new(),
-            dep_insts: HashMap::new(),
             pi_sites: HashMap::new(),
             prop_sites: HashMap::new(),
             undet_sites: HashMap::new(),
@@ -6840,6 +6866,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             )?;
             derived::inductive::DepRecursor::build(&mut env, &m, &gi.ind, &gr, &core.r)
         };
+        // The `COD` half of `PRE`, derived and closed over `p⃗` once — see
+        // [`DepBottom::cod_gen`]. In the same borrow as the recursor above, and
+        // before the `map` below, which owns `gi`.
+        let cod_gen = {
+            let m = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::motive::cod_at_funspace(&mut env, &m, &gi.ind)
+                .map(|c| derived::gen_all(&gi.ind.params, &c))
+        };
         // **`gr` is not kept.** It was, until `dep_rec_at` replaced the
         // `rec_of` rebuild with a substitution: nothing downstream needs the
         // general recursor as an object any more, only the dependent
@@ -6855,7 +6890,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let iota_gen =
                 dr.iota.iter().map(|t| derived::gen_all(&gvars, t)).collect::<Vec<_>>();
             let refl_gen = derived::gen_all(&gvars, &Thm::eq_refl(dr.rec.clone()));
-            Rc::new(DepBottom { gi, dr: Rc::new(dr), core, iota_gen, refl_gen, gvars })
+            Rc::new(DepBottom { gi, dr: Rc::new(dr), core, iota_gen, refl_gen, gvars, cod_gen })
         });
         if out.is_some() {
             DEP_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -6944,16 +6979,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if at.len() != dp.gvars.len() {
             return None
         }
-        let key = (which, at.clone());
-        if let Some(hit) = self.dep_insts.get(&key) {
-            return Some(hit.clone())
+        // `dp.dr.rec` is the declaration's own recursor term, and it is in the
+        // key because the store is per thread — see [`Shared::dep_insts`].
+        let key = (which, dp.dr.rec.clone(), at.clone());
+        if let Some(hit) = self.shared.borrow().dep_insts.get(&key) {
+            return Some(hit.clone().into_thm())
         }
         let closed = match which {
             None => &dp.refl_gen,
             Some(i) => dp.iota_gen.get(i)?,
         };
         let out = derived::inst_all(closed, &at)?;
-        self.dep_insts.insert(key, out.clone());
+        // `Sealed::new` fails closed: an instantiation standing under a kernel
+        // sequent is handed back to the caller and simply not stored.
+        if let Ok(sealed) = Sealed::new(out.clone()) {
+            self.shared.borrow_mut().dep_insts.insert(key, sealed);
+        }
         Some(out)
     }
 
@@ -14650,15 +14691,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(m_w) = self.uu_mem_along(&m_fs, &fs_eq, ch.as_ref()) else {
             return Err("iota: retargeting the motive onto the carrier failed")
         };
-        let Some(cod_thm) = ({
-            let m = mach.borrow();
-            let mut env = self.env_mut();
-            derived::inductive::motive::cod_at_funspace(&mut env, &m, &ind)
-        }) else {
+        // Derived once per declaration and closed over `p⃗` there — see
+        // [`DepBottom::cod_gen`]. It used to be derived and closed here, at
+        // every site.
+        let Some(cod_thm) = dp.cod_gen.as_ref() else {
             return Err("iota: the target policy has no discharge for this motive")
         };
-        let cod_thm = derived::gen_all(&ind.params, &cod_thm);
-        let Some(cod_thm) = derived::inst_all(&cod_thm, &ps) else {
+        let Some(cod_thm) = derived::inst_all(cod_thm, &ps) else {
             return Err("iota: instantiating the target policy at these parameters failed")
         };
         let Some(cod_thm) = derived::inst_all(&cod_thm, &[c.clone(), v.clone()]) else {
