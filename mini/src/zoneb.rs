@@ -147,6 +147,22 @@ pub fn provably_nonzero(l: &Level) -> bool {
     }
 }
 
+/// **The class walk's instantiation, as numerals** — the one named site where
+/// a symbolic declaration level is still refused, and the successor of the
+/// blanket flatten [`ensure`] used to do at its boundary.
+///
+/// What is behind it is the genuinely ground interior `LEVELPOLY.md` §5.3
+/// sizes: the `Prop` test at the truncation branch, the resultant sort, the
+/// constructor-index numerals and the field level. A declaration routed to
+/// [`crate::direct`] never reaches here, which is the whole of the difference
+/// this predicate buys.
+///
+/// [`Gap::SymbolicLevel`] and not a silence: the caller counts it, and the
+/// zone-B histogram still names the shape.
+pub(crate) fn walk_numerals(inst: &[Level]) -> Result<Vec<u32>, Gap> {
+    inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)
+}
+
 /// `Sort ℓ` at a ground numeral, as a mini expression.
 pub(crate) fn level_numeral(n: u32) -> Level {
     let mut l = Level::zero();
@@ -190,28 +206,36 @@ pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
 /// returns without doing anything, and a second call after a decline returns
 /// the same reason.
 ///
-/// # `inst` is `&[Level]`, and the split below is where groundness now lives
+/// # `inst` is `&[Level]`, and both halves of it stay levels
 ///
 /// It was `&[u32]`, which made a ground schedule a *precondition of the type*
 /// rather than a choice — `mini/src/ground.rs`'s header on the same move for
-/// [`crate::interp::ConstKey`]. The retype is not blanket: what this function
-/// does with the two halves of `inst` is deliberately asymmetric, because the
-/// clause that justified the change needs exactly that asymmetry.
+/// [`crate::interp::ConstKey`]. The retype was asymmetric for one tranche: the
+/// constant's own instantiation was a level vector and the **declaration's**
+/// was flattened here by one `ground::as_numeral`, standing in for the seven
+/// interior calls rather than pre-empting them.
 ///
-/// * **The constant's own instantiation stays a level vector.** A recursor's
-///   is its declaration's with the motive's level prepended, and that motive
-///   level is the one thing on this route that is polymorphic at a declaration
-///   with no parameters of its own — `Bool.rec.{u}`. It is the store key and
-///   it is passed to [`crate::recursor::ensure`] unflattened.
-/// * **The declaration's own instantiation is still required to be numerals.**
-///   Everything below the split — the carrier, the constructor spec, the
-///   truncation, the index walk — reads it through `ground::as_numeral`, and
-///   `LEVELPOLY.md` §5.3 sizes that interior at seven calls. Until those seven
-///   are done a symbolic declaration level is [`Gap::SymbolicLevel`], said once
-///   here rather than seven times inside.
+/// **That flatten is gone.** It was measured, and what it was refusing was not
+/// what it was documented to be refusing:
 ///
-/// So the clause this unlocks is precisely *the eliminator at a symbolic motive
-/// level over a parameter-free declaration*, and the type says so.
+/// * The declaration's resultant sort — the level the interior actually reads —
+///   is a function of the declaration, not of `inst`. Of the eleven
+///   level-polymorphic declarations the corpus reaches, **four** (`Eq`, `Acc`,
+///   `Exists`, `PropStructure`) have resultant sort `Prop` at *every*
+///   instantiation, so their interior numeral reads were never blocked at all;
+///   the blanket flatten here was the only thing refusing them.
+/// * [`provably_nonzero`], the trichotomy's branch decider, already runs on the
+///   declaration's own level *expression* and never saw `inst`. Every one of
+///   the eleven has a decided branch at a variable rung, `PUnit.{u}` included —
+///   which is that function's own header.
+///
+/// So groundness moves **down**, to the routes that genuinely read a numeral:
+/// [`build`] dispatches [`crate::direct`] at levels and converts at one named
+/// predicate for the class walk, which answers [`Gap::SymbolicLevel`] — a
+/// reason, not a silence, and one the histogram can still count.
+///
+/// The clause this unlocks is *the direct declaration at a symbolic
+/// instantiation*, and the type says so.
 pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[Level]) -> Result<(), Gap> {
     // **`Quot`'s four primitives come first, because none of them is an
     // inductive declaration.** They are `add_quot`'s opaque constants with no
@@ -254,19 +278,14 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[Level]) -> Result<()
     // store key is this one, and using the declaration's would put
     // `⟦PUnit.rec.{w,u}⟧` where `⟦PUnit.rec.{u}⟧` belongs.
     //
-    // **The own list keeps its levels and the declaration's is flattened to
-    // numerals here**, which is the asymmetry this function's header argues
-    // for. One `as_numeral` per declaration parameter, in one place, so the
-    // seven `ground::as_numeral` calls below it do not each have to be a
-    // separate frontier.
+    // **Both lists keep their levels.** The split is still here and still
+    // load-bearing — it is about *which parameters* a key names, not about
+    // their spelling — but neither half is flattened any more, and what refuses
+    // a symbolic level is [`walk_numerals`], one layer down. See the header.
     let own_inst: Vec<Level> = inst.to_vec();
-    let ind_inst: Vec<u32> = inst[inst.len() - nl..]
-        .iter()
-        .map(ground::as_numeral)
-        .collect::<Option<_>>()
-        .ok_or(Gap::SymbolicLevel)?;
+    let ind_inst: Vec<Level> = inst[inst.len() - nl..].to_vec();
     let inst = &ind_inst[..];
-    let key = (ind_name, crate::ground::ground_levels(inst));
+    let key = (ind_name, crate::ground::key_levels(inst));
     {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
@@ -301,7 +320,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[Level]) -> Result<()
     // bookkeeping table. Every route — the class-(T) walk and every
     // [`crate::direct`] clause — puts the type former there first, so this one
     // test covers both, and it is the same key on the same store.
-    if c.stored_term(&ind_name, inst).is_none() {
+    if c.stored_term_at(&ind_name, inst).is_none() {
         if let Err(g) = build(c, &ind_name, inst) {
             if let Some(ip) = c.interp() {
                 if let Some(app) = ip.ind_apparatus() {
@@ -379,7 +398,7 @@ fn record_reason(
     c: &mut Checker<'_, '_>,
     name: &Name,
     ind_name: &Name,
-    inst: &[u32],
+    inst: &[Level],
     own: &[Level],
     g: Gap,
 ) {
@@ -389,9 +408,9 @@ fn record_reason(
     if is_rec {
         app.rec_untranslated.insert((*name, crate::ground::key_levels(own)), g);
     } else if is_decl {
-        app.untranslated.insert((*name, crate::ground::ground_levels(inst)), g);
+        app.untranslated.insert((*name, crate::ground::key_levels(inst)), g);
     } else {
-        app.ctor_untranslated.insert((*name, crate::ground::ground_levels(inst)), g);
+        app.ctor_untranslated.insert((*name, crate::ground::key_levels(inst)), g);
     }
 }
 
@@ -412,7 +431,7 @@ pub(crate) fn stored_or_reason_after(
     c: &mut Checker<'_, '_>,
     name: &Name,
     ind_name: &Name,
-    inst: &[u32],
+    inst: &[Level],
     own: &[Level],
 ) -> Result<(), Gap> {
     if matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. })) {
@@ -424,7 +443,11 @@ pub(crate) fn stored_or_reason_after(
         // and the constant occurrences that have to report why it is missing
         // come later and only *read* the store. Before that they re-entered
         // here and `recursor::ensure` recomputed the reason at every use.
-        let r = crate::recursor::ensure(c, ind_name, inst, name, own);
+        // **The eliminator route still reads the declaration's numerals**, and
+        // says so here rather than inside. `walk_numerals` is the same named
+        // refusal [`build`] uses; moving it is the eliminator half of this
+        // frontier and is not what the direct clause bought.
+        let r = walk_numerals(inst).and_then(|i| crate::recursor::ensure(c, ind_name, &i, name, own));
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
                 app.rec_untranslated.insert((*name, crate::ground::key_levels(own)), g.clone());
@@ -432,7 +455,7 @@ pub(crate) fn stored_or_reason_after(
         }
         return r
     }
-    if c.stored_term(name, inst).is_some() {
+    if c.stored_term_at(name, inst).is_some() {
         return Ok(())
     }
     // **"Absent" is not a reason.** A constructor of an indexed family that the
@@ -441,7 +464,7 @@ pub(crate) fn stored_or_reason_after(
     // standing in for a decline that knows exactly what it could not bridge.
     // `crate::ev::Gap::IndexedCtor` says why the distinction is worth a variant.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        if let Some(g) = app.ctor_untranslated.get(&(*name, crate::ground::ground_levels(inst))) {
+        if let Some(g) = app.ctor_untranslated.get(&(*name, crate::ground::key_levels(inst))) {
             return Err(g.clone())
         }
     }
@@ -877,8 +900,16 @@ struct DeclUniv {
     level: u32,
 }
 
-/// Translate one declaration at one ground instantiation.
-pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), Gap> {
+/// Translate one declaration at one instantiation.
+///
+/// # Where groundness lives now
+///
+/// `inst` is `&[Level]`. [`crate::direct`]'s clauses take it as it comes; the
+/// class walk below converts once, at [`walk_numerals`], because the carrier,
+/// the constructor spec, the truncation and the index walk all read numerals.
+/// That conversion is the *whole* of what a symbolic declaration level still
+/// costs, and it is one named site rather than [`ensure`]'s blanket refusal.
+pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[Level]) -> Result<(), Gap> {
     // **`Eq`'s direct clause comes first**, and the dispatch is one lookup on
     // the name this call was already keyed on ([`crate::direct::clause_for`]).
     // Before the trichotomy rather than after it, because `Eq` is class (S) —
@@ -903,15 +934,27 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let Expr::Sort(l) = &own.view() else {
         return Err(Gap::IndSpec(*ind_name, "resultant sort"))
     };
-    let ind_ty = ground::subst_ground(ty, lparams, inst);
+    // **`subst_levels`, not `subst_ground`.** The latter *is* the former
+    // composed with a numeral spelling (`ground.rs`), so this is the same
+    // substitution at a wider argument, and at a ground `inst` it is the same
+    // expression node for node.
+    let ind_ty = ground::subst_levels(ty, lparams, inst);
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
         .map(|n| {
-            let t = env.get(n).map(|ci| ground::subst_ground(ci.ty(), lparams, inst));
+            let t = env.get(n).map(|ci| ground::subst_levels(ci.ty(), lparams, inst));
             (*n, t)
         })
         .map(|(n, t)| t.map(|t| (n, t)).ok_or(Gap::IndSpec(*ind_name, "ctor type")))
         .collect::<Result<_, _>>()?;
+    // **The class walk reads numerals, and this is the one place it says so.**
+    // Everything below — the carrier, the constructor spec, the truncation, the
+    // index walk — takes `&[u32]`. Converting here rather than at [`ensure`]'s
+    // boundary is what lets a *direct* declaration through at a symbolic
+    // instantiation while still giving the walk's declarations a counted
+    // reason.
+    let walk_inst = walk_numerals(inst)?;
+    let inst = &walk_inst[..];
     // **The trichotomy** (`INDEXED-DESIGN.md` §2.1). Which carriers are
     // *admissible* is not a choice and is decided first:
     //

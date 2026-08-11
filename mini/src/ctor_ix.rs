@@ -1422,10 +1422,13 @@ mod tests {
 
         // A key the store misses. `T` has no level parameters, so nothing is
         // ever built at `[9]` and both calls below take the miss branch.
-        let miss: &[u32] = &[9];
+        // `&[Level]` since `stored_or_reason_after` de-grounded; `key_levels`
+        // is the identity on a numeral, so this is the same key it always was.
+        let miss_v = crate::ground::ground_levels(&[9]);
+        let miss: &[crate::expr::Level] = &miss_v;
         let c2 = ctors[2];
         assert_eq!(
-            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, &crate::ground::ground_levels(miss)).unwrap_err(),
+            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),
             Gap::NoInterpretation(c2),
             "with nothing recorded, a store miss is an absence and says so"
         );
@@ -1433,10 +1436,10 @@ mod tests {
         {
             let app = c.interp().expect("threaded").ind_apparatus().expect("apparatus");
             app.ctor_untranslated
-                .insert((c2, crate::ground::ground_levels(miss)), want.clone());
+                .insert((c2, crate::ground::key_levels(miss)), want.clone());
         }
         assert_eq!(
-            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, &crate::ground::ground_levels(miss)).unwrap_err(),
+            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),
             want,
             "with a reason recorded, the same miss must report the reason"
         );

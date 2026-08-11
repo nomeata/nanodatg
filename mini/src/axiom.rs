@@ -192,8 +192,13 @@ fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, inst: &[u32], cod: &E) -> Ty
             let eq = if u == 0 { None } else { Some(sound_eq(c, u)) };
             match eq {
                 // `u = 0`: reflexivity, and `⟦Eq.{0}⟧` is the nest to β down.
-                None => crate::direct::eq_bottom(c, cod, vec![0], None),
-                Some(Some(t)) => crate::direct::eq_bottom(c, cod, vec![u], Some(t)),
+                // The numeral spelling, because this clause is keyed on `u` as
+                // a number (`Gap::Quotient` carries it) and `⟦Eq.{u}⟧` was
+                // stored under a ground key by the same route.
+                None => crate::direct::eq_bottom(c, cod, ground::ground_levels(&[0]), None),
+                Some(Some(t)) => {
+                    crate::direct::eq_bottom(c, cod, ground::ground_levels(&[u]), Some(t))
+                }
                 Some(None) => Typing {
                     ty: *cod,
                     tm: None,

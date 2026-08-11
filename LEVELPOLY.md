@@ -1353,13 +1353,21 @@ function is what made the rest countable:
 Four signatures changed, not 75. The 75 remain the eventual volume and are not
 worth landing ahead of the clauses that justify them.
 
-The genuinely non-mechanical interior is unchanged and untouched: outside its
-tests `zoneb.rs` calls `ground::as_numeral` **four** times (the `Prop` test at
-the truncation branch, the resultant sort, the ctor-index numerals, the field
-level) and `ground::subst_ground` **three** (the declaration's type, its
-constructors' types, and the Lean type the recursor is stated against). Those
-seven are what the ~70 eliminators whose *declaration* is polymorphic are
-waiting on, and none has been attempted.
+The interior was sized here at seven calls — `ground::as_numeral` **four**
+times (the `Prop` test at the truncation branch, the resultant sort, the
+ctor-index numerals, the field level) and `ground::subst_ground` **three** (the
+declaration's type, its constructors' types, and the Lean type the recursor is
+stated against) — and called *"genuinely non-mechanical"*, waiting on by
+*"~70 eliminators whose declaration is polymorphic"*.
+
+**Both halves of that sentence were wrong, and the measurement is below**
+(`symbolic-level`, measured). It is eleven declarations rather than seventy
+eliminators; the three `subst_ground`s are `subst_levels` composed with a
+numeral spelling, so retyping them *is* the de-grounding; and the four
+`as_numeral`s are not one obstacle — four of the eleven declarations are
+`Prop`-resultant at every σ and never reach any of them. The flatten this
+paragraph is about is now deleted, and what stands in its place is
+`zoneb::walk_numerals`.
 
 `Gap::NoInterpretation`'s second field went with the retype. It was
 `Vec<u32>`, never read — `Ledger::key` renders `no-interp({name})` and nothing
@@ -1455,9 +1463,11 @@ unstatable in the ω-vocabulary, and no fundamental blocker turned up — but
 ###### It is one frontier, not `rec_dep`'s bill
 
 The same `as_pi` blindness stands between this route and `rec_prop`
-(`036`, `078`), `rec_nat` (`097`), `rec_s_ix`, **and** the ~70 eliminators
-whose declaration is itself polymorphic, whose seven interior `as_numeral`
-calls are the *other* half of their obstacle. So the collapse is the next
+(`036`, `078`), `rec_nat` (`097`), `rec_s_ix`, **and** the eliminators whose
+declaration is itself polymorphic. (Sized here at *"~70 … whose seven interior
+`as_numeral` calls are the other half of their obstacle"*; measured since at
+**55**, over eleven declarations, and the seven were not the obstacle — see
+`symbolic-level`, measured.) So the collapse is the next
 tranche's unit of work and it should be built once, at `Interp`, rather than
 per route — which is why `level_nonzero` and `pi_dprod_at` were landed there
 and not inside `rec_dep`.
@@ -1592,6 +1602,84 @@ Gate baselines move to **27 × exit 0, 62 × exit 4, 2 × exit 2** and
 `zoneBOk = 148 / 362`; `open` is 0 on every file, the accounting identity
 `zone_b_ok + Σ zone_b_blocked == zone_b_consts` holds, and Gate A is
 byte-identical against a build of the parent commit.
+
+##### `symbolic-level`, measured — and it is not what it was sized as
+
+The 208 was briefed as *"the ~70 eliminators whose declaration carries universe
+parameters, waiting behind the boundary's seven interior calls."* Instrumenting
+the split before writing a line refutes that in the **favourable** direction,
+and this is the eighth size correction on the branch. Every row of the 208,
+attributed:
+
+| where it is refused | rows | what it is |
+|---|---|---|
+| `zoneb::ensure`'s declaration split | **172** | **eleven** declarations, type former + constructors + recursor |
+| `quot::prim_for`'s boundary | 24 | the `Quot` family over 6 files |
+| deeper, past the split | 12 | `And.rec` 7, `Nat.rec` 2, `True.rec`, `SortElimProp.rec`, `ProjDataIndex.rec` — recursors of declarations with **no** parameters of their own |
+
+Eleven declarations, not seventy eliminators, and `Eq` alone is **84 of the
+172** (28 files × 3 constants). Two further measurements decide the shape of
+the work, both taken by probe:
+
+* **The declaration's resultant sort is a function of the declaration, not of
+  σ**, and for four of the eleven it is `Prop` at *every* instantiation:
+  `Eq` (84), `Acc` (6), `PropStructure` (6), `Exists` (3) — **99 rows** whose
+  interior numeral reads were never blocked at all. The other seven are
+  `PUnit` `u` (21), `Prod` `max(u+1,v+1)` (18), `RBTree` `u+1` (15),
+  `PProd` `max(max(1,u),v)` (9), `List` `u+1` (4),
+  `TypeWithTypeFieldPoly` `u+2` (3), `PSigma` (3).
+* **The trichotomy needs nothing.** [`provably_nonzero`] already runs on the
+  declaration's own level *expression* and never saw σ; every one of the eleven
+  has a decided branch at a variable rung, `PUnit.{u}` included — which is that
+  function's own header, written before the frontier was named. There is **no
+  undecidable `u = 0` split anywhere in this frontier.**
+
+So the seven interior calls are not one obstacle. Three of them
+(`ground::subst_ground` on the declaration's type, its constructors' types, and
+the recursor's Lean type) are `ground::subst_levels` composed with a numeral
+spelling — the retype *is* the de-grounding. Of the four `as_numeral`s, the one
+at the truncation branch's `Prop` test is a routing predicate returning `bool`,
+not a certificate.
+
+##### The direct clause at a variable rung — 60 constants, and a third boundary found
+
+`zoneb::ensure`'s blanket flatten is deleted; groundness moves **down** to
+`zoneb::walk_numerals`, one named predicate the class walk converts at, which
+still answers `Gap::SymbolicLevel` — a reason the histogram counts. A
+declaration [`crate::direct::clause_for`] names never reaches it.
+
+| | + the binder collapse | **+ the direct clause** |
+|---|---|---|
+| zone-B constants owed | 362 | 362 |
+| interpreted at their own levels | 148 | **208** |
+| `symbolic-level` | 208 | **148** |
+| whole exports certified | 27 of 89 | 27 of 89 |
+
+`208 + 154 = 362`. The 60 are `Eq` and `Eq.refl` over 28 files and `Acc` and
+`Acc.intro` over 2 — every direct declaration's **type former and
+constructor**.
+
+**The exit codes did not move, and the reason is a boundary nobody had
+counted.** `Checker::const_evidence` flattens `ls` to numerals on its *own*
+account, before it looks in the store at all:
+
+```rust
+let Some(inst) = ls.iter().map(as_numeral).collect::<Option<Vec<u32>>>()
+else { return (None, Ev::missing(Gap::SymbolicLevel)) };
+```
+
+Zone B calls `zoneb::ensure` directly and so sees the 60; a **use site** goes
+through `const_evidence` and does not. `Eq.rec` and `Acc.rec` are likewise
+still behind `walk_numerals` in `stored_or_reason_after`, which is the
+eliminator half. So this tranche's number is a store-coverage number and not a
+certification one, and saying otherwise would be reading `zoneBOk` as something
+it is not. That third boundary is the next tranche's first target: the store it
+would read is now *filled* at symbolic keys, which it was not before.
+
+No fundamental blocker turned up. Every level expression the frontier produces
+— `u`, `u+1`, `max`, `imax` — is in the ω-vocabulary already, and the one place
+a genuine `ite0` would have been needed (the trichotomy at `PUnit.{u}`) does not
+need one.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

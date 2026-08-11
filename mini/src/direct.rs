@@ -267,7 +267,21 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
 /// The shape of the walk is [`crate::zoneb::build`]'s: the declaration's own
 /// data, the type former as a `np + ni`-deep λ-nest, then one nest per
 /// constructor. What differs is only the bottom of each nest.
-pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> Result<(), Gap> {
+///
+/// # `inst` is `&[Level]`, and for `Eq` and `Acc` nothing under it is symbolic
+///
+/// These clauses do not go through the class walk, so
+/// [`crate::zoneb::walk_numerals`] is not in their way. The one numeral they
+/// genuinely read is `level` below — the declaration's **resultant** sort, which
+/// for `Eq` and `Acc` is `Prop` at every instantiation and for `Nat` is `1` at
+/// the only one it has. `σ` reaches the *parameters* (`Eq.{u}`'s `α : Sort u`)
+/// and the parameters are λ-bound by `lam_nest`, whose binder types are
+/// interpreted rather than measured.
+///
+/// So a symbolic `σ` costs these clauses nothing, and the `Gap::SymbolicLevel`
+/// arm on `level` is the honest statement of the one case that would: a direct
+/// declaration whose own resultant sort moved with `σ`. There is none.
+pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[Level]) -> Result<(), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(*name, w);
     let env = c.environment();
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
@@ -283,17 +297,19 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
         return Err(Gap::NoInterpretation(*name))
     }
     let depth = (np + ni) as usize;
-    let lean_ty = ground::subst_ground(ty, lparams, inst);
-    // The resultant sort, as a ground numeral: the universe the former's
-    // bottom must land in, read off the declaration rather than assumed.
+    let lean_ty = ground::subst_levels(ty, lparams, inst);
+    // The resultant sort, as a numeral: the universe the former's bottom must
+    // land in, read off the declaration rather than assumed. See this
+    // function's header for why `Gap::SymbolicLevel` here is unreachable for
+    // the three clauses there are, and why it is still the right answer.
     let own = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad("type shape"))?;
     let Expr::Sort(l) = &own.view() else { return Err(bad("resultant sort")) };
-    let level = ground::as_numeral(l).ok_or_else(|| bad("level"))?;
+    let level = ground::as_numeral(l).ok_or(Gap::SymbolicLevel)?;
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
         .map(|n| {
             env.get(n)
-                .map(|ci| (*n, ground::subst_ground(ci.ty(), lparams, inst)))
+                .map(|ci| (*n, ground::subst_levels(ci.ty(), lparams, inst)))
                 .ok_or_else(|| bad("ctor type"))
         })
         .collect::<Result<_, _>>()?;
@@ -303,7 +319,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
     let mut bottom =
         move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(former_bottom(c, cl, &nm, depth, level)) };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    crate::zoneb::store(c, name, inst, t)?;
+    crate::zoneb::store_at(c, name, inst, t)?;
 
     // ── the constructors ──────────────────────────────────────────────────
     for (cname, cty) in &ctor_tys {
@@ -319,7 +335,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
         };
         let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(ctor_bottom(c, &site)) };
         let t = c.lam_nest(cty, cdepth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-        crate::zoneb::store(c, cname, inst, t)?;
+        crate::zoneb::store_at(c, cname, inst, t)?;
     }
     Ok(())
 }
@@ -466,7 +482,7 @@ fn level_of(n: u32) -> Level {
 pub(crate) fn eq_bottom(
     c: &mut Checker<'_, '_>,
     codomain: &E,
-    inst: Vec<u32>,
+    inst: Vec<Level>,
     eq: Option<Thm>,
 ) -> Typing {
     let site = CtorSite {
@@ -491,7 +507,7 @@ struct CtorSite {
     /// happened to be listed first. The arity check below is the derivation
     /// that confirms the name.
     ctor: Name,
-    inst: Vec<u32>,
+    inst: Vec<Level>,
     clause: Clause,
     codomain: E,
     /// A proof of `arg₁ = arg₂` for an `Eq` codomain whose two sides differ.
@@ -542,7 +558,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // `Nat.zero` has no binder and this is `None`, which is the arity check
     // that tells the two constructors apart.
     let field = if *clause == Clause::Nat { c.binder(0) } else { None };
-    let Some(store_ty) = c.stored_term(ind, inst) else { return gap(Gap::NoEndpoint) };
+    let Some(store_ty) = c.stored_term_at(ind, inst) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let point = ip.point();
 
@@ -780,6 +796,58 @@ pub(crate) mod tests {
         let (subj, _) = cm.concl().as_mem().expect("a membership");
         assert_eq!(subj, ct.tm.clone().unwrap(), "the typing must be about ⟦Eq.refl⟧ itself");
         assert_eq!(subj, c.interp().unwrap().point(), "a proof denotes •");
+    }
+
+    /// **The direct clause at a variable rung** — `⟦Eq.{u}⟧` and
+    /// `⟦Eq.refl.{u}⟧` stored at a level nothing decides.
+    ///
+    /// This is the clause the boundary was refusing. `Eq`'s resultant sort is
+    /// `Prop` at *every* `u`, so no numeral read under [`build`] was ever
+    /// blocked; what blocked it was [`crate::zoneb::ensure`] flattening the
+    /// declaration's instantiation with `ground::as_numeral` before the
+    /// dispatch could happen. `σ` reaches only the parameter `α : Sort u`,
+    /// which `lam_nest` binds.
+    ///
+    /// **It goes through [`crate::zoneb::ensure`] and not `infer_type`, and
+    /// that is the measurement and not a convenience.** `crate::poly_run`'s
+    /// zone B calls `ensure` exactly this way; a *use site* reaches
+    /// `Checker::const_evidence`, which flattens `ls` to numerals on its own
+    /// account before it ever looks in the store. That second boundary is
+    /// untouched here and is why this clause moves `zoneBOk` and moves no
+    /// export's exit code.
+    ///
+    /// The ground test above must keep passing beside this one: the point is
+    /// that the **same** derivation runs at both, not that a second one exists
+    /// for the variable case.
+    ///
+    /// What this adds over the constructor is non-vacuity, and no more —
+    /// `direct`'s own `debug_assert`s pin every intermediate, so a wrong step
+    /// returns `None` rather than a wrong theorem, and for a kernel-certified
+    /// `Thm` the conclusion shape *is* the content.
+    #[test]
+    fn eq_is_interpreted_at_a_variable_rung() {
+        let (env, e, r) = eq_env(Level::param(nm("u")));
+        let mut ip = Interp::new();
+        let mut c = Checker::poly(&env, &mut ip, &[nm("u")]).expect("the apparatus builds");
+        let us = vec![Level::param(nm("u"))];
+
+        crate::zoneb::ensure(&mut c, &e, &us).expect("⟦Eq.{u}⟧ at a variable rung");
+        assert!(
+            c.stored_term_at(&e, &us).is_some(),
+            "the type former must be in the store at [u], not merely reported Ok"
+        );
+        assert!(
+            c.stored_term_at(&r, &us).is_some(),
+            "and so must its constructor — one `ensure` fills both"
+        );
+
+        // The ground key is a *different* entry and must not have been filled
+        // by this call: `⟦Eq.{u}⟧` is not `⟦Eq.{0}⟧`, and a store that
+        // conflated them would answer every later lookup with the wrong nest.
+        assert!(
+            c.stored_term_at(&e, &[Level::zero()]).is_none(),
+            "the variable rung must not have written the numeral's key"
+        );
     }
 
     /// **The name is not the evidence.** A declaration called `Eq` whose
