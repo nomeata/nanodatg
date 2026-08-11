@@ -149,10 +149,10 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
 /// projection congruence through the same tuple projection, and consumes the
 /// retained constructor computation rule for direct redexes. The projection
 /// trace now also retains a subject's already-computed whnf certificate and
-/// hands it to TG: delta-only and nested projection subjects compose without a
-/// second reduction. Iota-containing traces remain behind the readiness gate
-/// until that iota family itself certifies, so exposing an independently
-/// unsupported rule cannot increase the ledger.
+/// hands it to TG: delta-only, the mini-published fieldless dependent-iota
+/// family, and nested projection subjects compose without a second reduction.
+/// Other iota traces remain behind the readiness gate, so exposing an
+/// independently unsupported rule cannot increase the ledger.
 #[test]
 fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let direct = run_on("proj_reduced_subject.ndjson", &["--no-modelgen", "--verbose"]);
@@ -162,8 +162,10 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
         stdout.contains("route\tmode=Split\ttoMini=3\ttoChecker=10\tunclaimed=0"),
         "the projection fixture was not handled by the one dispatch loop:\n{stdout}",
     );
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 12, "the reduced-subject projection ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 1, "a ready subject trace was not consumed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 7, "the reduced-subject projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 1, "Two.rec did not consume mini's dependent recursor evidence:\n{stdout}");
+    assert!(!stdout.contains("gap: iota:"), "the ready Two.rec subject trace was not certified:\n{stdout}");
+    assert!(!stdout.contains("gap: proj_reduce"), "the certified iota subject did not compose with projection computation:\n{stdout}");
     assert!(!stdout.contains("gap: whnf"), "a subject trace drifted from its endpoints:\n{stdout}");
     assert!(
         !stdout.contains("beta: the contracted body does not match its interpretation"),

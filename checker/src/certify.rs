@@ -310,6 +310,18 @@ pub trait Certifier<'t, 'p> {
         false
     }
 
+    /// Whether an iota step inside a projection subject has authoritative
+    /// evidence ready for this backend. This is a readiness query only: it
+    /// must not re-run reduction or eagerly build a recursor package.
+    fn wants_proj_red_iota(
+        &mut self,
+        _ctx: &mut TcCtx<'t, 'p>,
+        _redex: ExprPtr<'t>,
+        _reduct: ExprPtr<'t>,
+    ) -> bool {
+        false
+    }
+
     fn proj_red(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,

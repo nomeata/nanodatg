@@ -790,7 +790,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 };
                 self.certifier.wants_proj_red_subject(self.ctx, ty_name, structure)
             }
-            Node::One(Rule::Iota | Rule::Admitted(_)) => false,
+            Node::One(Rule::Iota) => {
+                self.certifier.wants_proj_red_iota(self.ctx, trace.from, trace.to)
+            }
+            Node::One(Rule::Admitted(_)) => false,
             Node::Seq(l, r) => {
                 self.projection_subject_ready(&Some(l.clone()))
                     && self.projection_subject_ready(&Some(r.clone()))

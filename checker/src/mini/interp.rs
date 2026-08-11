@@ -819,8 +819,12 @@ pub struct WRec {
 
 /// The general and dependent eliminators of one declaration, over one machine.
 pub struct DepRec {
-    pub gr: derived::inductive::GenRecursor,
-    pub dr: derived::inductive::DepRecursor,
+    pub gr: Rc<derived::inductive::GenRecursor>,
+    pub dr: Rc<derived::inductive::DepRecursor>,
+    /// The W-recursor this dependent development was built over. Consumers
+    /// need its composite symbol when spelling recursive induction hypotheses;
+    /// rebuilding it would produce a different recursor.
+    pub wrec: Rc<WRec>,
 }
 
 /// **What `⟦T.rec.{σ}⟧`'s nest bottom is called**, and the equation that takes
@@ -878,6 +882,18 @@ pub struct DepElim {
 }
 
 impl IndApparatus {
+    /// Hand the exact dependent-recursor package and its Lean-facing nest
+    /// bottom to the shared semantic core. The publication is performed only
+    /// after `rec_dep` has checked the abbreviation's endpoints.
+    pub(crate) fn publish_dep_elim(
+        &self,
+        key: ConstKey,
+        dep: Rc<DepRec>,
+        elim: Rc<DepElim>,
+    ) -> bool {
+        joint_key(&key).is_some_and(|joint| self.core.publish_dep_elim(joint, dep, elim))
+    }
+
     fn build(core: &EnvCore, p: &Prelude) -> Option<IndApparatus> {
         // The `Wtype`, `Bound` and `Machine` are the **core's** — built once,
         // over the prelude tower's own `Sums`, and shared with any other
@@ -1119,7 +1135,7 @@ impl IndApparatus {
                 env, &self.mach.borrow(), ind, &w.rc, &w.iota, &w.funspace,
             )?;
             let dr = derived::inductive::DepRecursor::build(env, &self.mach.borrow(), ind, &gr, &w.rc)?;
-            Some(Rc::new(DepRec { gr, dr }))
+            Some(Rc::new(DepRec { gr: Rc::new(gr), dr: Rc::new(dr), wrec: w }))
         });
         match built {
             Some(d) => {

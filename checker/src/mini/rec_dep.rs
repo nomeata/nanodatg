@@ -1182,7 +1182,11 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     if let Some(app) = ip.ind_apparatus() {
         let key = (site.rec, site.rec_inst.clone());
         let target = cx.v_set.clone();
-        app.dep_elims.insert(key, Rc::new(crate::mini::interp::DepElim { sym, ax, target }));
+        let elim = Rc::new(crate::mini::interp::DepElim { sym, ax, target });
+        if !app.publish_dep_elim(key.clone(), dep, elim.clone()) {
+            return Err(bad("dependent recursor: divergent shared elimination evidence"))
+        }
+        app.dep_elims.insert(key, elim);
     }
     Ok((term, out))
 }

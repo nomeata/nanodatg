@@ -2047,6 +2047,12 @@ struct ProjectionStore {
         crate::const_store::ConstKey,
         Option<Rc<derived::inductive::decl_proj::DeclProj>>,
     >,
+    /// Mini's exact dependent-recursor package and the abbreviation at the
+    /// bottom of the Lean-facing recursor nest, keyed by the recursor.
+    dep_elims: HashMap<
+        crate::const_store::ConstKey,
+        (Rc<crate::mini::interp::DepRec>, Rc<crate::mini::interp::DepElim>),
+    >,
 }
 
 /// The one-per-run semantic objects both engines must share for their
@@ -2176,12 +2182,52 @@ impl EnvCore {
         true
     }
 
+    /// Publish the dependent computation evidence mini produced while
+    /// checking an inductive group. A later checker-routed definition consumes
+    /// this exact package; no recursor is rebuilt and no declaration is
+    /// checked twice.
+    pub(crate) fn publish_dep_elim(
+        &self,
+        key: crate::const_store::ConstKey,
+        dep: Rc<crate::mini::interp::DepRec>,
+        elim: Rc<crate::mini::interp::DepElim>,
+    ) -> bool {
+        let mut store = self.projections.borrow_mut();
+        if let Some((old_dep, old_elim)) = store.dep_elims.get(&key) {
+            return Rc::ptr_eq(old_dep, &dep)
+                && old_elim.sym == elim.sym
+                && old_elim.target == elim.target
+        }
+        store.dep_elims.insert(key, (dep, elim));
+        true
+    }
+
+    fn dep_elim(
+        &self,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<(Rc<crate::mini::interp::DepRec>, Rc<crate::mini::interp::DepElim>)> {
+        self.projections.borrow().dep_elims.get(key).cloned()
+    }
+
+    fn has_dep_elim(&self, key: &crate::const_store::ConstKey) -> bool {
+        self.projections.borrow().dep_elims.contains_key(key)
+    }
+
     /// Whether mini published a translation at this exact joint key. Unlike
     /// [`Self::projection_evidence`], this is a pure readiness query: reduction
     /// recording must not eagerly build the expensive projection package when
     /// no caller may ever ask for its certificate.
     fn has_projection_translation(&self, key: &crate::const_store::ConstKey) -> bool {
         self.projections.borrow().translated.contains_key(key)
+    }
+
+    /// Mini's authoritative class-(T) translation at one exact joint key,
+    /// without constructing any later package over it.
+    fn projection_translation(
+        &self,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<Rc<crate::mini::interp::Translated>> {
+        self.projections.borrow().translated.get(key).cloned()
     }
 
     /// The field count of a mini-published class-(T) structure, independent of
@@ -3883,7 +3929,12 @@ struct DegenBottom {
 struct DepBottom {
     gi: Rc<GenInd>,
     dr: Rc<derived::inductive::DepRecursor>,
-    core: Rc<RecCore>,
+    /// Composite symbol of the exact W-recursor `dr` was built over.
+    comp: FnSym,
+    /// Mini's name for `app(drec, major)` at the bottom of an adopted nest.
+    elim: Option<Rc<crate::mini::interp::DepElim>>,
+    /// Mini's constructor abbreviations for an adopted package.
+    ctor_abbrev: Option<Vec<Thm>>,
     /// **The development, already closed over `p⃗, C, S⃗, T`.**
     ///
     /// [`TgBackend::dep_subst`] instantiates these at a use site's own terms,
@@ -6893,6 +6944,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         name: &NamePtr<'t>,
         levels: LevelsPtr<'t>,
     ) -> Option<RecBottom> {
+        if let Some((dp, tn)) = self.mini_dep_rec_bottom(ctx, name, levels) {
+            return Some(RecBottom::Dep(dp, tn))
+        }
         if self.enum_rec_shape(ctx, name).is_some() {
             return Some(RecBottom::Enum(self.bool_recursor()?))
         }
@@ -7115,7 +7169,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let ind_lv = self.interp_levels(ctx, ind_levels);
         // The Lean-facing type former of the declaration being eliminated —
         // per backend, and refused rather than guessed if it does not build.
-        let Some(tn) = self.gen_ty_nest(&gi, ind_name, &ind_lv) else {
+        let Some(tn) = self.gen_ty_nest(ctx, &gi, ind_name, ind_levels, &ind_lv) else {
             note_decline(Decline::Params);
             return None
         };
@@ -7246,7 +7300,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         let ind_lv = self.interp_levels(ctx, ind_levels);
-        let tn = self.gen_ty_nest(&gi, ind_name, &ind_lv)?;
+        let tn = self.gen_ty_nest(ctx, &gi, ind_name, ind_levels, &ind_lv)?;
         let key = (self.name_key(ind_name)?, ind_lv);
         let hit = self.shared.borrow().dep_recs.get(&key).cloned();
         if let Some(d) = hit {
@@ -7298,7 +7352,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let iota_gen =
                 dr.iota.iter().map(|t| derived::gen_all(&gvars, t)).collect::<Vec<_>>();
             let refl_gen = derived::gen_all(&gvars, &Thm::eq_refl(dr.rec.clone()));
-            Rc::new(DepBottom { gi, dr: Rc::new(dr), core, iota_gen, refl_gen, gvars, cod_gen })
+            Rc::new(DepBottom {
+                gi,
+                dr: Rc::new(dr),
+                comp: core.r.comp,
+                elim: None,
+                ctor_abbrev: None,
+                iota_gen,
+                refl_gen,
+                gvars,
+                cod_gen,
+            })
         });
         if out.is_some() {
             DEP_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -8713,6 +8777,32 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             note_decline(Decline::Build);
             return None
         }
+        // Mini is the sole declaration checker. For the fieldless,
+        // parameterless family, adopt its exact carrier instead of building a
+        // parallel enum carrier.
+        if np == 0 && spec.ctors.iter().all(|c| c.args.is_empty() && c.recs == 0) {
+            if let Some(translated) = self.mini_fieldless_translation_at(ctx, ind_name, levels) {
+                let same = translated.ind.spec.ctors.len() == spec.ctors.len()
+                    && translated
+                        .ind
+                        .spec
+                        .ctors
+                        .iter()
+                        .zip(&spec.ctors)
+                        .all(|(a, b)| a.order == b.order && a.recs == b.recs);
+                if same {
+                    return Some(Rc::new(GenInd {
+                        param_vars: walk.param_vars,
+                        param_doms: walk.param_doms,
+                        orders: walk.ctors.iter().map(|c| c.order.clone()).collect(),
+                        field_vars: walk.ctors.iter().map(|c| c.field_vars.clone()).collect(),
+                        beta_bodies: walk.ctors.iter().map(|c| c.beta_bodies.clone()).collect(),
+                        betas: walk.ctors.iter().map(|_| Vec::new()).collect(),
+                        ind: translated.ind.clone(),
+                    }))
+                }
+            }
+        }
         let mach = match self.machine() {
             Some(m) => m,
             None => {
@@ -8818,8 +8908,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// outright.
     fn gen_ty_nest(
         &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
         gi: &Rc<GenInd>,
         ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
         lv: &[Term],
     ) -> Option<Rc<GenTyNest>> {
         let key = (ind_name, lv.to_vec());
@@ -8840,6 +8932,38 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
             }
             note_dt(Dt::NestDrift);
+        }
+        // Mini already owns the Lean-facing name for an adopted fieldless
+        // declaration. At zero parameters its defining equation is the entire
+        // type-former bridge.
+        if gi.param_vars.is_empty()
+            && self
+                .mini_fieldless_translation_at(ctx, ind_name, levels)
+                .is_some_and(|tr| Rc::ptr_eq(&tr.ind, &gi.ind))
+        {
+            let head = self.mini_const(ctx, ind_name, levels)?;
+            let body = gi.ind.ty_of(Vec::new());
+            let head_ax = if head == body {
+                Thm::eq_refl(head.clone())
+            } else {
+                self.abbrev_defs.get(&head)?.clone()
+            };
+            if head_ax.concl().as_eq() != Some((head.clone(), body.clone())) {
+                return None
+            }
+            let out = Rc::new(GenTyNest {
+                head: head.clone(),
+                head_ax: head_ax.clone(),
+                head_sym: head.as_app().map(|(f, _)| f),
+                vars: Vec::new(),
+                doms: Vec::new(),
+                prems: Vec::new(),
+                spine: head,
+                spine_eq: head_ax.clone(),
+                spine_eq_all: head_ax,
+            });
+            self.gen_ty_nests.insert(key, out.clone());
+            return Some(out)
         }
         let ap = self.pre.ap.clone();
         let vars = gi.param_vars.clone();
@@ -8952,7 +9076,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let np = gi.param_vars.len();
 
         // ── The type former ─────────────────────────────────────────────────
-        let Some(tn) = self.gen_ty_nest(&gi, ind_name, &lv) else {
+        let Some(tn) = self.gen_ty_nest(ctx, &gi, ind_name, levels, &lv) else {
             note_decline(Decline::Params);
             return None
         };
@@ -9533,6 +9657,37 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     )> {
         let key = self.const_key(ctx, ty_name, levels)?;
         self.core.projection_evidence(&self.pre, &key)
+    }
+
+    /// Mini's authoritative class-(T) translation at a joint key. Unlike
+    /// [`Self::mini_projection_at`], this does not build the projection package.
+    fn mini_translation_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<crate::mini::interp::Translated>> {
+        let key = self.const_key(ctx, ty_name, levels)?;
+        self.core.projection_translation(&key)
+    }
+
+    /// Mini's fieldless, parameterless class-(T) translation at an exact key.
+    fn mini_fieldless_translation_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<crate::mini::interp::Translated>> {
+        let translated = self.mini_translation_at(ctx, ty_name, levels)?;
+        (translated.ind.spec.params == 0
+            && !translated.ind.spec.ctors.is_empty()
+            && translated
+                .ind
+                .spec
+                .ctors
+                .iter()
+                .all(|c| c.args.is_empty() && c.recs == 0))
+        .then_some(translated)
     }
 
     /// The authoritative interpretation of a data-valued structure
@@ -10801,6 +10956,58 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return u_mp(&u_a1i(&step, h.as_ref()), &p, h.as_ref())
         }
         None
+    }
+
+    /// Mini's exact dependent recursor, initially for the parameterless,
+    /// fieldless family needed by the reduced projection subject `Two.rec`.
+    fn mini_dep_rec_bottom(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<(Rc<DepBottom>, Rc<GenTyNest>)> {
+        let Declar::Recursor(r) = self.decls.get_declar(name)? else { return None };
+        if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return None
+        }
+        let ind_name = r.all_inductives[0];
+        let given = ctx.read_levels(levels).to_vec();
+        let ind_levels = ctx.alloc_levels_slice(given.get(1..)?);
+        let translated = self.mini_fieldless_translation_at(ctx, ind_name, ind_levels)?;
+        let rec_key = self.const_key(ctx, *name, levels)?;
+        let (dep, elim) = self.core.dep_elim(&rec_key)?;
+        let gi = self.gen_ind(ctx, ind_name, ind_levels)?;
+        if !Rc::ptr_eq(&gi.ind, &translated.ind)
+            || dep.dr.minors.len() != translated.ind.spec.ctors.len()
+            || r.num_minors as usize != dep.dr.minors.len()
+        {
+            return None
+        }
+        let ind_lv = self.interp_levels(ctx, ind_levels);
+        let tn = self.gen_ty_nest(ctx, &gi, ind_name, ind_levels, &ind_lv)?;
+        let mut gvars: Vec<FreeVar> = gi.ind.params.clone();
+        gvars.push(dep.dr.motive);
+        gvars.extend(dep.dr.minors.iter().copied());
+        gvars.push(dep.dr.target);
+        let iota_gen = dep
+            .dr
+            .iota
+            .iter()
+            .map(|t| derived::gen_all(&gvars, t))
+            .collect::<Vec<_>>();
+        let refl_gen = derived::gen_all(&gvars, &Thm::eq_refl(dep.dr.rec.clone()));
+        let out = Rc::new(DepBottom {
+            gi,
+            dr: dep.dr.clone(),
+            comp: dep.wrec.rc.comp,
+            elim: Some(elim),
+            ctor_abbrev: Some(translated.ctor_abbrev.clone()),
+            iota_gen,
+            refl_gen,
+            gvars,
+            cod_gen: None,
+        });
+        Some((out, tn))
     }
 
     /// A **context local**, by acquiring its own declared typing as a new
@@ -13799,26 +14006,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // graph certificates it already placed in the shared lambda store.
         // Other recursor shapes remain on TG's existing construction until
         // their carrier-specific computation rules move in a later tranche.
-        let adopted_nat = if self.nat_rec_shape(ctx, &name).is_some() {
-            self.mini_const(ctx, name, levels).and_then(|head| {
-                let bottom = self.rec_bottom(ctx, &name, levels)?;
-                matches!(bottom, RecBottom::Nat(_)).then(|| {
-                    Rc::new(RecNest {
-                        adopted: true,
-                        head: head.clone(),
-                        head_def: Thm::eq_refl(head),
-                        lams: Vec::new(),
-                        betas: Vec::new(),
-                        t_defs: Vec::new(),
-                        prefixes: Vec::new(),
-                        bottom,
-                    })
+        let adopted = self.mini_const(ctx, name, levels).and_then(|head| {
+            let bottom = self.rec_bottom(ctx, &name, levels)?;
+            let usable = match &bottom {
+                RecBottom::Nat(_) => self.nat_rec_shape(ctx, &name).is_some(),
+                RecBottom::Dep(dp, _) => dp.elim.is_some(),
+                _ => false,
+            };
+            usable.then(|| {
+                Rc::new(RecNest {
+                    adopted: true,
+                    head: head.clone(),
+                    head_def: Thm::eq_refl(head),
+                    lams: Vec::new(),
+                    betas: Vec::new(),
+                    t_defs: Vec::new(),
+                    prefixes: Vec::new(),
+                    bottom,
                 })
             })
-        } else {
-            None
-        };
-        let Some(nest) = adopted_nat.or_else(|| self.rec_nest(ctx, name, levels)) else {
+        });
+        let Some(nest) = adopted.or_else(|| self.rec_nest(ctx, name, levels)) else {
             // **The largest origin in the gap ledger**, split by the gates
             // [`Self::gen_rec_bottom`] actually applies rather than reported as
             // one row.
@@ -14088,7 +14296,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let ta: Vec<Term> = args.iter().map(|a| self.interp(ctx, *a)).collect();
 
         // ── The left-hand side: unfold, contract, then fire ──────────────────
-        let (chain, obligations) = self.nest_chain(ctx, nest, args, &ta, &doms)?;
+        let (mut chain, obligations) = self.nest_chain(ctx, nest, args, &ta, &doms)?;
+        // Mini's adopted nest contracts to its own abbreviation of
+        // `app(drec, major)`; consume the stored equation to reach the exact
+        // dependent recursor its computation theorem is about.
+        if nest.adopted {
+            if let RecBottom::Dep(dp, _) = &nest.bottom {
+                let elim = dp.elim.as_ref().ok_or("iota: adopted dependent nest has no bottom evidence")?;
+                let unfold = derived::inst_all(&elim.ax, &ta)
+                    .and_then(CondEq::plain)
+                    .ok_or("iota: mini's dependent nest bottom did not instantiate")?;
+                chain = self
+                    .ceq_trans(&chain, &unfold)
+                    .ok_or("iota: chaining mini's dependent nest bottom failed")?;
+            }
+        }
         let fired = match nest.bottom.clone() {
             RecBottom::Enum(br) => self.fire_enum(&br, &ta, idx)?,
             // `obligations` is not passed, and the absence is load-bearing:
@@ -14873,10 +15095,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let np = ps.len();
         let su = minors[i].clone();
         if k + m == 0 {
-            // A nullary constructor is `t_policy` 1's, and this arm is only
-            // reached when there is none. Unreachable, and refused rather than
-            // indexed into.
-            return Err("iota: a dependent minor premise of a nullary constructor")
+            let (minor_ty, hs) = obligations[np + 1 + i].clone();
+            let h = conj_of(&hs);
+            let mdom = doms[np + 1 + i].clone();
+            if u_concl(&minor_ty, h.as_ref())
+                != Some(Formula::mem(su.clone(), mdom.clone()))
+            {
+                return Err("iota: DEP undischargeable — a nullary minor has no typing")
+            }
+            let ax = dp
+                .ctor_abbrev
+                .as_ref()
+                .and_then(|axs| axs.get(i))
+                .and_then(|ax| derived::inst_all(ax, &[]))
+                .ok_or("iota: mini published no nullary constructor abbreviation")?;
+            let ctor_eq = CondEq::plain(ax)
+                .ok_or("iota: mini's nullary constructor abbreviation is not an equation")?;
+            let cod_eq = self
+                .ceq_congr(ap.app, &[CondEq::refl(c.clone()), ctor_eq])
+                .ok_or("iota: congruence at a nullary constructor refused")?;
+            let (from, _) = cod_eq
+                .as_eq()
+                .ok_or("iota: the nullary constructor codomain bridge is not an equation")?;
+            if from != mdom {
+                return Err("iota: the nullary minor is typed at another constructor")
+            }
+            let moved = self
+                .u_mem_along(&minor_ty, &cod_eq.thm, h.as_ref())
+                .ok_or("iota: retargeting a nullary minor onto mini's carrier failed")?;
+            return Ok((moved, hs))
         }
         let Some(mach) = self.machine() else {
             return Err("iota: the general apparatus is unavailable")
@@ -15466,6 +15713,70 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Ok((closed, out_hyps))
     }
 
+    /// `⊢ H → COD(C,V)` at mini's target `V`, from
+    /// `⊢ H → C ∈ fs(W,V)` and the tower rung's transitivity and empty
+    /// membership. This derives no Lean judgement.
+    fn mini_cod_at_rung(
+        &mut self,
+        w: &Term,
+        c: &Term,
+        v: &Term,
+        c_in_fs: &Thm,
+        hyps: &[Formula],
+    ) -> Option<Thm> {
+        let rung = (1..=64).find_map(|n| {
+            let r = self.pre.tower.at(n)?;
+            (r.set == *v).then_some(r)
+        })?;
+
+        let x = self.env_mut().fresh_var();
+        let tx = Term::var(x);
+        let x_mem = Formula::mem(tx.clone(), w.clone());
+        let mut x_hyps = hyps.to_vec();
+        if !x_hyps.contains(&x_mem) {
+            x_hyps.push(x_mem);
+        }
+        let xh = conj_of(&x_hyps);
+        let c_in_fs = reassume(c_in_fs, hyps, &x_hyps)?;
+        let x_in_w = self.assumed(&tx, w, &x_hyps)?;
+        let cx = self.mk(self.pre.ap.app, vec![c.clone(), tx]);
+        let cx_in_v = app_in_codomain(
+            &self.pre.fs_app_mem,
+            w,
+            v,
+            c,
+            &Term::var(x),
+            &c_in_fs,
+            &x_in_w,
+            xh.as_ref(),
+        )?;
+
+        let y = self.env_mut().fresh_var();
+        let ty = Term::var(y);
+        let y_mem = Formula::mem(ty.clone(), cx.clone());
+        let mut y_hyps = x_hyps.clone();
+        y_hyps.push(y_mem);
+        let yh = conj_of(&y_hyps);
+        let cx_in_v = reassume(&cx_in_v, &x_hyps, &y_hyps)?;
+        let trans = derived::inst_all(&rung.transitive, std::slice::from_ref(&cx))?;
+        let over = u_mp(&u_a1i(&trans, yh.as_ref()), &cx_in_v, yh.as_ref())?;
+        let at_y = u_inst1(&over, &ty, yh.as_ref())?;
+        let y_in_cx = self.assumed(&ty, &cx, &y_hyps)?;
+        let inner = u_mp(&at_y, &y_in_cx, yh.as_ref())?;
+        let want = Formula::mem(ty, v.clone());
+        let (fam, after_y) = self.guard_and_generalise_at(&inner, &y_hyps, &want, y, &cx)?;
+        if after_y != x_hyps {
+            return None
+        }
+        let fam_concl = u_concl(&fam, conj_of(&x_hyps).as_ref())?;
+        let (covers, after_x) = self.guard_and_generalise_at(&fam, &x_hyps, &fam_concl, x, w)?;
+        if after_x != hyps {
+            return None
+        }
+        let h = conj_of(hyps);
+        u_and_intro(&covers, &u_a1i(&rung.empty_mem, h.as_ref()), h.as_ref())
+    }
+
     /// **The ι rule at a dependent motive** — the arm `t_policy` declines.
     ///
     /// [`Self::fire_general`] with `HYP` replaced by `PRE`, and the interest is
@@ -15539,9 +15850,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(v) = self.motive_codomain(ctx, dom_exprs[np]) else {
             return Err("iota: the motive's codomain is not a closed sort")
         };
-        let t = {
-            let sums = mach.borrow().wt.sums.clone();
-            derived::inductive::motive::cod_target(&sums, &v)
+        let t = match dp.elim.as_ref() {
+            Some(elim) => {
+                if elim.target != v {
+                    return Err("iota: mini's dependent target is not the motive's sort")
+                }
+                elim.target.clone()
+            }
+            None => {
+                let sums = mach.borrow().wt.sums.clone();
+                derived::inductive::motive::cod_target(&sums, &v)
+            }
         };
         let Some(drec) = self.dep_rec_at(dp, &ps, &c, &minors, &t) else {
             return Err("iota: the dependent recursor term could not be built")
@@ -15621,17 +15940,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Derived once per declaration and closed over `p⃗` there — see
         // [`DepBottom::cod_gen`]. It used to be derived and closed here, at
         // every site.
-        let Some(cod_thm) = dp.cod_gen.as_ref() else {
-            return Err("iota: the target policy has no discharge for this motive")
-        };
-        let Some(cod_thm) = derived::inst_all(cod_thm, &ps) else {
-            return Err("iota: instantiating the target policy at these parameters failed")
-        };
-        let Some(cod_thm) = derived::inst_all(&cod_thm, &[c.clone(), v.clone()]) else {
-            return Err("iota: instantiating the target policy at this motive failed")
-        };
-        let Some(cod_thm) = u_mp(&u_a1i(&cod_thm, ch.as_ref()), &m_w, ch.as_ref()) else {
-            return Err("iota: discharging the target policy failed")
+        let cod_thm = if dp.elim.is_some() {
+            self.mini_cod_at_rung(&w_at, &c, &v, &m_w, &cod_hyps)
+                .ok_or("iota: mini's target policy did not discharge at this motive")?
+        } else {
+            let Some(cod_thm) = dp.cod_gen.as_ref() else {
+                return Err("iota: the target policy has no discharge for this motive")
+            };
+            let Some(cod_thm) = derived::inst_all(cod_thm, &ps) else {
+                return Err("iota: instantiating the target policy at these parameters failed")
+            };
+            let Some(cod_thm) = derived::inst_all(&cod_thm, &[c.clone(), v.clone()]) else {
+                return Err("iota: instantiating the target policy at this motive failed")
+            };
+            u_mp(&u_a1i(&cod_thm, ch.as_ref()), &m_w, ch.as_ref())
+                .ok_or("iota: discharging the target policy failed")?
         };
 
         // ── `DEP(C,S⃗)`, one dependent minor premise per constructor ──────────
@@ -15659,16 +15982,30 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if fields.len() != k_plain + m_rec {
             return Err("iota: the constructor is not applied to its own fields")
         }
-        let (ctor_eq, ctor_h, ctor_hyps, ys_c, ts_c) =
-            self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?;
+        let (ctor_eq, ctor_h, ctor_hyps, ys_c, ts_c) = if np == 0 && fields.is_empty() {
+            let ax = dp
+                .ctor_abbrev
+                .as_ref()
+                .and_then(|axs| axs.get(idx))
+                .and_then(|ax| derived::inst_all(ax, &[]))
+                .ok_or("iota: mini published no nullary constructor abbreviation")?;
+            if ax.concl().as_eq().map(|(l, _)| l) != Some(ta[major].clone()) {
+                return Err("iota: mini's constructor abbreviation has another endpoint")
+            }
+            let eq = CondEq::plain(ax)
+                .ok_or("iota: mini's constructor abbreviation is not an equation")?;
+            (eq, None, Vec::new(), Vec::new(), Vec::new())
+        } else {
+            self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?
+        };
         // `Hᵢ` — the fields at `βⱼ(p⃗,y⃗)` and the recursive ones at `W` — **is**
         // the constructor bridge's own `Hᵢ^ctor`. `Ctor::hyp` is
         // `ctor_atoms_at` and the dependent rule's is `rect::field_atoms`, and
         // both are the same list of memberships at the same sets. Checked below
         // against what the rule actually asks, never assumed from that.
-        let Some(ctor_h) = ctor_h else {
+        if !fields.is_empty() && ctor_h.is_none() {
             return Err("iota: the constructor with fields carries no typings")
-        };
+        }
 
         // ── (S4') at these terms, and the claim it must make ─────────────────
         //
@@ -15755,7 +16092,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // and is asked rather than reproduced, so the two cannot disagree.
         let ihs = {
             let m = mach.borrow();
-            match ind.minor_ihs(&m, dp.core.r.comp, &drec, idx, &ts_c) {
+            match ind.minor_ihs(&m, dp.comp, &drec, idx, &ts_c) {
                 Some(v) => v,
                 None => return Err("iota: the recursive calls could not be spelled"),
             }
@@ -15767,15 +16104,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // exactly the constructor bridge's own `Hᵢ^ctor`, which
         // `ctor_spine_bridge` discharged from the same obligations the spine
         // equation rests on.
-        let Some((hi, concl)) = u_concl(&fired, h.as_ref()).and_then(|f| f.as_imp()) else {
-            return Err("iota: the dependent rule at these fields is not conditional")
-        };
-        if concl != want_eq {
-            return Err("iota: the dependent computation rule is not about this instance")
-        }
-        let Some(hi_thm) = reassume(&ctor_h, &ctor_hyps, &hyps) else {
-            return Err("iota: restating the constructor's typings failed")
-        };
+        let fired = if fields.is_empty() {
+            if u_concl(&fired, h.as_ref()) != Some(want_eq) {
+                return Err("iota: the nullary dependent computation rule is not about this instance")
+            }
+            fired
+        } else {
+            let Some((hi, concl)) = u_concl(&fired, h.as_ref()).and_then(|f| f.as_imp()) else {
+                return Err("iota: the dependent rule at these fields is not conditional")
+            };
+            if concl != want_eq {
+                return Err("iota: the dependent computation rule is not about this instance")
+            }
+            let Some(ctor_h) = ctor_h.as_ref() else {
+                return Err("iota: the constructor with fields carries no typings")
+            };
+            let Some(hi_thm) = reassume(ctor_h, &ctor_hyps, &hyps) else {
+                return Err("iota: restating the constructor's typings failed")
+            };
         // **The two spell a recursive field's set differently, and the
         // difference is one defining equation.** `Ctor::hyp` states it at the
         // Lean-facing `ind(p⃗)` — its own header says the hypotheses are
@@ -15785,9 +16131,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // projected, the recursive ones moved along it, and the conjunction
         // reassembled. A constructor with no recursive field takes none of
         // this: the two lists are then equal and the loop below is skipped.
-        let hi_thm = if m_rec == 0 {
-            hi_thm
-        } else {
+            let hi_thm = if m_rec == 0 {
+                hi_thm
+            } else {
             let Some(got) = u_concl(&hi_thm, h.as_ref()) else {
                 return Err("iota: the constructor's typings have no conclusion")
             };
@@ -15832,12 +16178,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 acc = both;
             }
             acc
-        };
-        if u_concl(&hi_thm, h.as_ref()) != Some(hi) {
-            return Err("iota: the constructor's own typings are not the ones the rule asks for")
-        }
-        let Some(fired) = u_mp(&fired, &hi_thm, h.as_ref()) else {
-            return Err("iota: discharging the dependent rule's field typings failed")
+            };
+            if u_concl(&hi_thm, h.as_ref()) != Some(hi) {
+                return Err("iota: the constructor's own typings are not the ones the rule asks for")
+            }
+            u_mp(&fired, &hi_thm, h.as_ref())
+                .ok_or("iota: discharging the dependent rule's field typings failed")?
         };
         let Some(fired) = CondEq::new(fired, hyps) else {
             return Err("iota: the dependent computation rule does not have the assumed shape")
@@ -19683,6 +20029,27 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let Expr::Const { levels, .. } = ctx.read_expr(head) else { return false };
         self.const_key(ctx, ty_name, levels)
             .is_some_and(|key| self.core.has_projection_translation(&key))
+    }
+
+    fn wants_proj_red_iota(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        redex: ExprPtr<'t>,
+        _reduct: ExprPtr<'t>,
+    ) -> bool {
+        let (fun, _) = ctx.unfold_apps(redex);
+        let Expr::Const { name, levels, .. } = ctx.read_expr(fun) else { return false };
+        let Some(Declar::Recursor(r)) = self.decls.get_declar(&name) else { return false };
+        if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return false
+        }
+        let given = ctx.read_levels(levels).to_vec();
+        let Some(ind_given) = given.get(1..) else { return false };
+        let ind_levels = ctx.alloc_levels_slice(ind_given);
+        self.mini_fieldless_translation_at(ctx, r.all_inductives[0], ind_levels).is_some()
+            && self
+                .const_key(ctx, name, levels)
+                .is_some_and(|key| self.core.has_dep_elim(&key))
     }
 
     fn proj_red(
