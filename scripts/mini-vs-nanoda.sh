@@ -68,11 +68,31 @@
 # the population is visible rather than inferred from a 133-line table. If the
 # count moves, the row that moved says which file and why.
 #
+# # Two legs, two counts, two floors
+#
+# The comparison runs over `good/tutorial` (~91 files) and `bad/tutorial` (~42),
+# and they answer different questions: `good/` asks whether either checker
+# refuses something it should take, `bad/` whether either takes something it
+# should refuse. **Only `bad/` can catch an over-permissive checker**, and it is
+# the smaller of the two.
+#
+# One count over both is therefore a floor the big leg satisfies by itself. If
+# `bad/tutorial` were emptied — re-fetched wrong, renamed, its suffix changed —
+# it would expand to nothing under `nullglob`, the loop would produce no rows,
+# and the summary would read `(of 91)`: a large, healthy-looking number with the
+# negative half of the gate silently gone. So each leg prints its own count and
+# is floored on its own, here and again in `ci/check-mini-vs-nanoda.sh`.
+#
+# A leg *directory* that is missing is worse still and exits 2. It used to be a
+# bare `[[ -d "$d" ]] || continue`, which is a hand-rolled silent skip — what
+# `ci/skip-guard.rs` bans in the Rust suites for exactly this reason.
+#
 # # Exit status
 #
 #   0  no acceptance divergences
 #   1  at least one acceptance divergence, or a crash
-#   2  could not run — no corpus, no checker binary, or the build failed
+#   2  could not run — no corpus, a missing or empty corpus leg, no checker
+#      binary, or the build failed
 #
 # **2 is not 0.** This exited 0 when `vendor/arena-tests` was absent, which is
 # indistinguishable from a clean run for anything reading the status; `ci/
@@ -167,14 +187,30 @@ dirs=()
 [[ "$WHICH" == "good" || "$WHICH" == "all" ]] && dirs+=("$CORPUS/good/tutorial")
 [[ "$WHICH" == "bad"  || "$WHICH" == "all" ]] && dirs+=("$CORPUS/bad/tutorial")
 
+# A requested leg that is not there is an **incomplete corpus**, and it exits 2
+# ("could not run") rather than being skipped. What stood here was
+# `[[ -d "$d" ]] || continue` — a hand-rolled silent skip, the shell spelling of
+# the shape `ci/skip-guard.rs` bans in the Rust suites and `ci/check-test-guards.sh`
+# ratchets: the loop moved on, the summary counted the other leg, and the run
+# was green. Losing `bad/tutorial` that way loses the negative half of the
+# comparison, which is the half that can fail.
+for d in "${dirs[@]}"; do
+  [[ -d "$d" ]] && continue
+  echo "missing corpus leg: $d" >&2
+  echo "The corpus at $CORPUS is incomplete. A leg that is not there is not a" >&2
+  echo "leg that agreed; refusing to report a partial comparison as a whole one." >&2
+  exit 2
+done
+
 printf '%-42s %-12s %-12s %s\n' file mini nanoda ''
 agree=0; differ=0; oos=0; reason=0
-declare -a FAILURES=() NAMED=()
+declare -a FAILURES=() NAMED=() LEGS=()
 shopt -s nullglob
 for d in "${dirs[@]}"; do
-  [[ -d "$d" ]] || continue
+  leg="${d#"$CORPUS"/}"; legn=0
   echo "── $d"
   for f in "$d"/*.ndjson; do
+    legn=$((legn+1))
     rel="${f#"$CORPUS"/}"
     m="$(mini_verdict "$f")"
     n="$(nanoda_verdict "$f")"
@@ -195,15 +231,37 @@ for d in "${dirs[@]}"; do
     fi
     printf '%-42s %-12s %-12s %s\n' "$(basename "$f")" "$m" "$n" "$tag"
   done
+  LEGS+=("$leg $legn")
 done
 
 echo
-# The count line. `ci/check-mini-vs-nanoda.sh` parses the `(of N)` and treats a
-# zero, a missing line or an unparsable one as BROKEN rather than as a pass: an
-# exit status alone cannot tell a clean comparison from a comparison of nothing,
-# and this script iterating over an empty glob is exactly how it would look.
+# ── the count lines ─────────────────────────────────────────────────────────
+# **One per leg, and then the total.** The total alone was a floor a single
+# healthy leg could satisfy on its own: `good/tutorial` is ~91 of the ~133
+# files, so a `bad/tutorial` that expanded to nothing under `nullglob` — the
+# directory emptied, re-fetched wrong, or the `*.ndjson` suffix changed — left
+# `(of 91)`, a number comfortably over zero, with the entire negative half of
+# the comparison missing. Nothing in the output said so, because a leg that
+# contributes nothing to a sum looks exactly like a leg that contributed no
+# divergences.
+#
+# So each leg prints its own count and floors it here, and
+# `ci/check-mini-vs-nanoda.sh` re-checks both floors against these lines — the
+# harness cannot re-derive them, and a floor only the producer enforces is a
+# floor that leaves with the producer.
+for l in "${LEGS[@]}"; do echo "mini-vs-nanoda leg ${l% *}: ${l##* } files"; done
 echo "mini-vs-nanoda: $agree agree, $differ diverged, $oos out-of-scope, $reason reason-only (of $((agree+differ+oos+reason)))"
 if ((${#NAMED[@]})); then printf '  %s\n' "${NAMED[@]}"; fi
+empty=0
+for l in "${LEGS[@]}"; do
+  (( ${l##* } == 0 )) || continue
+  echo "empty corpus leg: ${l% *} matched no *.ndjson under $CORPUS" >&2
+  empty=1
+done
+if (( empty )); then
+  echo "A leg that compared nothing cannot agree; the total above is one leg's." >&2
+  exit 2
+fi
 if ((differ)); then
   printf '  FAIL   %s\n' "${FAILURES[@]}"
   echo "$differ acceptance divergence(s)/crash(es)" >&2

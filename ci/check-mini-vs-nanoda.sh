@@ -48,6 +48,25 @@
 # above SKIPs. `ci/check-arena.sh --self-test` and `ci/check-modelgen.sh
 # --self-test` are the same idea.
 #
+# ## …per leg, because `(of N)` is a sum
+#
+# `N` is `good/tutorial` plus `bad/tutorial`, and `good/` is ~91 of the ~133.
+# A `bad/tutorial` that expands to nothing — the directory present but empty,
+# which is what a half-finished re-fetch of a gitignored corpus looks like —
+# leaves `(of 91)`, and 91 > 0, so the whole negative half of the comparison
+# could disappear behind a passing floor. `bad/` is the only leg that can catch
+# an over-permissive checker, so it is the half worth losing least.
+#
+# `mini-vs-nanoda.sh` therefore prints one `mini-vs-nanoda leg <leg>: N files`
+# line per leg, and `run_compare` requires **each leg in `$REQUIRE_LEGS` to be
+# present and non-zero** as well as the total. It is a second floor over the
+# same fact and that is deliberate: the producer refuses an empty leg itself
+# (exit 2), but a floor only the producer enforces leaves when the producer is
+# edited, and this harness is what `ci/check.sh` actually reads. A missing leg
+# line is BROKEN and not a pass, for the same reason an unparsable count is:
+# a harness that cannot find the number it floors has stopped measuring, not
+# started agreeing.
+#
 # # Cost
 #
 # Measured 2026-08-08 in an empty worktree, `CARGO_BUILD_JOBS=3`:
@@ -80,11 +99,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 fails=0
 
+# The legs a full run must have compared. Both, unless a caller says otherwise:
+# `mini-vs-nanoda.sh good` and `… bad` exist for hand runs, and the self-test
+# drives one-leg canned output through this too.
+REQUIRE_LEGS="${REQUIRE_LEGS:-good/tutorial bad/tutorial}"
+
 # Run something that prints a `mini-vs-nanoda:` summary line, and require the
-# line to exist and to have compared a nonzero number of files.
+# line to exist, each required leg to have compared a nonzero number of files,
+# and the total likewise.
 run_compare() {
   local name="$1"; shift
-  local out rc n
+  local out rc n leg legn
   out="$( "$@" 2>&1 )"; rc=$?
   printf '%s\n' "$out"
   if (( rc )); then
@@ -92,6 +117,25 @@ run_compare() {
     fails=$((fails+1))
     return 1
   fi
+  # Per leg first: a zero here is invisible in the total, which is the whole
+  # point, so it must not be reported as "0 compared" only when every leg is
+  # empty.
+  for leg in $REQUIRE_LEGS; do
+    legn="$(printf '%s\n' "$out" \
+      | sed -nE "s#^mini-vs-nanoda leg ${leg}: ([0-9]+) files\$#\1#p" | tail -1)"
+    if [[ -z "$legn" ]]; then
+      echo "  BROKEN: $name reported no count for the \`$leg\` leg — either it did" >&2
+      echo "  not run, or the line this parses has moved. A leg that is not counted" >&2
+      echo "  is hidden inside the total below." >&2
+      fails=$((fails+1))
+      return 1
+    elif (( legn == 0 )); then
+      echo "  BROKEN: $name compared 0 files in the \`$leg\` leg. The total below is" >&2
+      echo "  the other leg's alone." >&2
+      fails=$((fails+1))
+      return 1
+    fi
+  done
   n="$(printf '%s\n' "$out" | sed -nE 's/^mini-vs-nanoda: .*\(of ([0-9]+)\)$/\1/p' | tail -1)"
   if [[ -z "$n" ]]; then
     echo "  BROKEN: $name exited 0 without reporting a file count" >&2
@@ -102,7 +146,9 @@ run_compare() {
     fails=$((fails+1))
     return 1
   fi
-  echo "  $name: $n files"
+  echo "  $name: $n files ($(printf '%s\n' "$out" \
+    | sed -nE 's/^mini-vs-nanoda leg (.*): ([0-9]+) files$/\1 \2/p' | tr '\n' ',' \
+    | sed 's/,$//; s/,/, /g'))"
 }
 
 # ── the self-test ───────────────────────────────────────────────────────────
@@ -145,6 +191,11 @@ EOF
 
   # corpus <dir> <relpath>... — the script only looks at good/tutorial and
   # bad/tutorial, so both always exist even when empty.
+  #
+  # Every outcome cell below populates **both** legs, even when only one of them
+  # carries the file under test: an empty leg is now itself a failure, so a cell
+  # that left one empty would be passing or failing for a reason that is not
+  # the one in its name. `AGREE` filler is what the other leg gets.
   corpus() {
     local d="$TMP/$1"; shift
     rm -rf "$d"; mkdir -p "$d/good/tutorial" "$d/bad/tutorial"
@@ -152,6 +203,8 @@ EOF
     for p in "$@"; do mkdir -p "$d/$(dirname "$p")"; echo '{}' > "$d/$p"; done
     printf '%s' "$d"
   }
+  GOODFILL=good/tutorial/MACCEPT-NACCEPT-fine.ndjson
+  BADFILL=bad/tutorial/MREJECT-NREJECT-caught.ndjson
 
   # cell <pass|fail> <name> <corpus dir> [extra env...]
   cell() {
@@ -179,19 +232,21 @@ EOF
   D1="$(corpus d1 good/tutorial/MACCEPT-NACCEPT-fine.ndjson \
                   bad/tutorial/MACCEPT-NREJECT-lost.ndjson)"
   cell fail "mini accepts what nanoda rejects" "$D1"
-  D2="$(corpus d2 good/tutorial/MREJECT-NACCEPT-refused.ndjson)"
+  D2="$(corpus d2 good/tutorial/MREJECT-NACCEPT-refused.ndjson "$BADFILL")"
   cell fail "mini rejects what nanoda accepts" "$D2"
 
   # The two tolerated classes. Both must pass *and* be named — a tolerated
   # outcome nobody can see in the summary is a silent one, and the argument for
   # having no waiver file rests on these rows existing.
-  OOS="$(corpus oos good/tutorial/MAXIOM-NACCEPT-declared.ndjson)"
+  OOS="$(corpus oos good/tutorial/MAXIOM-NACCEPT-declared.ndjson "$BADFILL")"
   cell pass "out-of-scope — mini declines a declared axiom, nanoda accepts" "$OOS"
-  RO="$(corpus ro bad/tutorial/MDECLINE-NREJECT-both-no.ndjson)"
+  RO="$(corpus ro bad/tutorial/MDECLINE-NREJECT-both-no.ndjson "$GOODFILL")"
   cell pass "reason-only — neither accepted, different reason" "$RO"
   named() { # <corpus> <label>
-    if ! MVN_CORPUS="$1" MVN_MINI="$TMP/fakemini" MVN_NANODA="$TMP/fakenanoda" \
-         "$ROOT/scripts/mini-vs-nanoda.sh" 2>&1 | grep -q "^  $2 "; then
+    local o
+    o="$(MVN_CORPUS="$1" MVN_MINI="$TMP/fakemini" MVN_NANODA="$TMP/fakenanoda" \
+         "$ROOT/scripts/mini-vs-nanoda.sh" 2>&1)"
+    if ! grep -q "^  $2 " <<<"$o"; then
       echo "SELF-TEST FAILED: $2 was not named in the summary" >&2; bad=1
     else
       echo "  ok: $2 is named in the summary"
@@ -202,12 +257,47 @@ EOF
 
   # A crash is not a verdict. Both directions, and the timeout, because the
   # `reason-only` bucket used to swallow all three.
-  CP="$(corpus cp bad/tutorial/MPANIC-NREJECT-boom.ndjson)"
+  CP="$(corpus cp bad/tutorial/MPANIC-NREJECT-boom.ndjson "$GOODFILL")"
   cell fail "mini panics" "$CP"
-  CN="$(corpus cn bad/tutorial/MREJECT-NPANIC-boom.ndjson)"
+  CN="$(corpus cn bad/tutorial/MREJECT-NPANIC-boom.ndjson "$GOODFILL")"
   cell fail "nanoda dies on a signal" "$CN"
-  CH="$(corpus ch bad/tutorial/MHANG-NREJECT-slow.ndjson)"
+  CH="$(corpus ch bad/tutorial/MHANG-NREJECT-slow.ndjson "$GOODFILL")"
   cell fail "mini exceeds MVN_TIMEOUT" "$CH" MVN_TIMEOUT=1
+
+  # ── the legs, at the producer ─────────────────────────────────────────────
+  # Half a corpus is not a corpus. Each of these leaves the *other* leg intact
+  # and healthy, so what is being watched is precisely the missing half and not
+  # a general absence: the total these produce is a perfectly respectable
+  # number, which is how they used to pass.
+  EG="$(corpus eg "$GOODFILL")"                       # bad/tutorial present, empty
+  cell fail "an empty bad/ leg behind a healthy good/ leg" "$EG"
+  EB="$(corpus eb "$BADFILL")"                        # good/tutorial present, empty
+  cell fail "an empty good/ leg behind a healthy bad/ leg" "$EB"
+  MB="$(corpus mb "$GOODFILL" "$BADFILL")"; rm -rf "$MB/bad"
+  cell fail "a bad/tutorial that is not there at all" "$MB"
+  # …and the leg counts are surfaced, not merely enforced: a floor whose number
+  # nobody prints cannot be read when it is *nearly* breached.
+  # Captured and then grepped, never piped: under `pipefail` a `grep -q` that
+  # exits on the first match can SIGPIPE the producer, and the cell then fails
+  # on a 141 that has nothing to do with what it is testing. Watched happening
+  # here, intermittently, on the line below.
+  out="$(MVN_CORPUS="$BASE" MVN_MINI="$TMP/fakemini" MVN_NANODA="$TMP/fakenanoda" \
+           "$ROOT/scripts/mini-vs-nanoda.sh" 2>&1)"
+  if grep -q '^mini-vs-nanoda leg bad/tutorial: 1 files$' <<<"$out"; then
+    echo "  ok: each leg's own count is in the output"
+  else
+    echo "SELF-TEST FAILED: the per-leg count line is missing from the summary" >&2; bad=1
+  fi
+  # A single-leg run is a legitimate hand invocation and must still work.
+  out="$(MVN_CORPUS="$BASE" MVN_MINI="$TMP/fakemini" MVN_NANODA="$TMP/fakenanoda" \
+           "$ROOT/scripts/mini-vs-nanoda.sh" good 2>&1)"; rc=$?
+  if (( rc == 0 )) && grep -q '^mini-vs-nanoda leg good/tutorial: 1 files$' <<<"$out" \
+     && ! grep -q 'leg bad/tutorial' <<<"$out"; then
+    echo "  ok: \`mini-vs-nanoda.sh good\` counts the one leg it was asked for"
+  else
+    echo "SELF-TEST FAILED: a single-leg run (exit $rc) did not report its leg" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2; bad=1
+  fi
 
   # Not running is not passing. This is the defect that motivated the step: the
   # script exited 0 with no corpus at all.
@@ -232,12 +322,13 @@ EOF
   # stop agreeing on the format of the line. The step itself cannot notice
   # either: on a machine with no corpus it SKIPs before reaching the parse.
   fails=0
-  if run_compare "two-file corpus" env MVN_CORPUS="$BASE" MVN_MINI="$TMP/fakemini" \
-       MVN_NANODA="$TMP/fakenanoda" "$ROOT/scripts/mini-vs-nanoda.sh" 2>/dev/null \
-       | grep -q '^  two-file corpus: 2 files$' && (( fails == 0 )); then
-    echo "  ok: the harness parses the count the script actually prints"
+  tfc="$(run_compare "two-file corpus" env MVN_CORPUS="$BASE" MVN_MINI="$TMP/fakemini" \
+       MVN_NANODA="$TMP/fakenanoda" "$ROOT/scripts/mini-vs-nanoda.sh" 2>/dev/null)"
+  if grep -q '^  two-file corpus: 2 files (good/tutorial 1, bad/tutorial 1)$' <<<"$tfc" \
+       && (( fails == 0 )); then
+    echo "  ok: the harness parses the counts the script actually prints"
   else
-    echo "SELF-TEST FAILED: the summary line and the parser have drifted apart" >&2; bad=1
+    echo "SELF-TEST FAILED: the summary lines and the parser have drifted apart" >&2; bad=1
   fi
   fails=0
   EMPTYC="$(corpus emptyc)"
@@ -255,13 +346,47 @@ EOF
   else
     echo "  ok: a run that prints no summary line is BROKEN"
   fi
+  # ── the legs, at the harness ──────────────────────────────────────────────
+  # Canned output, because these are about *this file's* floor and not the
+  # producer's. The producer refuses to print a zero leg at all now; if that
+  # refusal were removed — or if a future leg were added without one — this is
+  # what still catches it. Each cell's total is well over zero, which is the
+  # whole point.
+  legline() { printf 'mini-vs-nanoda leg %s: %s files\n' "$1" "$2"; }
+  full_out="$(legline good/tutorial 91; legline bad/tutorial 42
+              echo "mini-vs-nanoda: 130 agree, 0 diverged, 2 out-of-scope, 1 reason-only (of 133)")"
   fails=0
-  if run_compare "real count" \
-       echo "mini-vs-nanoda: 130 agree, 0 diverged, 2 out-of-scope, 1 reason-only (of 133)" \
-       >/dev/null && (( fails == 0 )); then
+  if run_compare "real count" echo "$full_out" >/dev/null && (( fails == 0 )); then
     echo "  ok: a real count is accepted"
   else
     echo "SELF-TEST FAILED: a real count was rejected" >&2; bad=1
+  fi
+  fails=0
+  zero_out="$(legline good/tutorial 91; legline bad/tutorial 0
+              echo "mini-vs-nanoda: 91 agree, 0 diverged, 0 out-of-scope, 0 reason-only (of 91)")"
+  if run_compare "zero bad leg" echo "$zero_out" >/dev/null 2>&1; then
+    echo "SELF-TEST FAILED: a bad/ leg of 0 files was accepted behind a total of 91" >&2; bad=1
+  elif (( fails != 1 )); then
+    echo "SELF-TEST FAILED: a bad/ leg of 0 files did not count a failure" >&2; bad=1
+  else
+    echo "  ok: a leg of 0 files behind a healthy total is BROKEN"
+  fi
+  fails=0
+  gone_out="$(legline good/tutorial 91
+              echo "mini-vs-nanoda: 91 agree, 0 diverged, 0 out-of-scope, 0 reason-only (of 91)")"
+  if run_compare "absent bad leg" echo "$gone_out" >/dev/null 2>&1; then
+    echo "SELF-TEST FAILED: a run that never mentioned the bad/ leg was accepted" >&2; bad=1
+  elif (( fails != 1 )); then
+    echo "SELF-TEST FAILED: an unreported leg did not count a failure" >&2; bad=1
+  else
+    echo "  ok: a leg with no count line at all is BROKEN"
+  fi
+  fails=0
+  if REQUIRE_LEGS="good/tutorial" run_compare "one required leg" echo "$gone_out" \
+       >/dev/null 2>&1 && (( fails == 0 )); then
+    echo "  ok: REQUIRE_LEGS names which legs must have run"
+  else
+    echo "SELF-TEST FAILED: REQUIRE_LEGS does not narrow the requirement" >&2; bad=1
   fi
 
   echo
@@ -306,7 +431,11 @@ run_compare "mini vs nanoda" env MVN_CORPUS="$CORPUS" \
 
 echo
 if (( fails )); then
-  echo "mini and nanoda diverge on acceptance" >&2
+  # Not necessarily a divergence: a leg that compared nothing lands here too,
+  # and saying "diverge" about it would send the reader looking for a file name
+  # that does not exist. The BROKEN/FAIL line above says which.
+  echo "the mini-vs-nanoda comparison did not stand up (see above: a divergence," >&2
+  echo "a crash, or a leg that compared nothing)" >&2
   exit 1
 fi
 echo "mini vs nanoda OK"

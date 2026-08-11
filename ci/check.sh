@@ -53,6 +53,12 @@ step "boundary check self-test"  ./ci/test-boundary.sh
 # cannot go unscanned the way it did when this was a blanket ban. See
 # MINI-DESIGN.md §4.4.
 step "mini hypothesis discipline" ./ci/check-mini-scope.sh
+# …and the self-test proving its bans and its scan floor can fail. It was the
+# last `ci/*.sh` with neither a count guard nor a self-test: its two bans are
+# pure greps, so a `mini/src` that moved would have satisfied both having read
+# nothing. Needs no corpus and no toolchain, so it runs everywhere — which is
+# why it sits here rather than behind the corpus gate below.
+step "mini-scope self-test"      ./ci/check-mini-scope.sh --self-test
 # The two encoders' own boundary: `mini/src/mutual_aux.rs` turns a block
 # into Lean-world syntax and `mini/src/nested.rs` specialises a nested
 # declaration; neither may look inside a certificate. The script
