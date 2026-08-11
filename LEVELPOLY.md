@@ -1916,10 +1916,13 @@ non-forcingly before it does anything else, which is *stronger* than the
   `Guard`. Where the *inner* guard is a successor, `succ_nonzero_at` settles it
   and the `max_ne_zero` step above it goes through with no caller guard at all.
   What stops that being a four-line change is that `level_guard_at` returns a
-  theorem at the **caller's polarity** and the unconditional route only ever
-  produces `NonZero`; the function has to hand back a `Guard` rather than a
-  `Thm` before the two compose. That is a real refactor of a load-bearing
-  function and was deliberately not folded into this tranche.
+  theorem at the **caller's polarity**; the function has to hand back a `Guard`
+  rather than a `Thm` before the two compose. That is a real refactor of a
+  load-bearing function and was deliberately not folded into this tranche.
+  *(This bullet also said "the unconditional route only ever produces
+  `NonZero`". Measured in the next tranche, **11 of the 315 produce `Zero`** —
+  `imax ℓ 0 = 0` — which strengthens rather than weakens the case for the
+  refactor: see §5.3.1 below.)*
 * **The 290 bare-parameter guards are the boundary and must stay refused.**
   `Sort u` is `Prop` at `u = 0` and a universe above it; a settler that
   answered there would be claiming a clause it cannot see. These need §6.2's
@@ -1930,6 +1933,107 @@ non-forcingly before it does anything else, which is *stronger* than the
 * **`015_levelParams`** is the store's coverage — `const_evidence`'s `Err(g)`
   arm handing a use site the reason a *stored* generic point's typing was
   blocked with. Unrelated to any of the above and the other cheap exit.
+
+#### 5.3.1 The `imax` guards: a polarity that comes back — 317 of 318, exits unmoved
+
+`Interp::level_guard_at` now has the signature the bullet above asked for:
+
+```rust
+fn level_guard_at(&mut self, t: &Term, guard: Option<&Guard>) -> Option<Guard>
+```
+
+— the caller's half is optional and **the polarity is an output**. One
+recursion serves both entries, and `as_pi_at` is three lines shorter than the
+two-branch version it replaces because the returned tag is what picks the
+clause.
+
+**Probed first, and the probe corrected the brief twice — the tenth and
+eleventh sizing corrections on this branch, both favourable, neither a
+feasibility one.** A throwaway classifier at the exact refusal site, run over
+the corpus before a line of the real change was written:
+
+    guard is a successor            860     settled last tranche
+    guard is imax over a successor  286   ┐
+    guard is imax over imax over "   17   ├ 315, to the unit the census's own
+    guard is imax over ∅             11   ┘
+    guard is ∅                        3     the census's unattributed "other"
+    guard is a bare û               290     the boundary, still refused
+    guard is imax over a bare û       1     inherits it, still refused
+
+1. **11 of the 315 `imax` guards come out `Zero`, not `NonZero`.** Lean's
+   `imax ℓ 0` *is* `0`, so the `Π` above such a guard is a `Prop` and wants
+   `pi_cndd_at`. §5.3's bullet predicted the unconditional route "only ever
+   produces `NonZero`". It does not, and the correction argues *for* the
+   refactor rather than against it: a function returning a bare `Thm` would
+   have made its caller guess the clause, and eleven times the guess would
+   have named a different set under the same name.
+2. **The census's "other 3" are guards that are literally `∅`** — a
+   `Prop`-valued codomain at a variable rung, where §1.4's clause still emits
+   `ite0(∅, cndd, dprod)` because `level_term_over` maps `Zero` to the term
+   `∅` and not to a numeral. One extra base case, `Thm::eq_refl`.
+
+Together: **317 of the 318 non-bare-parameter zone-A guards now come apart.**
+The single hold-out is an `imax` whose spine bottoms out at a bare parameter,
+and it is refused for the same reason the 290 are.
+
+**A claim that was in a test and was false.** The predecessor's
+`an_unguarded_pi_comes_apart_exactly_when_its_codomain_is_a_sort` ended by
+asserting, at `ℓ₂ = imax(v+1, u+1)`, that "an imax guard is undecidable
+without a split and must stay refused". `imax ℓ ℓ'` is zero exactly when `ℓ'`
+is, so an `imax` is as decidable as its own right operand — and `u+1` is a
+successor. The frontier was never at `imax`; it is at whatever the spine
+bottoms out in. The case is now a positive, the test is renamed
+`..._at_every_guard_the_vocabulary_settles`, and the **soundness** negative it
+had been standing in for is spelled properly instead: a bare parameter, and an
+`imax` over one.
+
+**What moved.**
+
+    typeEv     80 → 81        every other column unchanged
+    zoneBOk    208/362        unchanged, denominators unchanged
+    exits      31 × 0 / 58 × 4 / 2 × 2 — unchanged
+
+One file, `071_sortElimPropRec`, off `no-endpoint` (26 → 25). **The verdict did
+not move**, and that is the result rather than a preamble to one: 317 nodes
+that refused now answer, and the certificates they feed stop elsewhere. This
+is a reason-axis tranche, like the `u₁ = 0` split's, and the two cheapest exits
+named in §5.3 are both still open and both still owned by someone else's
+obstacle — `115_rTreeRec` at `conv-compose(pi-poly)`, minted at
+`pi_evidence_poly`'s `pi_typing_of` leg (the `Π` *formation* rule at a variable
+rung, `PiRules::pi_imax_dep`), and `015_levelParams` at the store.
+
+**No new `derived` mathematics, and the branch's three-step run of it ends
+here.** `Ite0::when_zero`/`when_nonzero` and `Order::max_ne_zero` — already
+unconditional, derived two tranches ago for exactly this caller — plus
+`kernel`'s `Thm::eq_refl` are the whole of it.
+
+**The ordering ratchet is unchanged and is now pinned by a test that fails
+without it.** The caller's own half is tried *before* both unconditional bases,
+at every rung and not only at the top. `a_level_guards_polarity_is_an_output_of_the_recursion`'s
+last case is a successor guard under a caller assuming it is `∅` — false, and
+exactly the shape `rec_dep::split_bottom`'s zero arm has; a recursion
+preferring its own `succ` fact would send that arm to `dprod` while its sibling
+walked `cndd`.
+
+**Non-forcing, now locally rather than by the caller's grace.**
+`level_guard_at` reads `Interp::levels_built` where it used to call
+`Interp::levels`. It was only ever reached after `as_pi_at` had peeked, so
+nothing changes on the corpus; what changes is that the property is now a
+property of the function.
+
+**Gates.** Gate A byte-identical against a build of the parent in this same
+worktree — 358 lines, 89 `ledger` rows, `cmp`-clean. Gate B: one row moved,
+upward; `open = 0` on all 89; every denominator `md5`-identical. Tests
+231/24/12/6/1/12/2/20/16 (`mini/src` 230 → **231**: one added,
+`a_level_guards_polarity_is_an_output_of_the_recursion`, and one renamed and
+widened — no `derived` test count moves). Three mutations verified red, each
+by the case that names it — the `∅` base dropped, the bases reordered ahead of
+the caller's half, and the recursive descent stripped — and
+`an_open_level_at_an_unthreaded_checker_costs_no_apparatus` **survives all
+three**, so the ground-path control separates from the polymorphic case rather
+than dying with it. `perf stat -e instructions` over the corpus, two
+repetitions each, parent binary and new binary built side by side: ground route
+**−0.002 %** (unreachable code path, as designed), `--poly` route **+0.23 %**.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

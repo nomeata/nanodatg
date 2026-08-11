@@ -576,6 +576,21 @@ impl Guard {
             Guard::Zero(t) | Guard::NonZero(t) => t,
         }
     }
+
+    /// The conclusion this half **must** have, to be a guard about `t`.
+    ///
+    /// One spelling for the three places that need it —
+    /// [`Interp::level_guard_at`]'s base case, its exit check, and its
+    /// callers — because a guard whose two spellings drifted would be a guard
+    /// that matched at the base and failed at the exit, which reads as an
+    /// unreachable branch rather than as the mistake it is.
+    fn about(&self, t: &Term, zero: &Term) -> Formula {
+        let eq = Formula::eq(t.clone(), zero.clone());
+        match self {
+            Guard::Zero(_) => eq,
+            Guard::NonZero(_) => Formula::not(eq),
+        }
+    }
 }
 
 impl PiShape {
@@ -2436,9 +2451,9 @@ impl Interp {
         (*out.concl() == want).then_some(out)
     }
 
-    /// **`Γ ⊢ ℓ̂ = ∅` or `Γ ⊢ ¬(ℓ̂ = ∅)` for a level *term*, under the split's
-    /// own half of excluded middle** — the recursion the binder collapse runs
-    /// on.
+    /// **`Γ ⊢ ℓ̂ = ∅` or `Γ ⊢ ¬(ℓ̂ = ∅)` for a level *term*** — the recursion
+    /// the binder collapse runs on, and the one the zone-A application node
+    /// runs on with **no `Γ` at all**.
     ///
     /// # Why a term and not a [`Level`]
     ///
@@ -2449,11 +2464,40 @@ impl Interp {
     /// [`Interp::pi_term_of`] put in the `ite0` — and the grammar it descends
     /// is exactly the one [`level_term_over`] emits for `imax`.
     ///
-    /// # Two clauses, and that is the whole of it
+    /// # Why a [`Guard`] out and not a [`Thm`], and why the argument is optional
     ///
-    /// * **Base.** `ℓ̂` is the term the hypothesis is already about. Compared,
-    ///   not assumed: a guard belonging to some other parameter falls through
-    ///   to `None` rather than borrowing this one's answer.
+    /// This used to take a `Guard` and hand back its theorem, so **the polarity
+    /// was an input**: the caller said which half of its own split it held, and
+    /// every rung of the recursion inherited that half. That shape has exactly
+    /// one caller it cannot serve — `crate::kernel`'s `Expr::App`, which is
+    /// zone A and is inside nobody's case split, so it has no half to offer.
+    ///
+    /// Both bases below settle a rung with no hypothesis, and the `imax` step
+    /// propagates whatever they settled it *to*, so the polarity is now an
+    /// **output**. That is not a convenience: measured over the corpus, of the
+    /// 315 zone-A `imax` guards **11 come out `Zero`** and want
+    /// [`Interp::pi_cndd_at`]'s `Prop` clause, not `dprod`. A function that
+    /// returned a bare `Thm` would have made its caller guess which, and the
+    /// guess would have been wrong eleven times.
+    ///
+    /// A caller that *does* hold a half still passes it, and it is still tried
+    /// **first** — see the base below.
+    ///
+    /// # Three bases and one step
+    ///
+    /// * **The caller's own hypothesis, first.** `ℓ̂` is the term the
+    ///   hypothesis is already about. Compared, not assumed: a guard belonging
+    ///   to some other parameter falls through rather than borrowing this
+    ///   one's answer. First because a caller inside a `u₁ = 0` arm wants the
+    ///   clause its *own* arm names; the two unconditional bases below can
+    ///   only agree with it, but ordering them after it means no route that
+    ///   already worked can move.
+    /// * **`∅`.** `⊢ ∅ = ∅`, and the `Π` above it is a `Prop`. This is Lean's
+    ///   `Sort 0` codomain at a *variable* rung, where the `Π` clause still
+    ///   emits `ite0(∅, cndd, dprod)` because [`level_term_over`] maps `Zero`
+    ///   to the term `∅` rather than to a numeral.
+    /// * **A successor.** [`Interp::succ_nonzero_at`], unconditional and
+    ///   term-level for the same reason this whole function is.
     /// * **`imax`.** `(imax ℓ ℓ')̂` is `ite0(ℓ̂', ∅, ℓ̂ ∪ ℓ̂')`, and *the guard of
     ///   an `imax` is its own right operand*, so the recursion is on `ℓ̂'` and
     ///   the two halves diverge only at the end:
@@ -2465,51 +2509,68 @@ impl Interp {
     ///     stated unconditionally for exactly this caller, which holds no
     ///     `∈ ω` about `ℓ̂` and has nowhere to get one.
     ///
-    /// `succ`, `max` and a bare foreign parameter all answer `None`. A
-    /// successor could be settled by [`Interp::level_nonzero`] and is not,
-    /// because that function reads a `Level`; nothing on this route has asked,
-    /// and a second spelling of the same fact is a second chance to disagree.
+    /// **`max` and a bare parameter still answer `None`, and that is the
+    /// genuine boundary.** `ℓ̂ ∪ ℓ̂'` is zero at `ℓ = ℓ' = 0` and nonzero
+    /// otherwise, and a bare `û` is `Prop` at `u = 0`; neither is decidable
+    /// without a split, and the 290 zone-A nodes that ask at a bare parameter
+    /// must keep being refused. An `imax` whose spine bottoms out at one of
+    /// those is refused with it — one such node in the corpus.
+    ///
+    /// Non-forcing ([`Interp::levels_built`], not [`Interp::levels`]): the
+    /// ground route reaches [`Interp::as_pi_at`] 100 000-plus times per corpus
+    /// run and no apparatus may be built on the way to finding out that
+    /// [`Interp::as_pi`] already answered. This used to lean on the caller
+    /// having forced first; now each function on the path declines on its own.
     ///
     /// Nothing is trusted: the union's left operand is recovered by taking the
     /// term apart and then **rebuilding** `ℓ̂ ∪ ℓ̂'` and comparing, so a third
     /// argument that is not this `imax`'s union declines instead of being
-    /// instantiated at.
-    pub fn level_guard_at(&mut self, t: &Term, guard: &Guard) -> Option<Thm> {
-        let lp = self.levels()?;
+    /// instantiated at, and the theorem that comes back is compared against
+    /// the conclusion its own polarity demands.
+    pub fn level_guard_at(&mut self, t: &Term, guard: Option<&Guard>) -> Option<Guard> {
+        let lp = self.levels_built()?.clone();
         let zero = lp.zero();
-        let want = match guard {
-            Guard::Zero(_) => Formula::eq(t.clone(), zero.clone()),
-            Guard::NonZero(_) => Formula::not(Formula::eq(t.clone(), zero.clone())),
-        };
-        if *guard.thm().concl() == want {
-            return Some(guard.thm().clone())
+        // ── base: the caller's own half of its split, before anything else ──
+        if let Some(g) = guard {
+            if *g.thm().concl() == g.about(t, &zero) {
+                return Some(g.clone())
+            }
         }
+        // ── base: `∅`, and the `Π` above it is a `Prop` ─────────────────────
+        if *t == zero {
+            return Some(Guard::Zero(Thm::eq_refl(zero)))
+        }
+        // ── base: a successor, never zero at any instantiation ──────────────
+        if let Some(ne) = self.succ_nonzero_at(t) {
+            return Some(Guard::NonZero(ne))
+        }
+        // ── step: an `imax`, whose guard is its own right operand ───────────
         let (f, args) = self.parts_of(t)?;
         if f != lp.i.sym || args.len() != 3 {
             return None
         }
         let inner = self.level_guard_at(&args[0], guard)?;
-        let out = match guard {
+        let out = match &inner {
             // `ite0(ℓ̂', a, ·) = a`, which is `= ∅` exactly when `a` is `∅` —
             // and the conclusion check below is what says so, so there is no
             // separate test for the middle argument here.
-            Guard::Zero(_) => Thm::mp(&derived::inst_all(&lp.i.when_zero, &args)?, &inner)?,
-            Guard::NonZero(_) => {
-                let eq = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, &inner)?;
+            Guard::Zero(s) => {
+                Guard::Zero(Thm::mp(&derived::inst_all(&lp.i.when_zero, &args)?, s)?)
+            }
+            Guard::NonZero(s) => {
+                let eq = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, s)?;
                 let m = self.union_left(&lp, &args[2], &args[0])?;
-                let union_ne = Thm::mp(
-                    &derived::inst_all(&lp.ord.max_ne_zero, &[m, args[0].clone()])?,
-                    &inner,
-                )?;
+                let union_ne =
+                    Thm::mp(&derived::inst_all(&lp.ord.max_ne_zero, &[m, args[0].clone()])?, s)?;
                 // `¬(· = ∅)` back along `ℓ̂ = ℓ̂ ∪ ℓ̂'`, one Leibniz step.
                 let w = self.fresh_var();
                 let hole = Formula::not(Formula::eq(Term::var(w), zero.clone()));
                 let leib = Thm::eq_leibniz(args[2].clone(), t.clone(), w, hole);
                 let back = derived::eq_symm(&mut self.core.env_mut(), &eq)?;
-                Thm::mp(&Thm::mp(&leib, &back)?, &union_ne)?
+                Guard::NonZero(Thm::mp(&Thm::mp(&leib, &back)?, &union_ne)?)
             }
         };
-        (*out.concl() == want).then_some(out)
+        (*out.thm().concl() == out.about(t, &zero)).then_some(out)
     }
 
     /// `ℓ̂` from `ℓ̂ ∪ ℓ̂'`, given the right operand — taken apart and then
@@ -2574,12 +2635,21 @@ impl Interp {
     ///
     /// It used to be an immediate refusal, and the zone-A application node
     /// (`crate::kernel`'s `Expr::App`) is the caller that has nothing else to
-    /// offer: it is not inside anybody's case split. What it does have is that
-    /// a `Π` whose codomain is a **sort** guards on a successor, which
-    /// [`Interp::succ_nonzero_at`] settles unconditionally. So the guardless
-    /// entry answers for exactly the sort-codomain `Π`s and refuses everything
-    /// else, and a caller *with* a guard is unaffected — its own hypothesis is
-    /// tried first and the fallback is only reached where that produced
+    /// offer: it is not inside anybody's case split. What it does have is
+    /// [`Interp::level_guard_at`]'s two **unconditional** bases — a codomain
+    /// level that is a successor (`Sort u` inhabits `Sort (u+1)`, so every
+    /// sort-codomain `Π`) and one that is `∅` (a `Prop`-valued `Π` at a
+    /// variable rung) — and the `imax` recursion over them, which settles a
+    /// codomain level built out of those however deeply nested.
+    ///
+    /// What is refused, and must stay refused, is a guard that is a **bare
+    /// parameter** or a `max`: `Sort u` is `Prop` at `u = 0`, the two clauses
+    /// are different sets, and no unconditional theorem separates them. Over
+    /// the corpus that is 290 zone-A nodes, plus one whose `imax` spine
+    /// bottoms out at a bare parameter.
+    ///
+    /// A caller *with* a guard is unaffected: its own hypothesis is tried
+    /// first and the unconditional bases are only reached where that produced
     /// nothing.
     pub fn as_pi_at(&mut self, t: &Term, guard: Option<&Guard>) -> Option<(PiShape, Option<Thm>)> {
         if let Some(shape) = self.as_pi(t) {
@@ -2593,25 +2663,22 @@ impl Interp {
         if f != lp.i.sym || args.len() != 3 {
             return None
         }
-        // **The caller's guard first, and the unconditional fact only as a
-        // fallback.** The order is the ratchet: a caller inside a `u₁ = 0` arm
-        // holds `Guard::Zero` and wants [`Interp::pi_cndd_at`], and a guard
-        // term that happened to be a successor would send it to the *other*
-        // clause — a different collapsed set, and a decline downstream where
-        // there had been none. Trying the caller's own hypothesis first leaves
-        // every route that already worked bit-for-bit where it was, and adds
-        // exactly the case that had no answer at all: no guard in hand.
-        let settled = guard.and_then(|g| Some((g, self.level_guard_at(&args[0], g)?)));
-        let collapse = match settled {
-            Some((Guard::Zero(_), s)) => self.pi_cndd_at(t, &s)?,
-            Some((Guard::NonZero(_), s)) => self.pi_dprod_at(t, &s)?,
-            // `ℓ̂₂ = succ(·)` — every `Π` whose codomain is a sort, which is
-            // what Lean writes for a motive binder and for the type of every
-            // type-valued function. Never zero, at no cost in hypotheses.
-            None => {
-                let ne = self.succ_nonzero_at(&args[0])?;
-                self.pi_dprod_at(t, &ne)?
-            }
+        // **One call, and the polarity it returns is what picks the clause.**
+        // [`Interp::level_guard_at`] tries the caller's own half of its split
+        // first — the ratchet: a caller inside a `u₁ = 0` arm holds
+        // `Guard::Zero` and wants [`Interp::pi_cndd_at`], and settling its
+        // guard term some other way could send it to the *other* clause, a
+        // different collapsed set and a decline downstream where there had
+        // been none — and only then reaches for the two facts that need no
+        // hypothesis. So every route that already worked is bit-for-bit where
+        // it was, and `guard: None` is an ordinary entry rather than a refusal.
+        //
+        // The tag is read off the **answer**, never off the caller: an `imax`
+        // whose spine bottoms out at `∅` is `Prop` however the caller is
+        // split, and eleven of the corpus's zone-A nodes are exactly that.
+        let collapse = match self.level_guard_at(&args[0], guard)? {
+            Guard::Zero(s) => self.pi_cndd_at(t, &s)?,
+            Guard::NonZero(s) => self.pi_dprod_at(t, &s)?,
         };
         let (_, collapsed) = collapse.concl().as_eq()?;
         Some((self.as_pi(&collapsed)?, Some(collapse)))
@@ -4866,58 +4933,201 @@ mod tests {
         }
     }
 
+    /// **[`Interp::level_guard_at`] with no caller hypothesis at all** — the
+    /// recursion whose polarity is an *output*, and the boundary it declines at.
+    ///
+    /// # Why the polarity has to come back and not go in
+    ///
+    /// The corpus decides this rather than taste. Of the 315 zone-A `imax`
+    /// guards, 303 come out `NonZero` and **11 come out `Zero`** — an `imax`
+    /// whose right operand is `0` *is* `0`, which is Lean's own
+    /// `imax ℓ 0 = 0`, so the `Π` above it is a `Prop` and wants
+    /// [`Interp::pi_cndd_at`]. A caller handed a bare `Thm` would have had to
+    /// guess which clause, and eleven times the guess would have been wrong
+    /// and the two sets it named would have differed. So the third case below
+    /// is not decoration: it is the reason for the return type.
+    ///
+    /// # The ordering ratchet, pinned
+    ///
+    /// A caller's own half is tried **before** the unconditional bases, and
+    /// the last case is what would catch that being reordered: a guard term
+    /// that is a successor, under a caller assuming it is `∅`. The assumption
+    /// is false, and that is the point — it is exactly the shape
+    /// `crate::rec_dep::split_bottom`'s zero arm has, and a recursion that
+    /// preferred its own `succ` fact would send that arm to `dprod` while its
+    /// sibling walked `cndd`. Two different sets under one name, three steps
+    /// downstream.
+    ///
+    /// # The negatives
+    ///
+    /// A bare parameter and a `max` are each zero at some instantiation and
+    /// nonzero at another; an `imax` over either inherits that and must
+    /// decline with it, which is the one corpus node this tranche leaves
+    /// refused. And a fresh [`Interp`] must answer `None` **without building
+    /// an apparatus** — the property
+    /// `a_successor_guard_is_settled_off_the_term_and_costs_no_hypothesis`
+    /// asserts of its own function, re-asserted here because this one is now
+    /// on the same 100 000-call zone-A path and used to reach
+    /// [`Interp::levels`], which forces.
+    #[test]
+    fn a_level_guards_polarity_is_an_output_of_the_recursion() {
+        // No apparatus, no answer — and none built on the way to saying so.
+        let mut fresh = Interp::new();
+        let atom = Term::var(fresh.fresh_var());
+        assert!(fresh.level_guard_at(&atom, None).is_none(), "no apparatus, no answer");
+        assert!(fresh.levels_built().is_none(), "…and none built to say it");
+
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let t = |n: &str| vars[&Name::simple(n)].tm.clone();
+        let zero = lp.zero();
+        let su = lp.succ_of(t("u"));
+
+        for (label, tm, want_zero) in [
+            ("a successor", su.clone(), false),
+            ("∅ itself", zero.clone(), true),
+            // `imax ℓ (ℓ'+1)` — the one-rung recursion, 286 corpus nodes.
+            ("imax over a successor", lp.imax(t("w"), su.clone()), false),
+            // Two rungs, 17 corpus nodes: a base case alone does not do this.
+            (
+                "imax over an imax over a successor",
+                lp.imax(t("v"), lp.imax(t("w"), su.clone())),
+                false,
+            ),
+            // `imax ℓ 0 = 0` — 11 corpus nodes, and the `Prop` clause.
+            ("imax over ∅", lp.imax(t("w"), zero.clone()), true),
+        ] {
+            let g = ip
+                .level_guard_at(&tm, None)
+                .unwrap_or_else(|| panic!("{label}: settles with no hypothesis at all"));
+            assert_eq!(
+                matches!(g, Guard::Zero(_)),
+                want_zero,
+                "{label}: the polarity must be the one the term actually has"
+            );
+            let eq = Formula::eq(tm, zero.clone());
+            assert_eq!(
+                *g.thm().concl(),
+                if want_zero { eq } else { Formula::not(eq) },
+                "{label}: the conclusion must be about this very term"
+            );
+            assert!(g.thm().hyps().is_empty(), "{label}: the caller has nothing to spend");
+        }
+
+        for (label, tm) in [
+            ("a bare parameter", t("u")),
+            ("a max", lp.max(t("w"), t("u"))),
+            ("an imax over a bare parameter", lp.imax(t("w"), t("u"))),
+            ("an imax over a max", lp.imax(t("w"), lp.max(t("v"), t("u")))),
+        ] {
+            assert!(
+                ip.level_guard_at(&tm, None).is_none(),
+                "{label} is ∅ at some instantiation and must not be settled"
+            );
+        }
+
+        // The ratchet: the caller's own half wins over a base that disagrees.
+        let hz = Guard::Zero(crate::scope::test_support::assume(Formula::eq(
+            su.clone(),
+            zero.clone(),
+        )));
+        let g = ip.level_guard_at(&su, Some(&hz)).expect("the caller's own hypothesis is about it");
+        assert!(
+            matches!(g, Guard::Zero(_)),
+            "a caller's half must be preferred to an unconditional base that disagrees"
+        );
+        // …and it is the caller's theorem, hypothesis and all, not a rebuild.
+        assert_eq!(g.thm().hyps().len(), 1, "the caller's assumption must travel with it");
+    }
+
     /// **[`Interp::as_pi_at`] with no `Guard` at all** — the entry the zone-A
     /// application node takes, and the boundary it stops at.
     ///
     /// The guard-bearing route is `crate::rec_dep`'s and is unchanged; what is
-    /// new is that `None` is no longer an immediate refusal. A `Π` whose
-    /// codomain is a **sort** comes apart, because its `ℓ₂` is a successor; a
-    /// `Π` whose codomain is at a bare parameter still does not, and must not —
-    /// `Sort u` is `Prop` at `u = 0`, and the two clauses are different sets.
+    /// new is that `None` is no longer an immediate refusal.
+    ///
+    /// # What moved, and the claim that was wrong
+    ///
+    /// This test used to end by asserting that an `imax` guard "is undecidable
+    /// without a split and must stay refused", exhibited at
+    /// `ℓ₂ = imax(v+1, u+1)`. **That sentence was false of that term.** Lean's
+    /// `imax ℓ ℓ'` is zero exactly when `ℓ'` is, so an `imax` is as decidable
+    /// as its own *right operand* — and `u+1` is a successor, which
+    /// [`Interp::succ_nonzero_at`] settles outright. The frontier was never at
+    /// `imax`; it is at whatever the `imax` spine bottoms out in, and the
+    /// assertion was pinning a refusal that only the missing recursion caused.
+    ///
+    /// So the case flips to a positive, and the **soundness** negative it was
+    /// standing in for is spelled properly instead: a bare parameter, and an
+    /// `imax` whose spine bottoms out at one. `Sort u` is `Prop` at `u = 0`,
+    /// the two clauses are different sets, and nothing unconditional
+    /// separates them.
+    ///
+    /// The four cases are the four the corpus census found, in its own
+    /// proportions: 860 successors, 303 `imax` spines over one, 14 at `∅`,
+    /// and 291 at a bare parameter that must decline.
     ///
     /// The collapsed right-hand side is required to **decompose**, which is the
     /// whole point of the call, and the equation's left side is required to be
     /// the term the clause built rather than one rebuilt here.
     #[test]
-    fn an_unguarded_pi_comes_apart_exactly_when_its_codomain_is_a_sort() {
+    fn an_unguarded_pi_comes_apart_at_every_guard_the_vocabulary_settles() {
         let env = crate::env::Environment::empty();
         let mut ip = Interp::new();
         let (u, v) = (p("u"), p("v"));
         let mut c =
             crate::kernel::Checker::poly(&env, &mut ip, &[Name::simple("u"), Name::simple("v")])
                 .expect("poly");
-        // `∀ x : Sort v. Sort u` — codomain a sort, so `ℓ₂ = u+1`.
-        let sorted = c.infer_type(&crate::expr::forall(
-            crate::expr::sort(v),
-            crate::expr::sort(u),
-        ));
-        // `∀ x : Sort v. (∀ _ : Sort v. Sort u)` has `ℓ₂ = imax(v+1, u+1)`,
-        // whose own guard is a successor — the recursion this does *not* do.
-        let nested = c.infer_type(&crate::expr::forall(
-            crate::expr::sort(v),
-            crate::expr::forall(crate::expr::sort(v), crate::expr::sort(u)),
-        ));
-        let both: Vec<Term> = [sorted, nested]
-            .iter()
-            .map(|t| t.as_ref().ok().and_then(|t| t.tm.clone()).expect("⟦Π⟧"))
-            .collect();
+        let sort = crate::expr::sort;
+        let all = crate::expr::forall;
+        // `∀ x : Sort v. B` throughout — only `B` differs, so only `ℓ₂` does.
+        let mut ty = |b: crate::expr::E| {
+            c.infer_type(&all(sort(v), b)).ok().and_then(|t| t.tm.clone()).expect("⟦Π⟧")
+        };
+        // `ℓ₂ = u+1` — a sort codomain, the shape every eliminator's motive
+        // binder has.
+        let sorted = ty(sort(u));
+        // `ℓ₂ = imax(v+1, u+1)` — the recursion, one rung.
+        let nested = ty(all(sort(v), sort(u)));
+        // `ℓ₂ = 0` — a `Prop`-valued codomain. `∀ x : Prop. x` is a `Prop`,
+        // and at a variable rung the clause still emits `ite0(∅, cndd, dprod)`
+        // rather than a numeral, so this reaches the same function.
+        let propish = ty(all(sort(Level::zero()), crate::expr::bvar(0)));
+        // `ℓ₂ = u`, a bare parameter — the genuine boundary.
+        let bare = ty(crate::expr::forall(sort(u), crate::expr::bvar(0)));
+        // `ℓ₂ = imax(u+1, u)` — an `imax` whose spine bottoms out at that same
+        // bare parameter, and which must decline with it. One corpus node.
+        let bare_under_imax = ty(all(sort(u), crate::expr::bvar(0)));
         drop(c);
 
-        let (shape, collapse) =
-            ip.as_pi_at(&both[0], None).expect("a sort codomain settles with no guard");
-        assert!(matches!(shape, PiShape::Dep { .. }), "…and it is the value clause");
-        let eq = collapse.expect("the ite0 was there, so an equation was needed");
-        let (lhs, rhs) = eq.concl().as_eq().expect("an equation");
-        assert_eq!(lhs, both[0], "the equation is about the term the Π clause built");
-        assert!(ip.as_pi(&rhs).is_some(), "the collapsed set decomposes, which is the point");
-        assert!(eq.hyps().is_empty(), "settled unconditionally");
+        for (label, tm, prop) in [
+            ("a sort codomain", sorted, false),
+            ("an imax over a successor", nested, false),
+            ("a Prop codomain", propish, true),
+        ] {
+            let (shape, collapse) =
+                ip.as_pi_at(&tm, None).unwrap_or_else(|| panic!("{label} settles with no guard"));
+            assert_eq!(
+                matches!(shape, PiShape::Prop { .. }),
+                prop,
+                "{label}: the polarity of the settled guard is what picks the clause"
+            );
+            let eq = collapse.expect("the ite0 was there, so an equation was needed");
+            let (lhs, rhs) = eq.concl().as_eq().expect("an equation");
+            assert_eq!(lhs, tm, "{label}: the equation is about the term the Π clause built");
+            assert!(ip.as_pi(&rhs).is_some(), "{label}: the collapsed set decomposes");
+            assert!(eq.hyps().is_empty(), "{label}: settled unconditionally");
+        }
 
-        // The boundary: an `imax` guard is not a successor, and nothing here
-        // recurses into it. A successor said so; this must not.
-        assert!(
-            ip.as_pi_at(&both[1], None).is_none(),
-            "an imax guard is undecidable without a split and must stay refused"
-        );
+        // The boundary, and it is a bare parameter rather than a former.
+        for (label, tm) in
+            [("a bare parameter", bare), ("an imax over a bare parameter", bare_under_imax)]
+        {
+            assert!(
+                ip.as_pi_at(&tm, None).is_none(),
+                "{label} is Prop at u = 0 and must stay refused without a split"
+            );
+        }
     }
 
     /// **The `u = 0` split, joined into one term** — [`Interp::ite0_merge`] and
@@ -5093,12 +5303,17 @@ mod tests {
         );
         let maxed = ip.level_term(&Level::max(p("w"), p("u")), &vars).expect("ŵ ∪ û");
         assert!(
-            ip.level_guard_at(&maxed, &hn).is_none(),
+            ip.level_guard_at(&maxed, Some(&hn)).is_none(),
             "a bare max has no ite0 to descend and must not be guessed at"
         );
-        let settled_nonzero = ip.level_guard_at(&guard_tm, &hn).expect("¬(imax(ŵ,û) = ∅)");
+        let settled_nonzero =
+            ip.level_guard_at(&guard_tm, Some(&hn)).expect("¬(imax(ŵ,û) = ∅)");
         assert!(
-            ip.pi_cndd_at(&pi, &settled_nonzero).is_none(),
+            matches!(settled_nonzero, Guard::NonZero(_)),
+            "the caller's own half is what settled it, so the polarity is its own"
+        );
+        assert!(
+            ip.pi_cndd_at(&pi, settled_nonzero.thm()).is_none(),
             "the Prop clause must not be unlocked by a refutation of its guard"
         );
     }

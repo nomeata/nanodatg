@@ -188,6 +188,55 @@
 //! does not — and `015_levelParams` never had this obstacle at all, reporting
 //! `not-decomposable` off a *stored* generic point's blocked typing.
 //!
+//! # The `imax` guards, and the census re-read at its own shape
+//!
+//! [`crate::interp::Interp::level_guard_at`] now returns a
+//! [`crate::interp::Guard`] instead of a `Thm` and takes the caller's half as
+//! an `Option`, so the same recursion serves both entries. Re-censused *after*
+//! the successor clause landed — the population moves when nodes stop
+//! declining, so the totals are not comparable, but the two categories that
+//! matter are unchanged to the unit:
+//!
+//! ```text
+//! guard is a successor           860    settled (successor clause)
+//! guard is imax over a successor 286  ┐
+//! guard is imax over imax over "   17  ├ 315 — settled here, exactly the
+//! guard is imax over ∅            11  ┘        count the census predicted
+//! guard is ∅                       3    settled here — the census's "other"
+//! guard is a bare û              290    the boundary; still refused
+//! guard is imax over a bare û      1    inherits it; still refused
+//! ```
+//!
+//! **Two things the previous tranche's sizing got wrong, both found by probing
+//! before writing.** Its note said "the unconditional route only ever produces
+//! `NonZero`" — **11 of the 315 produce `Zero`**, because Lean's
+//! `imax ℓ 0 = 0` and the `Π` above such a guard is a `Prop` wanting
+//! `Interp::pi_cndd_at`. That is not a detail: it is why the function must
+//! hand back a *tagged* `Guard` and not a bare theorem, and a caller that
+//! guessed `dprod` would have named a different set eleven times. And the
+//! census's unattributed **"other 3"** are guards that are literally `∅` —
+//! a `Prop`-valued codomain at a variable rung, where the clause still emits
+//! `ite0(∅, cndd, dprod)` rather than a numeral. Both are settled here, so
+//! **317 of the 318 non-bare-parameter nodes** now come apart.
+//!
+//! **What moved is one column: `typeEv` 80 → 81**, `071_sortElimPropRec`, off
+//! `no-endpoint`. Every other counter, every denominator and **the exits are
+//! unchanged at 31 × 0 / 58 × 4 / 2 × 2**. That is the honest shape of this
+//! tranche and it is worth stating plainly: 317 nodes that used to refuse now
+//! answer, and the certificates they feed stop somewhere else. The frontier
+//! moved; the verdict did not.
+//!
+//! The 290 bare-parameter guards are the genuine boundary and **must** stay
+//! refused — `Sort u` is `Prop` at `u = 0` and a universe above it, the two
+//! clauses are different sets, and no unconditional theorem separates them.
+//! They need §6.2's split reaching zone A, which is `rec_dep::split_bottom`'s
+//! machinery at a node that is inside nobody's case analysis.
+//!
+//! **No new `derived` mathematics.** `Ite0::when_zero`/`when_nonzero`,
+//! `Order::max_ne_zero` (already unconditional, derived two tranches ago for
+//! exactly this caller) and `kernel`'s `Thm::eq_refl` are the whole of it —
+//! the branch's three-step run of new derivations does not continue here.
+//!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
 //! * **A ground use of a poly constant pays the §1.2 bridge — and does not
