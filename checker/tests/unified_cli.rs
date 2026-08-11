@@ -143,3 +143,36 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
 }
+
+/// Mini owns the `Pair`/`Tri` declarations and publishes their class-(T)
+/// translations. TG interprets projections with that shared machine, lifts
+/// projection congruence through the same tuple projection, and consumes the
+/// retained constructor computation rule for direct redexes. The remaining
+/// projection reductions are deliberately the subject-whnf continuation: the
+/// current `proj_red` interface does not carry that trace certificate.
+#[test]
+fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
+    let direct = run_on("proj_reduced_subject.ndjson", &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&direct.stdout);
+    assert_eq!(direct.status.code(), Some(4), "the fixture's remaining TG debt moved:\n{stdout}");
+    assert!(
+        stdout.contains("route\tmode=Split\ttoMini=3\ttoChecker=10\tunclaimed=0"),
+        "the projection fixture was not handled by the one dispatch loop:\n{stdout}",
+    );
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 31, "the direct projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 5, "two direct computation rules were not consumed:\n{stdout}");
+    assert!(
+        !stdout.contains("beta: the contracted body does not match its interpretation"),
+        "the projection interpretation changed underneath a shared lambda graph:\n{stdout}",
+    );
+
+    let congr = run_on("proj_stuck_subject.ndjson", &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&congr.stdout);
+    assert_eq!(congr.status.code(), Some(4), "the fixture's remaining TG debt moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 36, "the projection congruence ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 3, "the direct computation control regressed:\n{stdout}");
+    assert!(
+        !stdout.contains("def_eq_proj: derived equation does not match the claim"),
+        "projection congruence used the retired opaque spelling:\n{stdout}",
+    );
+}

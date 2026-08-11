@@ -436,6 +436,10 @@ pub const CUMUL_HEIGHT: usize = 8;
 /// The §9 zone-B apparatus: the translation machine, the cumulative chain over
 /// the **same** signature, and the per-`(name, σ)` stores that go with them.
 pub struct IndApparatus {
+    /// The shared semantic owner of projection packages. Kept here so mini's
+    /// own projection clause and the routed TG consumer cannot build two
+    /// `DeclProj`s over one published translation.
+    core: EnvCore,
     /// The apparatus every declaration is translated over — one, so that the
     /// `MachineId` guards on `Inductive::is_over` all pass. Held through the
     /// [`EnvCore`]'s cell: the machine is the core's, so an `Interp` and a
@@ -893,6 +897,7 @@ impl IndApparatus {
             return None
         }
         Some(IndApparatus {
+            core: core.clone(),
             mach,
             chain,
             decls: HashMap::new(),
@@ -1320,7 +1325,16 @@ impl IndApparatus {
         if self.decl_projs_failed.contains(key) {
             return None
         }
-        let built = crate::mini::proj_data::build(env, &self.mach.borrow(), &t.ind).map(Rc::new);
+        let built = match joint_key(key) {
+            // `zoneb::build` publishes before any projection consumer can be
+            // reached. The routed TG consumer reads this same cell, so neither
+            // side can mint a second package for a joint key.
+            Some(joint) => self
+                .core
+                .projection_evidence_with(env, &self.mach.borrow(), &joint)
+                .and_then(|(shared, p)| (shared.ind.carrier == t.ind.carrier).then_some(p)),
+            None => crate::mini::proj_data::build(env, &self.mach.borrow(), &t.ind).map(Rc::new),
+        };
         match built {
             Some(p) => {
                 self.decl_projs.insert(key.clone(), p.clone());

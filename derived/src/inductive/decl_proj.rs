@@ -309,6 +309,13 @@ pub struct DeclProj {
     pub major: FreeVar,
     /// `πⱼ(z)` at [`DeclProj::major`], one per field in declared order.
     pub proj: Vec<Term>,
+    /// `⊢ ∀y⃗. πⱼ(ctor₀(y⃗)) = yⱼ`, one per field. These are the
+    /// constructor computation rules [`DeclProj::build`] had to derive in
+    /// order to build the typed projections below. Keeping them in the
+    /// package is load-bearing: a later checker can consume the authoritative
+    /// inductive construction instead of deriving a second spelling of the
+    /// projection rule.
+    pub computes: Vec<Thm>,
     /// `⊢ ∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(p⃗, π₀ z, …, π_{j-1} z))`, one per
     /// field. Empty at `k = 0`.
     pub typed: Vec<Thm>,
@@ -553,11 +560,17 @@ impl DeclProj {
         let dp = DeclProj {
             major: zv2,
             proj: (0..k).map(|j| proj_of(&ap, &mach.proj, j, tz2.clone())).collect(),
+            computes: computes.iter().map(|r| gen_all(yvs, r)).collect(),
             typed: out[..k].to_vec(),
             eta: out[k].clone(),
         };
         crate::all_unconditional(
-            &dp.typed.iter().chain(std::iter::once(&dp.eta)).collect::<Vec<_>>(),
+            &dp
+                .computes
+                .iter()
+                .chain(dp.typed.iter())
+                .chain(std::iter::once(&dp.eta))
+                .collect::<Vec<_>>(),
         )
         .then_some(dp)
     }

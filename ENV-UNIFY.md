@@ -910,6 +910,46 @@ stage 6"):
   `nat_eq`). Level-polymorphic store reuse remains the separately queued
   tranche; `Nat.ble` synthesis and projections are explicitly outside B6.
 
+* **B7** — the first authoritative projection consumer — **landed for direct
+  class-(T) constructor redexes and projection congruence** (2026-08-11).
+  Mini publishes the exact `Translated` value it built for the inductive at
+  each ground σ; `EnvCore` builds at most one `DeclProj` over that translation,
+  lazily on first projection use. `DeclProj` now retains the generalized
+  computation rules it already had to derive instead of dropping them after
+  constructing its typing/η package. TG interprets every projection of such a
+  declaration with the shared machine's tuple projection, lifts structure
+  equalities through that same composite by Leibniz, and for a direct
+  constructor redex composes the shared lambda contractions, mini's stored
+  constructor abbreviation, and the retained computation rule. There is no TG
+  structure carrier, no parallel projection theorem, and no second declaration
+  check.
+
+  On `proj_reduced_subject.ndjson`, real derivations **210 → 226**, total TG
+  gaps **47 → 31**, and `proj_reduce` **7 → 5**. On the independent stuck
+  projection/congruence fixture, real derivations **488 → 499**, total gaps
+  **47 → 36**, and `proj_reduce` **4 → 3**. The controls are exact:
+  `proj_reduced_carrier` remains **139**, `field_in_u0_by_carrier` remains
+  **0**, and the full Nat handoff fixture remains **172**. The ratchet in
+  `checker/tests/unified_cli.rs` also pins the one-loop route counts and the
+  absence of both the retired opaque-projection congruence mismatch and a
+  shared-lambda body interpretation drift.
+
+  The cost is measured rather than hidden. Median retired instructions over
+  three `perf stat -e instructions:u` runs, same debug-with-optimisation
+  binaries: `proj_reduced_subject` **4,254,386,335 → 4,677,391,237**
+  (**+9.94%**) for constructing and consuming its first projection package;
+  the larger `nat_char_equations` control **9,926,219,756 → 9,976,861,130**
+  (**+0.51%**). That is one lazy derived package, not another Lean type-check
+  pass; subsequent consumers read the same `Rc` from `EnvCore`.
+
+  The named continuation is subject reduction. A redex such as
+  `(mk2 α x y).fst` or `(pick α x y Two.a).fst` reaches a constructor only after
+  δ/ι reduction of its subject. `TypeChecker::reduce_proj` computes that whnf
+  trace, but `Certifier::proj_red` currently receives only the projection
+  endpoints. Until the subject's certificate is threaded into that interface,
+  TG can soundly consume the direct constructor theorem but cannot compose it
+  in front of the reduced-subject cases.
+
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
 `checker/src/routed.rs`, the checker's half). The policy function is

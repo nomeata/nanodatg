@@ -2035,6 +2035,20 @@ enum Lit {
 // behaviour, unchanged).
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Mini's authoritative class-(T) translation and the projection package
+/// derived over it. The translation is published while mini handles the
+/// inductive declaration; consumers build the expensive `DeclProj` at most
+/// once, on first actual projection use. An attempted failure is remembered,
+/// just like the other semantic stores on [`EnvCore`].
+#[derive(Default)]
+struct ProjectionStore {
+    translated: HashMap<crate::const_store::ConstKey, Rc<crate::mini::interp::Translated>>,
+    evidence: HashMap<
+        crate::const_store::ConstKey,
+        Option<Rc<derived::inductive::decl_proj::DeclProj>>,
+    >,
+}
+
 /// The one-per-run semantic objects both engines must share for their
 /// certificates to compose, as a cloneable same-thread handle. See the header
 /// above for what belongs here and why.
@@ -2069,6 +2083,11 @@ pub struct EnvCore {
             Option<Option<Rc<crate::mini::nat_clause::NatClause>>>,
         >,
     >,
+    /// Class-(T) translations published by mini and their lazily built typed
+    /// projection/computation package. This is semantic identity, not a result
+    /// cache: rebuilding `DeclProj` would mint another `w_rect` Separation and
+    /// produce theorems about a projection construction no other consumer uses.
+    projections: Rc<std::cell::RefCell<ProjectionStore>>,
     /// **The shared constant store** (ENV-UNIFY.md B4): `⟦c.{σ}⟧` carriers
     /// with their typings and defining equations, under the joint
     /// [`crate::const_store::ConstKey`], written and read by both engines.
@@ -2111,6 +2130,7 @@ impl EnvCore {
             wtb: Rc::new(std::cell::RefCell::new(None)),
             machine: Rc::new(std::cell::RefCell::new(None)),
             nat: Rc::new(std::cell::RefCell::new(None)),
+            projections: Rc::new(std::cell::RefCell::new(ProjectionStore::default())),
             consts: Rc::new(std::cell::RefCell::new(crate::const_store::ConstStore::default())),
             lams: Rc::new(std::cell::RefCell::new(crate::lam_store::LamStore::default())),
             pis: Rc::new(std::cell::RefCell::new(crate::pi_store::PiStore::default())),
@@ -2137,6 +2157,79 @@ impl EnvCore {
             .map(Rc::new);
         *self.nat.borrow_mut() = Some(built.clone());
         built
+    }
+
+    /// Publish the class-(T) translation mini produced while handling an
+    /// inductive declaration. A second publication is accepted only when it
+    /// names the same derived carrier; divergent translations never overwrite
+    /// evidence already associated with the key.
+    pub(crate) fn publish_projection_translation(
+        &self,
+        key: crate::const_store::ConstKey,
+        translated: Rc<crate::mini::interp::Translated>,
+    ) -> bool {
+        let mut store = self.projections.borrow_mut();
+        if let Some(old) = store.translated.get(&key) {
+            return old.ind.carrier == translated.ind.carrier
+        }
+        store.translated.insert(key, translated);
+        true
+    }
+
+    /// The field count of a mini-published class-(T) structure, independent of
+    /// ground level instantiation. The tuple projection operator is the shared
+    /// machine's at every level; this lookup therefore decides the
+    /// interpretation without a fragile attempt to recover levels from the
+    /// projection subject. Conflicting arities fail closed.
+    fn projection_arity(&self, name: crate::const_store::NameKey) -> Option<usize> {
+        let store = self.projections.borrow();
+        let mut found = None;
+        for (key, translated) in &store.translated {
+            if key.0 != name {
+                continue
+            }
+            let arity = translated.ind.spec.ctors.first()?.args.len();
+            if translated.ind.spec.ctors.len() != 1 || found.is_some_and(|old| old != arity) {
+                return None
+            }
+            found = Some(arity);
+        }
+        found
+    }
+
+    /// The authoritative projection package at a joint `(T, σ)` key. Mini
+    /// publishes the translation; this method invokes mini's one package
+    /// builder at most once and keeps the resulting computation rules beside
+    /// the carrier they are about.
+    pub(crate) fn projection_evidence_with(
+        &self,
+        env: &mut Env,
+        mach: &derived::inductive::Machine,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<(
+        Rc<crate::mini::interp::Translated>,
+        Rc<derived::inductive::decl_proj::DeclProj>,
+    )> {
+        let translated = self.projections.borrow().translated.get(key)?.clone();
+        if let Some(found) = self.projections.borrow().evidence.get(key) {
+            return found.clone().map(|p| (translated, p))
+        }
+        let built = crate::mini::proj_data::build(env, mach, &translated.ind).map(Rc::new);
+        self.projections.borrow_mut().evidence.insert(key.clone(), built.clone());
+        built.map(|p| (translated, p))
+    }
+
+    fn projection_evidence(
+        &self,
+        pre: &Prelude,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<(
+        Rc<crate::mini::interp::Translated>,
+        Rc<derived::inductive::decl_proj::DeclProj>,
+    )> {
+        let mach = self.machine(pre)?;
+        let out = self.projection_evidence_with(&mut self.env_mut(), &mach.borrow(), key);
+        out
     }
 
     /// The shared lambda mint. Same-thread cell, same short-lived-borrow rule:
@@ -9415,6 +9508,44 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(entry.term)
     }
 
+    /// Mini's class-(T) projection package when a direct constructor supplies
+    /// the level spine.
+    /// Constructor and inductive level parameters are the same export spine;
+    /// using it avoids making the interpretation of a direct projection
+    /// depend on whether the delta-only subject-type walk happens to succeed
+    /// in the current binder context.
+    fn mini_projection_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<(
+        Rc<crate::mini::interp::Translated>,
+        Rc<derived::inductive::decl_proj::DeclProj>,
+    )> {
+        let key = self.const_key(ctx, ty_name, levels)?;
+        self.core.projection_evidence(&self.pre, &key)
+    }
+
+    /// The authoritative interpretation of a data-valued structure
+    /// projection. The old opaque `proj(i,s)` remains the fail-closed fallback
+    /// for declarations mini did not translate by this class-(T) route.
+    fn interp_projection(
+        &mut self,
+        ty_name: NamePtr<'t>,
+        idx: usize,
+        subject: Term,
+    ) -> Option<Term> {
+        let name = self.name_key(ty_name)?;
+        (idx < self.core.projection_arity(name)?).then_some(())?;
+        let mach = self.machine()?;
+        let m = mach.borrow();
+        let out = derived::inductive::decl_proj::proj_of(&m.wt.sums.ap, &m.proj, idx, subject);
+        drop(m);
+        self.record_adopted_term(&out);
+        Some(out)
+    }
+
     /// Interpret a Lean expression as a kernel term.
     pub fn interp(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Term {
         if let Some(t) = self.exprs.get(&e) {
@@ -9604,10 +9735,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 };
                 Term::var(v)
             }
-            Expr::Proj { idx, structure, .. } => {
-                let i = self.idx_term(idx as u64);
+            Expr::Proj { ty_name, idx, structure, .. } => {
                 let s = self.interp(ctx, structure);
-                self.mk(self.syms.proj, vec![i, s])
+                if let Some(t) = self.interp_projection(ty_name, idx, s.clone()) {
+                    t
+                } else {
+                    let i = self.idx_term(idx as u64);
+                    self.mk(self.syms.proj, vec![i, s])
+                }
             }
             // **`⟦lit n⟧ = num(n)`** — the binary numeral over `ω`, and the
             // third carrier is gone.
@@ -13371,6 +13506,129 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             cur = next;
         }
         Ok((acc, obligations))
+    }
+
+    /// Contract a fully applied constant whose carrier and lambda graphs were
+    /// published by mini. Unlike [`Self::adopted_nest_chain`], the domains are
+    /// read from the constant's Lean telescope; this is the constructor side
+    /// of the same handoff.
+    fn adopted_const_spine(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+    ) -> Result<(CondEq, Vec<Term>, Term), &'static str> {
+        let (head, args) = ctx.unfold_apps(e);
+        let Expr::Const { .. } = ctx.read_expr(head) else {
+            return Err("projection: the structure head is not a constant")
+        };
+        let mut ty = self
+            .syn_type(ctx, head)
+            .ok_or("projection: the constructor type is unavailable")?;
+        let mut cur = self.interp(ctx, head);
+        let mut acc = CondEq::refl(cur.clone());
+        let mut terms = Vec::with_capacity(args.len());
+        for arg in args {
+            let pi = self
+                .expose_pi(ctx, ty)
+                .ok_or("projection: the constructor telescope is unavailable")?;
+            let Expr::Pi { binder_type, body, .. } = ctx.read_expr(pi) else {
+                return Err("projection: the constructor telescope ended early")
+            };
+            let ta = self.interp(ctx, arg);
+            let dom = self.interp(ctx, binder_type);
+            let lifted = self
+                .ceq_congr(self.pre.ap.app, &[acc.clone(), CondEq::refl(ta.clone())])
+                .ok_or("projection: congruence over the constructor spine refused")?;
+            let (mem, hyps) = self
+                .mem_obligation(ctx, arg, &ta, &dom)
+                .ok_or("projection: the constructor argument has no domain obligation")?;
+            let (step, next) = self.adopted_lam_step(&cur, &ta, &dom, &mem, &hyps)?;
+            acc = self
+                .ceq_trans(&lifted, &step)
+                .ok_or("projection: chaining the constructor contraction failed")?;
+            terms.push(ta);
+            cur = next;
+            ty = ctx.inst(body, &[arg]);
+        }
+        Ok((acc, terms, cur))
+    }
+
+    /// Consume mini's constructor projection computation rule for a direct
+    /// constructor redex. Subject reductions are deliberately outside this
+    /// first tranche: the checker currently hands `proj_red` only the two
+    /// endpoints, not the certificate for the subject's own whnf trace.
+    fn derive_direct_projection(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        redex: ExprPtr<'t>,
+        reduct: ExprPtr<'t>,
+    ) -> Result<CondEq, &'static str> {
+        let Expr::Proj { ty_name, idx, structure, .. } = ctx.read_expr(redex) else {
+            return Err("projection: the redex is not a projection")
+        };
+        let (head, _) = ctx.unfold_apps(structure);
+        let Expr::Const { name: ctor_name, levels, .. } = ctx.read_expr(head) else {
+            return Err("projection: the structure is not a direct constructor application")
+        };
+        let ctor = self
+            .decls
+            .get_constructor(&ctor_name)
+            .ok_or("projection: the structure head is not a constructor")?;
+        if ctor.inductive_name != ty_name {
+            return Err("projection: the constructor belongs to another inductive")
+        }
+        let (translated, dp) = self
+            .mini_projection_at(ctx, ty_name, levels)
+            .ok_or("projection: mini published no class-(T) package")?;
+        let (spine, terms, bottom) = self.adopted_const_spine(ctx, structure)?;
+        let ctor_i = usize::from(ctor.ctor_idx);
+        let abbrev = translated
+            .ctor_abbrev
+            .get(ctor_i)
+            .and_then(|a| derived::inst_all(a, &terms))
+            .and_then(CondEq::plain)
+            .ok_or("projection: the constructor abbreviation did not instantiate")?;
+        if abbrev.as_eq().map(|(a, _)| a) != Some(bottom) {
+            return Err("projection: the constructor abbreviation is about another bottom")
+        }
+        let structure_eq = self
+            .ceq_trans(&spine, &abbrev)
+            .ok_or("projection: chaining the constructor abbreviation failed")?;
+
+        let mach = self.machine().ok_or("projection: the shared machine is unavailable")?;
+        let m = mach.borrow();
+        let left = dp
+            .proj_at(&m.wt.sums.ap, &m.proj, idx, structure_eq.as_eq().ok_or("projection: constructor chain is not an equation")?.0)
+            .ok_or("projection: field index is outside the package")?;
+        let x = self.core.fresh_var();
+        let at_x = dp
+            .proj_at(&m.wt.sums.ap, &m.proj, idx, Term::var(x))
+            .ok_or("projection: field index is outside the package")?;
+        drop(m);
+        let under = self
+            .ceq_leibniz(&structure_eq, x, left, at_x)
+            .ok_or("projection: lifting the constructor equation refused")?;
+
+        let np = usize::from(ctor.num_params);
+        let fields = terms
+            .get(np..)
+            .ok_or("projection: the constructor has fewer arguments than parameters")?;
+        if fields.len() != usize::from(ctor.num_fields) {
+            return Err("projection: the constructor is not fully applied")
+        }
+        let computes = dp
+            .computes
+            .get(idx)
+            .and_then(|r| derived::inst_all(r, fields))
+            .and_then(CondEq::plain)
+            .ok_or("projection: the computation rule did not instantiate")?;
+        let out = self
+            .ceq_trans(&under, &computes)
+            .ok_or("projection: chaining the computation rule failed")?;
+        let want = (self.interp(ctx, redex), self.interp(ctx, reduct));
+        out.proves(&want.0, &want.1)
+            .then_some(out)
+            .ok_or("projection: derived equation does not match the reduction")
     }
 
     /// Move a derived membership along a defining equation.
@@ -19223,7 +19481,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let Some(sc) = self.consume(&structures) else {
             return self.note_admit(crate::certify::Admit::Proj.name())
         };
-        let (Expr::Proj { idx: ia, structure: sa, .. }, Expr::Proj { idx: ib, structure: sb, .. }) =
+        let (
+            Expr::Proj { ty_name: na, idx: ia, structure: sa, .. },
+            Expr::Proj { ty_name: nb, idx: ib, structure: sb, .. },
+        ) =
             (ctx.read_expr(a), ctx.read_expr(b))
         else {
             return self.note_admit("def_eq_proj: not a pair of projections")
@@ -19235,12 +19496,27 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if !sc.proves(&tsa, &tsb) {
             return self.note_admit("def_eq_proj: the premise is not about the two structures")
         }
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        // Mini's class-(T) projection is a composite tuple projection rather
+        // than TG's historical opaque two-argument symbol. Lift the structure
+        // equation through that exact composite by one checked Leibniz step.
+        if na == nb {
+            let authoritative = (|| {
+                let left = self.interp_projection(na, ia, tsa.clone())?;
+                let x = self.core.fresh_var();
+                let at_x = self.interp_projection(na, ia, Term::var(x))?;
+                (left == ta).then_some(())?;
+                self.ceq_leibniz(&sc, x, left, at_x)
+            })();
+            if let Some(out) = authoritative.filter(|out| out.proves(&ta, &tb)) {
+                return self.cert(ctx, out)
+            }
+        }
         let i = self.idx_term(ia as u64);
         let proj = self.syms.proj;
         let Some(out) = self.ceq_congr(proj, &[CondEq::refl(i), sc]) else {
             return self.note_admit("def_eq_proj: congruence refused")
         };
-        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         if !out.proves(&ta, &tb) {
             return self.note_admit("def_eq_proj: derived equation does not match the claim")
         }
@@ -19393,6 +19669,13 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // happens to compute: reflexivity is the claim, with no premise at all.
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
+        }
+        // The inductive declaration was dispatched to mini exactly once. For
+        // a direct constructor redex, consume the computation theorem retained
+        // in that declaration's shared projection package. No acceptance
+        // check, fallback checker, or parallel TG carrier is involved.
+        if let Ok(out) = self.derive_direct_projection(ctx, redex, reduct) {
+            return self.cert(ctx, out)
         }
         #[cfg(feature = "stepcount")]
         {

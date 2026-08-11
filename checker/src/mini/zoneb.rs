@@ -1025,17 +1025,26 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
     let rec_dom_abbrev: Vec<Vec<Vec<Thm>>> =
         shape.ctors.iter().map(|(.., ev)| ev.rec_dom_abbrev.clone()).collect();
+    let translated = Rc::new(crate::mini::interp::Translated {
+        ind,
+        field_abbrev,
+        ctor_abbrev,
+        rec_dom_abbrev,
+    });
     if let Some(ip) = c.interp() {
+        // Publish before the private index is filled. The routed checker's
+        // projection consumer reads this exact translation and the package
+        // built over it; it never reconstructs an inductive carrier.
+        if let Some(joint) = crate::mini::interp::joint_key(&key) {
+            if !ip
+                .core()
+                .publish_projection_translation(joint, translated.clone())
+            {
+                return Err(Gap::IndSpec(*ind_name, "shared projection divergence"))
+            }
+        }
         if let Some(app) = ip.ind_apparatus() {
-            app.decls.insert(
-                key,
-                Rc::new(crate::mini::interp::Translated {
-                    ind,
-                    field_abbrev,
-                    ctor_abbrev,
-                    rec_dom_abbrev,
-                }),
-            );
+            app.decls.insert(key, translated);
         }
     }
     Ok(())
