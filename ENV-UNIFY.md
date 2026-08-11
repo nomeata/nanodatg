@@ -947,7 +947,11 @@ checker's 156 slots into a typing per def and the 7 into a population
 
 **The comprehensive merge, in progress** (the owner's correction of this
 track's shape: one environment, one parse, one entry per declaration — "it
-shouldn't matter which code created it"). Stage 1, **one parse, landed**:
+shouldn't matter which code created it"). The destination is now explicit:
+there is one `checker` crate and one declaration loop, inductive groups take
+mini's implementation, all other groups take nanoda's, and `--naive` selects
+the old mini-only path. The top-level `mini/` crate disappears; its surviving
+code becomes modules under `checker/`. Stage 1, **one parse, landed**:
 the routed driver drives the checker over the `ExportFile` mini's load
 installed as its arena (`mini::arena::installed_export_file`), so the joint
 `NameKey` is an identity rather than an agreement between two deterministic

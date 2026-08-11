@@ -10080,16 +10080,23 @@ the wrong name for the tranche, and it made a solved problem look open.
    (`rcompat_at`), subject to the ground-σ and open-scope caveats above.
 4. **Call `ble_transfer` from `tg.rs`** — §4.6's link 4.
 
-### The fork that is not decided, and must not be assumed
+### The pipeline is one checker — owner decision, 2026-08-11
 
-Step 2 has two readings and the repository does not choose between them: either
-`mini` is the successor kernel, in which case steps 1/3/4 all live in `mini`,
-the dependency edge is a non-issue, **and the 11 821-gap ledger is the wrong
-yardstick for this tranche**; or `checker` stays, in which case `eq_cash` must
-move down into `derived/` or be re-derived in `checker`. Nothing on this arc
-records that decision. It is the one thing a successor would most easily get
-wrong, because every document quoted above says "the pipeline already produces
-it" without naming which pipeline.
+The apparent fork above was phrased incorrectly. There are not two candidate
+successors. `mini` and `checker` are to become **one pipeline in the `checker`
+crate**, with one loop over declarations and one dispatch on declaration kind:
+
+* inductive handling comes from mini;
+* every other declaration is checked by nanoda's checker;
+* `--naive` selects the current mini-only checking path for comparison;
+* the top-level `mini/` crate and directory go away; its surviving pieces are
+  modules under `checker/`.
+
+The already-landed routed driver is the behavioral prototype: its interleaved
+`Split` mode is the default policy this decision names. The remaining work is
+to invert ownership of that driver and collapse the crate boundary, not to move
+`eq_cash` across a permanent dependency edge. The 11 821-gap ledger remains the
+yardstick because the merged checker owns it.
 
 ### Method note
 

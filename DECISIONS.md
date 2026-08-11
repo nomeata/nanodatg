@@ -3577,3 +3577,21 @@ corpus actually has, the certified route is affordable. Keep 2⁶⁴ opaque.
 largest single origin left on a ledger of 11 825. The mechanism is now stated
 rather than assumed: `Nat.ble lit₃ lit₅` cannot fire ι because its major premise
 is an opaque constant, not a constructor application of anything.
+
+## 2026-08-11 — There is one checker pipeline, not a successor fork
+
+The question "is mini or checker the successor?" has a false premise. They are
+to be merged into one `checker` crate with one loop over declarations and one
+dispatch on declaration kind:
+
+* inductive declarations use the implementation developed in mini;
+* other declarations use nanoda's checker;
+* `--naive` switches to the current mini-only checking path;
+* the top-level `mini/` crate and directory are removed, with surviving code
+  living as modules under `checker/`.
+
+`route::Mode::Split` and the existing interleaved driver already pin the desired
+behavior. The implementation task is ownership inversion and crate collapse,
+not choosing one checker and porting selected facilities across a lasting crate
+edge. Model generation is being extracted as a separate product elsewhere and
+is outside this work.
