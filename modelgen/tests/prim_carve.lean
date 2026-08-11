@@ -93,16 +93,58 @@
      own; **reversed** induction-hypothesis binders in the recursor are
      rejected at `rec_0`.
 
-   Three negatives, and they are the arm's remaining boundary rather than
-   incidental refusals:
+   Three occupants for the **infinitary** carve — a recursive occurrence under
+   a binder. The erasure keeps the binders and replaces only the occurrence
+   under them (`∀ z⃗, T p⃗ e⃗` becomes `∀ z⃗, S p⃗`), and each of the three
+   consumers — `good`'s clause, the constructor's component, the recursor's
+   induction hypothesis — wraps what it built in the same `z⃗`
+   ([`Modelgen.withRecSlot`]). The spliced skeleton is then **arm W's**, which
+   is why these could not land before arm W did, and `Inf2` was this file's
+   third negative until they did.
 
-   * `Inf2` — an indexed family whose erasure is **infinitary**: the recursive
-     occurrence sits under a binder, so it is not a bare `Inf2 p⃗ e⃗` and there
-     is no whole domain for the erasure to replace. This is the half of the old
-     `erasure linear: no` refusal that is *still* a refusal, and it is here
-     because `Br` was the occupant of that refusal until this tranche made it a
-     model — relaxing the guard without replacing the fixture would have left
-     arm C's one live shape guard with nothing exercising it.
+   * `Inf2` — the base case: one binder at a ground type, and the child's index
+     is a *field* rather than the binder. It was the occupant of the erasure
+     guard's infinitary refusal and is now a model.
+
+   * `Cf` — **`PFunctor.Approx.CofixA` transcribed**, which is the declaration
+     this arm was extended for: two **parameters**, the second a family, the
+     branch type `B a` reading the constructor's own earlier field, and a
+     nullary base constructor. It is the one occupant with a parameter, and
+     that is exactly what it pins. [`Modelgen.eraseCtorTy`] is raw de Bruijn
+     surgery and every binder of the field it crosses pushes the parameters one
+     index further out; a treatment that erased the occurrence at the *field's*
+     depth rather than at the depth under its own binders writes
+     `Cf._model.skel B A` and the kernel refuses it. Measured: `Cf` red at
+     `_model.skel` under that mutation and `Inf2` and `Bif` **both models**,
+     because a parameter-free declaration's `skel` has no bound variable for
+     the shift to move.
+
+   * `Bif` — a **bare** recursive field and an **infinitary** one in the same
+     constructor, and the infinitary one has **two** binders, of different
+     types, whose *second* is the child's index. Two binders is what makes an
+     order visible and two types is what makes a reversal a type error, and
+     with one binder each `Inf2` and `Cf` cannot see it: measured, a mutation
+     that hands the consumers the branch's binders in reverse is red at `Bif`'s
+     `_model.good` **alone** and every other occupant in this file models under
+     it. It is `Utd`'s role in `prim_w.lean` arriving at arm C.
+
+   Four further mutations, for the record, and all four loud at every
+   infinitary occupant: erasing the occurrence *with* its binders (the
+   whole-domain replacement the bare case does) is rejected at `_model.good`,
+   as is the same omission in [`Modelgen.spineSwap`]; appending the branch's
+   binders after the induction hypothesis's own arguments rather than before is
+   rejected at `_model.rec_0`; and taking the constructor's field without
+   applying it to the branch is rejected at `_model.ctor_1`.
+
+   **The erasure guard now has no occupant in this file, and that is not an
+   oversight.** What is left of it — a mention βζ discards, a binder only βζ
+   reveals, a binder type naming the declaration, an occurrence that is not an
+   application of the declaration — is unwritable in a `prelude` source: the
+   first three arrive only from a *specialisation* the elaborator performed,
+   and the fourth is a nested occurrence, which never reaches `primIso` because
+   layer 1 compiles it away first. `nest_fam_arg.lean`'s `OK` and `Key` are the
+   live occupants of the same guard, at layer 3, and they are where it is
+   exercised.
 
    * `IBox` and `NoBase` — two indexed families whose erasure is bare and
      **still does not model**, so the skeleton is spliced, the prim pass
@@ -180,6 +222,18 @@ inductive Sm3 : N → Type where
 inductive Inf2 : N → Type where
   | ileaf : Inf2 N.z
   | inode : (n : N) → (N → Inf2 n) → Inf2 (N.s n)
+
+inductive P : Type where
+  | one : P
+  | two : P
+
+inductive Cf (A : Type u) (B : A → Type u) : N → Type u where
+  | c0 : Cf A B N.z
+  | c1 : (n : N) → (a : A) → (B a → Cf A B n) → Cf A B (N.s n)
+
+inductive Bif : N → Type where
+  | b0 : Bif N.z
+  | b2 : (a : N) → Bif a → ((x : P) → (y : N) → Bif y) → Bif (N.s a)
 
 inductive IBox (α : Sort u) (β : Sort v) : N → Sort (max 1 u v) where
   | mk : ((α → β) → β) → IBox α β N.z

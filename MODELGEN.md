@@ -4423,7 +4423,13 @@ It is also a third reason the glue is worth not having.
 One spliced inductive per modelled family, which splice-and-model must then
 model. So the arm's reach is *indexed families whose index erasure the existing
 routes model*, and a family whose erasure is branching still waits for W — the
-erasure of `Lean.Expr`'s aux is still `Lean.Expr`-shaped. This does not make
+erasure of `Lean.Expr`'s aux is still `Lean.Expr`-shaped. (Written before arm W
+existed. It does now — §8.16.2 for the tagged instantiation, §8.16.6 for the
+untagged — so a branching *or* infinitary erasure is modelled rather than
+waiting, and §8.16.3 and §8.16.8 are the two edits that let arm C produce one.
+The sentence is kept because the *shape* of the claim is the point: the arm's
+reach is whatever its skeleton's routes reach, and it moves when they do.)
+This does not make
 the arm smaller than the carve-over-W arm would have been; it makes the
 dependency **explicit and separable** where W underneath everything made it
 invisible.
@@ -5180,8 +5186,10 @@ now prints):
   §8.16.3 below is the branching 51, and the hypothesis was tested at the
   *first* target rather than the fifty-first: `tests/prim_carve.lean`'s `Br`
   modelled with no change to `eraseCtorTy`, to `spineSwap`, or to any
-  assumption arm C makes beyond the slot count. The infinitary 2 are still
-  open and are still a different question.
+  assumption arm C makes beyond the slot count. The infinitary 2 were a
+  different question and stayed open two tranches longer; §8.16.4 found that
+  one of them was never infinitary at all, and §8.16.8 closes the other by
+  walking the erasure into the field's own binder telescope.
 
 **What the prototypes settle.** The tag scheme, the label and branch encodings,
 both junk hazards, the universe argument, the fragment's one missing root, and
@@ -5314,8 +5322,9 @@ environment back on every withdrawal and on every decline, so a fragment that is
 
 **Verdict: arm C now runs at `erasureBare` instead of `erasureLinear`, so a
 constructor may have any number of recursive fields.** The branching 51 of
-§8.16.2's table were the tranche; the infinitary 2 were not folded in and are
-still open. `tests/prim_carve.lean` gained `Br`, `Mx` and `Sm3`, and `Br` —
+§8.16.2's table were the tranche; the infinitary 2 were not folded in — §8.16.8
+is where they close, by walking the erasure into a field's own binders rather
+than by relaxing a guard. `tests/prim_carve.lean` gained `Br`, `Mx` and `Sm3`, and `Br` —
 which that file already held as arm C's *branching* negative — is now one of
 its positives, with the header corrected in place.
 
@@ -5336,16 +5345,21 @@ it are the fragment being modelled in turn.
 armC := route .type ∧ ni > 0 ∧ erasureBare        -- was erasureLinear
 ```
 
-`erasureLinear`'s single answer is split into the two reasons it always
-printed. `erasureBareWhy` asks only whether every recursive occurrence is a
-bare `T p⃗ e⃗`; `branchingWhy` asks whether any constructor has more than one.
-Only the first still bounds the arm. `erasureLinear` survives as the
-conjunction because it is what `armW`'s guard is stated by and what the census
-counts the two populations with.
+`erasureLinear`'s single answer is split into the reasons it always printed.
+`erasureBareWhy` asks whether every recursive occurrence is a bare `T p⃗ e⃗`;
+`branchingWhy` asks whether any constructor has more than one. Only the first
+still bounds the arm. `erasureLinear` survives as the conjunction because it is
+what `armW`'s guard is stated by and what the census counts the two populations
+with. (§8.16.8 splits `erasureBareWhy` once more, into the *infinitary* half —
+which stops being arm C's refusal there — and the rest, which is all that is
+left of it; `erasureLinear` is then the conjunction of three.)
 
-The four sites all read one array — `ctorIdxAt`'s `slots : Array (Nat × Array
-Expr)`, one entry per recursive field in **telescope order**, where it was
-`Option (Nat × Array Expr)` holding the last:
+The four sites all read one array — `ctorIdxAt`'s `slots`, one entry per
+recursive field in **telescope order**, where it was `Option (Nat × Array
+Expr)` holding the last. It carried `(Nat × Array Expr)` — the field's position
+and the child's index arguments — until §8.16.8 made it `(Nat × Expr)`, the
+position and the field's whole domain, because an infinitary field's index
+arguments are not terms of this scope at all:
 
 | site | at one slot | at many |
 |---|---|---|
@@ -5549,7 +5563,7 @@ Four guards, and each asks a question whose answer is invariant under βζ:
 | site | the question |
 |---|---|
 | `erasureBareWhy` | is every recursive occurrence a bare `T p⃗ e⃗`? — arm C's guard |
-| arm C's `ctorIdxAt` | what are that occurrence's index arguments? |
+| arm C's `ctorIdxAt` | what are that occurrence's index arguments? (moved to [`Modelgen.withRecSlot`] in §8.16.8, which asks it and *how many binders it is under* together) |
 | [`Modelgen.recSlotOf`] | the same bareness question, for the tuple tower |
 | [`Modelgen.tagFactored`] | what binders does a recursive field have? — a redex has none to peel until it is reduced |
 
@@ -5574,22 +5588,32 @@ PFunctor.Approx.CofixA F : ℕ → Type (max uA uB)
 
 `F.B a → CofixA F n` is a **real** function type: there is a binder, the
 occurrence is under it, and there is no whole domain for the erasure to
-replace. But the second fact about it is the one that settles the bucket: the
-binder's type is `F.B a`, which mentions the constructor's **earlier field**
-`a` — so `B` does not factor through the tag, and the run has been printing
-`B factors through the tag: no` on this decline all along. Its index erasure,
-if one could be taken, is
+replace. But the second fact about it is the one that settled the bucket at the
+time: the binder's type is `F.B a`, which mentions the constructor's **earlier
+field** `a` — so `B` does not factor through the tag, and the run has been
+printing `B factors through the tag: no` on this decline all along. Its index
+erasure is
 
 ```text
 Skel | intro : ∀ (a : F.A), (F.B a → Skel) → Skel
 ```
 
 which is `WType F` — the very declaration in the not-tag-factored bucket
-beside `PSet` and `FirstOrder.Language.Term`. So closing the erasure for
-`CofixA` would splice a skeleton arm W declines, `Iso.requires` would withdraw
-the model, and the run would have paid for the splice first. **`CofixA` is a
-true W-type wearing an index**, and the honest census files it with the other
-three rather than with the two that were an artifact.
+beside `PSet` and `FirstOrder.Language.Term`. **`CofixA` is a true W-type
+wearing an index**, and at the time this section was written the census filed
+it with the other three rather than with the two that were an artifact.
+
+**Two claims in that paragraph were wrong and both are corrected here rather
+than below.** *"Closing the erasure for `CofixA` would splice a skeleton arm W
+declines, `Iso.requires` would withdraw the model, and the run would have paid
+for the splice first"* — arm W declined `WType`'s shape only until §8.16.6's
+**untagged** instantiation landed, and it models it now; the skeleton above is
+`prim_w.lean`'s `Wty` with a nullary constructor beside it. And filing `CofixA`
+with `WType` was right about the *shape* and wrong about the *job*: the two are
+not closed by the same change. `WType` is closed by giving arm W a second
+instantiation; `CofixA` is closed by giving arm C's erasure a binder telescope,
+which is §8.16.8 and touches no W code at all. It was the second of the two
+times this arc mis-assigned `CofixA`'s job.
 
 #### The residue the guard keeps, named rather than hand-waved
 
@@ -6117,7 +6141,7 @@ Nothing else in the report moved — the fragment still goes in once, at
 |---|---|---|
 | basis exemption — closed by definition | 3 | `Eq`, `Nat`, `PSigma` |
 | singleton boundaries — closed by definition | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
-| **indexed and infinitary** — the one open class | 1 | `PFunctor.Approx.CofixA` |
+| **indexed and infinitary** — the one open class | 1 | `PFunctor.Approx.CofixA` — **closed by §8.16.8**, which leaves 5 |
 
 Its decline now reads `B factors through the tag: no; through the label: yes;
 carrier is Type u: yes; why: infinitary: PFunctor.Approx.CofixA.intro has a
@@ -6130,6 +6154,13 @@ and `good`, its minor and the carve proof carrying a slot whose clause is
 would model the skeleton such an erasure produces — `Skel | intro : ∀ a, (F.B a
 → Skel) → Skel` *is* `WType F` — so `Iso.requires` would be met. One
 declaration, and the whole of what the third construction does not reach.
+
+**That prediction was carried out in §8.16.8 and every clause of it held**, the
+"would" included: the skeleton was written out as a standalone inductive and
+modelled *before* the erasure was designed, and the clause and the hypothesis
+are those two expressions verbatim. It is also the thesis's own §5.2 rule for
+the infinitary constructor, which is where it was checked against rather than
+re-derived.
 
 **The output was replayed from bytes with the kernel on, and this arm needed it
 for the reason §8.16.5 did**: **692,931 declarations accepted, 0 rejected**,
@@ -6159,3 +6190,241 @@ arm W fires only at `!erasureLinear`. What is measured is the column itself, on
 `tests/prim_w.lean`: `Wt`, `Tree`, `Br` and `Dep` at `[propext, Quot.sound]` and
 `Bad`, `Wty`, `Utd` at `[propext, Classical.choice, Quot.sound]`, read off the
 emitted file with the kernel on.
+
+### 8.16.8 The infinitary erasure — arm C walks into the field's own binders
+
+**Verdict: arm C's erasure keeps a recursive field's binder telescope and
+replaces only the occurrence under it, so `PFunctor.Approx.CofixA` models and
+the last open class in the corpus closes.** No W code moved. `erasureBareWhy`'s
+infinitary test is *split out* rather than deleted, because it is what routes a
+non-indexed infinitary declaration to arm W.
+
+**The load-bearing claim was tested before anything was designed, and it
+held.** §8.16.4 says the erasure `CofixA` would produce is
+
+```text
+Skel | intro : ∀ (a : F.A), (F.B a → Skel) → Skel
+```
+
+which is `WType F`. That is a claim about a declaration that did not exist, so
+it was made into one: both skeletons — `CofixA`'s and `tests/prim_carve.lean`'s
+`Inf2`'s — were written out as ordinary inductives in a scratch fixture and run
+through the tool. `Inf2`'s skeleton modelled at 215 declarations (it carried the
+W core) and `CofixA`'s at 12, both at `--check-recursors` with no statement
+differing. So `Iso.requires` would be met and **the erasure was the only
+missing piece** — which is a much smaller job than the decline's wording
+suggests, and worth the ten minutes it took to establish rather than assuming
+at the end.
+
+#### What the erasure has to do, and where it was replacing too much
+
+A recursive field is `∀ z⃗, T p⃗ e⃗(z⃗)` with `z⃗` possibly empty.
+[`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] replaced a recursive
+field's **whole domain** — right at `z⃗ = ε` and wrong otherwise, and there was
+nothing to replace when the occurrence sat under a binder. They now replace the
+**occurrence** and keep the binders:
+
+```text
+∀ z⃗, T p⃗ e⃗(z⃗)   erases to   ∀ z⃗, S p⃗
+```
+
+Two functions, because the two work in different currencies.
+[`Modelgen.swapOcc`] is the fvar-level one and `spineSwap` calls it;
+`eraseCtorTy`'s `eraseOcc` is raw de Bruijn, and **each binder it crosses
+pushes the parameters one index further out**, which is the whole of the
+arithmetic and the one place a parameter-free fixture cannot see a mistake.
+Binder types are kept **as written** in both: they mention the parameters and
+the constructor's earlier non-recursive fields, and the erasure moves neither.
+
+#### The three consumers, and why the slot array changed shape
+
+`ctorIdxAt` handed each consumer a slot's `(position, child index vector)`. An
+infinitary field's index vector is **not a term of that scope**: it mentions
+the field's own binders, which exist only once someone has opened them. So a
+slot now carries `(position, domain)` and each consumer opens it itself with
+[`Modelgen.withRecSlot`], which yields `z⃗` and `e⃗(z⃗)` together inside a scope
+where it can abstract them again.
+
+| consumer | at a bare slot | at an infinitary one |
+|---|---|---|
+| `good`'s clause | `ih (pack e⃗)` | `∀ z⃗, ih z⃗ (pack e⃗(z⃗))` |
+| the skeleton's field, in `ctor_j` | `f.1` | `fun z⃗ => (f z⃗).1` |
+| the carve component, in `ctor_j` | `f.2` | `fun z⃗ => (f z⃗).2` |
+| the recursor's ih, from `skel.rec` | `atSkel g` | `∀ z⃗, atSkel (g z⃗)` |
+| the minor's argument | `⟨g, hc⟩` | `fun z⃗ => ⟨g z⃗, hc z⃗⟩` |
+| the minor's hypothesis | `ih (pack e⃗) hc` | `fun z⃗ => ih z⃗ (pack e⃗(z⃗)) (hc z⃗)` |
+
+**At `z⃗ = ε` every right-hand column is the left one**, term for term, which is
+why no bare occupant anywhere in the tree moved. The `good` clause stays a
+`Prop` because `∀` into `Prop` is one, so the Church conjunction takes it
+unchanged; the minor's hypothesis is at `unpack (pack e⃗(z⃗))` and so at
+`e⃗(z⃗)` by structure eta, exactly as at a bare slot. **ι is still `Eq.refl`**
+— the three reductions §8.15 names carry it unchanged, and the kernel accepted
+every ι theorem of every infinitary occupant.
+
+The `good` clause's induction hypothesis type is `swapOcc` again, at the
+predicate `Pk → Prop`: the kernel binds an infinitary field's hypothesis under
+that field's own binders, and at a constant motive that is exactly the erasure
+rewrite with a different thing put in the hole.
+
+**This is the thesis's own rule and was checked against it rather than
+invented.** §5.2's `ctor` judgement has a case for the infinitary field,
+
+```text
+Γ; t : ∀x :: α. U_ℓ ⊢ (∀z :: γ. t e) → τ  ctor ⇒
+  A;  p. Σ(z :: γ) + B;  pgx. G[λb. g (inr b)/g′] ∧ ∀z :: γ. g (inl (z)) e
+```
+
+and the conjunct it adds is `∀z :: γ. good (f z) e(z)` — the row this table's
+first line builds, term for term. What differs is only what the thesis's rule
+is stated over: it constructs `A`, `B` and `G` for a **W-type**, where arm C
+keeps the field telescope on a spliced skeleton and so needs no `Σ(z :: γ) + B`
+branch encoding at all. The clause is the same; the carrier under it is
+§8.15's.
+
+#### The guard, split a second time — and the test that must not be deleted
+
+`erasureBareWhy` is now the *carve's* refusal alone and `infinitaryWhy` is a
+separate answer. **Deleting the infinitary test instead of splitting it would
+have been a regression with no fixture to catch it**: `armW`'s guard is
+`route .type ∧ ni == 0 ∧ isRec ∧ !erasureLinear`, so every non-indexed
+infinitary declaration — `Turing.PartrecToTM2.Λ'`, `prim_w.lean`'s `Br`,
+`Wt.mix` — reaches arm W *because* the erasure is not linear. With the test
+gone they would have been linear, fallen through to the tuple tower, and
+declined. `erasureLinear` is now the conjunction of three refusals rather than
+two.
+
+What is left of `erasureBareWhy` is four shapes, and two of them are new
+because binder types are newly load-bearing:
+
+| refusal | what it is |
+|---|---|
+| **vanishing mention** | a mention of `T` only inside a binder βζ discards (§8.16.4) |
+| **hidden binder** | a binder only βζ *reveals* — the erasure emits binders as written and would drop the branching, while `withRecSlot` reads through `headNorm` and would open it, so the two would disagree about the same field |
+| **binder mention** | a binder type that names `T`: the erasure keeps binder types verbatim, so it would still name the field's own carrier after the erasure retyped it |
+| **nested** | an occurrence that is not an application of `T` at all |
+
+The last two are unreachable in Lean as written — positivity gives no function
+out of `T` before `T` exists, and a nested occurrence is compiled away at layer
+1 before `primIso` sees it — and the first two arrive only from a
+specialisation. They are declines with a named reason rather than kernel
+rejections with none.
+
+#### The fixture, and the two mutations that are red at exactly one occupant
+
+`tests/prim_carve.lean`'s `Inf2` moves from the declines to the models and
+gains two neighbours. Each earns its place by a mutation the others survive:
+
+* **`Cf`** — `CofixA` transcribed: two parameters, the second a family, the
+  branch type `B a` reading the constructor's own earlier field, and a nullary
+  base constructor. Erasing the occurrence at the *field's* depth rather than
+  at the depth under its own binders writes `Cf._model.skel B A` and the kernel
+  refuses it. **Red at `Cf._model.skel` alone**; `Inf2` and `Bif` are both
+  models under it, because a parameter-free declaration's `skel` has no bound
+  variable for the shift to move.
+* **`Bif`** — a bare recursive field and an infinitary one in the same
+  constructor, the infinitary one with **two** binders of different types whose
+  *second* is the child's index. Handing the consumers the branch's binders in
+  reverse is **red at `Bif._model.good` alone** and every other occupant in the
+  file models under it. It is `Utd`'s role in `prim_w.lean` arriving at arm C,
+  and the same lesson: two of anything cannot distinguish an order.
+
+Four more mutations, all loud at all three infinitary occupants: erasing the
+occurrence *with* its binders — the whole-domain replacement the bare case
+does — is rejected at `_model.good`, as is the same omission in `spineSwap`;
+appending the branch's binders *after* the induction hypothesis's own arguments
+is rejected at `_model.rec_0`; and taking the constructor's field without
+applying it to the branch is rejected at `_model.ctor_1`.
+
+**A fourth occupant was built and dropped**, which is worth a line because the
+file's rule is one discrimination per occupant. `Lim | lz | ln : (k : N) → ((m
+: N) → Lim m) → Lim (N.s k)` — the child's index *is* the branch — turned out
+to be strictly weaker than `Bif`, whose infinitary child's index is a binder
+too: no mutation in the sweep is red at `Lim` and green elsewhere, and the one
+mutation `Lim` is *green* under (dropping the substitution of the field vector
+into the slot's domain) is red at all three of the others. It measured nothing
+they did not.
+
+**The erasure guard now has no occupant in `prim_carve.lean` at all**, and that
+is recorded in the header rather than papered over: every shape it still
+refuses is unwritable in a `prelude` source for the reasons in the table above.
+`nest_fam_arg.lean`'s `OK` and `Key` are the live occupants of the same guard,
+at layer 3, and they are where it is exercised — which is also where the corpus
+would meet it.
+
+#### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, **3.388 T instructions** (332.6 s wall on a contended box).*
+
+| | §8.16.7 | **and with the infinitary erasure** |
+|---|---|---|
+| models | 6,878 | **6,880** |
+| declines | 6 | **5** |
+| statements compared / differing | 18,501 / 0 | **18,507 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+| instructions | 3.436 T | **3.388 T** |
+
+6,880 / 6,885 is **99.93 %**. The instruction count moved the *wrong* way for
+one more model and is not claimed as a speedup: the two runs differ by ~1.4 %,
+the working set is 24 GB, and page-fault work is the plausible difference. It
+is recorded as measured.
+
+**The change is a no-op on everything that modelled before, and that is a
+measurement rather than an argument.** Diffing the two runs' reports —
+`model of` / `declined` / `prelude spliced`, every line — gives **exactly
+three**: two models added, one splice added, one decline removed.
+
+```text
+> PFunctor.Approx.CofixA: model of 8 declarations
+> PFunctor.Approx.CofixA._model.skel: model of 12 declarations
+> PFunctor.Approx.CofixA: prelude spliced — PFunctor.Approx.CofixA._model.skel
+< PFunctor.Approx.CofixA: declined — … why: infinitary: …
+```
+
+Nothing else in 6,885 verdicts moved. That is the control the bare case needed
+and the strongest single statement about the change: at `z⃗ = ε` the new code is
+the old code, on the whole corpus and not only on the fixtures.
+
+**The 5, in full — and every one of them is closed by definition:**
+
+| what | count | which |
+|---|---|---|
+| basis exemption — the three the construction stands on | 3 | `Eq`, `Nat`, `PSigma` |
+| singleton boundaries — a named shape with a named reason | 2 | `CategoryTheory.Functor.IsHomLift` (index-variable field), `Acc.below` (a graph-arm data field that is not itself an index) |
+
+There is **no open class left**. The residue is three basis exemptions, which
+are what makes the construction well-founded rather than a gap, and two
+declarations whose refusal names a specific missing capability in an arm that
+otherwise models its whole class.
+
+#### The two columns, and where `CofixA` lands
+
+**Arm C's own constants spend no axioms, and `CofixA`'s do not either** — the
+carve is written against the *real* spliced skeleton, whose ι the kernel gives
+it, so `PFunctor.Approx.CofixA._model.rec_0` has an empty axiom set. The bill
+is the **skeleton's model**, which `Iso.requires` demands and which the export
+carries beside it. Measured on `tests/prim_carve.lean`'s emitted output, with
+the kernel on and `CollectAxioms` over the installed environment:
+
+| constant | axioms |
+|---|---|
+| `Cf._model.rec_0`, `Inf2._model.rec_0`, `Bif._model.rec_0`, `Vc._model.rec_0` | **none** |
+| `Inf2._model.skel._model.rec_0`, `Bif._model.skel._model.rec_0`, `Br._model.skel._model.rec_0` | `[propext, Quot.sound]` |
+| **`Cf._model.skel._model.rec_0`** | `[propext, Classical.choice, Quot.sound]` |
+
+So `CofixA` joins the **untagged** column and the population there goes from
+three to four: `WType`, `PSet`, `FirstOrder.Language.Term`, and now
+`PFunctor.Approx.CofixA._model.skel`. That is not a coincidence and it is the
+same fact §8.16.4 read off the decline line: `B a` mentions the constructor's
+own earlier field `a`, so `tagFactored` is false — of the *skeleton*, for the
+same reason it was false of the family. `Bif`'s and `Inf2`'s skeletons have
+ground branch types and stay tagged, which is what makes the table a
+discrimination rather than a list.
+
+**The honest reading of the two columns is therefore one line longer than
+before.** `CofixA` is *modelled*, its own constants are certificate-clean, and
+the inductive underneath it is one of the four the corpus cannot model without
+`Classical.choice`. Whether that counts as covered is #150's question and not
+this section's.

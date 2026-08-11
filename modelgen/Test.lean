@@ -489,44 +489,49 @@ def expectedPrim : List Row :=
   -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
   -- exists to make impossible.
   --
-  -- `Mx`, `Sm3` and `Br` are the **multi-slot** occupants and they are the
-  -- reason this row grew the W fragment. Arm C runs at `erasureBare`: a
-  -- constructor may have any number of recursive fields, the erasure replaces
-  -- each one's whole domain, and the spliced skeleton that comes out
-  -- **branches** — so it is arm W that models it, and the first of the three
-  -- to be reached carries the splice. That is `Mx._model.skel` at 170 here,
-  -- and the eighteen `_wcore` rows after it are the fragment being modelled in
-  -- turn (`Iso.requires`' rule). `Br._model.skel` and `Sm3._model.skel` are
-  -- twelve each, because by then the fragment is in.
+  -- `Mx`, `Sm3` and `Br` are the **multi-slot** occupants and `Inf2`, `Cf` and
+  -- `Bif` the **infinitary** ones, and between them they are the reason this
+  -- row grew the W fragment. Arm C runs at `erasureBare`: a constructor may
+  -- have any number of recursive fields and each may sit under binders of its
+  -- own, the erasure replaces each occurrence and keeps those binders, and the
+  -- spliced skeleton that comes out **branches and is infinitary** — so it is
+  -- arm W that models it, and the first skeleton to be reached carries the
+  -- splice. That is `Bif._model.skel` at 215 here, and the eighteen `_wcore`
+  -- rows after it are the fragment being modelled in turn (`Iso.requires`'
+  -- rule). Every other `_model.skel` is its own dozen, because by then the
+  -- fragment is in.
   --
-  -- **`Mx._model.skel`'s 170 is an ordering fact, not a fact about `Mx`**, in
+  -- **`Bif._model.skel`'s 215 is an ordering fact, not a fact about `Bif`**, in
   -- exactly the sense the arm W row below records for `Tree`: the fixture's
   -- declaration order decides which skeleton pays for the splice.
   --
-  -- **`Inf2` is the guard's remaining refusal and it replaced `Br` as the
-  -- occupant of it.** `Br` used to decline here for `erasure linear: no`, and
-  -- relaxing the guard to `erasureBare` turned it into a model — which would
-  -- have left the arm's one live shape guard with no fixture at all. `Inf2`'s
-  -- recursive field sits under a binder, so it is the *infinitary* half of the
-  -- old reason, and the half that is still open.
+  -- **`Inf2` was this row's third decline and is now a model**, together with
+  -- `Cf` — `PFunctor.Approx.CofixA`'s own shape, which is the corpus
+  -- declaration the infinitary erasure was built for — and `Bif`. The source's
+  -- header carries the six mutations behind them and says which occupant each
+  -- is red at; two of the six are red at exactly one, `Cf` and `Bif`.
+  --
+  -- **The erasure guard has no occupant left in this file** and the header
+  -- says why: every shape it still refuses arrives from a specialisation and
+  -- cannot be written in a `prelude` source. `nest_fam_arg`'s `OK` and `Key`
+  -- are the live occupants of the same guard, at layer 3, and the row below
+  -- asserts them.
   , ("prim_carve",
-      [("N", 9), ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
-       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6),
-       ("Mx", 8), ("Mx._model.skel", 215),
+      [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model.skel", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
        ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
        ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
+       ("Cf", 8), ("Cf._model.skel", 12), ("Inf2", 8), ("Inf2._model.skel", 12),
+       ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
+       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6),
+       ("Mx", 8), ("Mx._model.skel", 12),
        ("Two2", 8), ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
        ("Sm3", 8), ("Sm3._model.skel", 12), ("Br", 8), ("Br._model.skel", 12),
        ("Tri3", 8), ("Tri3._model.skel", 6)],
       [ ("Eq", "prim model shape: a basis primitive")
-      -- the shape guard itself, and the only reason left that stops arm C
-      -- before it splices anything
-      , ("Inf2", "prim model shape: an indexed family at a never-zero sort whose index \
-          erasure is not bare")
       -- withdrawn: the erasure is bare and still does not model, and the
       -- reason carried is the *skeleton's* own rather than "it did not model"
       , ("IBox", "prim model shape: the spliced inductive IBox._model.skel did \

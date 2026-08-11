@@ -292,21 +292,27 @@ itself* rejects, recorded with the error Lean gives. `--prim-models` is
 narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
 paths have fixtures too (`tests/prim_declines.lean`, `tests/prim_graph.lean`).
 What it declines today:
-**indexed** carriers at a never-zero sort whose index erasure is itself
-branching, a recursive occurrence whose **binder telescope mentions an earlier
-field** (so the branch type does not factor through the tag), indices or
-recursion at a maybe-zero sort, one level-arithmetic gap, and — on the graph
-arm — a constructor whose data fields are not *literally* the conclusion's
-indices, since inversion at an arbitrary index would then need the index's
-injectivity.
+a constructor field whose **index expressions mention its own fields**, a
+recursive occurrence whose binders mention an earlier **recursive** field (the
+label carries no children for the branch type to read one from), indices or
+recursion at a maybe-zero sort, one level-arithmetic gap, a linearly recursive
+declaration with **no base constructor** (its spine has no zero fibre), an
+index erasure whose recursive occurrence is only visible through βζ — or hidden
+behind it — and, on the graph arm, a constructor whose data fields are not
+*literally* the conclusion's indices, since inversion at an arbitrary index
+would then need the index's injectivity.
 The *recursive subsingleton* is no longer among them: it is the graph arm,
 and `tests/prim_graph.lean` holds six occupants including `Acc`'s own shape.
-An **indexed family at a never-zero sort whose erasure is linear** is no longer
-among them either: arm C splices the index erasure as an ordinary inductive,
-models that by the same pass, and carves the family out of it — no axioms, no
-per-constructor glue, every ι rule `Eq.refl` (`MODELGEN.md` §8.15). A family
-whose spliced skeleton does *not* model produces **no emission**, so nothing
-unmodelled ever reaches a consumer.
+An **indexed family at a never-zero sort** is no longer among them either: arm
+C splices the index erasure as an ordinary inductive, models that by the same
+pass, and carves the family out of it — no axioms, no per-constructor glue,
+every ι rule `Eq.refl` (`MODELGEN.md` §8.15). The erasure carries **any number
+of recursive fields per constructor** and each one **under binders of its own**
+— `∀ z⃗, T p⃗ e⃗` erases to `∀ z⃗, S p⃗`, and `good`'s clause, the carve
+component and the recursor's hypothesis each go under the same `z⃗` (§8.16.3
+and §8.16.8) — so the skeleton that comes out may branch and be infinitary, and
+arm W is what models *it*. A family whose spliced skeleton does *not* model
+produces **no emission**, so nothing unmodelled ever reaches a consumer.
 **Non-indexed branching recursion is no longer among them either** — a
 constructor with two recursive fields, or with one under a binder. That is
 **arm W** (`MODELGEN.md` §8.16, `tests/prim_w.lean`): the tagged W
