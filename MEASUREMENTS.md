@@ -7738,6 +7738,9 @@ bit per *reason*, that yields **four sub-trees from one side-effect-free run**:
 | iota: no interpretation — **a ONE-CONSTRUCTOR STRUCTURE** | **400** | 2 280 | **2 680** |
 | iota: no interpretation — several constructors | 286 | 1 858 | 2 144 |
 | iota: no interpretation — a mutual block | 100 | 493 | 593 |
+
+*The third row's label was wrong and is now `a nested inductive`; the counts are
+unchanged. See "One ledger origin is mislabelled" below.*
 | iota: no interpretation — an indexed family | 6 | 54 | 60 |
 
 The split is not cosmetic and it is the point of having put the mask on the
@@ -7952,7 +7955,7 @@ distinct structures seen at the head and not a partition of the 659.)
 | `proj_reduce` | 659 | 2 467 | **1 618** — *same construction as above* |
 | iota: several constructors | 286 | 2 144 | unmeasured |
 | eq_cache | 287 | 849 | unmeasured |
-| iota: a mutual block | 100 | 593 | unmeasured |
+| iota: a mutual block *(mislabelled; it is nesting)* | 100 | 593 | unmeasured |
 | iota: an indexed family | 6 | 60 | unmeasured |
 
 `several constructors` is the largest unassigned item; it is terminal, so its
@@ -8171,8 +8174,9 @@ And the gate is the one the structures hit:
 
 **686 of origin 1's 792 firings — 86.6 % — are one line**: `t_policy`
 (`tg.rs:8242`) sites the motive's target at the first *nullary* constructor and
-returns `None` when there is none. The remaining 106 are the mutual block (100,
-which *does* have a nullary constructor and declines at an earlier gate) and
+returns `None` when there is none. The remaining 106 are `Lean.Syntax`'s three nested
+recursors (100, which *do* have a nullary constructor and decline at an earlier
+gate — the row was labelled *a mutual block* when this was measured) and
 `Eq.rec` (6, indexed).
 
 ### What it is worth
@@ -8239,8 +8243,8 @@ The two constructions are complementary and their populations are known:
 | nullary-free `t_policy` only | 4 409 (28.0 %) |
 | **both** | **6 180 (39.3 %)** |
 
-Still unmeasured: `eq_cache` 849, `iota: a mutual block` 593, `iota: an indexed
-family` 60 — together a predicted 1 502, and by the calibration above nearer
+Still unmeasured: `eq_cache` 849, `iota: a nested inductive` 593 (labelled *a
+mutual block* when this was written), `iota: an indexed family` 60 — together a predicted 1 502, and by the calibration above nearer
 1 350 in fact.
 
 ## The gap ledger is fully accounted — 2026-08-11
@@ -8291,7 +8295,7 @@ of the escapes the acquisition costs.
 | 3 | iota: no interpretation — several constructors | 286 | 2 144 | **1 929** | 10 % |
 | 4 | `proj_reduce` | 659 | 2 467 | **1 618** | 34 % |
 | 5 | `eq_cache` | 287 | 849 | **578** | 32 % |
-| 6 | iota: no interpretation — a mutual block | 100 | 593 | **511** | 14 % |
+| 6 | iota: no interpretation — **a nested inductive** (labelled *a mutual block* when this was measured) | 100 | 593 | **511** | 14 % |
 | 7 | iota: no interpretation — an indexed family | 6 | 60 | **54** | 10 % |
 | 8–16 | the nine-origin tail, deleted together | 167 | 638 | **528** | 17 % |
 | | **sum of individual deletions** | 2 391 | 12 717 | **10 764** | |
@@ -8751,20 +8755,37 @@ constructor's term mentions no parameter at all, at any parameter list.
 
 So the parameter gap is **arity and only arity** — which is what was added.
 
-### One ledger origin is mislabelled, and the corpus has no mutual block at all
+### One ledger origin was mislabelled, and the corpus has no mutual block at all — fixed 2026-08-11 (task #153)
 
-`iota: no interpretation — **a mutual block**` is 100 gaps (100 own, 493
+`iota: no interpretation — **a mutual block**` was 100 gaps (100 own, 493
 sub-tree). There is **no mutual block anywhere in
 `vendor/arena-tests/good/`** — zero declarations with `len(all) > 1`. All three
-recursors that trip that gate are `Lean.Syntax`'s (`rec`, `rec_1`, `rec_2`),
-each with `all_inductives.len() == 1` and `num_motives = 3`. It is **nesting**
-(`Lean.Syntax` has `numNested = 2`), and `derive_iota` tests
-`num_motives != 1 || all_inductives.len() != 1` **before** `is_nested`, so the
-nested row never fires and the mutual row is entirely one nested declaration.
+recursors that tripped that gate are `Lean.Syntax`'s, and the decline census
+prints them: `rec` 66, `rec_1` 22, `rec_2` 12, each with
+`num_indices = 0`, `all_inductives.len() = 1`, `num_motives = 3`, `is_k = false`
+and **`is_nested = true`**. It is **nesting**: Lean compiles a nested inductive
+through an auxiliary mutual block, so the recursor carries a motive per member
+while `all_inductives` still names only the one the user wrote.
 
-That matters for reading the census: "a mutual block" names a whole missing
-feature class, and the population is one declaration's auxiliary recursors.
-`checker/` has a live seat, so this is named rather than reordered.
+`derive_iota` tested `num_motives != 1 || all_inductives.len() != 1` **before**
+`is_nested`, so the nested row never fired and the mutual row was entirely one
+nested declaration. The two are now separate clauses, each testing the thing it
+is named for, with `is_nested` in front of the motive count:
+
+    gap: iota: no interpretation — a mutual block      100  →  absent
+    gap: iota: no interpretation — a nested inductive    0  →  100
+
+Ledger byte-identical across the relabel — 11 825 / 2 629 / 164 109, and
+`gap: iota` still sums to 656, which is what makes this a rename and not a
+movement. A third clause, `several motives, neither mutual nor nested`, catches
+the residue and reads **0**; it is kept so that such a shape is counted rather
+than falling through to the constructor-count buckets, where it would be read as
+a declaration the dependent arm could serve.
+
+That mattered for reading the census: "a mutual block" names a whole missing
+feature class — a row that priced a mutual-block elaborator which would have
+closed nothing, and hid the nested row that would. Row 6 of the full table above
+is this origin, and its **511** is a nesting number.
 
 ### Arms with no possible corpus witness — nothing to add
 

@@ -2036,7 +2036,41 @@ fn the_general_iota_rule_computes_on_the_prelude() {
         iota_gaps > 0 && iota_gaps <= 656,
         "init-prelude: {iota_gaps} ι gaps, ratchet 656 — the general ι path regressed. \
          Unlike the ledger total this one IS about this test's subject: 550 `major premise \
-         is not a constructor` + 100 `mutual` + 6 `indexed`."
+         is not a constructor` + 100 `nested inductive` + 6 `indexed family`."
+    );
+    // ── The origin that was named for something the corpus does not contain ──
+    //
+    // Task #153. `no interpretation — a mutual block` carried these 100 gaps
+    // and there is **no mutual block anywhere in the corpus** — zero
+    // declarations with `all_inductives.len() > 1`. All three recursors that
+    // tripped it are `Lean.Syntax`'s, each with one inductive, three motives
+    // and `is_nested == true`; `derive_iota` tested the motive count before
+    // `is_nested`, so the nested row never fired.
+    //
+    // The two assertions are deliberately of **different kinds**, and that is
+    // the whole design of this guard:
+    //
+    // * the nested row is pinned with `row`, which fails if the row is absent.
+    //   A count asserted through `rows_or_zero` would read 0 for a renamed row
+    //   and pass having measured nothing — the defect class this pass is about,
+    //   and it applies to the fix as much as to the bug;
+    // * the mutual row is asserted **absent**, because the claim is not "it is
+    //   small" but "the corpus cannot produce one". If a genuine mutual block
+    //   ever enters the corpus this fails, which is the correct outcome: it is
+    //   then a real origin and wants a real number.
+    const NESTED: &str = "gap: iota: no interpretation — a nested inductive";
+    assert_eq!(
+        row(&text, NESTED),
+        100,
+        "the nested ι origin is not `Lean.Syntax`'s 66 + 22 + 12"
+    );
+    const MUTUAL: &str = "gap: iota: no interpretation — a mutual block";
+    assert!(
+        !text.lines().any(|l| l.trim_start().starts_with(MUTUAL)),
+        "`{MUTUAL}` is back. The corpus has no declaration with \
+         `all_inductives.len() > 1`, so either one has entered it — in which case this \
+         origin is real and wants its own number — or the gate in front of `is_nested` \
+         has been widened again and the row is nesting under the wrong name."
     );
 }
 

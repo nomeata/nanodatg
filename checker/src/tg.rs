@@ -12975,9 +12975,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let ind = r.all_inductives.first().copied();
             let idat = ind.and_then(|i| self.decls.get_inductive(&i));
             let nctors = idat.as_ref().map(|i| i.all_ctor_names.len());
+            // **The order of these tests is the label**, and one of them used
+            // to lie (task #153). `num_motives != 1 || all_inductives.len() != 1`
+            // was one clause called "a mutual block", and it sat in front of
+            // `is_nested`. On `init-prelude` it carried **100 gaps and not one
+            // of them was a mutual block**: all three recursors that tripped it
+            // are `Lean.Syntax`'s — `rec` 66, `rec_1` 22, `rec_2` 12 — each with
+            // `all_inductives.len() == 1`, `num_motives == 3` and
+            // **`is_nested == true`**. Lean compiles a nested inductive through
+            // an auxiliary mutual block, so its recursor carries a motive per
+            // member while `all_inductives` still names only the one the user
+            // wrote. The checker had `is_nested` in hand and tested the motive
+            // count first, so the nested row never fired and the corpus has
+            // **zero** declarations with `all_inductives.len() > 1`.
+            //
+            // A label is not cosmetic here: the origin mask mints a bit per
+            // *reason*, so this row priced a construction — a mutual-block
+            // elaborator — that would have closed nothing, and hid the one that
+            // would. Split so that each clause tests the thing it is named for.
             let why = if r.num_indices != 0 {
                 "iota: no interpretation — an indexed family"
-            } else if r.num_motives != 1 || r.all_inductives.len() != 1 {
+            } else if r.all_inductives.len() != 1 {
                 "iota: no interpretation — a mutual block"
             } else if r.is_k {
                 "iota: no interpretation — a K-like eliminator"
@@ -12985,6 +13003,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 "iota: no interpretation — a hand-written recogniser owns it"
             } else if idat.as_ref().is_some_and(|i| i.is_nested) {
                 "iota: no interpretation — a nested inductive"
+            } else if r.num_motives != 1 {
+                // One inductive, not nested, and still several motives. Nothing
+                // on this corpus reaches it. Kept, and named for exactly what it
+                // is, so that a shape which is neither of the two above is
+                // *counted* rather than falling through to the constructor-count
+                // buckets below — where it would be read as a declaration the
+                // dependent arm could serve, which is the mistake this pass is
+                // about.
+                "iota: no interpretation — several motives, neither mutual nor nested"
             } else {
                 match nctors {
                     Some(0) => "iota: no interpretation — no constructors",
