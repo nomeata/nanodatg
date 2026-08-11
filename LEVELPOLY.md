@@ -1950,6 +1950,103 @@ non-forcingly before it does anything else, which is *stronger* than the
   arm handing a use site the reason a *stored* generic point's typing was
   blocked with. Unrelated to any of the above and the other cheap exit.
 
+#### 5.3.0 Where the strand stands — read this first after a restart
+
+**Branch `explore/level-poly-target`, deliberately diverged from master; do not
+rebase (the obstacle is semantic, `ConstKey`).** Thirteen tranches. The verdict
+number has gone **18 → 32 of 89** and **nothing in thirteen tranches has needed
+something the ω-vocabulary cannot state.** There is no fundamental blocker.
+
+    exits      32 × 0 / 57 × 4 / 2 × 2 of 89     (the 2 are frontend declines)
+    typeEv     92        typesOk 115      valuesOk 117    valueEv 71
+    zoneBOk    208/362   stored 116       constEv 42
+    open = 0 asserted on all 89           mini/src tests 233
+    perf       --poly +0.17 %,  ground −0.004 %
+
+**Gate A** is 91 exports' `ledger`/`evidence`/`untranslated` rows — 358 lines,
+89 `ledger` rows — byte-identical against a build of the parent **in this
+worktree** (a fresh worktree has no `modelgen` and exits 0 emitting nothing; see
+the `MINI_MODELGEN` note in §5.3's recipe, which now covers both call sites it
+has bitten). **Gate B** is the ratchet: no denominator moves, `open = 0` on all
+89, nothing below a baseline **re-derived from a parent build and `cmp`-compared,
+not remembered**.
+
+##### The three `derived` additions — the run stands and is closed
+
+1. `Srt::empty_mem` + `Srt::transitive` (`4ff7d93`)
+2. `Order::max_ne_zero` (`189b64d`) — unconditional, plus a private `sub_empty`
+3. `recursion::succ_ne_zero_pair` (`f8417b3`) — the unconditional theorem was
+   already the last line before `a1i` weakened it
+
+All three for the same reason, and it will recur: **a term-level walk has no
+`∈ ω` to spend**, so the `ω`-guarded route proves the same thing and is
+unusable. Nothing since has needed a fourth.
+
+##### The honest limit on `derived` tests — keep verbatim
+
+> Most mutations of these `derived` derivations **never reach a test**: the
+> module's internal `debug_assert`s pin every intermediate, so a wrong step
+> returns `None`. For a kernel-certified `Thm` the conclusion shape **is** the
+> content; what a new test adds over the constructor is **non-vacuity**, and it
+> should not be read as more.
+
+Four seats have now carried that sentence. The corollary that has paid: a
+mutation which kills both the ground path and the polymorphic one proves less
+than one that **separates** them — so every tranche here checks that
+`an_open_level_at_an_unthreaded_checker_costs_no_apparatus` *survives* the
+mutation that reddens the new test.
+
+##### The two findings most likely to be re-derived — keep verbatim
+
+> **An open level's two sides are both structural, so a raw spelling that
+> differs from `Level::simplify`'s costs nothing — nothing on this route ever
+> has to agree with a canonical form.**
+
+That is why `derived::levels::leq::Leq` is a complete, tested construction
+**spent by nothing**, and why its header's "1005 of 2103 … a raw `imax(a,…,u)`
+chain whose canonical form is the bare parameter `u`" was never on the critical
+path: that census counts the *open* population, 3 591 of 18 714 `mem_at_srt`
+calls, all of which certify anyway. What blocks is `ground::as_numeral`
+**evaluating** where `level_term_over` is **structural** — closed levels only,
+224 sites, four shapes (§5.3.2). Do not go looking for `Leq` again without
+re-measuring first.
+
+> **A green "this guard is unreachable" is only as good as the obstruction
+> upstream of it.**
+
+`pi_typing_of`'s conclusion check was documented *"measured, it never fires —
+removing it leaves all 91 exports byte-identical, so nothing on the corpus
+reaches it."* True, and true only because the `mp` two lines above refused
+first. With the premise side bridged it fired **157** times. This belongs with
+the project's "reported success having done nothing" family: before deleting a
+guard on the strength of an unreachability measurement, ask what is refusing
+upstream of it and whether that refusal is permanent.
+
+##### Where to go next, and why
+
+`015_levelParams` is the only file owing `typeEv` alone. The 39 declarations
+that were behind `conv-compose(pi-poly)` moved to **`conv-compose(proof-irrel)`
+38** and one `ind-spec(Acc: …)`. The largest cluster is the **15 files owing
+only `zoneB`**, censused in §5.3.3: 28 of their 38 constants are behind one
+named gate, `zoneb::walk_numerals`, and that gate is a **door, not a step** —
+behind it is the ground interior of the class walk
+(`LEVEL-POLYMORPHIC-INDUCTIVES.md`), a multi-tranche piece.
+
+**The narrowest opening, and the recommended next probe**: `Eq.rec` at a
+symbolic motive level, blocked in six of the fifteen files. `Eq` already has a
+*direct* clause, so its type former and constructor certify at a symbolic
+instantiation while its recursor does not — `direct::build` is ungated and
+`recursor::ensure` is gated by `walk_numerals`. One declaration, clause already
+de-scheduled, only the eliminator's route still insisting on numerals.
+
+**The one thing to get wrong**: reading a wide reason off the histogram instead
+of the site census. `symbolic-level` said all twelve `zoneB`-only files stop at
+`walk_numerals`; three of them do not. The census is armed on all three axes
+now (`MINI_POLY_SITES=1`), but it is still **partial on the zone-B axis** —
+`note_site` files the oldest trail mint of the same variant, and a `Gap`
+returned by a bare `ok_or` never reaches the trail. Convert the one you need to
+the `gap!` macro before believing an attribution.
+
 #### 5.3.1 The `imax` guards: a polarity that comes back — 317 of 318, exits unmoved
 
 `Interp::level_guard_at` now has the signature the bullet above asked for:
