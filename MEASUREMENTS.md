@@ -8774,3 +8774,58 @@ declarations at `ni ∈ {1,2}` (46 at one, 10 at two, **none at three or more**)
 
 `derived` suite green throughout; `cargo clippy -p derived --all-targets -D
 warnings` clean.
+
+## The numeral bridge, priced as a chain: neither link is worth anything alone — 2026-08-11
+
+*Task #127, after link 3 landed (`666c297`). `release`, `--features tg,stepcount`,
+`good/init-prelude.ndjson`, `num_threads: 1`. Link 2's certification is simulated
+with `NANODA_ASSUME=nat_reduce` (`origin_assume` acquires rather than admits, so
+the cost shows up as escapes) and link 3's split with `NANODA_NAT_RULED=1`.*
+
+### The four configurations
+
+| | gaps | vs baseline | escapes | derived |
+|---|---:|---:|---:|---:|
+| baseline | 15 734 | — | 2 232 | 159 803 |
+| **link 2 alone** — the numeral fact is a rule, `reduce_rec` unchanged | 15 648 | **−86** | 2 257 | 159 914 |
+| **link 3 alone** — the split, numeral still admitted | 16 676 | **+942** | 2 232 | 160 745 |
+| **the pair** | **13 137** | **−2 597** | 2 934 | 164 986 |
+
+**Link 3 alone is worse than doing nothing.** It makes the checker ask for
+certificates it never asked for, and the major's reduction contains the very
+admission the single ι gap was standing in for — so the gap does not close, it
+multiplies. Link 2 alone buys 86, because with `reduce_rec` still handing `iota`
+an unreduced redex there is almost nothing to consume the fact.
+
+Together they are worth **2 597**, against −856 for the sum of their separate
+effects. The chain is not additive and not even monotone in its parts; it is
+superadditive by 3 453. Every previous tranche on this arc was priced by
+deleting one origin, and that method would have valued *both* of these at
+approximately nothing.
+
+**2 597 is 85 % of origin 2's measured 3 066**, which is what the ceiling rule
+predicts: the sub-tree column is exact only for a terminal origin, and the
+residue re-originates one place down — `proj_reduce` 2 467 → 2 546 here.
+
+### And the origin leaves the table
+
+`iota: the major premise is not a constructor` was the largest single origin in
+this ledger. With the pair it is gone from the ranking entirely, and the head
+becomes
+
+| origin | own | relayed | sub-tree |
+|---|---:|---:|---:|
+| iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 280 | 2 680 |
+| proj_reduce | 659 | 1 887 | 2 546 |
+| iota: no interpretation — several constructors | 286 | 1 858 | 2 144 |
+
+### What is actually left
+
+Links 1 and 2 are built in `derived/` (`Boolean`, `Eval::ble_bool`,
+`ble_uniqueness`, `ble_transfer`) and link 3 is in `checker/`. **The consumer is
+not.** `NANODA_ASSUME=nat_reduce` stands in for a `checker/src/tg.rs` that calls
+`derived::nat::ble_transfer` to turn `Admit::NatRed` into a rule; until that
+exists the 2 597 is a measurement and not a landing. It is the same sentence
+that has been true at every stage of this chain, one step further along, and it
+is the fourth time this arc that a complete certified construction has been
+waiting on a caller.

@@ -573,9 +573,15 @@ largest single origin in the ledger. What has to exist, for
 |---|---|---|
 | 1 | `⊢ bleb(t,f,num a,num b) = t` at literal operands | **built** — `derived::nat::Boolean`, `Eval::ble_bool`, 70 inferences at four bits |
 | 2 | `⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` | **built** — `derived::nat::ble_uniqueness`, fired by `ble_transfer` |
-| 3 | `reduce_rec` recording the major premise's own whnf as a step the backend sees | **not built** — `checker/`, sequenced by the owner |
+| 3 | `reduce_rec` recording the major premise's own whnf as a step the backend sees | **built** — `666c297`, gated on `reduct::fully_ruled`, ledger byte-identical |
+| 4 | `checker/src/tg.rs` calling `ble_transfer` so `Admit::NatRed` *is* a rule | **not built** — the consumer, and the only thing still missing |
 
-None of the three is worth anything without the other two, and §1.5's census is
+None of the links is worth anything without the others, and that is now
+**measured** rather than argued (`MEASUREMENTS.md`, "The numeral bridge, priced
+as a chain"): link 2 alone is worth −86 gaps, link 3 alone is **+942 — worse
+than doing nothing** — and the pair is **−2 597**. Superadditive by 3 453, so
+the one-origin-at-a-time deletion method that priced every other tranche on this
+arc would have valued both of these at approximately nothing. §1.5's census is
 what says the sizes: link 1 only ever fires at operands ≤ 12 on this file.
 
 *Link 3, precisely, so the plumbing seat does not re-derive it.* `reduce_rec`
