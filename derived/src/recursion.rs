@@ -193,7 +193,7 @@ pub use induction::{induction_principle, induction_scheme};
 pub use iterate::{iterate, rec_fn, Iter, RecFn};
 pub use omega_tower::{omega_tower, OmegaTower};
 pub use naturals::{inductive, least_inductive, omega, omega_exists, OmegaCore};
-pub use peano::{mem_succ_self, omega_trans, succ_inj, succ_ne_zero, Peano};
+pub use peano::{mem_succ_self, omega_trans, succ_inj, succ_ne_zero, succ_ne_zero_pair, Peano};
 pub use rec::Rec;
 pub use theorem::{recursion, Recursion};
 pub use unique::{rec_agree, rec_subset, rec_unique};

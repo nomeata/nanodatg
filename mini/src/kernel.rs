@@ -2674,10 +2674,56 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let (ty, body) = (*ty, *body);
                 // Which of §6.2's three `Π` clauses the function's type took,
                 // read off the interpretation the call above already produced.
-                let shape = tf
-                    .ev
-                    .mem_set()
-                    .and_then(|t| self.th.as_ref().and_then(|th| th.ip.as_pi(&t)));
+                //
+                // **`as_pi_at` and not `as_pi`, and where it collapses, the
+                // typing moves with it.** At a numeral rung the two are the
+                // same call — `as_pi_at`'s first line *is* `as_pi`, it answers,
+                // no equation comes back and nothing is retargeted — which is
+                // what keeps the σ-scheduled route's rows byte-identical. At a
+                // **variable** rung the `Π` clause emits §1.4's `ite0`, `as_pi`
+                // is blind, and this node holds no `Guard` to settle it with:
+                // it is zone A, not inside anybody's case split. What it does
+                // hold is the one guard that needs no split — `ℓ̂₂ = succ(·)`,
+                // which is what Lean writes whenever a codomain is a sort, so
+                // the motive binder of every eliminator's *type* comes apart
+                // here ([`crate::interp::Interp::succ_nonzero_at`]).
+                //
+                // The typing must travel with the shape rather than be
+                // recomputed: `app_evidence` composes `tf.ev` against the
+                // clause the shape names, and a membership left at the `ite0`
+                // while the shape spoke of the product would be two different
+                // sets under one name. ([`crate::interp::Interp::as_pi_mem`]
+                // does both in one call and is what `crate::rec_dep` uses; it
+                // is not used here because it clones the membership on the
+                // arm the ground route takes, and that arm is 100 000-plus
+                // calls per corpus run.)
+                let (shape, tf) = match tf.ev.mem_set() {
+                    Some(set) => match self.th.as_mut().and_then(|th| th.ip.as_pi_at(&set, None)) {
+                        // **The σ-scheduled arm, and the ground route takes no
+                        // other.** `as_pi` answered by itself, so there is no
+                        // equation and the typing is the one that came in —
+                        // the same two calls the line before this clause made,
+                        // which is what makes Gate A's byte-identity here a
+                        // property of the code rather than of the corpus.
+                        Some((s, None)) => (Some(s), tf),
+                        Some((s, Some(eq))) => {
+                            let moved = tf.ev.thm().cloned().and_then(|m| {
+                                self.th.as_mut().and_then(|th| th.ip.retarget_set(&m, &eq))
+                            });
+                            match moved {
+                                Some(m) => (Some(s), Typing { ev: Ev::Proved(m), ..tf }),
+                                // The collapse was proved and the membership
+                                // would not travel along it. Declining is the
+                                // only honest answer: a shape naming the
+                                // product beside a typing still at the `ite0`
+                                // is two sets under one name.
+                                None => (None, tf),
+                            }
+                        }
+                        None => (None, tf),
+                    },
+                    None => (None, tf),
+                };
                 let dom_tm = shape.as_ref().map(|s| s.dom());
                 let ta = self.infer_type(arg)?;
                 let arg_ty_tm = ta.ev.mem_set();

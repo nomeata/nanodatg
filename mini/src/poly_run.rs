@@ -140,6 +140,54 @@
 //! the collapse. "The nonzero arm needs no guard" was measured over
 //! field-*free* constructors, which open no binder at all.
 //!
+//! # Zone A's own type — the frontier is not only zone B's
+//!
+//! Everything above is about the constants a zone-B declaration owes. The
+//! obstacle that held the per-file verdict at **27 of 89** for three tranches
+//! was in neither zone B nor any eliminator route: it was
+//! `crate::kernel`'s `Expr::App` rule, one node of the ordinary zone-A walk,
+//! certifying the declaration's **own type**.
+//!
+//! `⟦boolRec.{u}⟧`'s type is
+//! `∀ {motive : Bool → Sort u}, motive false → motive true → ∀ t, motive t`.
+//! Its codomain is an *application*, so the type's certificate needs the
+//! application rule at `motive`, whose own type is `Bool → Sort u` — and at a
+//! variable rung that is `ite0(succ(û), cndd, dprod)`, which
+//! [`crate::interp::Interp::as_pi`] is blind to. **This node holds no
+//! `Guard`**: it is zone A, not inside anybody's case split, so
+//! [`crate::interp::Interp::as_pi_at`]'s guard-keyed route had nothing to
+//! offer it.
+//!
+//! What settles it is the same observation `cx_of` spends on the motive binder
+//! and cannot lend: the guard is a **successor**, because `Sort u` inhabits
+//! `Sort (u+1)`. `Interp::level_nonzero` reads a `Level` and this node has an
+//! `Expr`, so the fact is spent unguarded —
+//! [`crate::interp::Interp::succ_nonzero_at`], over
+//! `derived::recursion::succ_ne_zero_pair`'s first component.
+//!
+//! Measured over the corpus, of the zone-A application nodes where `as_pi` is
+//! blind *and the function's membership is present* — a real frontier, not a
+//! downstream casualty:
+//!
+//! ```text
+//! ite0 guard is a successor   1489    settled
+//! ite0 guard is an imax        315    wants level_guard_at's recursion
+//! ite0 guard is a bare û       290    undecidable; wants a split
+//! other                          3
+//! ```
+//!
+//! `typeEv` **74 → 80**, every other column unchanged, and the exits
+//! **27 → 31 of 89**. Six files gain a type certificate — `059_emptyRec`,
+//! `060_boolRec`, `061_twoBoolRec`, `062_andRec`, `067_nRec`,
+//! `090_projDataIndexRec` — and the four with nothing else outstanding exit 0;
+//! `062` and `090` still owe zone-B constants.
+//!
+//! Two files owed *only* `typeEv` and did not get it, each for a reason that is
+//! not this clause's: `115_rTreeRec` moved off `no-endpoint` and onto
+//! `conv-compose(pi-poly)` — the collapse happens, the composition after it
+//! does not — and `015_levelParams` never had this obstacle at all, reporting
+//! `not-decomposable` off a *stored* generic point's blocked typing.
+//!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
 //! * **A ground use of a poly constant pays the §1.2 bridge — and does not
@@ -322,6 +370,18 @@ pub struct PolyLedger {
     /// reason that is true. So this arms the blocker, clears per declaration,
     /// and files the **first** mint whose variant matches the reason that was
     /// actually reported.
+    ///
+    /// **Both axes land in this one map, and that is deliberate.**
+    /// [`PolyLedger::blocked`] and [`PolyLedger::ev_blocked`] are kept apart
+    /// because "no interpretation" and "no certificate" are different
+    /// questions (MINI-DESIGN.md §0); a *mint site* is neither, it is a line of
+    /// code, and the same line answers for both. Merging them is what let the
+    /// unguarded-successor tranche put five of six declarations at
+    /// `kernel.rs`'s `app_evidence` in one run — the evidence axis had no
+    /// census at all until then, and the four eliminator wrappers had sat on
+    /// `no-endpoint` for three tranches with nothing saying where it came from.
+    /// Which axis a row belongs to is still answerable: it is whichever
+    /// histogram carries the reason.
     ///
     /// Off by default and off in every gate: arming puts a thread-local write
     /// on `Ev::missing`, which is the failure branch of `whnf`.
@@ -569,6 +629,9 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
             None => {
                 let g = ty_t.as_ref().ok().and_then(|t| t.ev.gap().cloned());
                 PolyLedger::note(&mut led.ev_blocked, g.as_ref());
+                if sites {
+                    led.note_site(g.as_ref());
+                }
             }
         }
 
@@ -936,7 +999,7 @@ fn generic_points(c: &mut Checker<'_, '_>) {
 mod tests {
     use super::*;
     use crate::env::{ConstantInfo, DefKind};
-    use crate::expr::{E, Level, Name, forall, konst, sort};
+    use crate::expr::{E, Level, Name, app, bvar, forall, konst, sort};
 
     fn n(s: &str) -> Name { Name::simple(s) }
 
@@ -2114,6 +2177,72 @@ mod tests {
         let _ = Ledger::run(&env, &ds, &sched, &mut ip);
         assert_eq!(ip.poly_const_count(), 0, "the scheduled route filled the poly store");
         assert!(ip.const_count() > 0, "…while filling the one it owns");
+    }
+
+    /// **Zone A's own type comes apart at a sort-valued binder** — the
+    /// obstacle the four eliminator wrappers stopped at, in the smallest
+    /// declaration that has it and no inductive at all.
+    ///
+    /// `axiom a.{u} : ∀ (m : Sort 1 → Sort u) (x : Sort 1), m x`
+    ///
+    /// The codomain `m x` is an **application**, so certifying the type needs
+    /// `crate::kernel`'s `Expr::App` rule at `m`, whose own type is
+    /// `Sort 1 → Sort u`. At a variable rung §1.4's `Π` clause emits that as
+    /// `ite0(succ(û), cndd, dprod)` and [`crate::interp::Interp::as_pi`] is
+    /// blind to it — and this node is zone A, so unlike
+    /// `crate::rec_dep::minor_at` it holds **no `Guard`** to settle the
+    /// conditional with. What settles it is that the guard is a *successor*,
+    /// unconditionally, which is
+    /// [`crate::interp::Interp::succ_nonzero_at`].
+    ///
+    /// # Why an `axiom` and why this exact type
+    ///
+    /// An `axiom` has no value, so `valuesOk`/`valueEv` are vacuous and the
+    /// only conjunct left for [`PolyLedger::is_clean`] is the one under test.
+    /// A declaration whose type were merely `Sort u` would pass without any of
+    /// this — the `Π` *formation* rule certifies the `ite0` in one theorem and
+    /// never takes it apart. **It is the elimination that was blind**, so the
+    /// type has to apply something, and the thing it applies has to be a
+    /// binder whose own type is a `Π` into a sort.
+    ///
+    /// **Two binders and not one.** With `m` alone the application's argument
+    /// would have to be a closed term and the node would be exercised at a
+    /// constant; `x` makes the argument a scope variable, which is what every
+    /// one of the four corpus declarations passes (`motive false`, `motive t`).
+    ///
+    /// The **control is `k`**, the same shape with `Sort u` replaced by
+    /// `Sort 1`: a ground codomain emits the product directly, `as_pi` answers
+    /// on its own, and it certified before this clause existed. Both are run
+    /// through one route, so a change that broke the ground path would show up
+    /// here and not only in Gate A.
+    #[test]
+    fn a_sort_valued_binder_is_applied_in_zone_as_own_type() {
+        let one = Level::zero().succ();
+        let u = Level::param(n("u"));
+        // `∀ (m : Sort 1 → Sort ℓ) (x : Sort 1), m x`
+        let ty_at = |l: Level| {
+            forall(
+                forall(sort(one), sort(l)),
+                forall(sort(one), app(bvar(1), bvar(0))),
+            )
+        };
+        let cases = [("Sort u", u, vec![n("u")]), ("Sort 1", one, Vec::new())];
+        for (label, l, lparams) in cases {
+            let d = Declaration::Axiom { name: n("a"), lparams, ty: ty_at(l) };
+            let env = Environment::empty();
+            let mut ip = Interp::new();
+            let led = run(&env, std::slice::from_ref(&d), &mut ip);
+            assert_eq!(led.declarations, 1, "{label}");
+            assert_eq!(led.types_ok, 1, "{label}: ⟦ty⟧ is owed: {:?}", led.blocked);
+            assert_eq!(
+                led.type_ev_ok, 1,
+                "{label}: the type's certificate is owed: {:?}",
+                led.ev_blocked
+            );
+            assert_eq!(led.values_attempted, 0, "{label}: an axiom has no value");
+            assert_eq!(led.open, 0, "{label}: nothing escaped its discharge");
+            assert!(led.is_clean(), "{label}: {:?}", led.rows());
+        }
     }
 
     /// The row is wire-safe in the same sense `Ledger`'s is: one `key=value`

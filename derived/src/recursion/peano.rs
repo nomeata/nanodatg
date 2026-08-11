@@ -7,6 +7,7 @@
 //! ```text
 //! ⊢ t ∈ succ(t)                                                  [mem_succ_self]
 //! ⊢ ∀n. (n ∈ ω → Trans(n))                                       [omega_trans]
+//! ⊢ ∀n. ¬(succ(n) = 0)                                    [succ_ne_zero_pair.0]
 //! ⊢ ∀n. (n ∈ ω → ¬(succ(n) = 0))                                 [succ_ne_zero]
 //! ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (succ(m) = succ(n) → m = n))       [succ_inj]
 //! ```
@@ -18,6 +19,9 @@
 //! **Nothing is conditional and no axiom was added.** The `n ∈ ω` antecedent on
 //! [`succ_ne_zero`] is not used — the statement holds for every set — but it is
 //! the form the Peano axioms are stated in, so it is the form given.
+//! [`Peano::succ_ne_zero_un`] is the *un*weakened theorem the same derivation
+//! passes through, exported beside it because a term-level caller has no `∈ ω`
+//! to spend; [`succ_ne_zero_pair`] says which caller and why.
 //!
 //! # Where the content is
 //!
@@ -88,7 +92,40 @@ pub fn omega_trans(env: &mut Env, core: &OmegaCore) -> Option<Thm> {
 /// `n ∈ succ(n)`, so `succ(n) = ∅` would put `n` in `∅`. The `n ∈ ω`
 /// antecedent is not used — the statement holds for every set — but it is the
 /// form the Peano axioms are stated in, so it is the form given here.
+///
+/// [`succ_ne_zero_pair`] hands back the unguarded theorem beside it, and this
+/// is the guarded projection of that one call.
 pub fn succ_ne_zero(env: &mut Env, core: &OmegaCore) -> Option<Thm> {
+    Some(succ_ne_zero_pair(env, core)?.1)
+}
+
+/// **Both spellings of "zero is not a successor", from one derivation**:
+///
+/// ```text
+/// ⊢ ∀n. ¬(succ(n) = 0)                 unguarded   .0
+/// ⊢ ∀n. (n ∈ ω → ¬(succ(n) = 0))       Peano form  .1
+/// ```
+///
+/// # Why the unguarded form is stated rather than left to the caller
+///
+/// This module's header has said since it was written that the `n ∈ ω`
+/// antecedent *"is not used — the statement holds for every set"*, and the
+/// derivation below shows it: `ne` is the unguarded theorem and [`a1i`] is the
+/// single step that weakens it. What is new is a **consumer that cannot spend
+/// the antecedent**, and it is the same one
+/// [`crate::levels::order::Order::max_ne_zero`] was made unconditional for:
+/// `mini::interp::Interp::as_pi_at` settles an interpreted `Π`'s `ite0` guard
+/// by reading the *term*, and a term-level walk has no `∈ ω` to spend. There
+/// the guard `ℓ̂₂` is `succ(û₁)` — every `Π` whose codomain is a sort, because
+/// `Sort u` inhabits `Sort (u+1)` — and the walk holds no level expression to
+/// recover `û₁ ∈ ω` from.
+///
+/// So the pair, and **one derivation** rather than two: the two theorems differ
+/// by [`a1i`] alone, and deriving them apart would be two chances to disagree about
+/// which `succ` and which `∅` they are about. Returning both from one call is
+/// also what keeps [`Peano::over`]'s `Env::fresh_var` count exactly what it
+/// was, which matters because every later symbol is numbered off it.
+pub fn succ_ne_zero_pair(env: &mut Env, core: &OmegaCore) -> Option<(Thm, Thm)> {
     let n = env.fresh_var();
     let tn = Term::var(n);
     let (zero, sn) = (core.zero(), core.succ_of(tn.clone()));
@@ -100,6 +137,12 @@ pub fn succ_ne_zero(env: &mut Env, core: &OmegaCore) -> Option<Thm> {
     let to_mem = mpd_const(&leib, &n_in_sn)?;
     let not_mem = inst_all(&core.empty_ax, std::slice::from_ref(&tn))?;
     let ne = syl(&to_mem, &not_mem)?;
+    let un = Thm::gen(n, &ne);
+    debug_assert_eq!(
+        *un.concl(),
+        Formula::forall(n, Formula::not(Formula::eq(sn.clone(), core.zero()))),
+        "succ_ne_zero_pair: unexpected unguarded shape"
+    );
     let out = Thm::gen(n, &a1i(&ne, Formula::mem(tn.clone(), core.set())));
     debug_assert_eq!(
         *out.concl(),
@@ -112,7 +155,7 @@ pub fn succ_ne_zero(env: &mut Env, core: &OmegaCore) -> Option<Thm> {
         ),
         "succ_ne_zero: unexpected shape"
     );
-    Some(out)
+    Some((un, out))
 }
 
 /// `⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (succ(m) = succ(n) → m = n))` — the successor
@@ -216,6 +259,10 @@ pub struct Peano {
     pub trans: Thm,
     /// `⊢ ∀n. (n ∈ ω → ¬(succ(n) = 0))`.
     pub succ_ne_zero: Thm,
+    /// `⊢ ∀n. ¬(succ(n) = 0)` — the same fact with the vacuous antecedent left
+    /// off, for a caller that reads a level *term* and holds no membership.
+    /// See [`succ_ne_zero_pair`]; the two come out of one derivation.
+    pub succ_ne_zero_un: Thm,
     /// `⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (succ(m) = succ(n) → m = n))`.
     pub succ_inj: Thm,
     /// `⊢ ∀x. ¬(x ∈ x)`, which the injectivity proof consumes and which is
@@ -236,10 +283,18 @@ impl Peano {
     pub fn over(env: &mut Env, core: OmegaCore) -> Option<Peano> {
         let induction = induction_principle(env, &core)?;
         let trans = omega_trans(env, &core)?;
-        let succ_ne_zero = succ_ne_zero(env, &core)?;
+        let (succ_ne_zero_un, succ_ne_zero) = succ_ne_zero_pair(env, &core)?;
         let no_self_mem = crate::empty::no_self_mem(env, core.sets.up, &core.mem_sing).ok()?;
         let succ_inj = succ_inj(env, &core, &trans, &no_self_mem)?;
-        Some(Peano { core, induction, trans, succ_ne_zero, succ_inj, no_self_mem })
+        Some(Peano {
+            core,
+            induction,
+            trans,
+            succ_ne_zero,
+            succ_ne_zero_un,
+            succ_inj,
+            no_self_mem,
+        })
     }
 
     /// The same, minting a fresh [`Sets`].

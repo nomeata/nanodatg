@@ -2300,6 +2300,10 @@ impl Interp {
     /// guessed at them would hand back a theorem about a level it cannot see.
     /// A caller that needs those settles them by hypothesis and
     /// [`Ite0`](derived::levels::ite0::Ite0)'s two halves.
+    ///
+    /// [`Interp::succ_nonzero_at`] is the twin that reads the **term**, for a
+    /// caller with no `Level` on its stack; that one is where the two are
+    /// reconciled.
     pub fn level_nonzero(&mut self, l: &Level, vars: &LevelVars) -> Option<Thm> {
         let LevelView::Succ(a) = l.view() else { return None };
         let ta = self.level_term(&a, vars)?;
@@ -2308,6 +2312,61 @@ impl Interp {
         let out =
             Thm::mp(&derived::inst_all(&lp.r.peano.succ_ne_zero, std::slice::from_ref(&ta))?, &ma)?;
         let want = Formula::not(Formula::eq(lp.succ_of(ta), lp.zero()));
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// **`⊢ ¬(ℓ̂ = ∅)` read off the *term*** — [`Interp::level_nonzero`] for a
+    /// caller that holds no `Level`, and unconditional.
+    ///
+    /// # Why this exists beside [`Interp::level_nonzero`]
+    ///
+    /// That one's header said *"a successor could be settled by
+    /// `Interp::level_nonzero` and is not, because that function reads a
+    /// `Level`; nothing on this route has asked"* — written at
+    /// [`Interp::level_guard_at`], and **something has now asked**. The zone-A
+    /// application node (`crate::kernel`'s `Expr::App`) walks an interpreted
+    /// `Π` whose head is §1.4's `ite0`, and at that point mini has an *`Expr`*
+    /// on its stack, not the codomain's level: the sort `ℓ₂` the `Π` clause
+    /// guarded on was computed one frame up, inside the `Expr::Forall` that
+    /// built the term, and is gone by the time the application takes it apart.
+    ///
+    /// So the fact is spent **unguarded**, and that is the whole design:
+    /// `derived::recursion::succ_ne_zero_pair`'s first component, exactly as
+    /// `derived::levels::order::Order::max_ne_zero` is spent unguarded by
+    /// [`Interp::level_guard_at`] and for the identical reason — *a term-level
+    /// walk has no `∈ ω` to spend*. The predecessor's warning that a second
+    /// spelling is a second chance to disagree is answered by construction and
+    /// not by discipline: the predecessor is **rebuilt** with
+    /// [`derived::levels::apparatus::LevelPoly::succ_of`] and compared against
+    /// the caller's term, and the theorem's conclusion is compared against the
+    /// `want` this function spells, so the two functions cannot differ about
+    /// *what* was proved. They differ only in what they spend, and the one that
+    /// spends nothing is the one whose caller has nothing.
+    ///
+    /// # Non-forcing, deliberately
+    ///
+    /// [`Interp::levels_built`] and not [`Interp::levels`]. This is reached
+    /// from a node the **ground** route walks too, at every application whose
+    /// function type `as_pi` cannot decompose — 100 000-plus times over the
+    /// tutorial corpus — and building the apparatus there would declare symbols
+    /// off the shared `Env` and renumber every later mint. The apparatus's build
+    /// point stays pinned inside `Checker::poly`; this reads it if it is there
+    /// and answers `None` if it is not.
+    ///
+    /// `None` at every term that is not syntactically `succ(·)`: a bare
+    /// parameter, a `max`, an `imax`'s `ite0` and `∅` itself are each zero at
+    /// some instantiation.
+    pub fn succ_nonzero_at(&mut self, t: &Term) -> Option<Thm> {
+        let lp = self.levels_built()?.clone();
+        let (_, args) = self.parts_of(t)?;
+        let [pred] = args.as_slice() else { return None };
+        // Rebuilt and compared, never read off the head symbol — the
+        // discipline [`Interp::union_left`] keeps for the same reason.
+        if lp.succ_of(pred.clone()) != *t {
+            return None
+        }
+        let out = derived::inst_all(&lp.r.peano.succ_ne_zero_un, std::slice::from_ref(pred))?;
+        let want = Formula::not(Formula::eq(t.clone(), lp.zero()));
         (*out.concl() == want).then_some(out)
     }
 
@@ -2510,20 +2569,49 @@ impl Interp {
     /// [`crate::rec_dep::ih_transport`] builds its result at the collapsed set
     /// and has to land back on the caller's own `⟦∀z:γ, C (f z)⟧`. `None` here
     /// means `as_pi` answered on its own and nothing moved.
+    ///
+    /// # `guard: None` is a real entry, not a degenerate one
+    ///
+    /// It used to be an immediate refusal, and the zone-A application node
+    /// (`crate::kernel`'s `Expr::App`) is the caller that has nothing else to
+    /// offer: it is not inside anybody's case split. What it does have is that
+    /// a `Π` whose codomain is a **sort** guards on a successor, which
+    /// [`Interp::succ_nonzero_at`] settles unconditionally. So the guardless
+    /// entry answers for exactly the sort-codomain `Π`s and refuses everything
+    /// else, and a caller *with* a guard is unaffected — its own hypothesis is
+    /// tried first and the fallback is only reached where that produced
+    /// nothing.
     pub fn as_pi_at(&mut self, t: &Term, guard: Option<&Guard>) -> Option<(PiShape, Option<Thm>)> {
         if let Some(shape) = self.as_pi(t) {
             return Some((shape, None))
         }
-        let guard = guard?;
-        let lp = self.levels()?;
+        // Non-forcing, before anything else: on the σ-scheduled route `as_pi`
+        // above is the only branch that ever answers, and no apparatus may be
+        // built on the way to finding that out. See [`Interp::succ_nonzero_at`].
+        let lp = self.levels_built()?.clone();
         let (f, args) = self.parts_of(t)?;
         if f != lp.i.sym || args.len() != 3 {
             return None
         }
-        let settled = self.level_guard_at(&args[0], guard)?;
-        let collapse = match guard {
-            Guard::Zero(_) => self.pi_cndd_at(t, &settled)?,
-            Guard::NonZero(_) => self.pi_dprod_at(t, &settled)?,
+        // **The caller's guard first, and the unconditional fact only as a
+        // fallback.** The order is the ratchet: a caller inside a `u₁ = 0` arm
+        // holds `Guard::Zero` and wants [`Interp::pi_cndd_at`], and a guard
+        // term that happened to be a successor would send it to the *other*
+        // clause — a different collapsed set, and a decline downstream where
+        // there had been none. Trying the caller's own hypothesis first leaves
+        // every route that already worked bit-for-bit where it was, and adds
+        // exactly the case that had no answer at all: no guard in hand.
+        let settled = guard.and_then(|g| Some((g, self.level_guard_at(&args[0], g)?)));
+        let collapse = match settled {
+            Some((Guard::Zero(_), s)) => self.pi_cndd_at(t, &s)?,
+            Some((Guard::NonZero(_), s)) => self.pi_dprod_at(t, &s)?,
+            // `ℓ̂₂ = succ(·)` — every `Π` whose codomain is a sort, which is
+            // what Lean writes for a motive binder and for the type of every
+            // type-valued function. Never zero, at no cost in hypotheses.
+            None => {
+                let ne = self.succ_nonzero_at(&args[0])?;
+                self.pi_dprod_at(t, &ne)?
+            }
         };
         let (_, collapsed) = collapse.concl().as_eq()?;
         Some((self.as_pi(&collapsed)?, Some(collapse)))
@@ -4694,6 +4782,142 @@ mod tests {
             vars.insert(Name::simple(n), LevelVar { v, tm, in_omega });
         }
         (lp, vars)
+    }
+
+    /// **`¬(ℓ̂ = ∅)` off the term alone, spending nothing** —
+    /// [`Interp::succ_nonzero_at`], and the two properties its caller depends
+    /// on that [`Interp::level_nonzero`] cannot supply.
+    ///
+    /// # 1. No hypothesis, because the caller has none to give
+    ///
+    /// `level_nonzero` discharges `derived`'s Peano `succ_ne_zero` against
+    /// `û ∈ ω`, and `a_pi_over_a_sort_comes_apart_at_a_variable_rung` pins
+    /// that it carries exactly the hypotheses of the parameters its level
+    /// mentions. That is right for a caller holding a `Level`. The zone-A
+    /// application node holds a **term**: the codomain's level was computed one
+    /// frame up and is gone. So this one is asserted to carry **zero**
+    /// hypotheses — not as a nicety, but because there is nothing at that node
+    /// to produce one from.
+    ///
+    /// # 2. It must not build an apparatus
+    ///
+    /// The node this is called from is on the σ-scheduled route too, at every
+    /// application whose function type `as_pi` cannot decompose. Building the
+    /// apparatus there would declare symbols off the shared `Env` and renumber
+    /// every later mint — Gate A's byte-identity, lost to a diagnostic. So the
+    /// first case below is a **fresh `Interp`**, and it asserts both that the
+    /// answer is `None` and that no apparatus appeared.
+    ///
+    /// # The negatives, and why these four
+    ///
+    /// `û` bare, `∅`, `max(û,v̂)` and `imax(û,v̂)` are each zero at some
+    /// instantiation, and each is a *different* way to be wrong: the first is
+    /// the shape the corpus's undecidable guards actually take, `∅` is the one
+    /// a "not obviously zero" test would wave through, `max` is an applied
+    /// binary term that a loose arity check accepts, and `imax` is an `ite0`
+    /// whose own head is the thing `as_pi_at` was looking at — the one a
+    /// recursion could answer for its inner guard by mistake.
+    #[test]
+    fn a_successor_guard_is_settled_off_the_term_and_costs_no_hypothesis() {
+        // (2) — never a reason to build one.
+        let mut bare = Interp::new();
+        let atom = Term::var(bare.fresh_var());
+        assert!(bare.succ_nonzero_at(&atom).is_none(), "no apparatus, no answer");
+        assert!(bare.levels_built().is_none(), "…and no apparatus built on the way to saying so");
+
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let t = |n: &str| vars[&Name::simple(n)].tm.clone();
+
+        // (1) — three successors, so a settler that read only the outermost
+        // `succ` and one that read only a *variable* under it both fail.
+        for (label, pred) in [
+            ("succ(û)", t("u")),
+            ("succ(succ(û))", lp.succ_of(t("u"))),
+            ("succ(û ∪ v̂)", lp.max(t("u"), t("v"))),
+            ("succ(∅)", lp.zero()),
+        ] {
+            let tm = lp.succ_of(pred);
+            let ne = ip
+                .succ_nonzero_at(&tm)
+                .unwrap_or_else(|| panic!("{label}: a successor is never ∅"));
+            assert_eq!(
+                *ne.concl(),
+                Formula::not(Formula::eq(tm, lp.zero())),
+                "{label}: the conclusion is about this very term"
+            );
+            assert!(
+                ne.hyps().is_empty(),
+                "{label}: the caller has no `∈ ω` to spend, so neither may this"
+            );
+        }
+
+        // The four negatives.
+        for (label, tm) in [
+            ("û", t("u")),
+            ("∅", lp.zero()),
+            ("û ∪ v̂", lp.max(t("u"), t("v"))),
+            ("imax(û,v̂)", lp.imax(t("u"), t("v"))),
+        ] {
+            assert!(
+                ip.succ_nonzero_at(&tm).is_none(),
+                "{label} is ∅ at some instantiation and must not be settled"
+            );
+        }
+    }
+
+    /// **[`Interp::as_pi_at`] with no `Guard` at all** — the entry the zone-A
+    /// application node takes, and the boundary it stops at.
+    ///
+    /// The guard-bearing route is `crate::rec_dep`'s and is unchanged; what is
+    /// new is that `None` is no longer an immediate refusal. A `Π` whose
+    /// codomain is a **sort** comes apart, because its `ℓ₂` is a successor; a
+    /// `Π` whose codomain is at a bare parameter still does not, and must not —
+    /// `Sort u` is `Prop` at `u = 0`, and the two clauses are different sets.
+    ///
+    /// The collapsed right-hand side is required to **decompose**, which is the
+    /// whole point of the call, and the equation's left side is required to be
+    /// the term the clause built rather than one rebuilt here.
+    #[test]
+    fn an_unguarded_pi_comes_apart_exactly_when_its_codomain_is_a_sort() {
+        let env = crate::env::Environment::empty();
+        let mut ip = Interp::new();
+        let (u, v) = (p("u"), p("v"));
+        let mut c =
+            crate::kernel::Checker::poly(&env, &mut ip, &[Name::simple("u"), Name::simple("v")])
+                .expect("poly");
+        // `∀ x : Sort v. Sort u` — codomain a sort, so `ℓ₂ = u+1`.
+        let sorted = c.infer_type(&crate::expr::forall(
+            crate::expr::sort(v),
+            crate::expr::sort(u),
+        ));
+        // `∀ x : Sort v. (∀ _ : Sort v. Sort u)` has `ℓ₂ = imax(v+1, u+1)`,
+        // whose own guard is a successor — the recursion this does *not* do.
+        let nested = c.infer_type(&crate::expr::forall(
+            crate::expr::sort(v),
+            crate::expr::forall(crate::expr::sort(v), crate::expr::sort(u)),
+        ));
+        let both: Vec<Term> = [sorted, nested]
+            .iter()
+            .map(|t| t.as_ref().ok().and_then(|t| t.tm.clone()).expect("⟦Π⟧"))
+            .collect();
+        drop(c);
+
+        let (shape, collapse) =
+            ip.as_pi_at(&both[0], None).expect("a sort codomain settles with no guard");
+        assert!(matches!(shape, PiShape::Dep { .. }), "…and it is the value clause");
+        let eq = collapse.expect("the ite0 was there, so an equation was needed");
+        let (lhs, rhs) = eq.concl().as_eq().expect("an equation");
+        assert_eq!(lhs, both[0], "the equation is about the term the Π clause built");
+        assert!(ip.as_pi(&rhs).is_some(), "the collapsed set decomposes, which is the point");
+        assert!(eq.hyps().is_empty(), "settled unconditionally");
+
+        // The boundary: an `imax` guard is not a successor, and nothing here
+        // recurses into it. A successor said so; this must not.
+        assert!(
+            ip.as_pi_at(&both[1], None).is_none(),
+            "an imax guard is undecidable without a split and must stay refused"
+        );
     }
 
     /// **The `u = 0` split, joined into one term** — [`Interp::ite0_merge`] and

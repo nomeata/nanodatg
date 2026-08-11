@@ -992,13 +992,13 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 27 as of the binder collapse,
-   # and **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
+   # de-scheduled route certifies end to end. **31 of 89** as of the unguarded
+   # successor guard; the ceiling of 25 was the zone-B *skip*, which is gone.
    # `$?` must be its own statement: `echo "$(basename $f) $?"` reports
    # `basename`'s exit status, which reads as 89 clean files.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 27 × 0, 62 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 31 × 0, 58 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1805,6 +1805,131 @@ parks nothing.
 
 The four files still owe `typeEv`, now blocked on `no-endpoint` rather than on
 the sealing — a different obstacle and the next one on this route.
+
+#### Zone A's own type: `as_pi` at an unguarded successor — exits 27 → 31 of 89
+
+**The number that had not moved in three tranches has moved.** The obstacle was
+not in zone B at all, and not in any eliminator route: it is
+`crate::kernel`'s `Expr::App` rule, one node of the ordinary zone-A walk.
+
+Probed before a line was written, and the brief's sizing was wrong again in the
+favourable direction — the ninth on this branch, and again not a feasibility
+one. The brief named **four** files owing only `typeEv`. Classifying every one
+of the 89 by which `is_clean` conjunct fails says **six**:
+`015_levelParams`, `059_emptyRec`, `060_boolRec`, `061_twoBoolRec`, `067_nRec`,
+`115_rTreeRec`. Arming the site census on the *evidence* axis puts five of the
+six at one line — `kernel::app_evidence`'s `blocked` — and the sixth
+(`015_levelParams`) somewhere else entirely.
+
+**What the node cannot do.** `⟦boolRec.{u}⟧`'s declared type is
+`∀ {motive : Bool → Sort u}, motive false → motive true → ∀ t, motive t`. Its
+codomain is an *application*, so certifying the type needs the application rule
+at `motive`, whose own type is `Bool → Sort u`. At a variable rung §1.4's `Π`
+clause emits that as `ite0(succ(û), cndd, dprod)` and `Interp::as_pi` dispatches
+on the head symbol, so it is blind — the frontier the `Π` clause left behind,
+now reached from zone A. And **this node holds no `Guard`**: it is not inside
+anybody's case split, so `Interp::as_pi_at`'s `let guard = guard?` refused it
+outright.
+
+**What settles it costs no split and no hypothesis.** The guard is
+`ℓ̂₂ = succ(û)` — `Sort u` inhabits `Sort (u+1)`, so *every* `Π` whose codomain
+is a sort has a successor guard, which is the same observation
+`rec_dep::collapse_motive_ty` already spends on the motive binder. What it
+cannot reuse is `Interp::level_nonzero`, which reads a `Level` and discharges
+`û ∈ ω`: at the application node the codomain's level was computed one frame up,
+inside the `Expr::Forall` that built the term, and is gone. So the fact is spent
+**unguarded**, exactly as `Order::max_ne_zero` is spent unguarded by
+`level_guard_at` and for the identical reason — *a term-level walk has no `∈ ω`
+to spend*.
+
+The frontier, measured over the corpus rather than argued: of the zone-A
+application nodes where `as_pi` is blind **and the function's own membership is
+present** (so the site is a real frontier and not a downstream casualty),
+
+    ite0 guard is a successor    1489      settled by this tranche
+    ite0 guard is an imax         315      needs level_guard_at's recursion
+    ite0 guard is a bare û        290      genuinely undecidable; needs a split
+    other                           3
+
+**What moved.**
+
+    typeEv     74 → 80        every other column unchanged
+    zoneBOk    208/362        unchanged, denominators unchanged
+    exits      27 × 0 → 31 × 0,  62 × 4 → 58 × 4,  2 × 2 unchanged
+
+**Six files gain a type certificate**, one declaration each — `059_emptyRec`,
+`060_boolRec`, `061_twoBoolRec`, `062_andRec`, `067_nRec`,
+`090_projDataIndexRec`. Four of them had nothing else outstanding and now exit
+0; `062` and `090` still owe zone-B constants, so they gain a column and not a
+verdict.
+
+**Two of the six files that owed *only* `typeEv` did not get it, and neither is
+this clause's.** `115_rTreeRec` moved off `no-endpoint` and onto
+`conv-compose(pi-poly)`: the collapse now happens and the composition after it
+does not, one step further in and a different owner. `015_levelParams` never had
+this obstacle — its `typeEv` reason is `not-decomposable`, minted at
+`const_evidence`'s `Err(g)` arm, i.e. a *stored* generic point whose typing was
+already blocked when the second declaration referenced it. That is the store's
+coverage, not the application rule's.
+
+**The `derived` addition is the third on this branch and the smallest of the
+three.** `recursion::succ_ne_zero_pair` returns
+`⊢ ∀n. ¬(succ(n) = ∅)` beside the Peano-form `⊢ ∀n. (n ∈ ω → ¬(succ(n) = ∅))`,
+from **one** derivation — the unguarded theorem was already the last line before
+`a1i` weakened it, and the module header has said since it was written that the
+antecedent is not used. So no new mathematics, only a fact that was being
+thrown away. `Peano::over`'s `Env::fresh_var` count is unchanged by
+construction, which is what keeps every later symbol numbered where it was.
+
+**`Interp::level_nonzero` is deliberately left alone.** The obvious tidy is to
+delegate it to the new term-level `Interp::succ_nonzero_at` and have one
+spelling; it is not done, because
+`a_pi_over_a_sort_comes_apart_at_a_variable_rung` asserts that its conclusion
+carries *exactly* the level hypotheses its level mentions, and delegating would
+take that to zero. The predecessor's warning that a second spelling is a second
+chance to disagree is answered by construction instead: `succ_nonzero_at`
+**rebuilds** `succ(·)` with `LevelPoly::succ_of` and compares it against the
+caller's term, and compares the theorem's conclusion against the `want` it
+spells, so the two cannot differ about what was proved. They differ only in what
+they spend.
+
+**The ordering inside `as_pi_at` is the ratchet.** The caller's `Guard` is tried
+**first** and the unconditional fact only as a fallback. A caller inside a
+`u₁ = 0` arm holds `Guard::Zero` and wants `pi_cndd_at`; a guard term that
+happened to be a successor would send it to the *other* clause — a different
+collapsed set and a decline downstream where there had been none. Trying the
+caller's own hypothesis first leaves every route that already worked exactly
+where it was and adds only the case that had no answer at all.
+
+**`Interp::levels_built` and not `Interp::levels`.** The application node is on
+the σ-scheduled route too, at every application whose function type `as_pi`
+cannot decompose — over 100 000 times across the tutorial corpus. Forcing the
+apparatus there would declare symbols off the shared `Env` and renumber every
+later mint, losing Gate A's byte-identity to a diagnostic. `as_pi_at` now peeks
+non-forcingly before it does anything else, which is *stronger* than the
+`let guard = guard?` it replaced.
+
+**For a successor, in the order the census puts them.**
+
+* **The 315 `imax` guards.** `level_guard_at` already recurses through an
+  `ite0` — its own `imax` case — and the recursion bottoms out on the caller's
+  `Guard`. Where the *inner* guard is a successor, `succ_nonzero_at` settles it
+  and the `max_ne_zero` step above it goes through with no caller guard at all.
+  What stops that being a four-line change is that `level_guard_at` returns a
+  theorem at the **caller's polarity** and the unconditional route only ever
+  produces `NonZero`; the function has to hand back a `Guard` rather than a
+  `Thm` before the two compose. That is a real refactor of a load-bearing
+  function and was deliberately not folded into this tranche.
+* **The 290 bare-parameter guards are the boundary and must stay refused.**
+  `Sort u` is `Prop` at `u = 0` and a universe above it; a settler that
+  answered there would be claiming a clause it cannot see. These need §6.2's
+  split, which is `rec_dep::split_bottom`'s machinery reaching zone A — and
+  nothing has yet measured whether zone A has anywhere to put the two arms.
+* **`115_rTreeRec`'s `conv-compose(pi-poly)`** is one file and one step past
+  the collapse. It is the cheapest remaining exit.
+* **`015_levelParams`** is the store's coverage — `const_evidence`'s `Err(g)`
+  arm handing a use site the reason a *stored* generic point's typing was
+  blocked with. Unrelated to any of the above and the other cheap exit.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

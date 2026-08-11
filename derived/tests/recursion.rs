@@ -303,6 +303,69 @@ fn zero_is_not_a_successor() {
     );
 }
 
+/// `⊢ ∀n. ¬(succ(n) = 0)` — the **unguarded** half of
+/// [`recursion::succ_ne_zero_pair`], and the one property that makes it worth
+/// stating separately.
+///
+/// The guarded form covers this module's own uses; what it cannot serve is a
+/// caller with no `n ∈ ω` to discharge, which is
+/// `mini::interp::Interp::succ_nonzero_at` — a walk over a level *term*, with
+/// no level expression to recover a membership from. So the test instantiates
+/// at a **free variable**: nothing in the theory proves `x ∈ ω` for one, so a
+/// theorem that still wanted the antecedent could not be spent here at all.
+/// That is the whole content, and it is why `0` and `succ(0)` beside it are
+/// not enough on their own — both have their memberships to hand.
+///
+/// The pair is also checked not to have swapped: `.1` is still the guarded
+/// theorem, which a returned tuple makes a one-character mistake.
+#[test]
+fn zero_is_not_a_successor_and_the_omega_guard_is_not_needed() {
+    let mut env = Env::new();
+    let core = recursion::OmegaCore::new(&mut env).expect("OmegaCore");
+    let (un, guarded) =
+        recursion::succ_ne_zero_pair(&mut env, &core).expect("succ_ne_zero_pair");
+    assert!(kernel::thm::debug_locally_closed(un.concl()));
+
+    let zero = core.zero();
+    let n = env.fresh_var();
+    let tn = Term::var(n);
+    assert_eq!(
+        *un.concl(),
+        Formula::forall(n, Formula::not(Formula::eq(core.succ_of(tn.clone()), zero.clone()))),
+        "the unguarded theorem has the wrong shape"
+    );
+    assert!(un.hyps().is_empty(), "it is unconditional");
+    // The pair is in the documented order.
+    assert_eq!(
+        *guarded.concl(),
+        Formula::forall(
+            n,
+            Formula::imp(
+                Formula::mem(tn, core.set()),
+                Formula::not(Formula::eq(core.succ_of(Term::var(n)), zero.clone()))
+            )
+        ),
+        "the pair is (unguarded, guarded) and came back swapped"
+    );
+
+    // Spent at three terms. The **free variable** is the one that matters:
+    // no `x ∈ ω` exists for it, so the guarded form is unusable there, and
+    // that is exactly the position mini's term-level walk is in.
+    let x = Term::var(env.fresh_var());
+    for (label, t) in
+        [("a free variable", x), ("0", zero.clone()), ("succ(0)", core.succ_of(zero.clone()))]
+    {
+        let at = derived::inst_all(&un, std::slice::from_ref(&t)).expect("instantiate");
+        assert!(at.hyps().is_empty(), "{label}: nothing was assumed");
+        assert_ne!(core.succ_of(t.clone()), zero.clone(), "{label}: not a vacuous negation");
+        assert_eq!(
+            *at.concl(),
+            Formula::not(Formula::eq(core.succ_of(t), zero.clone())),
+            "{label}: the instance has the wrong shape"
+        );
+    }
+}
+
 /// `⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (succ(m) = succ(n) → m = n))`.
 #[test]
 fn the_successor_is_injective_on_omega() {
