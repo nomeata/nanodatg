@@ -17,8 +17,25 @@
 //! for the same reason: a checker meets `≤` as a **set** — the interpretation
 //! of whatever declaration its input called `Nat.ble`, compiled through
 //! whatever `brecOn`/`below`/`match` nest its author used — and must not trust
-//! a name. What it can do is derive the three clauses for that set by δ and ι,
-//! and instantiate this.
+//! a name. What it would take to use it is the three clauses for that set,
+//! derived by δ and ι, and this instantiated at them.
+//!
+//! **No checker can do that today, and the sentence this replaces said it
+//! could.** The clauses are stated at schematic `x, y ∈ ω`, so deriving them
+//! means running δ and ι *under a universal quantifier* through the `brecOn`
+//! nest; every ι step the checker performs is at a concrete `Expr` during a
+//! conversion check. The obvious way round — the corpus holds only 51 distinct
+//! `Nat.ble` instances, every operand ≤ 12, so derive 51 concrete facts instead
+//! — was censused before it was built and refuted (`MEASUREMENTS.md`, "The
+//! concrete route to link 3 is refuted inside the rule"): with the accelerator
+//! withheld all 51 *reduce* concretely, and **not one certifies**. Two steps of
+//! the unfolding are outright admissions — a `PProd` projection, and ι at a
+//! `Nat.rec` whose major is a nat literal, which is the very origin the
+//! workaround was meant to escape — and 25 424 β contractions are conditional
+//! on domain premises nothing discharges.
+//!
+//! So this bridge is waiting on a **schematic** ι, not on wiring. Three
+//! documents said otherwise, including an earlier version of this header.
 //!
 //! # Why `t` and `f` are quantified, and not `succ 0` and `0`
 //!
@@ -48,6 +65,14 @@
 //! rather than left implied because link 1's predecessor —
 //! [`crate::nat::Compare`], complete and certified since task #94 — sat unused
 //! for want of exactly this sentence.
+//!
+//! **Link 3 landed and the list above still understates it.** `reduce_rec` does
+//! return the major's own trace (`checker/src/tc.rs`), gated on
+//! `reduct::fully_ruled` — and on this population the gate can never open,
+//! because the major's reduction is either one `Admit::NatRed` (accelerator on)
+//! or a β/δ/ι/projection chain (accelerator off), and `fully_ruled` admits
+//! neither ι nor projection for measured reasons. The missing piece is not the
+//! plumbing; it is this file's three premises, which nothing supplies.
 //!
 //! # The proof
 //!

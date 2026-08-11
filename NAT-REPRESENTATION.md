@@ -275,6 +275,40 @@ well, which a schematic derivation would have had to discharge at variables too.
 So the carrier swap is a precondition for step 4 that has now been paid, which
 is the honest statement of what this tranche is worth.
 
+### And the concrete route round it is refuted — censused, not argued
+
+The obvious escape is that no schematic derivation is *needed*: the corpus holds
+**51 distinct `Nat.ble` instances, every operand ≤ 12**, so there are only 51
+concrete facts `⟦Nat.ble lit_a lit_b⟧ = ⟦Bool.true⟧`, each apparently provable by
+the concrete δ and ι the checker runs at every conversion check. That was
+measured at the site where the answer matters — `reduce_rec`, at the major
+premise of the ι redex — before anything was built
+(`scripts/ble-census.diff`; `MEASUREMENTS.md`, "The concrete route to link 3 is
+refuted inside the rule").
+
+**All 51 reduce. Not one certifies.** With the accelerator withheld below 13
+every instance reaches `Bool.true` or `Bool.false` by β, δ, ι and projection —
+13 steps for `ble 0 0`, 206 for `ble 12 11` — and every one of the 51 composites
+comes out `trans over an admitted premise`. The blame, over 30 400 re-asked
+steps:
+
+* `ProjRed` on the `below` nest's `PProd` is `ADMITTED: proj_reduce` (2 624) —
+  a different origin, 659 gaps in the baseline on its own account;
+* `Iota` at `Nat.rec` is `ADMITTED: iota: the major premise is not a
+  constructor` (2 352), and those majors are **nat literals**. `reduce_rec`
+  rescues a literal major with the *untraced* `nat_lit_to_constructor`, so
+  unfolding `Nat.ble` structurally does not escape origin 2 — it reproduces it
+  2 352 times inside its own workaround;
+* the remaining 25 424 steps are β contractions conditional on 1–4 undischarged
+  `⟦arg⟧ ∈ ⟦binder domain⟧` premises, which is a 10× move on the escape ratchet
+  (2 625 → 28 063).
+
+Ledger with the accelerator withheld: **11 969 / 2 639 / 172 561** against
+11 821 / 2 625 / 164 109, and 165 003 reduction steps against 89 710 — figures
+that reproduce task #129's *to the digit*, and #129 measured them on the W-type
+`Nat`. The carrier swap is a precondition for the **schematic** route and buys
+the concrete one nothing.
+
 ## 1. What `mini` does with `Nat` today — measured
 
 ### 1.1 The literal clause
