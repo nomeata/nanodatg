@@ -12202,7 +12202,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // did not reduce, rather than being unreachable in shape. This is
             // 485 of the 486, i.e. essentially the whole of this origin.
             #[cfg(feature = "stepcount")]
-            NOT_CTOR[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            {
+                NOT_CTOR[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Which constants, and can they be unfolded at all? A head with
+                // a value is a reduction that did not happen; one without is a
+                // shape no unfolding reaches.
+                let kind = match self.decls.get_declar(&cname) {
+                    Some(Declar::Definition { .. }) => "definition",
+                    Some(Declar::Theorem { .. }) => "theorem",
+                    Some(Declar::Opaque { .. }) => "opaque",
+                    Some(Declar::Axiom { .. }) => "axiom",
+                    Some(Declar::Inductive(_)) => "inductive",
+                    Some(Declar::Recursor(_)) => "recursor",
+                    Some(Declar::Quot { .. }) => "quot",
+                    Some(Declar::Constructor(_)) => "constructor(!)",
+                    None => "unknown",
+                };
+                let sp = self.spell(ctx, cname);
+                let mut g = NOT_CTOR_NAMES.lock().expect("not_ctor_names poisoned");
+                *g.entry(format!("{kind:<11} {sp}")).or_insert(0u64) += 1;
+            }
             return Err("iota: the major premise is not a constructor")
         };
         let idx = c.ctor_idx as usize;
@@ -16216,7 +16235,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
                 // reporting a gap — the measurement that validates the
                 // sub-tree column. See [`iota_assume`]; nothing is admitted.
                 #[cfg(feature = "stepcount")]
-                if iota_assume() {
+                if iota_assume(why) {
                     let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
                     if l != r {
                         let f = Formula::eq(l, r);
@@ -16812,14 +16831,30 @@ static IOTA_ACQUIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 /// Never on in any shipped configuration: `stepcount` is a measurement feature
 /// and this needs an environment variable on top of it.
 #[cfg(feature = "stepcount")]
-fn iota_assume() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("NANODA_IOTA_ASSUME").is_some())
+fn iota_assume(why: &str) -> bool {
+    static ON: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let v = ON.get_or_init(|| {
+        std::env::var("NANODA_IOTA_ASSUME").ok().map(|s| s.to_ascii_lowercase())
+    });
+    match v.as_deref() {
+        None => false,
+        // Name one origin to delete it alone — the sub-tree column is per
+        // origin, so a combined run cannot check a single prediction.
+        Some("nonest") => why == "iota: this recursor has no curried interpretation",
+        Some("notctor") => why == "iota: the major premise is not a constructor",
+        Some(_) => true,
+    }
 }
 
 /// The recursors with no curried interpretation, by spelling — the top origin's
 /// own census, and the thing that says whether closing it is bounded work.
 static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// The constants that head a major premise and are not constructors, by kind
+/// and spelling — the second origin's census, and what says whether the step it
+/// is short of is a reduction that exists.
+#[cfg(feature = "stepcount")]
+static NOT_CTOR_NAMES: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 /// What the major premise's head is when it is not a constructor — the second
 /// origin's census.
@@ -16919,6 +16954,22 @@ pub fn origin_report() -> String {
             v.sort_by(|a, b| b.1.cmp(a.1));
             s.push_str(&format!(
                 "  the top origin, by recursor — {} distinct, {} firings\n",
+                v.len(),
+                v.iter().map(|(_, n)| **n).sum::<u64>()
+            ));
+            for (r, n) in v.iter().take(20) {
+                s.push_str(&format!("    {r:<76}  {n:>8}\n"));
+            }
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    {
+        let g = NOT_CTOR_NAMES.lock().expect("not_ctor_names poisoned");
+        if !g.is_empty() {
+            let mut v: Vec<(&String, &u64)> = g.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1));
+            s.push_str(&format!(
+                "  the second origin, by head constant — {} distinct, {} firings\n",
                 v.len(),
                 v.iter().map(|(_, n)| **n).sum::<u64>()
             ));

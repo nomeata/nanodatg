@@ -7624,3 +7624,99 @@ second says the *producing* side has no supply and cannot be bootstrapped from
 within a declaration. Together they say the work is on the supply side and
 nowhere else — and the ranking above is the first thing produced this stage that
 names where on the supply side to start.
+
+## Origin 2 priced, and it is the `Nat` literal question — 2026-08-11
+
+*The ranking's second entry, taken before the first because it was the sharp
+one. Measured before anything was built, per the rule; what the measurement
+found was that the brief it was taken from — including my own wording of it —
+was wrong about the cause.*
+
+### The sub-tree is real, and the column is validated per origin
+
+`NANODA_IOTA_ASSUME` now names **one** origin, so a prediction can be checked
+against its own deletion rather than against a combined run:
+
+| deleted | acquisitions | gaps | fall | **predicted sub-tree** |
+|---|---:|---:|---:|---:|
+| — (baseline) | — | 15 734 | — | — |
+| `iota: the major premise is not a constructor` | 486 | **12 668** | **3 066** | 3 286 |
+| `iota: this recursor has no curried interpretation` | 792 | **10 720** | **5 014** | 5 517 |
+| both | 1 278 | 7 654 | 8 080 | 8 803 |
+
+Two things worth having. Each prediction lands within **7–9 %** of its own
+deletion, so the provenance column is calibrated per origin and not just in
+aggregate. And **3 066 + 5 014 = 8 080 exactly**: the two sub-trees are
+disjoint and additive, which is what the single-origin attribution rule claimed
+and had not yet been made to prove.
+
+### The cause: three constants, and 466 of them are one
+
+Origin 2 is 486 firings. One is a projection. The other 485 are a major premise
+whose head is a constant that is not a constructor, and the census of *which*
+constant is the whole finding:
+
+| kind | constant | firings |
+|---|---|---:|
+| definition | **`Nat.ble`** | **466** |
+| definition | `Nat.beq` | 14 |
+| definition | `OfNat.ofNat` | 5 |
+
+**Three distinct constants — 96 % of them one — carrying 3 066 gaps, 19.5 % of
+the whole ledger.**
+
+### Which corrects the brief, including my own wording of it
+
+The census that produced this origin recorded "a constant that is not a
+constructor — **it did not reduce**", and the tranche was briefed as *one delta
+step short of the rule firing*. That reading is wrong, and `Nat.ble` is why.
+
+`Nat.ble` and `Nat.beq` are not unfolded by the checker at all. They are
+**GMP-accelerated literal operations**: `try_reduce_nat` (`checker/src/tc.rs:587`)
+matches the head against `NameCache`'s cached pointers and computes the answer
+natively, and `reduce_rec`'s internal `self.whnf(major)` takes that path with
+**no certificate requested**. So the ι rule's major premise becomes
+`Bool.true`/`Bool.false` by arithmetic the backend never saw and could not
+have derived: the certifier's own route for it is `Admit::NatRed`, an admission,
+not a rule.
+
+The step this origin is short of is therefore not a delta step and not
+plumbing. It is **`⟦Nat.ble a b⟧ = ⟦Bool.true⟧` for literal operands**, a fact
+about numerals in the target theory.
+
+### The third route to the same place
+
+`NAT-BRIDGE-FEASIBILITY.md` §1 already answered the question this lands on, from
+the opposite end and before this ledger existed: *"`init-prelude` needs
+computation, not only representation … conversion checks that are decided only
+because the checker evaluates `Nat.beq` and `Nat.ble` on literals — at operands
+as large as 2⁶⁴ — and it contains no route to those checks that does not
+compute."* It established that by renaming the operations out of `NameCache` and
+watching the checker fail.
+
+That document named the two operations. This one **prices** them: `Nat.ble` and
+`Nat.beq` are 480 of 486 firings at the second-largest origin in the gap ledger,
+and closing that origin is worth **3 066 gaps**. The nat-computation work has
+had a feasibility argument since; it now has a payoff number, which is the thing
+it was missing.
+
+So the convergence is three routes, not two:
+
+* the target-beta route — every *consuming* rule measured at this frontier is
+  worth nothing when unblocked (0 and 15 gaps);
+* the `checker/` seat's route — the *producing* side has no supply and cannot be
+  bootstrapped inside a declaration (a wall, not a bootstrap);
+* and this one — of the supply that is missing, the second-largest single piece
+  is literal `Nat` arithmetic, which was independently shown to be unavoidable.
+
+### What is left of the ranking
+
+Origin 1, `iota: this recursor has no curried interpretation`, is now measured
+at **5 014 gaps** (31.9 %) and remains the largest single item anywhere in this
+ledger. It is 109 distinct recursors: a head of mutual and nested families
+(`Lean.ParserDescr.rec` 169, `Decidable.rec` 81, `Lean.Syntax.rec` 66 and three
+companions) and a tail of roughly a hundred **one-constructor structure
+recursors at four firings each**. The tail is the untested hypothesis worth
+taking next: if one shape covers it, it is a large fraction of 5 014 for a
+single construction. Unlike origin 2 it is a genuine construction question and
+not a representation one.
