@@ -12164,6 +12164,23 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // so a structure whose one constructor has fields is policy 3
                 // and declines there. This counts the two apart rather than
                 // inferring it.
+                // For the multi-constructor declarations: is ANY constructor
+                // nullary? `t_policy` needs one, so this is the same question
+                // asked of the same gate one bucket along — and if the answer
+                // is the same, the two buckets share a root cause even though
+                // they do not share a construction.
+                if nctors.is_some_and(|n| n > 1) {
+                    let any_nullary = idat.as_ref().is_some_and(|i| {
+                        i.all_ctor_names.iter().any(|c| {
+                            matches!(
+                                self.decls.get_declar(c),
+                                Some(Declar::Constructor(cd)) if cd.num_fields == 0
+                            )
+                        })
+                    });
+                    MULTI_NULLARY[usize::from(!any_nullary)]
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 if nctors == Some(1) {
                     let f = idat
                         .as_ref()
@@ -16969,6 +16986,11 @@ static PROJ_RED: [std::sync::atomic::AtomicU64; 4] =
 #[cfg(feature = "stepcount")]
 static PROJ_STRUCTS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// For the multi-constructor declarations: is any constructor nullary?
+/// Index 0 = yes (`t_policy` has its point), 1 = none (policy 3, declines).
+#[cfg(feature = "stepcount")]
+static MULTI_NULLARY: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 /// For the one-constructor structures: does the single constructor take fields?
 /// Zero fields is a nullary constructor and `t_policy` has its canonical point;
 /// one or more is policy 3, which declines. Indices 0 / 1 / 2 = none / some /
@@ -17047,10 +17069,22 @@ fn origin_mask(cs: &[&TgCert]) -> u32 {
 /// 66 → 391 and `nat_reduce` 111 → 190, i.e. a third of its predicted sub-tree
 /// was relays that promptly re-originated at literal arithmetic.
 ///
-/// So: read `SUBTREE` as a ceiling, and confirm any origin worth building
-/// against by deleting it. **Measured deletions do compose** — the structures
-/// (2 480) and `proj_reduce` (1 618) together measure 4 098, to the digit — so
-/// the confirmation is needed once per origin and not once per combination.
+/// The band is not as tight as the first three suggested, either: `several
+/// constructors`, which is terminal, predicted 2 144 and measured **1 929**, 10 %
+/// over. So terminal ≈ 10 %, mid-chain 34 %, and neither is exact.
+///
+/// # Measured deletions compose, but **only as a lower bound**
+///
+/// Confirmation stays cheap because a deletion measured once can be added to
+/// another: structures 2 480 + `proj_reduce` 1 618 = **4 098**, and structures
+/// 2 480 + several 1 929 = **4 409**, both to the digit on a joint run.
+///
+/// It is a *lower* bound, not an identity. All three together measure **6 180**
+/// against a sum of 6 027 — **superadditive by 153** — because a relay naming
+/// two or more origins is in nobody's sub-tree and vanishes only when *every*
+/// origin naming it closes. The excess is bounded by the `MULTI` row, so
+/// `sum ≤ joint ≤ sum + MULTI`, and confirmation is still needed once per
+/// origin rather than once per combination.
 pub fn origin_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let v = ORIGINS.lock().expect("tg origins poisoned").clone();
@@ -17144,6 +17178,21 @@ pub fn origin_report() -> String {
         ));
         for (r, n) in v.iter().take(25) {
             s.push_str(&format!("    {r:<96}  {n:>8}\n"));
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    if MULTI_NULLARY.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+        for (i, l) in [
+            "…of the multi-constructor ones, SOME constructor is nullary (t_policy has its point)",
+            "…of the multi-constructor ones, NONE is nullary (t_policy 3, declines)",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let n = MULTI_NULLARY[i].load(Relaxed);
+            if n > 0 {
+                s.push_str(&format!("    {l:<96}  {n:>8}\n"));
+            }
         }
     }
     #[cfg(feature = "stepcount")]

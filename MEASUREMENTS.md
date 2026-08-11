@@ -7902,7 +7902,10 @@ confirmed by deleting it. That is cheap, because **measured deletions compose**:
 
 2 480 + 1 618 = 4 098, to the digit. Additivity survives even where the
 prediction does not, so confirmation is needed once per origin, never once per
-combination.
+combination. *(Refined the next day: composition is a **lower** bound, not an
+identity — see "the nullary-constructor gate" below, where three deletions
+together measure 153 more than their sum because a relay naming two origins
+vanishes only when both close.)*
 
 ### And origin 3 is not a tranche — it is origin 1's construction, again
 
@@ -7945,7 +7948,9 @@ distinct structures seen at the head and not a partition of the 659.)
 | iota: an indexed family | 6 | 60 | unmeasured |
 
 `several constructors` is the largest unassigned item; it is terminal, so its
-2 144 should hold to within 9 %.
+2 144 should hold to within 9 %. *(Measured the same day: **1 929**, i.e. 10 %
+over — the prediction in this sentence is the one that widened the band. See
+"the nullary-constructor gate" below.)*
 
 ## Origin 2 is not the bignum bridge — it is 55 facts at operands ≤ 12 — 2026-08-11
 
@@ -8126,3 +8131,104 @@ the same numeral facts this section is about, arriving as the next wall behind a
 different origin. Two independent deletions therefore agree that literal
 arithmetic is a *terminal* obstruction of this ledger, and that closing the
 projection path raises rather than lowers the numeral tranche's value.
+
+## The nullary-constructor gate: 686 of 792, and 39 % of the ledger — 2026-08-11
+
+*"Several constructors", the largest unassigned origin, asked the question that
+paid off twice before: not what the row costs, but what construction would serve
+it and whether something already being built serves it too. It collapses onto
+the same gate as the structures — though, importantly, **not** onto the same
+construction.*
+
+### It is five recursors, and they are all one gate
+
+`several constructors` is 286 firings and **five** recursors:
+
+| recursor | ctors | firings |
+|---|---:|---:|
+| `Lean.ParserDescr.rec` | 13 | 169 |
+| `Decidable.rec` | 2 | 81 |
+| `Lean.Syntax.Preresolved.rec` | 2 | 12 |
+| `Except.rec` | 2 | 12 |
+| `EStateM.Result.rec` | 2 | 12 |
+
+And the gate is the one the structures hit:
+
+| | |
+|---|---:|
+| multi-constructor declines where **some** constructor is nullary | 0 |
+| multi-constructor declines where **none** is nullary — policy 3 | **286** |
+| structure declines where the constructor is nullary | 0 |
+| structure declines where it takes fields — policy 3 | **400** |
+
+**686 of origin 1's 792 firings — 86.6 % — are one line**: `t_policy`
+(`tg.rs:8242`) sites the motive's target at the first *nullary* constructor and
+returns `None` when there is none. The remaining 106 are the mutual block (100,
+which *does* have a nullary constructor and declines at an earlier gate) and
+`Eq.rec` (6, indexed).
+
+### What it is worth
+
+| deleted | gaps | fall | predicted |
+|---|---:|---:|---:|
+| baseline | 15 734 | — | — |
+| several constructors | 13 805 | **1 929** | 2 144 |
+| structures | 13 254 | 2 480 | 2 680 |
+| **both — the whole policy-3 gate** | **11 325** | **4 409** | — |
+| all three, with `proj_reduce` | **9 554** | **6 180** | — |
+
+**The nullary gate is 4 409 gaps, 28.0 % of the ledger.** With the projection
+origin, which the one-constructor half also serves, **6 180 — 39.3 %.**
+
+Two calibration notes, both corrections to what I wrote yesterday.
+
+* **The band is looser than three data points suggested.** `several
+  constructors` is terminal and still missed by 10 % (2 144 predicted, 1 929
+  measured). So terminal ≈ 10 %, mid-chain 34 %, and `SUBTREE` is a ceiling in
+  every case rather than an estimate in the good case.
+* **Composition is a lower bound, not an identity.** Pairwise it was exact —
+  2 480 + 1 618 = 4 098 and 2 480 + 1 929 = 4 409, both to the digit — but all
+  three together measure **6 180 against a sum of 6 027, superadditive by 153**.
+  A relay naming two or more origins sits in nobody's sub-tree and vanishes only
+  when every origin naming it closes, so `sum ≤ joint ≤ sum + MULTI`. Both
+  corrected in `origin_report`'s header.
+
+### One gate, but two constructions — and this is the part to get right
+
+The collapse is at the *gate*, and it would be a mistake to read it as a
+collapse at the *construction*:
+
+* **One constructor** — no case analysis at all, `S.rec C f (S.mk a⃗) ⟶ f a⃗`.
+  The degenerate recursor already assigned. It serves the 400 **and** the 659
+  projections, because `(mk a⃗).i ⟶ aᵢ` is that same eliminator at the
+  projection motive. Worth 4 098.
+* **Several constructors, none nullary** — there *is* case analysis, so the
+  degenerate recursor does not reach it. What these need is a `t_policy` that
+  does not require a nullary constructor: some set containing every fibre of the
+  motive. Worth 1 929 on its own.
+
+**A hypothesis for whoever takes the second, with its precedent and its
+obstacle.** The precedent is `derived/src/ext/dprod.rs`, which faced the
+identical problem — *"the codomain has to be some set containing every fibre,
+and `⋃{b(x) : x ∈ A}` is the cheapest one: a Replacement image followed by a
+union, both total, so it costs no side condition"* — and `t_policy`'s job is
+exactly to name such a set. The obstacle, which I checked before proposing it
+and which stops this being a one-liner: the target is **not** a free parameter
+of the carrier. `carrier_at` builds `(A, B, U({A,T′}), W(A,B,U({A,T′})))`, so
+`T` appears inside the carrier's own universe, and an image-union target defined
+in terms of the motive would have to be shown not to make that circular. That is
+a real derivation question and it is why this is named rather than asserted.
+
+### For the board
+
+The two constructions are complementary and their populations are known:
+
+| built | gaps removed |
+|---|---:|
+| degenerate recursor only | 4 098 (26.0 %) |
+| nullary-free `t_policy` only | 4 409 (28.0 %) |
+| **both** | **6 180 (39.3 %)** |
+
+Still unmeasured: `eq_cache` 849, `iota: a mutual block` 593, `iota: an indexed
+family` 60 — together a predicted 1 502, and by the calibration above nearer
+1 350 in fact.
