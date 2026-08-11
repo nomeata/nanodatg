@@ -123,7 +123,7 @@ impl SuccFun {
         )?;
         let beta = imported(
             "instantiating beta_conditional_n at A := ω",
-            inst_all(&generic_beta, &[omega.clone()]),
+            inst_all(&generic_beta, std::slice::from_ref(&omega)),
         )?;
 
         Ok(SuccFun { lam, lam_ax, term, in_funspace, beta })
