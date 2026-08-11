@@ -6090,3 +6090,72 @@ that is late rather than a name that is lost. `fxNames` is now
 the wait fires only for a model that has *already declined* at one of them, so
 no model that does not touch them moves. `Test.lean`'s `w_core` row is where the
 difference shows: `Acc` is last in the list rather than in the middle.
+
+#### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, **3.436 T instructions** (350.8 s wall on a contended box — the
+instruction count is the comparable number).*
+
+| | §8.16.5 | **and with the untagged instantiation** |
+|---|---|---|
+| models | 6,875 | **6,878** |
+| declines | 9 | **6** |
+| statements compared / differing | 18,494 / 0 | **18,501 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+| instructions | 3.398 T | **3.436 T** (+1.1 %) |
+
+6,878 / 6,884 is **99.91 %**, and **+3 is exactly the three §8.16.6 named**:
+`WType` at 10 declarations, `PSet` at 10, `FirstOrder.Language.Term` at 12.
+Nothing else in the report moved — the fragment still goes in once, at
+`Lean.Syntax._model.0._model.aux._model.skel`, and `Lean.RArray` is still 12.
+
+**The 6, in full:**
+
+| what | count | which |
+|---|---|---|
+| basis exemption — closed by definition | 3 | `Eq`, `Nat`, `PSigma` |
+| singleton boundaries — closed by definition | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+| **indexed and infinitary** — the one open class | 1 | `PFunctor.Approx.CofixA` |
+
+Its decline now reads `B factors through the tag: no; through the label: yes;
+carrier is Type u: yes; why: infinitary: PFunctor.Approx.CofixA.intro has a
+recursive occurrence that is not a bare PFunctor.Approx.CofixA`. That is the
+new bill line earning its keep: the label question is *not* what stops it, so
+what remains is **arm C's erasure walking into a field's own forall-telescope**
+— `eraseCtorTy` replacing only the final `T p⃗ e⃗` rather than the whole domain,
+and `good`, its minor and the carve proof carrying a slot whose clause is
+`∀ b, good (f b) ι⃗` and whose hypothesis is `∀ b, motive ι⃗ (f b)`. This scheme
+would model the skeleton such an erasure produces — `Skel | intro : ∀ a, (F.B a
+→ Skel) → Skel` *is* `WType F` — so `Iso.requires` would be met. One
+declaration, and the whole of what the third construction does not reach.
+
+**The output was replayed from bytes with the kernel on, and this arm needed it
+for the reason §8.16.5 did**: **692,931 declarations accepted, 0 rejected**,
+over the whole 5,851,376,351-byte emitted file from an empty environment
+(`envprobe target/carve-mathlib.out.ndjson C`, 24.7 GB peak). `modelgen`'s own
+`addChecked` checks each declaration against the environment *it* has built, so
+a model emitted at a different *position* in the file is exactly what that
+check cannot see — and this arm both splices and defers.
+
+**+75 against §8.16.5's 692,856, and it adds up to the record**: the three new
+models are 10 + 10 + 12 = 32 declarations, and the fragment grew by 45 records
+of which two — `Nonempty` and `Classical.choice` — Mathlib already had and
+`ensureWCore` skipped. 32 + 43 = 75.
+
+**On a real input the shared names are shared and nothing is spliced twice.**
+The one splice line in the run carries `_wcore.Classical.em`,
+`_wcore.Classical.propDecidable`, `_wcore.Classical.choose` and the rest of the
+closure under the prefix, and carries **neither** `Classical.choice` nor
+`Nonempty` — Mathlib declares both, `ensureWCore` skipped both, and the
+fragment's axiom is the input's own.
+
+**The two columns are three declarations and 6,875 declarations.** That the
+untagged population is exactly the three is not a separate measurement: the
+predicate that selects it is `tagFactored`, which this change did not touch, and
+a target with `tagFactored` false that the *tower* reached is unaffected because
+arm W fires only at `!erasureLinear`. What is measured is the column itself, on
+`tests/prim_w.lean`: `Wt`, `Tree`, `Br` and `Dep` at `[propext, Quot.sound]` and
+`Bad`, `Wty`, `Utd` at `[propext, Classical.choice, Quot.sound]`, read off the
+emitted file with the kernel on.
