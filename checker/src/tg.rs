@@ -2184,6 +2184,40 @@ struct Shared {
     /// `lam_in_dprod_n`, keyed by the *pair* of skeletons it relates — the
     /// lambda's and the dependent product's, which are independent.
     lam_dprods: HashMap<(Term, Term), Option<Sealed>>,
+    /// **`⊢ conj(out_hyps) → DEPᵢ(C,Sᵢ)`** — [`TgBackend::dep_minor_typed`]'s
+    /// result, keyed by `(ind(p⃗), C, Sᵢ, i)`, with the antecedent list it was
+    /// derived at stored beside it.
+    ///
+    /// # Why here and not on the backend, and why this key
+    ///
+    /// `fire_dep` discharges `PRE = COD ∧ DEP` at **every** ι site and `DEP` is
+    /// one minor premise per constructor, so `Lean.ParserDescr` pays twelve
+    /// derivations at each of its 169 sites. None of them depends on the
+    /// constructor being fired. Measured on `init-prelude`
+    /// (`scripts/dep-key-census.diff`): **2 303 paid at 797 distinct keys**, so
+    /// 65 % of the work is a repeat — and the 222 sites span 54 declarations,
+    /// so the same memo on [`TgBackend`], beside `dep_insts`, would reach only
+    /// 1 195 and save 48 %. That 17-point difference is the whole reason this
+    /// field is on `Shared`.
+    ///
+    /// # The assumption list is *not* in the key, and that was measured
+    ///
+    /// The design this replaces expected to key on the ambient assumption list,
+    /// because `dep_minor_typed` rests on the use site's own obligations. It
+    /// does — but the list is a **function** of the terms above: adding every
+    /// obligation's hypotheses to the key moves the distinct count by exactly
+    /// zero (797 → 797, and 99 → 99 for the whole of `PRE`). So the key is
+    /// terms only.
+    ///
+    /// **That is measured, not proved, so it is checked at every hit.**
+    /// `out_hyps` is assembled from the obligations by `merge_hyps` *before* any
+    /// derivation happens, so the site can recompute it for nothing and compare;
+    /// a mismatch falls through to the derivation. This is the property the
+    /// `ty_const` store's doc says it lacks — see [`Dt::Conditional`], where a
+    /// conditional entry is refused because its antecedent would be re-asserted
+    /// at a site that never owned it. Here the site owns exactly this list, or
+    /// there is no hit.
+    dep_minors: HashMap<(Term, Term, Term, usize), (Sealed, Vec<Formula>)>,
     /// The W-type machinery, derived on first use — most developments never
     /// declare an enumeration, and the derivation is not free. The outer
     /// `Option` is "has it been attempted", the inner one "did it succeed".
@@ -2594,6 +2628,7 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             prop_intros: HashMap::new(),
             lam_fss: HashMap::new(),
             lam_dprods: HashMap::new(),
+            dep_minors: HashMap::new(),
             inds: None,
             ind_ty_u1: None,
             rec_core: None,
@@ -3796,8 +3831,29 @@ static DEP_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// a real row on the ledger — every shortfall shows up under an `iota:` gap
 /// reason of its own.
 static DEP_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-
+/// **Dependent minor premises derived**, and the three rows beside it are what
+/// make [`Shared::dep_minors`] a measurement rather than a hope.
+///
+/// `derived + hits` is the number of minor premises the ι sites *asked* for —
+/// twelve per site for `Lean.ParserDescr` — and the split is the memo's hit
+/// rate. Printed unconditionally, at zero as well: the wired-and-never-reached
+/// failure has fifteen recorded instances on this project and a row that
+/// vanishes when it reads zero is how it stays unnoticed.
+static DEP_MINOR_DERIVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Answered from [`Shared::dep_minors`] without re-deriving.
+static DEP_MINOR_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **The key matched and the assumption list did not.** Zero on `init-prelude`,
+/// and it is counted rather than assumed away: the claim that the antecedents
+/// are a function of `(ind(p⃗), C, Sᵢ, i)` is a *measurement*
+/// (`scripts/dep-key-census.diff`), so the code checks it at every hit and this
+/// row is how a corpus that refutes it says so instead of silently costing a
+/// derivation.
+static DEP_MINOR_KEY_CLASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Results `Sealed::new` declined — a minor premise standing under a *kernel*
+/// sequent, which nothing in `checker/` builds today. Not an error: it is not
+/// stored and the next site derives it again.
+static DEP_MINOR_SEAL_REFUSED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
@@ -3841,6 +3897,10 @@ fn gen_report() -> String {
     row(&mut s, "cached dependent recursors declined: not over this carrier", DEP_REC_GUARD_MISS.load(Relaxed));
     row(&mut s, "ι sites the DEPENDENT rule computed", DEP_IOTAS.load(Relaxed));
     row(&mut s, "…DEPENDENT ι sites the arm was asked at", DEP_ASKED.load(Relaxed));
+    row(&mut s, "dependent minor premises derived", DEP_MINOR_DERIVED.load(Relaxed));
+    row(&mut s, "…answered from the per-thread store instead", DEP_MINOR_HITS.load(Relaxed));
+    row(&mut s, "…store key matched, assumption list did not", DEP_MINOR_KEY_CLASH.load(Relaxed));
+    row(&mut s, "…results the Sealed funnel declined", DEP_MINOR_SEAL_REFUSED.load(Relaxed));
     for d in Decline::ALL {
         let n = DECLINES[d as usize].load(Relaxed);
         if n > 0 {
@@ -13897,6 +13957,33 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if m > 0 {
             out_hyps = merge_hyps(&out_hyps, &w_ty.1);
         }
+
+        // ── The memo, and the two things that make it exact ──────────────────
+        //
+        // `out_hyps` is now final and **nothing has been derived yet** — it is
+        // `merge_hyps` over the obligations the caller already holds. So the
+        // site can recompute the antecedent list for nothing and demand that a
+        // stored entry match it, which is what makes reuse identical to
+        // re-derivation rather than merely compatible with it.
+        //
+        // The conclusion is likewise a function of the key: `want` below is
+        // built from `ctor.args`, `ps`, `c`, `su` and `w_at`, and the only
+        // things minted fresh per call are the `∀`-bound `y⃗,t⃗,v⃗`, over which
+        // the kernel's `∀` is alpha-canonical. `w_at` is a function of
+        // `ind(p⃗)`, which is the first component of the key.
+        //
+        // See [`Shared::dep_minors`] for the measurement this rests on. A
+        // mismatch is not an error: it falls through and derives.
+        let memo_key = (ind.ty_of(ps.to_vec()), c.clone(), su.clone(), i);
+        if let Some((thm, hs)) = self.shared.borrow().dep_minors.get(&memo_key) {
+            if *hs == out_hyps {
+                DEP_MINOR_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok((thm.clone().into_thm(), out_hyps))
+            }
+            DEP_MINOR_KEY_CLASH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        DEP_MINOR_DERIVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         let Some(hs) = reassume(&hs, &obligations[np + 1 + i].1, &out_hyps) else {
             return Err("iota: restating the minor premise's typing failed")
         };
@@ -14398,6 +14485,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         if *closed.concl() != want {
             return Err("iota: the dependent minor's typing is not the one DEP asks for")
+        }
+        // **After the statement check**, so nothing enters the store that has
+        // not already been held against `want`. `Sealed::seal` fails closed: a
+        // theorem standing under a kernel sequent is simply not stored, and the
+        // next site derives it again. Nothing in `checker/` builds one today.
+        if let Ok(sealed) = Sealed::new(closed.clone()) {
+            self.shared.borrow_mut().dep_minors.insert(memo_key, (sealed, out_hyps.clone()));
+        } else {
+            DEP_MINOR_SEAL_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok((closed, out_hyps))
     }

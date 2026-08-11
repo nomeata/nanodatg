@@ -1,0 +1,155 @@
+# MEASUREMENT PROBE — task #126: does `PRE`'s key repeat across dependent ι
+# sites? Worktree-only, never to be landed.
+#
+#   git apply scripts/dep-key-census.diff
+#   cargo build --release --features tg,stepcount --bin nanoda_bin
+#   ./target/release/nanoda_bin cfg.json      # census prints in `gen_report`
+#
+# `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
+# `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`. The
+# ledger is untouched by the probe: 11 825 / 2 629 / 164 109.
+#
+# WHY IT EXISTS. `fire_dep` discharges `PRE = COD ∧ DEP` at every ι site and
+# `DEP` is one `dep_minor_typed` per constructor, so `Lean.ParserDescr` pays
+# twelve minor-premise derivations at each of its 169 sites. The named fix was
+# "hoist `PRE`, memo key = the ambient assumption list". A memo is worth
+# building only if it HITS, and the evidence pointed the other way: `dep_insts`,
+# memoised on the very same `p⃗,C,S⃗,T`, bought 1 %. This counts paid against
+# distinct at every granularity the hoist could be built on, and at both
+# possible scopes.
+#
+# THE ANSWER on `init-prelude` (2026-08-11), paid / distinct:
+#
+#     the motive C alone                                 222 /   49
+#     the motive's hyps alone                            222 /   27
+#   COD  (ind p⃗, C)                                     222 /   49
+#   COD  (ind p⃗, C) + the motive's hyps                 222 /   49
+#   DEPᵢ (ind p⃗, C, Sᵢ, i)                             2303 /  797
+#   DEPᵢ (ind p⃗, C, Sᵢ, i) + C's and Sᵢ's hyps         2303 /  797
+#   PER-BACKEND  DEPᵢ (seq, ind p⃗, C, Sᵢ, i)           2303 / 1195
+#   PER-BACKEND  PRE  (seq, ind p⃗, C, S⃗)               222 /  130
+#   PER-BACKEND  which backend                           222 /   54
+#   PRE  (ind p⃗, C, S⃗)                                 222 /   99
+#   PRE  (ind p⃗, C, S⃗) + every obligation's hyps       222 /   99
+#
+# Three things, and two of them refute the brief this probe was written for.
+#
+#   1. **The hyps are not part of the key.** Adding every obligation's
+#      assumption list to any of these keys changes the distinct count by
+#      exactly zero — 99 → 99, 797 → 797, 49 → 49. The assumption list is a
+#      FUNCTION of the interpreted terms, so the memo is keyed on terms alone
+#      and the "ambient assumption list" design the last tranche named is not
+#      needed. That is a simplification, not a compromise.
+#   2. **It hits.** 2303 minor-premise derivations at 797 distinct keys, 65 %
+#      redundant. `dep_insts`' 1 % was not evidence against this: it memoised
+#      one `inst_all`, which is a small share of a site, not the derivation.
+#   3. **Scope is worth 17 points.** The 222 sites span 54 declarations, so a
+#      per-backend memo (`TgBackend`, where `dep_insts` lives) saves 48 % where
+#      a per-thread one (`Shared`) saves 65 %. That is why the memo landed on
+#      `Shared`, behind the `Sealed` funnel.
+#
+diff --git a/checker/src/tg.rs b/checker/src/tg.rs
+index 64ae939..98e94e9 100644
+--- a/checker/src/tg.rs
++++ b/checker/src/tg.rs
+@@ -3797,7 +3797,43 @@ static DEP_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
+ /// reason of its own.
+ static DEP_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+ 
++// ── PROBE (task #126 hoist census, worktree only) ────────────────────────────
++//
++// **Does `PRE`'s key repeat across ι sites?** The hoist the last tranche named
++// is only worth building if it *hits*, and `dep_insts` — memoised on the very
++// same `p⃗,C,S⃗,T` — bought 1 %, which is evidence that it does not. Counts
++// distinct keys at four granularities against the number of derivations paid.
++#[cfg(feature = "stepcount")]
++static DEP_KEYS: std::sync::Mutex<Option<std::collections::BTreeMap<&'static str, (u64, std::collections::HashSet<u64>)>>> =
++    std::sync::Mutex::new(None);
++
++#[cfg(feature = "stepcount")]
++fn dep_key_note(what: &'static str, h: u64) {
++    let mut g = DEP_KEYS.lock().expect("dep key census poisoned");
++    let m = g.get_or_insert_with(Default::default);
++    let e = m.entry(what).or_default();
++    e.0 += 1;
++    e.1.insert(h);
++}
+ 
++#[cfg(feature = "stepcount")]
++fn dep_key_hash<T: std::hash::Hash>(x: &T) -> u64 {
++    use std::hash::{Hash, Hasher};
++    let mut h = std::collections::hash_map::DefaultHasher::new();
++    x.hash(&mut h);
++    h.finish()
++}
++
++#[cfg(feature = "stepcount")]
++fn dep_key_report() -> String {
++    let g = DEP_KEYS.lock().expect("dep key census poisoned");
++    let Some(m) = g.as_ref() else { return String::new() };
++    let mut s = String::from("  PROBE — dependent ι key census (paid / distinct):\n");
++    for (k, (n, set)) in m {
++        s.push_str(&format!("    {k:<52}  {n:>8} / {:>8}\n", set.len()));
++    }
++    s
++}
+ 
+ fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+ 
+@@ -3841,6 +3877,8 @@ fn gen_report() -> String {
+     row(&mut s, "cached dependent recursors declined: not over this carrier", DEP_REC_GUARD_MISS.load(Relaxed));
+     row(&mut s, "ι sites the DEPENDENT rule computed", DEP_IOTAS.load(Relaxed));
+     row(&mut s, "…DEPENDENT ι sites the arm was asked at", DEP_ASKED.load(Relaxed));
++    #[cfg(feature = "stepcount")]
++    s.push_str(&dep_key_report());
+     for d in Decline::ALL {
+         let n = DECLINES[d as usize].load(Relaxed);
+         if n > 0 {
+@@ -14572,6 +14610,47 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+             return Err("iota: discharging the target policy failed")
+         };
+ 
++        // ── PROBE (task #126 hoist census, worktree only) ────────────────────
++        //
++        // Every key the hoist could plausibly be built on, counted paid against
++        // distinct. `ind_body_t` is `ind(p⃗)`, so it stands for the pair
++        // (declaration, `p⃗`) without needing a name.
++        #[cfg(feature = "stepcount")]
++        {
++            let ob_h = |k: usize| obligations[k].1.clone();
++            let m_h = ob_h(np);
++            dep_key_note("PRE  (ind p⃗, C, S⃗)", dep_key_hash(&(&ind_body_t, &c, &minors)));
++            dep_key_note(
++                "PRE  (ind p⃗, C, S⃗) + every obligation's hyps",
++                dep_key_hash(&(
++                    &ind_body_t,
++                    &c,
++                    &minors,
++                    (np..np + 1 + n).map(ob_h).collect::<Vec<_>>(),
++                )),
++            );
++            dep_key_note("COD  (ind p⃗, C)", dep_key_hash(&(&ind_body_t, &c)));
++            dep_key_note("COD  (ind p⃗, C) + the motive's hyps", dep_key_hash(&(&ind_body_t, &c, &m_h)));
++            dep_key_note("     the motive's hyps alone", dep_key_hash(&m_h));
++            dep_key_note("     the motive C alone", dep_key_hash(&c));
++            // **Scope.** `dep_insts` lives on `TgBackend`, which is per
++            // declaration, so a memo built there can only hit within one. These
++            // two say what that costs against a per-thread one.
++            dep_key_note("PER-BACKEND  PRE  (seq, ind p⃗, C, S⃗)", dep_key_hash(&(self.seq, &ind_body_t, &c, &minors)));
++            dep_key_note("PER-BACKEND  which backend", dep_key_hash(&self.seq));
++            for i in 0..n {
++                dep_key_note("DEPᵢ (ind p⃗, C, Sᵢ, i)", dep_key_hash(&(&ind_body_t, &c, &minors[i], i)));
++                dep_key_note(
++                    "PER-BACKEND  DEPᵢ (seq, ind p⃗, C, Sᵢ, i)",
++                    dep_key_hash(&(self.seq, &ind_body_t, &c, &minors[i], i)),
++                );
++                dep_key_note(
++                    "DEPᵢ (ind p⃗, C, Sᵢ, i) + C's and Sᵢ's hyps",
++                    dep_key_hash(&(&ind_body_t, &c, &minors[i], i, &m_h, ob_h(np + 1 + i))),
++                );
++            }
++        }
++
+         // ── `DEP(C,S⃗)`, one dependent minor premise per constructor ──────────
+         let mut dep_parts: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(n);
+         for i in 0..n {
