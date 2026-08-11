@@ -9201,3 +9201,65 @@ that should govern any future Nat work here: it rules out unary representations
 globally and permits them at exactly the operands that matter, and it is the
 third time this arc that a corpus population honestly measured has been more
 useful than a design document.
+
+## Origin 3, censused inside the rule: 5 of 5 declarations build — 2026-08-11
+
+*Task #130, the gate before the port. Baseline `13 254 / 2 432 / 162 483`.
+`scripts/dep-census.diff`; without its environment variable the ledger is
+byte-identical. **This is the first census on this arc that says build it.***
+
+### The question, and why it had never been asked
+
+`gen_rec_bottom`'s `t_policy` gate sits **in front of** `GenRecursor::build`.
+For every declaration in origin 3 the general recursor has therefore never been
+attempted *in the checker at all*, and "`DepRecursor` handles these shapes" had
+been checked only against `derived/`'s own fixtures — the same fixtures whose
+thirteen `DeclSpec`s all began with `CtorSpec::nullary()` and so could not see
+this population. Green said nothing there twice; this asks the corpus.
+
+The probe attempts `GenRecursor::build` and then `DepRecursor::build` at the
+decline point, over the checker's own `gen_ind` translation, memoised per
+declaration, and reports which of the two refuses.
+
+| declaration | verdict | gate reaches |
+|---|---|---:|
+| `Lean.ParserDescr` | **BOTH BUILD** | 254 |
+| `Decidable` | **BOTH BUILD** | 135 |
+| `Except` | **BOTH BUILD** | 20 |
+| `EStateM.Result` | **BOTH BUILD** | 20 |
+| `Lean.Syntax.Preresolved` | **BOTH BUILD** | 20 |
+| | **5 of 5** | **449** |
+
+**Nothing declines.** Not `GenRecursor::build`, which had never run for these
+declarations, and not `DepRecursor::build`.
+
+*The two counts, and they are different populations.* The gate is reached 449
+times; the **ι gaps** are 286 — `Lean.ParserDescr.rec` 169, `Decidable.rec` 81,
+`Lean.Syntax.Preresolved.rec` 12, `Except.rec` 12, `EStateM.Result.rec` 12. The
+gap census counts ι sites; this counts every reach of the decline point,
+including the ones no ι site is behind. 286 is the number the ledger will move
+by, and 449 is what the port has to survive.
+
+### How this differs from the two censuses before it
+
+| tranche | construction reaches | verdict |
+|---|---|---|
+| projection consumer (#126) | 18 of 178 sites | refuted |
+| literal equations (#129) | 10 of 466 sites | refuted |
+| **`DepRecursor` (#130)** | **5 of 5 declarations, 286 ι sites** | **build it** |
+
+The three censuses cost about one run each. Two of them stopped a build that
+would have cost days and closed nothing; this one clears a build whose price
+was otherwise a guess. That is the method paying for itself in both directions,
+which is the argument for putting it between the deletion and the build rather
+than trusting either alone.
+
+### What the census does *not* say
+
+It says the construction builds over the corpus's declarations. It does not say
+the consumer can *fire* it: the port still has to discharge `COD` at the motive
+binder's `Sort u₁`, `DEPᵢ` per constructor against `guards.dep_parts[i]`, and
+`Hᵢ` at the use site, and retarget the major onto the carrier. Those are
+checker-side plumbing, and the honest precedent is the degenerate recursor,
+where the gate admitted 103 of 103 and the wiring still had to be measured
+separately before the 2 480 was real.
