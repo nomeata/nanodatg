@@ -6428,3 +6428,20 @@ before.** `CofixA` is *modelled*, its own constants are certificate-clean, and
 the inductive underneath it is one of the four the corpus cannot model without
 `Classical.choice`. Whether that counts as covered is #150's question and not
 this section's.
+
+#### Replayed from bytes, with the kernel on
+
+**692,951 declarations accepted, 0 rejected**, over the whole
+5,851,511,275-byte emitted file from an empty environment
+(`envprobe target/carve2-mathlib.out.ndjson C`). `modelgen`'s own `addChecked`
+checks each declaration against the environment *it* has built, so a model
+emitted at a different *position* in the file is exactly what that check cannot
+see — and this arm defers a splice, so it needs the replay for the reason
+§8.16.5 and §8.16.7 did.
+
+**+20 against §8.16.7's 692,931, and it is the two rows and nothing else**:
+`PFunctor.Approx.CofixA` at 8 declarations and
+`PFunctor.Approx.CofixA._model.skel` at 12. The file grew by 134,924 bytes.
+Nothing was spliced that was not already there — the W core fragment goes in
+once, at `Lean.Syntax._model.0._model.aux._model.skel`, exactly as before, and
+`CofixA`'s one splice line names only its own skeleton.
