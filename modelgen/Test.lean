@@ -649,6 +649,43 @@ def expectedPrim : List Row :=
           Flat._model.0._model.aux._model.skel did not model")
       , ("Key._model.0._model.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")])
+  -- **A basis primitive the input declares after the block whose model needs
+  -- it.** `runFilter`'s `waitingPrim` has always held an *input* declaration's
+  -- prim model back until `primReady`; what this file pins is that the
+  -- **composition's third step** can wait too. `primCompose` is called from
+  -- inside `genMutual` and from the nested arm, neither of which could reach
+  -- the queue, so it passed `canWait := false` and declined at a primitive
+  -- that was merely late. That is `Lean.Syntax`'s shape in Mathlib and was two
+  -- of the eleven declines the full run reported (`MODELGEN.md` §8.16.5).
+  --
+  -- **The order in this row is the claim.** `MA` (the mutual model) and
+  -- `Nd`/`Nd._model.0` (nested, then its mutual) are generated at their own
+  -- declarations, because layers 1 and 2 need only `Eq`. Everything from `N`
+  -- on is the drain at the input's own `PSigma`, in queue order: the three
+  -- input declarations that were already waiting, then the four the
+  -- composition emitted. A row that moved back above `N` would mean the third
+  -- step stopped waiting.
+  --
+  -- `Pre` is the control — a simple inductive before `PSigma` whose model is
+  -- an input declaration's — so a repair that broke the pre-existing wait
+  -- while adding this one is red in the same file. `N`'s splice line names
+  -- `Nat` and not `PSigma`: a primitive the input does *not* declare is
+  -- spliced and never waited for.
+  , ("prim_late_basis",
+      [("MA", 20), ("Nd", 15), ("Nd._model.0", 14),
+       ("N", 8), ("L", 6), ("Pre", 6),
+       ("MA._model.tag", 8), ("MA._model.aux", 16),
+       ("MA._model.aux._model.skel", 14),
+       ("Nd._model.0._model.tag", 6), ("Nd._model.0._model.aux", 12),
+       ("Nd._model.0._model.aux._model.skel", 174),
+       ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
+       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4)],
+      [ ("PSigma", "prim model shape: a basis primitive")
+      , ("Eq", "prim model shape: a basis primitive")])
   ]
 
 structure TAcc where

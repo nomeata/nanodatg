@@ -446,42 +446,85 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           st.2.2), false)
     return (st2, false)
 
+/-- **One prim model held back until the input has caught up.**
+[`Modelgen.runFilter`]'s `waitingPrim` queue, named because
+[`Modelgen.primCompose`] now returns entries for it. The leading `Bool` says
+*which* wait: `false` for the basis ([`Modelgen.primReady`]) and `true` for the
+quotient behind `funext` ([`Modelgen.primFxReady`]). -/
+abbrev PrimJob := Bool × Name × List Name × Nat × Expr × Array (Name × Expr)
+
 /-- **The composition's third step**: the single inductives a mutual model
 just emitted — `T._model.tag` and `T._model.aux` — are declarations of the
 output like any other, so `--prim-models` runs on them too. The tag is a
-plain sum and models; `aux` is indexed and declines today, and the decline
-is recorded rather than skipped, because the boundary of the composition is
-a measurement. -/
+plain sum and models; `aux` is indexed and takes arm C.
+
+**And it can wait, exactly as an input declaration can.** A prim model may
+splice `Eq`, `False`, `Nat` and `PSigma`, and a splice is refused at a name the
+input declares *later* — so `runFilter` holds such a model in `waitingPrim`
+until [`Modelgen.primReady`] and generates it after the input's own. The third
+step had no way to reach that queue: it was called from inside `genMutual` and
+from the nested arm, both of which thread only `(out, rep, pending)`, so it
+passed `canWait := false` and every model here declined at a primitive that was
+merely *late*. On the Mathlib export that is `Lean.Syntax`, replayed at line
+9,948 against `PSigma` at line 95,424: both of its members declined
+`prim model name taken (PSigma)`, and both are models once they are allowed to
+wait.
+
+**This is not the `_mgalt` alias-root retry's class** and the two must not be
+confused. That retry answers [`Modelgen.Decline.nameLost`] — *our* name,
+normalised onto another of ours, which we may rename because nothing in the
+input holds it. This is [`Modelgen.Decline.nameTaken`] — the *input's* name,
+arriving later, which we may not take at any spelling and must simply wait for.
+
+So the deferred jobs are **returned** rather than run, and the caller puts them
+where the input declarations' own jobs go. `canWait := false` at the
+end-of-file drain, where nothing more is coming and a decline is the honest
+answer. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
-    (reserved : Std.HashSet Name)
+    (reserved : Std.HashSet Name) (canWait : Bool)
     (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Array PrimJob) := do
   let mut st := st
+  let mut wait : Array PrimJob := #[]
+  -- Asked once, of the environment as it stands at the block: every member of
+  -- one block is at the same point in the replay.
+  let ready ← primReady reserved
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
     for cn in iv.ctors do
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
-    st := (← genPrim n lparams np iv.type cts reserved false st).1
-  return st
+    if canWait && !ready then
+      -- The type and the constructor types are read **here**, at the block,
+      -- because that is where the member is known to be installed; the drain
+      -- only needs to call `genPrim` with them.
+      wait := wait.push (false, n, lparams, np, iv.type, cts)
+    else
+      st := (← genPrim n lparams np iv.type cts reserved false st).1
+  return (st, wait)
 
 /-- One plain mutual block's model, generated and accounted for.
 
 A function rather than two copies inline because it is called from two places
 in [`Modelgen.runFilter`] — at the block, and again at the input's own `Eq` for
-a block that had to wait for it. -/
+a block that had to wait for it.
+
+The second component is [`Modelgen.primCompose`]'s deferred jobs, which the
+caller adds to its own `waitingPrim`; it is empty unless `--prim-models` is on
+and the basis is late. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
-    (reserved : Std.HashSet Name) (primModels : Bool)
+    (reserved : Std.HashSet Name) (primModels : Bool) (canWait : Bool)
     (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Array PrimJob) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   match ← (mutualIso all lparams np tys ctors reserved).run with
   | .error dec =>
     setEnv saved
-    return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") }, pending)
+    return ((out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
+      pending), #[])
   | .ok is =>
     let mut out := out
     for gd in is.decls do
@@ -491,9 +534,9 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let st := (out, rep, pending.push (all, np, is))
     if primModels then
-      primCompose is.members is.levelParams np reserved st
+      primCompose is.members is.levelParams np reserved canWait st
     else
-      return st
+      return (st, #[])
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) :
@@ -511,7 +554,11 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
   -- ([`Modelgen.primReady`]) and `true` for the quotient behind `funext`
   -- ([`Modelgen.primFxReady`]) — kept apart so a model that never touches
   -- `funext` is not moved past a `Quot` it does not need.
-  let mut waitingPrim : Array (Bool × Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
+  -- **The composition's third step queues here too** ([`Modelgen.PrimJob`]'s
+  -- type): a `T._model.tag` or `T._model.aux` whose model needs a primitive the
+  -- input declares later waits exactly as one of the input's own declarations
+  -- does, instead of declining at a name that is merely late.
+  let mut waitingPrim : Array PrimJob := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
@@ -592,8 +639,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
                   if primModels then
-                    (out, rep, pending) ← primCompose is2.members is2.levelParams
-                      t.numParams reserved (out, rep, pending)
+                    let (st3, jobs) ← primCompose is2.members is2.levelParams
+                      t.numParams reserved true (out, rep, pending)
+                    (out, rep, pending) ← pure st3
+                    waitingPrim := waitingPrim ++ jobs
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
@@ -650,8 +699,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
           -- `expand` holds its rule theorems back for the same reason. A file
           -- that declares no `Eq` at all does not wait: §1.5 splices one.
           if ← eqReady reserved then
-            (out, rep, pending) ← genMutual all t.levelParams t.numParams tys ctors reserved
-              primModels (out, rep, pending)
+            let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors reserved
+              primModels true (out, rep, pending)
+            (out, rep, pending) ← pure st3
+            waitingPrim := waitingPrim ++ jobs
           else
             waiting := waiting.push job
         -- ── a simple inductive (`--prim-models`): the third construction ──
@@ -677,8 +728,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
     -- dependency order puts it.
     if !waiting.isEmpty && (← eqReady reserved) then
       for (all, lp, np, tys, ctors) in waiting do
-        (out, rep, pending) ← genMutual all lp np tys ctors reserved primModels
+        let (st3, jobs) ← genMutual all lp np tys ctors reserved primModels true
           (out, rep, pending)
+        (out, rep, pending) ← pure st3
+        waitingPrim := waitingPrim ++ jobs
       waiting := #[]
     -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
     -- for whichever of those the input declares later, not only for `Eq` —
@@ -716,7 +769,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (primModels : Bool := false) 
   -- decline list gains nothing at all against the run before §1.6 existed, and
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
   for (all, lp, np, tys, ctors) in waiting do
-    (out, rep, pending) ← genMutual all lp np tys ctors reserved primModels (out, rep, pending)
+    let (st3, jobs) ← genMutual all lp np tys ctors reserved primModels false
+      (out, rep, pending)
+    (out, rep, pending) ← pure st3
+    waitingPrim := waitingPrim ++ jobs
   for (_, n, lp, np, ty, ctors) in waitingPrim do
     (out, rep, pending) ← pure (← genPrim n lp np ty ctors reserved false (out, rep, pending)).1
   for (all, np, is) in pending do

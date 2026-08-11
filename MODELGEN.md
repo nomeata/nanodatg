@@ -5697,3 +5697,132 @@ remainder:
 * **the 2 singleton boundaries** are `Acc.below`'s index that is not one of its
   own data fields, and `IsHomLift`'s index expressions that mention its own
   fields — both `MODELGEN.md` §8.7's and arm F's own limits, unchanged.
+
+### 8.16.5 The two name-taken — a primitive that is late, not a name that is lost
+
+**Verdict: they were a different class from the `_mgalt` alias-root retry, and
+the retry was never at fault.** `Lean.Syntax._model.0._model.tag` and
+`…_model.aux` decline `prim model name taken (PSigma)`, and that is
+[`Modelgen.Decline.nameTaken`] — the **input's** name, which we may not take at
+any spelling — where the retry answers [`Modelgen.Decline.nameLost`] — **our**
+name, normalised onto another of ours, which we may rename freely because
+nothing in the input holds it. Two constructors, two opposite responses, and
+§8.14 says so where it introduces them. Nothing here reflects on the alias
+root: `_mgalt` occurs zero times in the 5.6 GB output before this change and
+zero times after.
+
+#### What it actually is
+
+The Mathlib export replays `Lean.Syntax` at line **9,948** and `PSigma` at line
+**95,424**. A prim model's carrier is a right-nested `PSigma` chain, so at line
+9,948 the model would have to *splice* `PSigma` — into a file that declares its
+own eighty-five thousand lines later. That splice is refused, correctly: the
+name is reserved and `Environment` cannot rebind a constant.
+
+`runFilter` has had the answer to exactly this since §1.6: `waitingPrim` holds
+a prim model back until [`Modelgen.primReady`] — every basis constant either
+installed or not declared by the input at all — and generates it after the
+input's own declaration arrives. **What was missing is that the composition's
+third step could not reach that queue.** `waitingPrim` is `runFilter`'s local,
+and [`Modelgen.primCompose`] is called from inside `genMutual` and from the
+nested arm, both of which thread only `(out, rep, pending)`. So it passed
+`canWait := false`, and a model of a declaration *the tool itself emitted*
+declined at a primitive that was merely late, where a model of one of the
+input's own would have waited.
+
+So this is neither a shape nor a name: it is **one queue two of the three
+callers could not see**.
+
+#### What moved
+
+`primCompose` and `genMutual` return a second component — the jobs they
+deferred, at `waitingPrim`'s own element type — and `runFilter` appends them to
+the queue at all four call sites. `canWait := false` at the end-of-file drain,
+where nothing more is coming and a decline is the honest answer. The
+declaration's type and its constructors' types are read at the block, where the
+member is known to be installed; the drain only calls
+[`Modelgen.genPrim`] with them.
+
+**The deferred model is emitted after the input's own `PSigma` record** rather
+than beside the block it models, and that is sound for the same reason §8.13's
+splice ordering is: the export only requires a declaration to precede its uses,
+and this one uses `Lean.Syntax._model.0._model.aux` and `PSigma`, both earlier.
+
+`primCompose` defers **only when `primReady` is false**, so every composition
+model that ran inline before still runs inline. That condition is a
+minimal-disturbance guarantee and not a correctness one, and the fixture says
+so rather than implying otherwise: mutating it to defer unconditionally leaves
+the suite **green**, because `runFilter` drains the queue immediately after the
+very next record and the report order does not move. The mutation that is red
+is the one that matters — `canWait := false`, the old behaviour — and it takes
+all four composition models in the fixture back to `prim model name taken
+(PSigma)`.
+
+#### The fixture
+
+`modelgen/tests/prim_late_basis.lean`, and its layout is the whole claim:
+`Eq` first; a three-member **mutual** block `MA`/`MB`/`MC` and a **nested**
+`Nd`, both before `PSigma`, because the third step has two callers and a repair
+at one would leave the other declining; `PSigma` last, at Lean's own shape, so
+[`Modelgen.checkPSigma`] runs on it; and `Pre`, a simple inductive before
+`PSigma`, as the control — its model is an *input* declaration's and rides the
+queue that already existed, so a repair that broke that wait while adding this
+one is red in the same file. `Nat` is deliberately not declared: it is spliced,
+and the report says so with a splice line rather than a wait, which is the case
+the queue must not fire on.
+
+**The row's order is the assertion.** `MA`, `Nd` and `Nd._model.0` are
+generated at their own declarations — layers 1 and 2 need only `Eq` — and
+everything from `N` on is the drain at the input's own `PSigma`, in queue
+order: the three input declarations that were already waiting, then the four
+the composition emitted. A composition row that climbed back above `N` would
+mean the third step had stopped waiting.
+
+#### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, 328.6 s wall, 23.9 GB peak RSS, **3.398 T instructions**.*
+
+| | §8.16.4 | **and with the composition able to wait** |
+|---|---|---|
+| models | 6,872 | **6,875** |
+| declines | 11 | **9** |
+| statements compared / differing | 18,474 / 0 | **18,494 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+
+6,875 / 6,884 is **99.87 %**. **+3 models is the tag, the `aux` and the `aux`'s
+skeleton**, and the whole report diffs in **four lines**: those three, plus
+`Lean.RArray` falling from 166 declarations to 12 because it is no longer the
+first W target in the run — `Lean.Syntax…_model.aux._model.skel` now is, and
+carries the fragment's splice. That number has been an ordering fact since
+§8.16.2 said so of `Tree`, and it moving is the ordering changing, not a model.
+
+**The output was replayed from bytes with the kernel on**, and this is the
+oracle the change actually needed: **692,856 declarations accepted, 0
+rejected**, over the whole 5.85 GB emitted file, from an empty environment
+(`envprobe target/…/wait.out.ndjson C`, 1,263.6 s, 24.8 GB peak). `modelgen`'s
+own `addChecked` checks each declaration against the environment *it* has
+built, where the `aux` was installed back at the block — so a model emitted at
+a **different position in the file** is precisely the kind of change that check
+cannot see, and only a replay from nothing can. A deferred model that landed
+before something it uses would be a `unknown constant` here and is not.
+
+**The 9, in full** — the standing residue of the third construction on Mathlib,
+every one classified:
+
+| what | count | which |
+|---|---|---|
+| **not tag-factored** — the true W-types | 4 | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
+| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+
+Three classes, and **two of them are closed by definition**: the basis
+exemption is what makes the construction well-founded and must stay unmodelled,
+and the two singleton boundaries are arm G's and arm F's own limits — an index
+that is not one of the constructor's data fields, and index expressions that
+mention the constructor's own fields. So the *whole* remaining question about
+this construction's reach on Mathlib is **one class of four declarations**, and
+it is not a coverage question but a certifiability one: W with a `B` that can
+see the label's data is `WFromPaths.lean`, which costs `Classical.choice` on
+every constant, and §8.16 took the tagged construction over it deliberately.
