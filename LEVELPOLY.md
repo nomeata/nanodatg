@@ -954,6 +954,32 @@ THREADING-CENSUS §2).
    CI change. Both are one line, written out so the next tranche runs them
    instead of reinventing them:
 
+   **Gate A is diffed against a *build of the parent commit*, not a remembered
+   file**, and four seats have now had to work out how. The recipe, so the
+   fifth does not:
+
+   ```sh
+   # A throwaway worktree at the parent, with the target dir reflinked so the
+   # build is ~30 s instead of a cold one. `git -C` because a compound
+   # `cd … && git …` is forbidden on this branch.
+   git -C "$W" worktree add --detach "$W-parent" <parent-sha>
+   cp -a --reflink=auto "$W/target" "$W-parent/target"
+   (cd "$W-parent" && ./ci/corpus-dir.sh --link && cargo build -p mini)
+   ```
+
+   **`MINI_MODELGEN` is the part that is not obvious.** A fresh worktree has no
+   `modelgen/.lake/build/bin/modelgen`, and `mini` does not fail loudly enough
+   to notice: it prints one line to stderr and **exits 0 having produced no
+   `ledger` rows at all**, so the diff comes back as "the parent emitted
+   nothing" and reads like a catastrophic regression. Point it at the binary
+   the working worktree already built:
+
+   ```sh
+   MINI_MODELGEN=$W/modelgen/.lake/build/bin/modelgen ./target/debug/mini …
+   ```
+
+   Remove the worktree afterwards (`rm -rf "$W-parent/target"` first — 14 GB).
+
    ```sh
    # Gate A — must be byte-identical to the previous tranche's file.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do echo "## $(basename $f)"
@@ -1728,6 +1754,57 @@ at all. *A generic point for inductive declarations is the named next
 construction*, and it is not a boundary retype: it is `⟦T.{u⃗}⟧` as a `k`-ary
 symbol with its typing quantified over `u⃗ ∈ ω`, which is exactly what step 5
 already does for definitions.
+
+##### The generic point for inductive declarations — `valueEv` 67 → 71
+
+The construction the last tranche named, built. `crate::poly_run::generic_points`
+is the `def` path's step 5 with the **store standing in for the value**:
+
+```text
+  {u⃗ ∈ ω} ⊢ ⟦c.{u⃗}⟧ ∈ T̂     the typing zoneb::store_at parked
+  {u⃗ ∈ ω} ⊢ f̂(u⃗)   ∈ T̂     poly_const_open — retarget along f̂'s equation
+         ⊢ u⃗ ∈ ω → f̂(u⃗) ∈ T̂  discharge_levels, once, batched
+         ⊢ ∀u⃗. u⃗ ∈ ω → …     gen_all_checked
+```
+
+**What those four eliminators were missing was declaration exit, not a
+derivation.** `060_boolRec`, `061_twoBoolRec`, `067_nRec` and `115_rTreeRec`
+reported `ind-spec(…: hypothesis escaped the nest)` — literally `store_at`'s
+`Sealed::new` refusing a typing proved under `u⃗ ∈ ω`. The theorem was true and
+then discarded, because `Checker::discharge_levels` **drains** its tokens and so
+cannot run from inside a build. `Th::pending_poly` parks it instead; `zone_b`
+drains that **inside the same `Checker`'s life**, which is the whole safety
+argument — an entry never outlives the assumptions it was proved under.
+
+`park_poly_typing` is a no-op with no level variables, so the σ-scheduled route
+parks nothing.
+
+    valueEv    67 → 71        every other column unchanged
+    exits      27 × 0, 62 × 4, 2 × 2 — unmoved
+
+**Two corrections the build forced, both measured, neither predicted.**
+
+* **The generic point is the fallback, not the front door.** It was consulted
+  first in `const_evidence`, which was free while only definitions had one.
+  Once inductives had them the order became a loss: the generic point's
+  instantiation `⟦T.rec.{u⃗}⟧[u⃗ := ℓ̂⃗]` and the ground build
+  `zoneb::ensure(T.rec, ℓ⃗)` are **two different terms** both entitled to the
+  name, and the ι rules are registered for the ground one.
+  `075_nRecReduction` and `116_rtreeRecReduction` lost four columns each, every
+  one reporting `not-decomposable`. A keyed entry *with a certificate* now wins
+  outright and the generic point answers only where the keyed store cannot.
+* **`PolyConst::unfold_at_use`.** An inductive constant's interpretation is
+  *walked* — the ι route and the application spine decompose the nest, and `f̂`
+  is opaque to them — so the use site gets the term unfolded along `defeq`,
+  with the typing carried across by `retarget_subject` so subject and theorem
+  stay the same term. A **definition's** must stay folded: the abbreviation is
+  what stops a nest being re-spelled at every use, and §5.4's `upi`
+  measurement is what unfolding one costs. The flag is set by
+  `generic_points` and clear on the `def` path, and the asymmetry is that
+  measurement rather than a preference.
+
+The four files still owe `typeEv`, now blocked on `no-endpoint` rather than on
+the sealing — a different obstacle and the next one on this route.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

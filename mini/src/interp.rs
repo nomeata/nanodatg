@@ -218,14 +218,35 @@ pub struct PolyConst {
     /// `⊢ ∀u⃗. f̂(u⃗) = ⟦val⟧` — the defining axiom of the abbreviation, δ's
     /// certificate at the generic point.
     ///
-    /// **Stored ahead of its consumer, deliberately.** Nothing reads it yet:
-    /// `Checker::delta_evidence` is still on the ground store's `defeq`, and
-    /// the poly route does not reach δ. It is kept because the alternative is
-    /// worse than a dead field — the equation cannot be *re-derived* later,
-    /// only re-minted, and `derived::define_abbrev` mints a **second symbol**
-    /// every time it is called. A store entry without its equation would leave
-    /// the next tranche with two symbols both claiming to be `⟦c⟧`.
+    /// **Stored ahead of its consumer, deliberately.** `Checker::delta_evidence`
+    /// is still on the ground store's `defeq` and the poly route does not reach
+    /// δ; [`PolyConst::unfold_at_use`] is the one reader, and only for the
+    /// entries that ask for it. It is kept because the alternative is worse
+    /// than a dead field — the equation cannot be *re-derived* later, only
+    /// re-minted, and `derived::define_abbrev` mints a **second symbol** every
+    /// time it is called. A store entry without its equation would leave the
+    /// next tranche with two symbols both claiming to be `⟦c⟧`.
     pub defeq: Option<Sealed>,
+    /// **Hand the use site the unfolded term, not `f̂(ℓ̂⃗)`.**
+    ///
+    /// Set for the zone-B constants `crate::poly_run::generic_points` mints and
+    /// clear for every definition, and the asymmetry is measured rather than
+    /// stylistic:
+    ///
+    /// * An **inductive** constant's interpretation is *walked*. The ι route
+    ///   and the application spine decompose `⟦T.rec⟧`'s λ-nest, and `f̂` is
+    ///   opaque to them: minting a generic point for `N.rec` and `RTree.rec`
+    ///   without this flag cost `075_nRecReduction` and `116_rtreeRecReduction`
+    ///   four columns each, every one of them reported `not-decomposable`.
+    /// * A **definition**'s must stay folded. The abbreviation is what keeps a
+    ///   nest of interpretations from being re-spelled at every use, and the
+    ///   `upi` measurement (`LEVELPOLY.md` §5.4) is what happens when it is
+    ///   not: a def-eq walk pays for the repetition exponentially.
+    ///
+    /// The typing is carried onto the unfolded subject along `defeq`, so the
+    /// theorem handed back is about the term handed back — never a membership
+    /// describing `f̂` while the caller holds the nest.
+    pub unfold_at_use: bool,
 }
 
 /// The interpretation's state: one kernel `Env`, the ambient signature, the

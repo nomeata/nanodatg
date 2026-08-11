@@ -618,6 +618,21 @@ struct Th<'i> {
     /// interpretation, which is a gap and not a lie.
     slots: Vec<Option<usize>>,
     tokens: Vec<ScopeToken>,
+    /// **Zone-B typings that are still open, waiting for the one discharge.**
+    ///
+    /// `crate::zoneb::store_at` seals what it stores, and a typing proved under
+    /// `u⃗ ∈ ω` cannot be sealed — that is the `hypothesis escaped the nest`
+    /// four eliminators report. The theorem is *true*; what is missing is the
+    /// declaration-exit step a `def` gets and an inductive never did, because
+    /// [`Checker::discharge_levels`] **drains** its tokens and so cannot run
+    /// mid-build.
+    ///
+    /// So the open theorem is parked here instead of dropped, and
+    /// [`crate::poly_run`] drains this **inside the same `Checker`'s life**,
+    /// before the tokens are gone. That bound is the whole safety argument: an
+    /// entry never outlives the assumptions it was proved under, and nothing
+    /// reads this but the drain.
+    pending_poly: Vec<(Name, Vec<crate::expr::Level>, Thm)>,
 }
 
 impl<'e, 'i> Checker<'e, 'i> {
@@ -646,6 +661,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 tokens: Vec::new(),
                 levels: crate::interp::LevelVars::new(),
                 level_tokens: Vec::new(),
+                pending_poly: Vec::new(),
             }),
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
@@ -710,7 +726,15 @@ impl<'e, 'i> Checker<'e, 'i> {
         Some(Checker {
             env,
             lenv: Vec::new(),
-            th: Some(Th { ip, scopes, slots: Vec::new(), tokens: Vec::new(), levels, level_tokens }),
+            th: Some(Th {
+                ip,
+                scopes,
+                slots: Vec::new(),
+                tokens: Vec::new(),
+                levels,
+                level_tokens,
+                pending_poly: Vec::new(),
+            }),
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
             defeq_depth: 0,
@@ -782,6 +806,40 @@ impl<'e, 'i> Checker<'e, 'i> {
             out = th.scopes.discharge_assumption_many(tok, &out);
         }
         out
+    }
+
+    /// **Park a zone-B typing that is still open**, for the one discharge at
+    /// declaration exit — [`Th::pending_poly`] for why it exists.
+    ///
+    /// Called by `crate::zoneb::store_at` at exactly the point it would
+    /// otherwise drop the theorem on the floor. A no-op with no thread and — the
+    /// case that matters — a no-op with **no level variables**, so the
+    /// σ-scheduled route parks nothing and the ground path cannot be moved by
+    /// anything downstream of this.
+    pub(crate) fn park_poly_typing(
+        &mut self,
+        name: &Name,
+        levels: &[crate::expr::Level],
+        thm: &Thm,
+    ) {
+        let Some(th) = self.th.as_mut() else { return };
+        if th.levels.is_empty() {
+            return
+        }
+        th.pending_poly.push((*name, levels.to_vec(), thm.clone()));
+    }
+
+    /// Take everything [`Checker::park_poly_typing`] parked, leaving none.
+    ///
+    /// Draining rather than borrowing because the caller must then call
+    /// [`Checker::discharge_levels`], which needs `&mut self`; and *taking*
+    /// rather than copying so that a second drain on the same `Checker` cannot
+    /// discharge the same conclusion twice against tokens that are gone.
+    pub(crate) fn take_pending_poly(&mut self) -> Vec<(Name, Vec<crate::expr::Level>, Thm)> {
+        match self.th.as_mut() {
+            Some(th) => std::mem::take(&mut th.pending_poly),
+            None => Vec::new(),
+        }
     }
 
     /// [`Checker::discharge_levels`] for a caller holding exactly one
@@ -3742,7 +3800,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             // `Gap::SymbolicLevel` has always meant.
             return Some((None, Ev::missing(Gap::SymbolicLevel)))
         };
-        let tm = th.ip.mk(p.sym, args);
+        let tm = th.ip.mk(p.sym, args.clone());
         let ev = match &p.typing {
             Ok(s) => match th.ip.poly_instantiate(s.thm(), ls, &vars) {
                 Some(t) => Ev::Proved(t),
@@ -3750,18 +3808,59 @@ impl<'e, 'i> Checker<'e, 'i> {
             },
             Err(g) => Ev::missing(g.clone()),
         };
+        // **The zone-B entries hand back the nest, not the symbol** — see
+        // [`crate::interp::PolyConst::unfold_at_use`]. `f̂(ℓ̂⃗) = ⟦c.{ℓ̂⃗}⟧` at
+        // these arguments is the stored equation instantiated, and the typing
+        // rides across it so subject and theorem stay the same term.
+        //
+        // Both halves or neither: a failure here leaves `f̂` and its own
+        // membership in place, which is consistent even though it is what the
+        // reduction route cannot walk. Substituting one half would be the
+        // *described-but-wrong* theorem this file refuses everywhere else.
+        if p.unfold_at_use {
+            if let Some(eq) = p.defeq.as_ref() {
+                if let Some(inst) = derived::inst_all(eq.thm(), &args) {
+                    // The `env_mut()` handle is scoped so it is dropped before
+                    // `retarget_subject` needs the same `Interp` mutably.
+                    let symm = { derived::eq_symm(&mut th.ip.env_mut(), &inst) };
+                    if let Some(back) = symm {
+                        if let Some((unfolded, _)) = back.concl().as_eq() {
+                            let unfolded = unfolded.clone();
+                            let moved = match &ev {
+                                Ev::Proved(m) => th.ip.retarget_subject(m, &back).map(Ev::Proved),
+                                _ => Some(ev.clone()),
+                            };
+                            if let Some(moved) = moved {
+                                return Some((Some(unfolded), moved))
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Some((Some(tm), ev))
     }
 
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
-        // The generic point first. Inert on the σ-scheduled route **by
-        // construction rather than by test**: only `crate::poly_run` writes
-        // that store, so the lookup is a miss on every run Gate A measures and
-        // no scheduled certificate can move.
-        if let Some(hit) = self.poly_const_evidence(name, ls) {
-            return hit
-        }
+        // **The generic point is the fallback, not the front door**, and the
+        // order was measured rather than chosen.
+        //
+        // It used to be consulted first, which was free while only definitions
+        // had one: nothing else on this route could answer for them. Once
+        // *inductive* constants got generic points too the order became a loss.
+        // The generic point's instantiation `⟦T.rec.{u⃗}⟧[u⃗ := ℓ̂⃗]` and the
+        // ground build `zoneb::ensure(T.rec, ℓ⃗)` are **two different terms**
+        // both entitled to the name, and the ι rules are registered for the
+        // ground one — so answering a ground use from the generic point hands
+        // the reduction route a nest its rules do not match.
+        // `075_nRecReduction` and `116_rtreeRecReduction` lost four columns
+        // each to exactly that, every one reported `not-decomposable`.
+        //
+        // So the keyed store answers wherever it can, including through
+        // `miss_reason`'s lazy fill, and the generic point answers where it
+        // cannot — which is the symbolic use that has no ground key at all,
+        // and is the case it was built for.
         // **The flatten is now a routing test, not a refusal.** This used to
         // require `ls` to be numerals before it would so much as look in the
         // store, which made it a *third* boundary behind `zoneb::ensure`'s and
@@ -3787,20 +3886,29 @@ impl<'e, 'i> Checker<'e, 'i> {
         // schedule filled can miss; an open list reaches the same store
         // `ensure` fills, at the same key.
         let key = (*name, crate::ground::store_key_levels(ls));
-        if let Some(g) = self.miss_reason(name, ls) {
+        let miss = self.miss_reason(name, ls);
+        // The keyed store, if the lazy fill left anything there.
+        let stored = self.th.as_ref().and_then(|th| th.ip.get_const(&key)).map(|c| {
+            let ev = match &c.typing {
+                Ok(s) => Ev::Proved(s.thm().clone()),
+                Err(g) => Ev::missing(g.clone()),
+            };
+            (Some(c.term.clone()), ev)
+        });
+        // A keyed entry **with a certificate** wins outright; that is the
+        // reduction route's own term and the one its rules were built for.
+        if let Some((tm, Ev::Proved(t))) = stored.clone() {
+            return (tm, Ev::Proved(t))
+        }
+        // Otherwise the generic point, which is what a symbolic use has and a
+        // keyed entry whose typing never survived `Sealed` does not.
+        if let Some(hit) = self.poly_const_evidence(name, ls) {
+            return hit
+        }
+        if let Some(g) = miss {
             return (None, Ev::missing(g))
         }
-        let Some(th) = self.th.as_ref() else { return (None, Ev::missing(Gap::SymbolicLevel)) };
-        match th.ip.get_const(&key) {
-            Some(c) => {
-                let ev = match &c.typing {
-                    Ok(s) => Ev::Proved(s.thm().clone()),
-                    Err(g) => Ev::missing(g.clone()),
-                };
-                (Some(c.term.clone()), ev)
-            }
-            None => (None, Ev::missing(Gap::NoInterpretation(*name))),
-        }
+        stored.unwrap_or((None, Ev::missing(Gap::NoInterpretation(*name))))
     }
 
     /// `Γ ⊢ ⟦e⟧ ∈ ⟦ty⟧` from `Γ ⊢ ⟦e⟧ ∈ ⟦tv.ty⟧` and the conversion between

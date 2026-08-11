@@ -644,6 +644,9 @@ pub fn run(env: &Environment, decls: &[Declaration], ip: &mut Interp) -> PolyLed
                 // assumes nothing — so it is sealed here rather than
                 // discharged. See `Checker::poly_const_open`.
                 defeq: Sealed::new(o.defeq).ok(),
+                // A definition's interpretation stays folded — the `upi`
+                // measurement is what unfolding one costs.
+                unfold_at_use: false,
             },
         );
     }
@@ -794,6 +797,10 @@ fn zone_b(env: &Environment, ip: &mut Interp, d: &Declaration, led: &mut PolyLed
         // is one of several it fills; reading the return value alone would
         // count a constructor as done because its type former was.
         let stored = c.stored_term_at(n, &own).is_some();
+        // ── the generic point for a zone-B constant (§5.3 step 5, inductives) ─
+        //
+        // Before `drop(c)`, because the `uᵢ ∈ ω` tokens die with it.
+        generic_points(&mut c);
         drop(c);
         if stored {
             led.zone_b_ok += 1;
@@ -803,6 +810,125 @@ fn zone_b(env: &Environment, ip: &mut Interp, d: &Declaration, led: &mut PolyLed
             // having nothing to say, and is not a reason zone B can mint.
             PolyLedger::note(&mut led.zone_b_blocked, Some(&r.err().unwrap_or(Gap::Skeleton)));
         }
+    }
+}
+
+/// **The generic point for the zone-B constants this `ensure` just built** —
+/// `LEVELPOLY.md` §5.3 step 5 for inductive declarations, which never had one.
+///
+/// # Why an inductive needed this and a `def` did not
+///
+/// A `def`'s generic point is minted from its *value*. A type former, a
+/// constructor and an eliminator have no value; what they have is a term and a
+/// typing that `crate::zoneb::store_at` built under `u⃗ ∈ ω`. `Sealed` refuses
+/// that typing at the ground key — correctly — and the four eliminators that
+/// reported `ind-spec(…: hypothesis escaped the nest)` were **not** missing a
+/// derivation. They were missing declaration exit: the theorem was proved and
+/// then discarded for want of the discharge a `def` gets.
+///
+/// So the shape is the `def` path's, with the store standing in for the value:
+///
+/// ```text
+///   {u⃗ ∈ ω} ⊢ ⟦c.{u⃗}⟧ ∈ T̂        the parked typing
+///   {u⃗ ∈ ω} ⊢ f̂(u⃗)   ∈ T̂        poly_const_open — retarget along f̂'s equation
+///          ⊢ u⃗ ∈ ω → f̂(u⃗) ∈ T̂   discharge_levels, once, batched
+///          ⊢ ∀u⃗. u⃗ ∈ ω → …       gen_all_checked
+/// ```
+///
+/// # The order is forced and the batch is not an optimisation
+///
+/// [`Checker::discharge_levels`] **drains** its tokens, so it runs exactly once
+/// per `Checker`; every conclusion has to be in that one call or the ones left
+/// out keep a hypothesis whose token is gone. `crate::rec_dep::gen_all_checked`
+/// then refuses to bind a variable that is free in a live hypothesis, which is
+/// what makes *generalise last* a refusal rather than a convention —
+/// `Thm::gen` is banned in `mini/src` (R6′ I3) so it cannot be waived.
+///
+/// # What is skipped, and why that is a decline rather than a guess
+///
+/// An entry whose key is not a vector of **distinct bare parameters** gets no
+/// generic point: the symbol's arity is the key's length and
+/// `Checker::poly_const_evidence` instantiates positionally, so a key like
+/// `[max u v]` would mint a symbol whose argument order means nothing. Those
+/// keep the reason they already have.
+fn generic_points(c: &mut Checker<'_, '_>) {
+    use crate::expr::{LevelView, Name};
+
+    let pending = c.take_pending_poly();
+    if pending.is_empty() {
+        return
+    }
+    // ── 1. retarget each onto its own `f̂`, while the assumptions are live ──
+    let mut opened: Vec<(Name, crate::kernel::PolyOpen)> = Vec::new();
+    for (name, levels, thm) in &pending {
+        let ups: Option<Vec<Name>> = levels
+            .iter()
+            .map(|l| match l.view() {
+                LevelView::Param(u) => Some(u),
+                _ => None,
+            })
+            .collect();
+        let Some(ups) = ups else { continue };
+        // Distinct: two arguments standing for one parameter would make the
+        // arity a lie in the other direction.
+        let mut seen = ups.clone();
+        seen.sort_by_key(|n| format!("{n}"));
+        seen.dedup();
+        if seen.len() != ups.len() {
+            continue
+        }
+        let Some(term) = c.stored_term_at(name, levels) else { continue };
+        if let Some(o) = c.poly_const_open(&ups, &term, Some(thm)) {
+            opened.push((*name, o));
+        }
+    }
+    // ── 2. one discharge for all of them ─────────────────────────────────────
+    let raw: Vec<Option<kernel::Thm>> = opened.iter().map(|(_, o)| o.typing.clone()).collect();
+    let present: Vec<kernel::Thm> = raw.iter().flatten().cloned().collect();
+    let mut closed = c.discharge_levels(&present).into_iter();
+    let closed: Vec<Option<kernel::Thm>> =
+        raw.iter().map(|r| if r.is_some() { closed.next() } else { None }).collect();
+
+    // ── 3. …and only now, generalise and store ───────────────────────────────
+    let Some(ip) = c.interp() else { return };
+    for ((name, o), t) in opened.into_iter().zip(closed) {
+        let typing = match t {
+            Some(t) => match crate::rec_dep::gen_all_checked(&o.vars, &t) {
+                // `Sealed` again, and it is an assertion here exactly as it is
+                // on the `def` path: a theorem that still carries a hypothesis
+                // after the discharge is refused the store, not written to it.
+                Some(g) => Sealed::new(g).map_err(|_| Gap::Skeleton),
+                None => Err(Gap::Skeleton),
+            },
+            None => Err(Gap::Skeleton),
+        };
+        // **A generic point without a certificate does not get to shadow one
+        // that has one**, and this is where an inductive differs from a `def`.
+        //
+        // `Checker::const_evidence` consults the poly store *first*. For a
+        // `def` that is free: nothing else on this route can answer, so storing
+        // a bare symbol with `typing: Err` still moves `valuesOk`. An inductive
+        // constant has a **competitor** — the keyed store, which
+        // `Checker::miss_reason`'s lazy fill will build at a ground key on
+        // demand, ι-rules and all. Shadowing that with an uncertified `f̂` is a
+        // strict loss, and it was measured as one: `075_nRecReduction` and
+        // `116_rtreeRecReduction` lost `typesOk`, `typeEv`, `valueEv` and
+        // `constEv` when this arm stored unconditionally.
+        //
+        // So the entry goes in only with its typing. The reason for the ones
+        // left out is unchanged and still reported from the keyed store.
+        let Ok(typing) = typing else { continue };
+        ip.put_poly_const(
+            name,
+            crate::interp::PolyConst {
+                sym: o.sym,
+                arity: o.vars.len(),
+                typing: Ok(typing),
+                defeq: Sealed::new(o.defeq).ok(),
+                // An inductive constant's is *walked* — see the field's header.
+                unfold_at_use: true,
+            },
+        );
     }
 }
 
@@ -1161,6 +1287,65 @@ mod tests {
         assert!(
             ip.get_const(&(rec, Vec::new())).is_none(),
             "the eliminator must not be keyed on its declaration's instantiation"
+        );
+    }
+
+    /// **An inductive constant gets a generic point too** — [`generic_points`],
+    /// and the thing four eliminators were missing.
+    ///
+    /// `⟦Empty.rec.{u}⟧`'s typing is proved under `u ∈ ω`, which `Sealed`
+    /// refuses at the keyed store — that refusal is the
+    /// `ind-spec(…: hypothesis escaped the nest)` that `060_boolRec`,
+    /// `061_twoBoolRec`, `067_nRec` and `115_rTreeRec` reported. They were not
+    /// missing a derivation; they were missing **declaration exit**, which a
+    /// `def` gets and an inductive never did.
+    ///
+    /// What is asserted here is that the exit now happens: a `PolyConst` exists
+    /// for the eliminator, its arity is the recursor's own parameter count, and
+    /// its typing is `Ok` — the `∀u. u ∈ ω → …` that `Sealed` will accept
+    /// because the hypothesis has become an antecedent.
+    ///
+    /// **The keyed entry is still there and still says what it said.** The
+    /// generic point does not replace it and must not: `const_evidence` prefers
+    /// a keyed entry *with a certificate*, because the reduction route's ι
+    /// rules are registered for that term and not for the generic point's
+    /// instantiation of it. Pinning both here is what keeps the next tranche
+    /// from "simplifying" one of them away.
+    ///
+    /// Non-vacuity and no more: the conclusion shape is the content of a
+    /// kernel-certified `Thm`, and `generic_points`' own steps are pinned by
+    /// the `debug_assert`s under them.
+    #[test]
+    fn an_eliminator_gets_a_generic_point_at_declaration_exit() {
+        // A two-constructor enumeration, which is `Bool`'s shape. **Not
+        // `Empty`**: `crate::recursor::empty_rec` never reads `u₁`, so its
+        // typing is hypothesis-free already and nothing parks — measured, and
+        // the reason this fixture is the one with constructors.
+        let (env, d) = nullary_ind(&["ff", "tt"]);
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        let rec = Name::str(&n("T"), "rec");
+
+        let p = ip
+            .get_poly_const(&rec)
+            .unwrap_or_else(|| panic!("⟦Empty.rec⟧ has no generic point: {:?}", led.rows()));
+        assert_eq!(p.arity, 1, "the motive's level is the one argument");
+        assert!(
+            p.typing.is_ok(),
+            "the typing must survive declaration exit, not `hypothesis escaped the nest`: {:?}",
+            p.typing
+        );
+        assert!(
+            p.typing.as_ref().is_ok_and(|s| s.thm().hyps().is_empty()),
+            "discharged: `u ∈ ω` is an antecedent now, not a live hypothesis"
+        );
+        assert!(p.unfold_at_use, "an inductive constant's interpretation is walked");
+        // And the keyed entry is untouched — both, or the reduction route loses
+        // the term its rules were built for.
+        let own = vec![Level::param(env.get(&rec).expect("generated").lparams()[0])];
+        assert!(
+            ip.get_const(&(rec, crate::ground::key_levels(&own))).is_some(),
+            "the keyed entry must survive beside the generic point"
         );
     }
 

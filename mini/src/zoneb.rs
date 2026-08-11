@@ -3961,9 +3961,25 @@ pub(crate) fn store_at(
     let (tm, ev) = (t.tm, t.ev);
     let Some(term) = tm else { return Err(ev.reason(Gap::NoEndpoint)) };
     let typing = match ev {
-        Ev::Proved(th) => match Sealed::new(th) {
+        Ev::Proved(th) => match Sealed::new(th.clone()) {
             Ok(s) => Ok(s),
-            Err(_) => Err(Gap::IndSpec(*name, "hypothesis escaped the nest")),
+            Err(_) => {
+                // **Not dropped — parked.** A typing proved under `u⃗ ∈ ω` is
+                // exactly what `Sealed` must refuse *here*, because this key is
+                // the ground store and an open theorem has no business in it.
+                // But the theorem is true, and on the de-scheduled route it is
+                // the only certificate the constant will ever have: it is the
+                // declaration-exit discharge that is missing, and
+                // `Checker::discharge_levels` drains its tokens, so it cannot
+                // be done from inside a build.
+                //
+                // `crate::poly_run` drains this before the `Checker` dies and
+                // turns it into a generic point. On the σ-scheduled route
+                // `park_poly_typing` is a no-op — no level variables — so this
+                // arm reports exactly what it always did.
+                c.park_poly_typing(name, levels, &th);
+                Err(Gap::IndSpec(*name, "hypothesis escaped the nest"))
+            }
         },
         Ev::Gap(g) => Err(g),
     };
