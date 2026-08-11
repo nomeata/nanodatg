@@ -3902,6 +3902,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// take it apart again later.
     fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term { record(&mut self.parts, f, args) }
 
+    /// Register `t`'s application shape, and every subterm's, in
+    /// [`TgBackend::parts`] — [`Self::mk`] over a term this backend did not
+    /// build.
+    ///
+    /// A term reached through a **thread-shared** package (`GenInd::betas`, a
+    /// cached `GenRec`) is perfectly well formed and completely unknown to this
+    /// backend's side table, and several clauses read shapes only from there.
+    /// `record` is idempotent and rebuilds nothing — the kernel hash-conses, so
+    /// the term that comes back is the one that went in, which is asserted
+    /// rather than assumed.
+    fn record_shape(&mut self, t: &Term) {
+        let Some((f, args)) = t.as_app().map(|(f, a)| (f, a.to_vec())) else { return };
+        for a in &args {
+            self.record_shape(a);
+        }
+        let again = self.mk(f, args);
+        debug_assert_eq!(&again, t, "recording a shape rebuilt a different term");
+    }
+
     /// Accept `eq` as a proof that `redex` and `reduct` are equal, but only
     /// after checking it really is that equation. Every rule that concludes
     /// something about two specific terms goes through this.
@@ -6684,8 +6703,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             note_decline(Decline::Shape);
             return None
         }
-        // The one decline this arm adds; see the header.
-        if gi.ind.spec.ctors.iter().any(|c| c.recs > 0) {
+        // **A recursive constructor is admitted, and a function-typed or mixed
+        // recursive slot is not.** At a plain slot the minor premise's
+        // induction hypothesis is `vⱼ ∈ app(C,tⱼ)` and the constructor term's
+        // argument is `tⱼ` itself, so `dep_minor_typed`'s walk reads one binder
+        // per slot and lands on the atom `motive::dep_minor` states. At a
+        // function-typed slot the hypothesis is a pointwise *family* over `Aⱼ`
+        // and at a mixed constructor `Inductive::minor_subs` hands the minor
+        // `app(tⱼ,•)` where `ctorᵢ` took a function out of `1` — two grains,
+        // which `derived` states and this walk would silently conflate.
+        // Declined here as well as at the walk, because the two guards are far
+        // apart and this one keeps the nest from being built at all.
+        if (0..gi.ind.spec.ctors.len()).any(|i| {
+            gi.ind
+                .ctor_slot_domains(i)
+                .iter()
+                .chain(gi.ind.rec_slot_domains(i).iter())
+                .any(|d| d.is_some())
+        }) {
             note_decline(Decline::DepRecursive);
             return None
         }
@@ -6754,6 +6789,77 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mach = self.machine()?;
         let sums = mach.borrow().wt.sums.clone();
         Some(derived::inductive::motive::cod_target(&sums, &v))
+    }
+
+    /// **The dependent recursor's term at caller-supplied arguments** — and the
+    /// theorems about it, on the same substitution.
+    ///
+    /// `DepRecursor`'s whole development is stated over four groups of free
+    /// variables: the declaration's parameters `p⃗`, the motive `C`, Lean's
+    /// minors `S⃗` and the target `T`. Every consumer needs all of it at a use
+    /// site's own terms, and there are two ways to get there.
+    ///
+    /// **Rebuilding is the wrong one here.** `derived` exposes
+    /// [`derived::inductive::GenRecursor::rec_of`] and
+    /// [`derived::inductive::carrier_at`] for exactly this, because the kernel
+    /// has no term-level substitution — but they rebuild `drec` *from its
+    /// pieces*, and at a constructor with `mᵢ > 0` one of those pieces is a
+    /// **guarded** minor: a `define_abbrev` nest
+    /// `gminᵢ = lam₀ᵢ(p⃗, C, Sᵢ, T, dom₀(p⃗))` that
+    /// [`derived::inductive::guard::GuardedMinors`] minted and did not export a
+    /// builder for. Rebuilding would mean adding one, and then trusting that it
+    /// reproduces what `build` did.
+    ///
+    /// **Instantiating is the right one, and it needs nothing new.** The kernel
+    /// has no term substitution but it has *theorem* instantiation, and
+    /// `⊢ t = t` is a theorem about any term whatever. Generalising it over the
+    /// four groups and instantiating at the use site's terms hands back
+    /// `t[σ]` — the guard nest carried along with everything else, because
+    /// substitution does not care what a symbol was minted for. So this is the
+    /// same operation for the term and for `iota`/`typing`, which is the
+    /// property that matters: the `drec` the nest's bottom is built from and
+    /// the `drec` the ι rule speaks of are the *same substitution of the same
+    /// term*, rather than two constructions checked against each other.
+    ///
+    /// This is the second time on this task that a facility looked missing and
+    /// was present under another name. `app_in_fibre` was `dprod_app`; this is
+    /// `terms_at`, spelled as instantiation.
+    fn dep_subst(
+        &self,
+        dp: &DepBottom,
+        ps: &[Term],
+        c: &Term,
+        minors: &[Term],
+        t: &Term,
+        thm: &Thm,
+    ) -> Option<Thm> {
+        let ind = &dp.gi.ind;
+        if minors.len() != dp.dr.minors.len() || ps.len() != ind.params.len() {
+            return None
+        }
+        let mut gvars: Vec<FreeVar> = ind.params.clone();
+        gvars.push(dp.dr.motive);
+        gvars.extend(dp.dr.minors.iter().copied());
+        gvars.push(dp.dr.target);
+        let mut at: Vec<Term> = ps.to_vec();
+        at.push(c.clone());
+        at.extend(minors.iter().cloned());
+        at.push(t.clone());
+        derived::inst_all(&derived::gen_all(&gvars, thm), &at)
+    }
+
+    /// [`Self::dep_subst`] at `⊢ drec = drec`, read back as the term.
+    fn dep_rec_at(
+        &self,
+        dp: &DepBottom,
+        ps: &[Term],
+        c: &Term,
+        minors: &[Term],
+        t: &Term,
+    ) -> Option<Term> {
+        let refl = Thm::eq_refl(dp.dr.rec.clone());
+        let at = self.dep_subst(dp, ps, c, minors, t, &refl)?;
+        at.concl().as_eq().map(|(l, _)| l)
     }
 
     /// `⟦Sort u₁⟧` off the motive binder's type `T p⃗ → Sort u₁`, unopened.
@@ -6947,9 +7053,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // `t_last(p⃗,C,s⃗,b) := app(drec(p⃗,s⃗,T), b)`, which is the general
             // arm's bottom at a **different target**: `T` is
             // [`Self::dep_target`]'s `⋃⟦Sort u₁⟧ ∪ {∅}` rather than
-            // `t_policy`'s motive-at-a-nullary-constructor, and the guarded
-            // minors `gmin⃗` are Lean's own `S⃗` because every constructor here
-            // has `mᵢ = 0` (`dep_rec_bottom` declines the rest by name).
+            // `t_policy`'s motive-at-a-nullary-constructor.
+            //
+            // **Not `rec_of`.** [`Self::dep_rec_at`] substitutes the term
+            // `DepRecursor::build` actually produced, rather than rebuilding it
+            // from pieces — which is what lets a constructor with `mᵢ > 0`
+            // through at all, its guarded minor being a `define_abbrev` nest
+            // with no exported builder. See that method.
             RecBottom::Dep(d, _) => {
                 let n = d.gi.ind.spec.ctors.len();
                 if depth != np + n + 2 {
@@ -6957,13 +7067,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
                 let t = self.dep_target(ctx, motive_dom?)?;
                 let ps: Vec<Term> = vars[..np].iter().map(|v| Term::var(*v)).collect();
+                let motive = Term::var(vars[np]);
                 let minors: Vec<Term> =
                     vars[np + 1..np + 1 + n].iter().map(|v| Term::var(*v)).collect();
-                let mach = self.machine()?;
-                let rec_term = {
-                    let m = mach.borrow();
-                    d.gr.rec_of(&m, &d.gi.ind, &d.core.r, &ps, &minors, &t)?
-                };
+                let rec_term = self.dep_rec_at(d, &ps, &motive, &minors, &t)?;
                 ap.apply(rec_term, major)
             }
         };
@@ -12965,12 +13072,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             RecBottom::Degen(d) => {
                 self.fire_degen(ctx, &d, cfun, args, &ta, idx, &cparams, &fields)?
             }
-            // `nest` is not passed, for `fire_degen`'s reason: it is what
-            // `fire_general` re-enters for a recursive call, and this arm
-            // declines a recursive constructor at the bottom.
             RecBottom::Dep(dp, tn) => self.fire_dep(
-                ctx, &dp, &tn, cfun, args, &ta, &doms, &dom_exprs, &obligations, idx, &cparams,
-                &fields,
+                ctx, &dp, &tn, nest, cfun, args, &ta, &doms, &dom_exprs, &obligations, idx,
+                &cparams, &fields,
             )?,
         };
         let Some(lhs_chain) = self.ceq_trans(&chain, &fired) else {
@@ -13680,18 +13784,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ps: &[Term],
         c: &Term,
         minors: &[Term],
+        w_at: &Term,
+        ty_t: &Term,
+        w_ty: &(Thm, Vec<Formula>),
         i: usize,
     ) -> Result<(Thm, Vec<Formula>), &'static str> {
         let ap = self.pre.ap.clone();
         let ind = dp.gi.ind.clone();
         let ctor = ind.spec.ctors[i].clone();
-        let k = ctor.args.len();
+        let (k, m) = (ctor.args.len(), ctor.recs);
+        let order = ctor.order.clone();
         let np = ps.len();
         let su = minors[i].clone();
-        if ctor.recs != 0 {
-            return Err("iota: a dependent minor premise with a recursive field")
-        }
-        if k == 0 {
+        if k + m == 0 {
             // A nullary constructor is `t_policy` 1's, and this arm is only
             // reached when there is none. Unreachable, and refused rather than
             // indexed into.
@@ -13700,6 +13805,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(mach) = self.machine() else {
             return Err("iota: the general apparatus is unavailable")
         };
+        // **Plain recursive slots only.** At a *function-typed* one the minor
+        // premise receives a whole function on `Aⱼ` and its induction
+        // hypothesis is `motive::ih_at_motive`'s pointwise family rather than
+        // `vⱼ ∈ app(C,tⱼ)`; at a *mixed* constructor the constructor term's
+        // argument and the minor premise's are two grains apart
+        // (`Inductive::minor_subs` hands over `app(tⱼ,•)`). `derived` states
+        // both — `dep_minor` is written at both grains — but the walk below
+        // reads one binder per slot and would silently type the wrong thing, so
+        // the two are declined by name where they can still be told apart.
+        let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+        if cd.len() != m || rd.len() != m {
+            return Err("iota: a dependent minor's recursive slots are not the spec's")
+        }
+        if cd.iter().chain(rd.iter()).any(|d| d.is_some()) {
+            return Err("iota: DEP undischargeable — a function-typed or mixed recursive slot")
+        }
 
         // ── The minor's own typing, and the parameters' ──────────────────────
         //
@@ -13719,8 +13840,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         for (_, phs) in &pobs {
             out_hyps = merge_hyps(&out_hyps, phs);
         }
+        // **The carrier bridge's assumptions join, and only when they are
+        // used.** `DEPᵢ` types a recursive slot at the raw `W` while the Lean
+        // telescope binds it at the spine `⟦T p⃗⟧`, and at `np > 0` the equation
+        // between them holds under the parameters' own typings. Dragging those
+        // in unconditionally would let them escape from constructors with no
+        // recursive field at all — `gen_minor_typed`'s rule, for its reason.
+        if m > 0 {
+            out_hyps = merge_hyps(&out_hyps, &w_ty.1);
+        }
         let Some(hs) = reassume(&hs, &obligations[np + 1 + i].1, &out_hyps) else {
             return Err("iota: restating the minor premise's typing failed")
+        };
+        let w_ty_out = match m {
+            0 => None,
+            _ => match reassume(&w_ty.0, &w_ty.1, &out_hyps) {
+                Some(w) => Some(w),
+                None => return Err("iota: restating the carrier's defining equation failed"),
+            },
         };
         let mdom = doms[np + 1 + i].clone();
         // `mem_obligation` hands back a vacuous `⊢ H → H` when it could not
@@ -13735,18 +13872,34 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         // ── The pointwise variables and the antecedent ───────────────────────
-        let yv: Vec<FreeVar> = {
+        //
+        // `y⃗` the plain fields, `t⃗` the recursive ones and `v⃗` the induction
+        // hypotheses — `motive::dep_minor`'s own three groups, in its order, so
+        // that the `∀`-closure at the end is the formula it states.
+        let (yv, tv, vv) = {
             let mut env = self.env_mut();
-            (0..k).map(|_| env.fresh_var()).collect()
+            let yv: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+            let tv: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+            let vv: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+            (yv, tv, vv)
         };
         let ys: Vec<Term> = yv.iter().map(|v| Term::var(*v)).collect();
-        let pw: Vec<Formula> = (0..k)
+        let ts: Vec<Term> = tv.iter().map(|v| Term::var(*v)).collect();
+        let vs: Vec<Term> = vv.iter().map(|v| Term::var(*v)).collect();
+        let mut pw: Vec<Formula> = (0..k)
             .map(|j| {
                 let mut a = ps.to_vec();
                 a.extend(ys[..j].iter().cloned());
                 Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
             })
             .collect();
+        // The recursive fields at the **raw** carrier and the induction
+        // hypotheses at the motive — `dep_minor`'s two remaining atom groups at
+        // a plain slot, which is the only kind that reaches here.
+        pw.extend(ts.iter().map(|x| Formula::mem(x.clone(), w_at.clone())));
+        pw.extend(
+            (0..m).map(|j| Formula::mem(vs[j].clone(), ap.apply(c.clone(), ts[j].clone()))),
+        );
         // **`derived::conj_of`, not this file's** — the two nest opposite ways
         // and `dep_minor` states the antecedent right-nested. `gen_minor_typed`
         // records the same trap, and the first shape at which it is visible has
@@ -13767,8 +13920,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }) else {
             return Err("iota: restating the minor premise's typing failed")
         };
-        let mut atom_thms: Vec<Thm> = Vec::with_capacity(k);
-        for j in 0..k {
+        // The carrier bridge under `h_all`, for the recursive slots' transport.
+        let w_ty_all = match &w_ty_out {
+            None => None,
+            Some(w) => match &h_out {
+                Some(o) => derived::syl(&left(o), w),
+                None => Some(u_a1i(w, ha)),
+            },
+        };
+        if m > 0 && w_ty_all.is_none() {
+            return Err("iota: restating the carrier's defining equation failed")
+        }
+        let mut atom_thms: Vec<Thm> = Vec::with_capacity(pw.len());
+        for j in 0..pw.len() {
             let Some(p) = derived::conj_proj(&pw, j) else {
                 return Err("iota: projecting the pointwise antecedent failed")
             };
@@ -13800,67 +13964,256 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         // ── The telescope, one binder at a time ──────────────────────────────
+        //
+        // Lean writes a minor premise as the fields **in declared order** — the
+        // `order` mask — then one induction hypothesis per recursive field,
+        // then the codomain. That is `applied_minor`'s own shape, which is what
+        // lets the accumulated term be compared against it at the end.
         let mut cur_e = dom_exprs[np + 1 + i];
         let mut cur_t = mdom;
         let mut acc_term = su.clone();
-        // The fields' memberships at the **nest's** domains, in declared order:
-        // what [`GenCtorBridge`]'s two theorems share as an antecedent.
-        let mut declared: Vec<Thm> = Vec::with_capacity(k);
-        let mut declared_f: Vec<Formula> = Vec::with_capacity(k);
-        for j in 0..k {
+        // The **fields'** memberships at the nest's domains, in declared order:
+        // what [`GenCtorBridge`]'s two theorems share as an antecedent. The
+        // induction hypotheses are not among them — the constructor has no such
+        // argument — so this stops after `k + m` rungs.
+        let mut declared: Vec<Thm> = Vec::with_capacity(k + m);
+        let mut declared_f: Vec<Formula> = Vec::with_capacity(k + m);
+        // One rung. `arg` is the term applied, `arg_thm` its typing at the
+        // rung's own interpreted domain, and `bind` the variable the binder's
+        // local is bound to so that the next domain interprets with it in
+        // place.
+        let mut rung: Vec<(Term, FreeVar, usize)> = Vec::with_capacity(k + 2 * m);
+        let (mut pi, mut ri) = (0usize, 0usize);
+        for slot in &order {
+            match slot {
+                Slot::Plain => {
+                    rung.push((ys[pi].clone(), yv[pi], pi));
+                    pi += 1;
+                }
+                Slot::Rec => {
+                    rung.push((ts[ri].clone(), tv[ri], k + ri));
+                    ri += 1;
+                }
+            }
+        }
+        for j in 0..m {
+            rung.push((vs[j].clone(), vv[j], k + m + j));
+        }
+        for (step, (arg, bind, atom)) in rung.iter().enumerate() {
             let Expr::Pi { binder_name, binder_style, binder_type, body, .. } =
                 ctx.read_expr(cur_e)
             else {
                 return Err("iota: a dependent minor's type is not the telescope its spec claims")
             };
             let dom_t = self.interp(ctx, binder_type);
-            // `yⱼ ∈ βⱼ(p⃗,y⃗)` ↦ `yⱼ ∈ ⟦βⱼ⟧`, along `βⱼ`'s own defining equation
-            // at *these* terms. The equation is the one `gen_ind`'s walk minted
-            // by interpreting this very binder type, so the guard below is that
-            // the two have not drifted — never that they cannot.
-            let Some((bsym, bax)) = dp.gi.betas[i].get(j) else {
-                return Err("iota: a plain field has no defining equation")
+            // Bring the rung's atom to the interpreted domain. Three kinds, and
+            // each is a different bridge — or none:
+            //
+            // * a **plain field**: `yⱼ ∈ βⱼ(p⃗,y⃗)` ↦ `yⱼ ∈ ⟦βⱼ⟧`, along `βⱼ`'s
+            //   own defining equation at *these* terms. The equation is the one
+            //   `gen_ind`'s walk minted by interpreting this very binder type,
+            //   so the guard is that they have not drifted, never that they
+            //   cannot;
+            // * a **recursive field**: `tⱼ ∈ W` ↦ `tⱼ ∈ ⟦T p⃗⟧`, along the
+            //   carrier bridge, which is conditional at `np > 0` and so needs
+            //   `uu_mem_along` rather than `u_mem_along`;
+            // * an **induction hypothesis**: nothing. `DEPᵢ` states it as
+            //   `vⱼ ∈ app(C,tⱼ)` and Lean's binder is `motive tⱼ`, whose
+            //   interpretation *is* `app(C,tⱼ)` — the one place the two
+            //   vocabularies already coincide, and it is checked rather than
+            //   assumed.
+            // Two memberships come out of a plain rung, not one, and they can
+            // be at **different sets**: the constructor's nest binds the field
+            // at its *declared* type and the recursor's minor premise at the
+            // contractum (see the `optParam` note below). `declared` feeds
+            // `GenCtorBridge`'s antecedent and must be the first; `app_at_pi`
+            // needs the second. They coincide everywhere but a defaulted field.
+            let mut at_declared: Option<(Term, Thm)> = None;
+            let arg_thm = if step < k + m {
+                match &order[step] {
+                    Slot::Plain => {
+                        let pj = order[..step].iter().filter(|s| matches!(s, Slot::Plain)).count();
+                        let Some((bsym, bax)) = dp.gi.betas[i].get(pj) else {
+                            return Err("iota: a plain field has no defining equation")
+                        };
+                        if *bsym != ctor.args[pj] {
+                            return Err("iota: a plain field's symbol is not the spec's")
+                        }
+                        let mut bat: Vec<Term> = ps.to_vec();
+                        bat.extend(ys[..pj].iter().cloned());
+                        let Some(inst) = derived::inst_all(bax, &bat) else {
+                            return Err("iota: instantiating a field type's definition failed")
+                        };
+                        let Some((blhs, body)) = inst.concl().as_eq() else {
+                            return Err("iota: a field type's definition is not an equation")
+                        };
+                        if blhs != Term::apply(ctor.args[pj], bat) {
+                            return Err("iota: a field type's definition is not about this domain")
+                        }
+                        // **`βⱼ`'s body and the minor's binder need not be the
+                        // same term, and on this corpus they are not.** A field
+                        // declared with a default — `Lean.ParserDescr.sepBy`'s
+                        // `(allowTrailingSep : Bool := false)` — has
+                        // `optParam Bool false` as its *constructor* field type
+                        // and plain `Bool` as the recursor's minor binder, so
+                        // `βⱼ`'s body is a redex and `dom_t` is its contractum.
+                        // Nothing about the dependent motive causes this; it is
+                        // a `δ`-step between two spellings of one Lean type,
+                        // and `gen_minor_typed` never sees it because it takes
+                        // `βⱼ`'s body *as* the domain and never compares.
+                        //
+                        // `target_head_step` is exactly the contraction — it
+                        // unfolds an abbreviation head or betas a lambda graph
+                        // over a **term**, which is what is in hand here — and
+                        // it is iterated to a fixed point rather than assumed
+                        // to close in one. It must add no assumption of its
+                        // own: the walk is already under `h_all` and a new
+                        // conjunct could not be curried back out.
+                        let inst_body = inst.clone();
+                        let bridge = if body == dom_t {
+                            inst
+                        } else {
+                            // **Tell this backend's side table the term's own
+                            // shape before asking it to reduce.**
+                            // `target_head_step` finds a λ graph only through
+                            // `TgBackend::parts`, and `parts` is per backend
+                            // while `GenInd::betas` comes from the thread's
+                            // cache — so the head of a field type built by
+                            // another declaration's backend is unrecorded here
+                            // and the reduction declines as "the head is
+                            // opaque" for a term that is nothing of the kind.
+                            // That is the miss `parts`' own header calls "the
+                            // silent kind", counted as
+                            // `ThStep::HeadUnrecordedIsApp`; the delta branch
+                            // was already let through it and the λ branch was
+                            // not. `mk` is build-and-record, so re-minting the
+                            // spine registers it and changes no term.
+                            let mut cur = body.clone();
+                            let mut chain: Option<Thm> = None;
+                            for _ in 0..DELTA_FUEL {
+                                if cur == dom_t {
+                                    break
+                                }
+                                // Each step's *output* is unrecorded too — the
+                                // contraction builds it with `Term::apply` and
+                                // no side table — so this is inside the loop
+                                // rather than before it.
+                                self.record_shape(&cur);
+                                let Some((eq, next, used)) =
+                                    self.target_head_step(ctx, &cur, &out_hyps, 0)
+                                else {
+                                    return Err("iota: a field type's two spellings have no bridge")
+                                };
+                                if used != out_hyps {
+                                    return Err("iota: contracting a field type wants a new assumption")
+                                }
+                                chain = match chain {
+                                    None => Some(eq),
+                                    Some(c) => match self.u_eq_trans(&c, &eq, h_out.as_ref()) {
+                                        Some(t) => Some(t),
+                                        None => {
+                                            return Err("iota: chaining a field type's contraction failed")
+                                        }
+                                    },
+                                };
+                                cur = next;
+                            }
+                            if cur != dom_t {
+                                return Err("iota: a field type does not contract to its binder")
+                            }
+                            let Some(chain) = chain else {
+                                return Err("iota: a field type's contraction is empty")
+                            };
+                            // `βⱼ(p⃗,y⃗) = body` (unconditional) then
+                            // `body = dom_t` (under `h_out`), composed.
+                            let Some(bridge) = self.u_eq_trans(
+                                &u_a1i(&inst, h_out.as_ref()),
+                                &chain,
+                                h_out.as_ref(),
+                            ) else {
+                                return Err("iota: composing a field type's bridge failed")
+                            };
+                            bridge
+                        };
+                        // The membership at the constructor's **own** domain,
+                        // which is `βⱼ`'s body whether or not it contracts.
+                        let Some(at_body) = self.u_mem_along(&atom_thms[*atom], &inst_body, ha)
+                        else {
+                            return Err("iota: unfolding a field type failed")
+                        };
+                        at_declared = Some((body.clone(), at_body));
+                        // Under `h_all`: unconditional when the bridge was just
+                        // `βⱼ`'s equation, and `h_out`-conditional otherwise.
+                        let lifted = if body == dom_t {
+                            self.u_mem_along(&atom_thms[*atom], &bridge, ha)
+                        } else {
+                            let under = match &h_out {
+                                Some(o) => derived::syl(&left(o), &bridge),
+                                None => Some(u_a1i(&bridge, ha)),
+                            };
+                            match under {
+                                Some(u) => self.uu_mem_along(&atom_thms[*atom], &u, ha),
+                                None => None,
+                            }
+                        };
+                        match lifted {
+                            Some(th) => th,
+                            None => return Err("iota: unfolding a field type failed"),
+                        }
+                    }
+                    Slot::Rec => {
+                        if dom_t != *ty_t {
+                            return Err("iota: a recursive field's binder is not the Lean spine")
+                        }
+                        let Some(wa) = w_ty_all.clone() else {
+                            return Err("iota: transporting a recursive slot's typing failed")
+                        };
+                        match self.uu_mem_along(&atom_thms[*atom], &wa, ha) {
+                            Some(th) => th,
+                            None => {
+                                return Err("iota: transporting a recursive slot's typing failed")
+                            }
+                        }
+                    }
+                }
+            } else {
+                atom_thms[*atom].clone()
             };
-            if *bsym != ctor.args[j] {
-                return Err("iota: a plain field's symbol is not the spec's")
+            if u_concl(&arg_thm, ha) != Some(Formula::mem(arg.clone(), dom_t.clone())) {
+                return Err("iota: a dependent minor's binder is not the domain its atom names")
             }
-            let mut bat: Vec<Term> = ps.to_vec();
-            bat.extend(ys[..j].iter().cloned());
-            let Some(inst) = derived::inst_all(bax, &bat) else {
-                return Err("iota: instantiating a field type's definition failed")
-            };
-            if inst.concl().as_eq() != Some((Term::apply(ctor.args[j], bat), dom_t.clone())) {
-                return Err("iota: a field type's definition is not about this domain")
+            if step < k + m {
+                let (d_set, d_thm) = match at_declared {
+                    Some((set, thm)) => (set, thm),
+                    None => (dom_t.clone(), arg_thm.clone()),
+                };
+                declared_f.push(Formula::mem(arg.clone(), d_set));
+                declared.push(d_thm);
             }
-            let Some(y_thm) = self.u_mem_along(&atom_thms[j], &inst, ha) else {
-                return Err("iota: unfolding a field type failed")
-            };
-            declared_f.push(Formula::mem(ys[j].clone(), dom_t.clone()));
-            declared.push(y_thm.clone());
             // The rung: `has_type_a`'s own application step, at whichever of
             // §6.2's two clauses this `Π` fell under.
             let Ok((next, _)) =
-                self.app_at_pi(cur_e, &cur_t, &dom_t, &acc_term, &ys[j], &acc_thm, &y_thm, ha)
+                self.app_at_pi(cur_e, &cur_t, &dom_t, &acc_term, arg, &acc_thm, &arg_thm, ha)
             else {
                 return Err("iota: applying a dependent minor premise to one argument failed")
             };
-            acc_term = ap.apply(acc_term.clone(), ys[j].clone());
+            acc_term = ap.apply(acc_term.clone(), arg.clone());
             acc_thm = next;
-            // Descend, binding the binder's local to `yⱼ`.
+            // Descend, binding the binder's local to this rung's variable.
             let local = ctx.mk_unique(binder_name, binder_style, binder_type);
             let Some(lkey) = unique_key(ctx, local) else {
                 return Err("iota: a dependent minor's binder has no key")
             };
-            self.locals.insert(lkey, yv[j]);
+            self.locals.insert(lkey, *bind);
             cur_e = ctx.inst(body, &[local]);
             cur_t = self.interp(ctx, cur_e);
         }
-        let applied = derived::inductive::applied_minor(&ap, &ctor.order, &su, &ys, &[], &[]);
+        let applied = derived::inductive::applied_minor(&ap, &order, &su, &ys, &ts, &vs);
         if acc_term != applied {
             return Err("iota: the applied dependent minor is not the one the rule spells")
         }
 
-        // ── `app(C, ⟦cᵢ p⃗ y⃗⟧)` brought to `app(C, ctorᵢ(y⃗))` ────────────────
+        // ── `app(C, ⟦cᵢ p⃗ f⃗⟧)` brought to `app(C, ctorᵢ(y⃗,t⃗))` ─────────────
         let Some((f, cargs)) = cur_t.as_app().map(|(f, a)| (f, a.to_vec())) else {
             return Err("iota: a dependent minor's codomain is not the motive at a point")
         };
@@ -13880,11 +14233,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(br) = self.gen_ctor_bridges.get(&(cname, clv)).cloned() else {
             return Err("iota: the constructor has no bridge to the carrier's term")
         };
-        if br.vars.len() != np + k || br.np != np || br.order.len() != k {
+        if br.vars.len() != np + k + m || br.np != np || br.order.as_slice() != order {
             return Err("iota: the constructor's bridge is about another constructor")
         }
+        // The spine's arguments are the parameters and then the fields **in
+        // declared order** — the mask, not the two groups — which is the same
+        // interleaving `rung` walked and so the same list `declared` typed.
         let mut tf: Vec<Term> = ps.to_vec();
-        tf.extend(ys.iter().cloned());
+        let (mut pj, mut rj) = (0usize, 0usize);
+        for slot in &order {
+            match slot {
+                Slot::Plain => {
+                    tf.push(ys[pj].clone());
+                    pj += 1;
+                }
+                Slot::Rec => {
+                    tf.push(ts[rj].clone());
+                    rj += 1;
+                }
+            }
+        }
         let Some(spine_inst) = derived::inst_all(&br.spine, &tf) else {
             return Err("iota: instantiating the constructor's bridge failed")
         };
@@ -13893,7 +14261,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         let ctor_term = {
             let m = mach.borrow();
-            match ind.ctor_term(&m, i, &ys, &[]) {
+            match ind.ctor_term(&m, i, &ys, &ts) {
                 Some(t) => t,
                 None => return Err("iota: the constructor term could not be built"),
             }
@@ -13911,7 +14279,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // left-nested — the same trap `gen_minor_typed` records, at a
         // constructor instead of a minor premise, and invisible below three
         // atoms.
-        let mut all_f: Vec<Formula> = Vec::with_capacity(np + k);
+        let mut all_f: Vec<Formula> = Vec::with_capacity(np + k + m);
         for (j, (thm, _)) in pobs.iter().enumerate() {
             let Some(f) = u_concl(thm, conj_of(&obligations[j].1).as_ref()) else {
                 return Err("iota: a parameter's typing has no conclusion")
@@ -13927,7 +14295,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         let mut rest: Vec<Thm> = param_thms.clone();
         rest.extend(declared.iter().cloned());
-        let mut assembled = rest.pop().expect("np + k >= 1");
+        let mut assembled = rest.pop().expect("np + k + m >= 1");
         while let Some(p) = rest.pop() {
             let Some(both) = u_and_intro(&p, &assembled, ha) else {
                 return Err("iota: assembling the constructor's premises failed")
@@ -13955,19 +14323,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         // ── Curry the escaping assumptions back out, then quantify ───────────
+        //
+        // `y⃗` then `t⃗` then `v⃗`, outermost first — `dep_minor`'s own order.
+        let mut quant = yv;
+        quant.extend(tv);
+        quant.extend(vv);
         let closed = match &h_out {
-            None => derived::gen_all(&yv, &acc_thm),
+            None => derived::gen_all(&quant, &acc_thm),
             Some(o) => {
                 let Some(u) = derived::uncurry(&acc_thm) else {
                     return Err("iota: separating the dependent minor's assumptions failed")
                 };
-                match gen_under(&u, o, &yv) {
+                match gen_under(&u, o, &quant) {
                     Some(cl) => cl,
                     None => return Err("iota: quantifying the dependent minor failed"),
                 }
             }
         };
-        let want = yv
+        let want = quant
             .iter()
             .rev()
             .fold(Formula::imp(h_pw, concl), |acc, v| Formula::forall(*v, acc));
@@ -14011,6 +14384,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         dp: &DepBottom,
         tn: &GenTyNest,
+        nest: &RecNest,
         cfun: ExprPtr<'t>,
         args: &[ExprPtr<'t>],
         ta: &[Term],
@@ -14045,6 +14419,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the general apparatus is unavailable")
         };
 
+        // **Register every constructor's declared field types in this
+        // backend's `abbrev_defs`**, before anything reads them.
+        //
+        // `dep_minor_typed` may have to *contract* a field's declared type down
+        // to the minor premise's binder — a defaulted field is `optParam A d`
+        // on the constructor and plain `A` on the recursor — and
+        // [`Self::target_head_step`] does that by looking the head constant's
+        // defining equation up in `abbrev_defs`. That map is **per backend**,
+        // filled as a side effect of `interp`, while `GenInd::betas` comes from
+        // the *thread's* cache and may have been built by another declaration's
+        // backend entirely. So the equation can be missing here for a term this
+        // backend is nonetheless reasoning about, and the contraction declines
+        // with "the head is opaque" through no fault of the term.
+        //
+        // Interpreting each constructor's declared type is what fills it, and
+        // `interp` is memoised per backend, so after the first ι site of a
+        // declaration this costs a hash lookup. Nothing is taken from the
+        // result — it is called for the registration alone.
+        if let Expr::Const { name: cn0, levels: clv0, .. } = ctx.read_expr(cfun) {
+            if let Some(Declar::Constructor(cd)) = self.decls.get_declar(&cn0) {
+                let ind_name = cd.inductive_name;
+                let names: Vec<NamePtr<'t>> = match self.decls.get_inductive(&ind_name) {
+                    Some(id) => id.all_ctor_names.iter().copied().collect(),
+                    None => Vec::new(),
+                };
+                for cn in names {
+                    let Some(Declar::Constructor(c)) = self.decls.get_declar(&cn) else { continue };
+                    let (uparams, cty) = (c.info.uparams, c.info.ty);
+                    let mut cur = ctx.subst_expr_levels(cty, uparams, clv0);
+                    while let Expr::Pi { binder_name, binder_style, binder_type, body, .. } =
+                        ctx.read_expr(cur)
+                    {
+                        let _ = self.interp(ctx, binder_type);
+                        let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+                        cur = ctx.inst(body, &[local]);
+                    }
+                }
+            }
+        }
+
         // ── The target, and `drec` at it ─────────────────────────────────────
         //
         // The **same** function the nest's bottom used, at the same binder, for
@@ -14057,12 +14471,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let sums = mach.borrow().wt.sums.clone();
             derived::inductive::motive::cod_target(&sums, &v)
         };
-        let drec = {
-            let m = mach.borrow();
-            match dp.gr.rec_of(&m, &ind, &dp.core.r, &ps, &minors, &t) {
-                Some(g) => g,
-                None => return Err("iota: the dependent recursor term could not be built"),
-            }
+        let Some(drec) = self.dep_rec_at(dp, &ps, &c, &minors, &t) else {
+            return Err("iota: the dependent recursor term could not be built")
         };
         let w_at = {
             let m = mach.borrow();
@@ -14075,6 +14485,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // ── `⊢ ⟦T p⃗⟧ = W`: the carrier under two names ───────────────────────
         let ty_t = doms[major].clone();
         let ind_body = ind.ty_of(ps.clone());
+        let ind_body_t = ind_body.clone();
         let (ty_ax, ty_hyps) =
             self.gen_ty_bridge(tn, &ps, ta, doms, obligations, &ty_t, &ind_body)?;
         let Some(w_ax) = derived::inst_all(&ind.ty_ax, &ps) else {
@@ -14090,6 +14501,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if u_concl(&ty_w, th.as_ref()) != Some(Formula::eq(ty_t.clone(), w_at.clone())) {
             return Err("iota: the carrier's defining equation is not about this W-type")
         }
+        // The reverse, `⊢ W = ⟦T p⃗⟧`, is what a recursive slot needs: `DEPᵢ`
+        // binds it at the raw carrier and Lean's telescope at the spine.
+        let Some(w_ty) = self.u_eq_symm(&ty_w, th.as_ref()) else {
+            return Err("iota: reversing the carrier's defining equation failed")
+        };
+        let w_ty = (w_ty, ty_hyps.clone());
 
         // ── `COD(C,T)`, from the motive being a function at all ──────────────
         let (m_thm, m_hyps) = obligations[np].clone();
@@ -14159,47 +14576,36 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 &ps,
                 &c,
                 &minors,
+                &w_at,
+                &ty_t,
+                &w_ty,
                 i,
             )?);
         }
 
         // ── The constructor: its spine equation, and its own typings ─────────
         let order = ind.spec.ctors[idx].order.clone();
-        let k_plain = ind.spec.ctors[idx].args.len();
-        if fields.len() != k_plain || ind.spec.ctors[idx].recs != 0 {
+        let (k_plain, m_rec) = (ind.spec.ctors[idx].args.len(), ind.spec.ctors[idx].recs);
+        if fields.len() != k_plain + m_rec {
             return Err("iota: the constructor is not applied to its own fields")
         }
         let (ctor_eq, ctor_h, ctor_hyps, ys_c, ts_c) =
             self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?;
-        if !ts_c.is_empty() {
-            return Err("iota: a dependent constructor with a recursive field")
-        }
-        // `Hᵢ` — the fields at `βⱼ(p⃗,y⃗)` — **is** the constructor bridge's own
-        // `Hᵢ^ctor`. `Ctor::hyp` is `ctor_atoms_at` and the dependent rule's is
-        // `rect::field_atoms`, and at `mᵢ = 0` the two are the same list of
-        // memberships at the same `βⱼ` symbols. Checked below against what the
-        // rule actually asks, never assumed from that.
+        // `Hᵢ` — the fields at `βⱼ(p⃗,y⃗)` and the recursive ones at `W` — **is**
+        // the constructor bridge's own `Hᵢ^ctor`. `Ctor::hyp` is
+        // `ctor_atoms_at` and the dependent rule's is `rect::field_atoms`, and
+        // both are the same list of memberships at the same sets. Checked below
+        // against what the rule actually asks, never assumed from that.
         let Some(ctor_h) = ctor_h else {
             return Err("iota: the constructor with fields carries no typings")
         };
 
         // ── (S4') at these terms, and the claim it must make ─────────────────
         //
-        // `DepRecursor`'s theorems carry the declaration's parameters and its
-        // own `C`, `S⃗`, `T` as **free variables**. The kernel has no term-level
-        // substitution, but it has generalisation: `gen_all` over exactly those
-        // and then `inst_all` at the use site's terms is the same move
-        // `carrier_at` makes for a term, at a theorem instead.
-        let mut gvars: Vec<FreeVar> = ind.params.clone();
-        gvars.push(dp.dr.motive);
-        gvars.extend(dp.dr.minors.iter().copied());
-        gvars.push(dp.dr.target);
-        let mut gat: Vec<Term> = ps.clone();
-        gat.push(c.clone());
-        gat.extend(minors.iter().cloned());
-        gat.push(t.clone());
-        let Some(rule) = derived::inst_all(&derived::gen_all(&gvars, &dp.dr.iota[idx]), &gat)
-        else {
+        // The **same** substitution that produced `drec` above — see
+        // [`Self::dep_subst`]. That the term and the rule come out of one
+        // operation is the point: they cannot be about two `drec`s.
+        let Some(rule) = self.dep_subst(dp, &ps, &c, &minors, &t, &dp.dr.iota[idx]) else {
             return Err("iota: instantiating the dependent computation rule failed")
         };
         // `PRE` at these terms is **read off the instantiated rule**, never
@@ -14258,7 +14664,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(mut fired) = u_syl(&pre_thm, &rule, h.as_ref()) else {
             return Err("iota: discharging the dependent computation rule's premise failed")
         };
-        for y in &ys_c {
+        // `∀y⃗ ∀t⃗` — the plain fields then the recursive ones, `dep_iota_stmt`'s
+        // own order.
+        for y in ys_c.iter().chain(ts_c.iter()) {
             let Some(next) = u_inst1(&fired, y, h.as_ref()) else {
                 return Err("iota: instantiating the dependent rule at these fields failed")
             };
@@ -14266,17 +14674,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         let ctor_term = {
             let m = mach.borrow();
-            match ind.ctor_term(&m, idx, &ys_c, &[]) {
+            match ind.ctor_term(&m, idx, &ys_c, &ts_c) {
                 Some(ct) => ct,
                 None => return Err("iota: the constructor term could not be built"),
             }
         };
+        // The induction hypotheses the rule's right-hand side spells:
+        // `app(drec, tⱼ)` at a plain recursive slot, which is the only kind
+        // `dep_minor_typed` admits. `Inductive::minor_ihs` is the same funnel
+        // and is asked rather than reproduced, so the two cannot disagree.
+        let ihs = {
+            let m = mach.borrow();
+            match ind.minor_ihs(&m, dp.core.r.comp, &drec, idx, &ts_c) {
+                Some(v) => v,
+                None => return Err("iota: the recursive calls could not be spelled"),
+            }
+        };
         let rhs =
-            derived::inductive::applied_minor(&ap, &order, &minors[idx], &ys_c, &[], &[]);
+            derived::inductive::applied_minor(&ap, &order, &minors[idx], &ys_c, &ts_c, &ihs);
         let want_eq = Formula::eq(ap.apply(drec.clone(), ctor_term), rhs);
-        // `Hᵢ` — the fields at `βⱼ(p⃗,y⃗)` — is exactly the constructor bridge's
-        // own `Hᵢ^ctor`, which `ctor_spine_bridge` discharged from the same
-        // obligations the spine equation rests on.
+        // `Hᵢ` — the fields at `βⱼ(p⃗,y⃗)` and the recursive ones at `W` — is
+        // exactly the constructor bridge's own `Hᵢ^ctor`, which
+        // `ctor_spine_bridge` discharged from the same obligations the spine
+        // equation rests on.
         let Some((hi, concl)) = u_concl(&fired, h.as_ref()).and_then(|f| f.as_imp()) else {
             return Err("iota: the dependent rule at these fields is not conditional")
         };
@@ -14285,6 +14705,63 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         let Some(hi_thm) = reassume(&ctor_h, &ctor_hyps, &hyps) else {
             return Err("iota: restating the constructor's typings failed")
+        };
+        // **The two spell a recursive field's set differently, and the
+        // difference is one defining equation.** `Ctor::hyp` states it at the
+        // Lean-facing `ind(p⃗)` — its own header says the hypotheses are
+        // "stated at `W(…)`; transported to `ind(p⃗)` at the end" — while
+        // `rect::field_atoms`, which the dependent ι rule is built from, states
+        // it at the raw `W`. `w_ax` is exactly `ind(p⃗) = W`, so the atoms are
+        // projected, the recursive ones moved along it, and the conjunction
+        // reassembled. A constructor with no recursive field takes none of
+        // this: the two lists are then equal and the loop below is skipped.
+        let hi_thm = if m_rec == 0 {
+            hi_thm
+        } else {
+            let Some(got) = u_concl(&hi_thm, h.as_ref()) else {
+                return Err("iota: the constructor's typings have no conclusion")
+            };
+            let mut atoms: Vec<Formula> = Vec::with_capacity(k_plain + m_rec);
+            let mut cur = got;
+            for _ in 1..(k_plain + m_rec) {
+                let Some((a, rest)) = as_and(&cur) else {
+                    return Err("iota: the constructor's typings are not a conjunction")
+                };
+                atoms.push(a);
+                cur = rest;
+            }
+            atoms.push(cur);
+            let mut moved: Vec<Thm> = Vec::with_capacity(atoms.len());
+            for (j, atom) in atoms.iter().enumerate() {
+                let Some(p) = derived::conj_proj(&atoms, j) else {
+                    return Err("iota: projecting the constructor's typings failed")
+                };
+                let Some(one) = u_syl(&hi_thm, &p, h.as_ref()) else {
+                    return Err("iota: projecting the constructor's typings failed")
+                };
+                // Only a recursive slot moves, and it is identified by the set
+                // the atom names rather than by the mask — the mask is over
+                // `order` and this list is in the same order, but reading the
+                // set is what makes the guard about the formula in hand.
+                let is_rec = atom.as_mem().map(|(_, st)| st) == Some(ind_body_t.clone());
+                if !is_rec {
+                    moved.push(one);
+                    continue
+                }
+                let Some(t2) = self.u_mem_along(&one, &w_ax, h.as_ref()) else {
+                    return Err("iota: retargeting a recursive field onto the carrier failed")
+                };
+                moved.push(t2);
+            }
+            let mut rest = moved;
+            let mut acc = rest.pop().expect("a constructor with fields has an atom");
+            while let Some(pv) = rest.pop() {
+                let Some(both) = u_and_intro(&pv, &acc, h.as_ref()) else {
+                    return Err("iota: reassembling the constructor's typings failed")
+                };
+                acc = both;
+            }
+            acc
         };
         if u_concl(&hi_thm, h.as_ref()) != Some(hi) {
             return Err("iota: the constructor's own typings are not the ones the rule asks for")
@@ -14296,13 +14773,53 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the dependent computation rule does not have the assumed shape")
         };
 
-        // ── `app(drec, ⟦cᵢ f⃗⟧) = app(drec, ctorᵢ(y⃗))`, then the rule ─────────
-        let Some(at_ctor) = self.ceq_congr(app, &[CondEq::refl(drec), ctor_eq]) else {
+        // ── `app(drec, ⟦cᵢ f⃗⟧) = app(drec, ctorᵢ(y⃗,t⃗))`, then the rule ──────
+        let Some(at_ctor) = self.ceq_congr(app, &[CondEq::refl(drec.clone()), ctor_eq]) else {
             return Err("iota: congruence at the constructor refused")
         };
-        let Some(acc) = self.ceq_trans(&at_ctor, &fired) else {
+        let Some(mut acc) = self.ceq_trans(&at_ctor, &fired) else {
             return Err("iota: the nest does not reduce to the dependent recursor at the constructor")
         };
+
+        // ── The live recursive calls, spelled the way the reduct spells them ─
+        //
+        // The rule says `app(drec, tⱼ)` and the reduct says `⟦T.rec C s⃗ tⱼ⟧`,
+        // so the nest is contracted once more per recursive field and the call
+        // rewritten — `fire_general`'s last step, at this bottom.
+        if m_rec > 0 {
+            let base = derived::inductive::applied_minor(
+                &ap,
+                &order,
+                &minors[idx],
+                &ys_c,
+                &ts_c,
+                &[],
+            );
+            let mut cur = CondEq::refl(base);
+            let mut ri = 0usize;
+            for (f, slot) in order.iter().enumerate() {
+                if matches!(slot, Slot::Plain) {
+                    continue
+                }
+                let mut rec_args: Vec<ExprPtr<'t>> = args[..major].to_vec();
+                rec_args.push(fields[f]);
+                let mut rec_ta: Vec<Term> = ta[..major].to_vec();
+                rec_ta.push(ts_c[ri].clone());
+                let (call, _) = self.nest_chain(ctx, nest, &rec_args, &rec_ta, doms)?;
+                let Some(back) = self.ceq_symm(&call) else {
+                    return Err("iota: reversing a recursive call's contraction failed")
+                };
+                let Some(next) = self.ceq_congr(app, &[cur, back]) else {
+                    return Err("iota: congruence at a recursive call refused")
+                };
+                cur = next;
+                ri += 1;
+            }
+            let Some(joined) = self.ceq_trans(&acc, &cur) else {
+                return Err("iota: rewriting the recursive calls failed")
+            };
+            acc = joined;
+        }
         DEP_IOTAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(acc)
     }
@@ -19166,6 +19683,16 @@ const N_AP: usize = 15;
 static AP: [std::sync::atomic::AtomicU64; N_AP] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_AP];
 fn note_ap(k: ApStep) { AP[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// How many contractions [`TgBackend::dep_minor_typed`] will take to bring a
+/// constructor field's declared type to the minor premise's binder.
+///
+/// A bound rather than a loop-until-stuck, because `target_head_step` is a
+/// *step* and nothing here knows the term is normalising. Four is what
+/// `optParam A d` needs — one δ on the head, two βs, and the check — and the
+/// corpus's whole population of this is `optParam`. A field needing more
+/// declines and is counted as a gap, which is the safe direction.
+const DELTA_FUEL: usize = 8;
 
 /// Which of §6.2's two application clauses [`TgBackend::app_at_pi`] fired.
 ///
