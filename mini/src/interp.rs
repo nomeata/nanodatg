@@ -113,11 +113,14 @@ pub struct Interp {
     // cache, was always the rule; over one core with the checker it had
     // stopped being true, because the two engines keyed the same shape to the
     // same term and then minted two symbols for it.
-    /// The dependent-product machinery per fibre **shape**.
-    fibres: HashMap<Term, FibreSite>,
+    // `fibres: HashMap<Term, FibreSite>` was here, with `fibre_by_sym`
+    // beside it. Both are now `nanoda_lib::pi_store::PiStore` on the shared
+    // core, for the reason above and with the larger prize: the Π shapes the
+    // two engines keyed were 99.5 % the same skeleton under two symbols
+    // (`ENV-UNIFY.md` §B5), where λ's residue was mostly genuine divergence.
     /// The conditional-singleton machinery per `Prop`-valued `∀` shape.
     conds: HashMap<Term, CondSite>,
-    /// The same three tables keyed the other way, by the symbol each site
+    /// The remaining table keyed the other way, by the symbol the site
     /// *builds* — so that an interpretation handed back can be taken apart
     /// again ([`Interp::as_lam`], [`Interp::as_pi`]).
     ///
@@ -128,7 +131,6 @@ pub struct Interp {
     // `lam_by_sym` moved with `lams`; see above. [`Interp::as_lam`] reads the
     // shared table, which is why it now takes apart a lambda **the checker
     // minted** as readily as one of its own — the read-back half of the merge.
-    fibre_by_sym: HashMap<FnSym, FibreSite>,
     cond_by_sym: HashMap<FnSym, CondSite>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
     prop_sub: Option<Thm>,
@@ -1488,9 +1490,7 @@ impl Interp {
             x_canon,
             cumul,
             consts: HashMap::new(),
-            fibres: HashMap::new(),
             conds: HashMap::new(),
-            fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
             prop_sub: None,
             dprod_fs: HashMap::new(),
@@ -1551,7 +1551,7 @@ impl Interp {
             // same vector by construction and their intersection measures
             // nothing. `LamStore::asked` is the successor measurement.
             self.core.lams().borrow().keys(),
-            self.fibres.keys().cloned().collect(),
+            self.core.pis().borrow().keys(),
             self.conds.keys().cloned().collect(),
         )
     }
@@ -1986,12 +1986,17 @@ impl Interp {
     /// invariant. An `fs` term is not an interpreted `Π` and answers `None`.
     pub fn as_pi(&self, t: &Term) -> Option<PiShape> {
         let (f, mut args) = self.parts_of(t)?;
-        if let Some(site) = self.fibre_by_sym.get(&f) {
+        // The shared by-symbol index: this takes apart a `Π` the *checker*
+        // minted just as readily as one of mini's own, which is the read-back
+        // half of the merge.
+        let shared = self.core.pis().borrow().by_dprod(f).map(|(k, s)| (k.clone(), s.clone()));
+        if let Some((skel, site)) = shared {
             if args.len() != site.k + 1 {
                 return None
             }
             let dom = args.pop()?;
-            return Some(PiShape::Dep { site: FibreSite { holes: args, ..site.clone() }, dom })
+            let view = Self::fibre_view(skel, &site, args)?;
+            return Some(PiShape::Dep { site: view, dom })
         }
         if let Some(site) = self.cond_by_sym.get(&f) {
             if args.len() != site.k + 1 {
@@ -2228,49 +2233,16 @@ impl Interp {
         let mut holes = Vec::new();
         let skel = self.skeleton(body_ty_tm, w, &mut holes);
         let k = holes.len();
-        if let Some(c) = self.fibres.get(&skel) {
-            return Some(FibreSite { holes, ..c.clone() })
-        }
-        // `b(h⃗, x) = ⟦B⟧`'s skeleton — holes first, binder last.
-        let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
-        xs.push(self.x_canon);
-        let (b, b_ax) = derived::define_abbrev(&mut self.env_mut(), &xs, &skel)?;
-
+        // **One mint for both engines** (task #151). `define_abbrev`, the
+        // `DProdN` chain and the four universe lemmas all moved into
+        // `nanoda_lib::pi_store`; what is left here is the key, the view and
+        // the label. `want_full = true`: this engine is the one that needs
+        // `dprod(h⃗,A) ∈ U(c)`, and a site the *checker* minted is upgraded
+        // with that layer rather than re-minted, so the symbol stays one.
+        // `inert_on_refusal = false`: mini declines a refusal, as it always
+        // did, and so also declines an inert entry the checker left.
         let p = self.prelude.clone();
-        let dp = derived::ext::DProdN::new(&mut self.env_mut(), &p.ap, &p.fs, b)?;
-        // The one ingredient that mentions `b`, and hence the only one that
-        // has to be re-run per fibre rather than taken from the tower.
-        let ur = derived::universe::universe_replacement_n(
-            &mut self.env_mut(),
-            &p.tower.space.empty_ax,
-            dp.img,
-            &dp.img_ax,
-            b,
-        )?;
-        let replacement = derived::universe::least_universe_replacement_n(
-            &mut self.env_mut(),
-            p.tower.space.lu,
-            &p.tower.space.lu_ax,
-            dp.img,
-            b,
-            &ur,
-        )?;
-        let fibre = dp.fibre(&replacement);
-        let u = derived::ext::UniverseParts {
-            lu: p.tower.space.lu,
-            c2: &p.tower.space.c2,
-            fs_in_u: &p.tower.funspace_of,
-            union: &p.tower.union,
-            bin_union: &p.tower.bin_union,
-        };
-        let general =
-            derived::ext::dprod_in_universe_of_n(&mut self.env_mut(), &p.ap, &p.fs, &fibre, &u)?;
-        let rule =
-            derived::ext::dprod_in_universe_pair_n(&mut self.env_mut(), &p.ap, &fibre, &u, &general)?;
-        // `fibre` borrows `replacement`; the borrow ends here.
-
-        let site =
-            FibreSite { b, skel: skel.clone(), b_ax, dp: Rc::new(dp), replacement, rule, holes: Vec::new(), k };
+        let site = self.core.pi_site(nanoda_lib::lam_store::Minter::Mini, &p, &skel, k, false, true)?;
         // **The constant fibre gets a label, because it is one symbol
         // corpus-wide and it is the commonest thing in a dump.** Its skeleton
         // is the bare hole-0 variable — `skeleton` makes a binder-free term
@@ -2283,11 +2255,37 @@ impl Interp {
         // that order is exactly what a reader comparing a dump against the old
         // spelling has to see.
         if k == 1 && skel == Term::var(self.hole_var(0)) {
-            self.sym_labels.insert(site.dp.dprod, "dprod₀");
+            self.sym_labels.insert(site.dprod, "dprod₀");
         }
-        self.fibres.insert(skel, site.clone());
-        self.fibre_by_sym.insert(site.dp.dprod, site.clone());
-        Some(FibreSite { holes, ..site })
+        Self::fibre_view(skel, &site, holes)
+    }
+
+    /// This occurrence's view of a shared [`nanoda_lib::pi_store::PiSite`]: the
+    /// same symbols and theorems, with this occurrence's holes.
+    ///
+    /// [`Interp::lam_view`]'s counterpart, and it declines in the same two
+    /// cases — an **inert** entry (no defining axioms, so nothing to reason
+    /// with) and one that carries no universe layer. The second cannot arise
+    /// from a `want_full` ask, which is the only kind this engine makes; it is
+    /// checked rather than asserted because the store is shared and a future
+    /// caller could store a core-only entry under a shape mini then reaches.
+    fn fibre_view(
+        skel: Term,
+        site: &nanoda_lib::pi_store::PiSite,
+        holes: Vec<Term>,
+    ) -> Option<FibreSite> {
+        let f = site.fibre.as_ref()?;
+        let full = site.full.as_ref()?;
+        Some(FibreSite {
+            b: f.b,
+            skel,
+            b_ax: f.b_def.clone(),
+            dp: full.dp.clone(),
+            replacement: full.replacement.clone(),
+            rule: full.rule.clone(),
+            holes,
+            k: site.k,
+        })
     }
 
     /// `b(q⃗, x)` — the fibre at a point.
@@ -3028,7 +3026,7 @@ impl Interp {
     /// How many per-shape binder symbols carry a defining axiom. Summarised in
     /// the dump rather than listed; see `crate::dump`'s header.
     pub fn site_count(&self) -> usize {
-        self.core.lams().borrow().len() + self.fibres.len() + self.conds.len()
+        self.core.lams().borrow().len() + self.core.pis().borrow().len() + self.conds.len()
     }
 }
 

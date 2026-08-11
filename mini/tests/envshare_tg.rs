@@ -143,21 +143,76 @@ fn a_defining_equation_crosses_from_mini_to_checker() {
     assert_eq!(field(&r, "incoherent"), 0, "a certificate not about its carrier:\n{r}");
 }
 
-/// **The declining side of the defeq slot.** `003_arrowType`'s one
+/// **The declining side of the defeq slot.** `004_dependentType`'s one
 /// definition interprets to different bodies under the two dispatches, so
 /// mini's defining equation is *offered* and the statement guard in
 /// `const_abbrev` refuses it: one counted decline, a second carrier beside
 /// mini's (`divergent = 1`), and no adoption. This is the fixture that goes
 /// red if that guard is loosened — `034` below cannot catch it, because an
 /// inductive-only file never calls `const_abbrev` at all.
+///
+/// **Moved off `003_arrowType` on 2026-08-11, with a written trade** (task
+/// #151). `003` used to carry this cell and stopped being divergent when the
+/// `Π` mint merged, because its divergence *was* the thing the merge removes:
+/// its body is an arrow type, both engines interpreted it to a `dprod` at the
+/// constant fibre, and the two terms differed **only in the symbol**. So this
+/// cell was passing for the wrong reason — it was measuring the duplicate-mint
+/// bug, not the statement guard, and a fixture that green-lights on a defect
+/// stops testing the moment the defect is fixed.
+///
+/// `003` is *restated* rather than deleted, in the cell below, and it now
+/// carries the merge's own falsifier. The guard's population is not lost with
+/// it: `declinedByCheckerDefeq` is **20** across the 89 tutorial exports after
+/// the merge, over 20 divergent files, and `004`'s divergence is genuine —
+/// a dependent type, where the two dispatches really do build different bodies.
 #[test]
 fn a_mismatched_defining_equation_is_declined_not_adopted() {
-    let Some(r) = cross_report("good/tutorial/003_arrowType.ndjson") else { return };
+    let Some(r) = cross_report("good/tutorial/004_dependentType.ndjson") else { return };
     assert_eq!(field(&r, "adoptedByCheckerDefeq"), 0, "a defeq crossed unguarded:\n{r}");
     assert_eq!(field(&r, "declinedByCheckerDefeq"), 1, "the declined population moved:\n{r}");
     assert_eq!(field(&r, "divergent"), 1, "{r}");
     assert_eq!(field(&r, "alias"), 0, "{r}");
     assert_eq!(field(&r, "incoherent"), 0, "{r}");
+}
+
+/// **`003_arrowType` restated: the file the Π merge converged, and why.**
+///
+/// The cell above used to be this file, asserting `divergent = 1` and one
+/// counted decline. It asserts the opposite now, and the change is the merge
+/// working rather than a guard weakening — so the mechanism is *pinned here*
+/// rather than argued in a comment.
+///
+/// `003`'s definition is an arrow type. Both engines interpret it to a `dprod`
+/// at the constant fibre; before the merge they minted **two symbols** for that
+/// one fibre shape, so mini's defining equation and the checker's carrier
+/// differed in exactly that symbol and the statement guard refused the
+/// crossing. That is `pi_store`'s header sentence made concrete: *a gap where
+/// reflexivity was the whole proof*.
+///
+/// # Why this cell can fail
+///
+/// The Π assertion is the load-bearing one. `converged = 1` alone would also
+/// hold if the guard were loosened to accept a mismatch, which is the failure
+/// this cell must not green-light; requiring that the two engines asked for the
+/// **same** Π shape and that neither has a one-sided one says *why* they
+/// converged. Un-merging the Π table turns `askedByBoth` to 0 and both halves
+/// of this cell red.
+#[test]
+fn the_arrow_type_converged_because_its_pi_symbol_is_now_one() {
+    let Some((r, pi)) = both_reports("good/tutorial/003_arrowType.ndjson") else { return };
+    assert_eq!(field(&r, "converged"), 1, "003 stopped converging:\n{r}");
+    assert_eq!(field(&r, "divergent"), 0, "003 diverged again:\n{r}");
+    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 1, "the equation stopped crossing:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerDefeq"), 0, "{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "a certificate not about its carrier:\n{r}");
+
+    assert!(
+        field(&pi, "askedByBoth") > 0,
+        "the two engines share no Π shape here, so the convergence above is \
+         not the merge and this cell no longer explains it:\n{pi}"
+    );
+    assert_eq!(field(&pi, "askedByMiniOnly"), 0, "a one-sided Π shape appeared:\n{pi}");
+    assert_eq!(field(&pi, "askedByCheckerOnly"), 0, "a one-sided Π shape appeared:\n{pi}");
 }
 
 /// **The `has_type_const` guard, specifically.** `034` below exercises only
@@ -216,6 +271,7 @@ fn cross_sweep_tutorial() {
     files.sort();
     let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
     let mut lam_totals: std::collections::BTreeMap<String, u64> = Default::default();
+    let mut pi_totals: std::collections::BTreeMap<String, u64> = Default::default();
     for f in files {
         let name = f.file_stem().unwrap().to_string_lossy().to_string();
         let report = std::thread::Builder::new()
@@ -234,7 +290,8 @@ fn cross_sweep_tutorial() {
                 run_checker(&f);
                 let r = core.consts().borrow().report();
                 let l = core.lams().borrow().report();
-                format!("{r}\tfile={name}\n{l}\tfile={name}")
+                let pi = core.pis().borrow().report();
+                format!("{r}\tfile={name}\n{l}\tfile={name}\n{pi}\tfile={name}")
             })
             .expect("spawn")
             .join()
@@ -244,6 +301,7 @@ fn cross_sweep_tutorial() {
             let bucket = match line.split('\t').next() {
                 Some("cross") => &mut totals,
                 Some("lammint") => &mut lam_totals,
+                Some("pimint") => &mut pi_totals,
                 _ => continue,
             };
             for kv in line.split('\t').skip(1) {
@@ -258,6 +316,8 @@ fn cross_sweep_tutorial() {
     eprintln!("crossTotal\t{}", row.join("\t"));
     let row: Vec<String> = lam_totals.iter().map(|(k, v)| format!("{k}={v}")).collect();
     eprintln!("lamTotal\t{}", row.join("\t"));
+    let row: Vec<String> = pi_totals.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    eprintln!("piTotal\t{}", row.join("\t"));
 }
 
 /// Both engines over one core and one export, mini first; the shared lambda
@@ -321,6 +381,119 @@ fn one_lam_symbol_serves_both_engines() {
     );
     assert_eq!(field(&r, "inert"), 0, "a graph construction refused:\n{r}");
     assert_eq!(field(&r, "failed"), 0, "a mint failed outright:\n{r}");
+}
+
+/// Both engines over one core and one export, mini first; the shared **Π**
+/// mint's report handed back for pinning.
+fn pi_report(file: &str) -> Option<String> { both_reports(file).map(|(_, pi)| pi) }
+
+/// The crossing ledger **and** the Π mint report from **one** run.
+///
+/// `install_shared_core` is once per thread by construction — replacing a
+/// `Shared` mid-run would strand every symbol the old one minted — so a cell
+/// that wants both numbers cannot call `cross_report` and `pi_report` in
+/// sequence. It has to ask once and read twice, which is this.
+fn both_reports(file: &str) -> Option<(String, String)> {
+    let export = corpus().join(file);
+    if skip_guard::absent(&export) {
+        return None
+    }
+    let core = EnvCore::fresh();
+    let (out, _ip) = mini::run::check_file_with_interp(
+        &export,
+        mini::run::Options::default(),
+        Interp::over(core.clone()),
+    );
+    assert!(out.verdict.is_accepted(), "mini accepts {file}: {:?}", out.verdict);
+    nanoda_lib::tg::install_shared_core(core.clone());
+    run_checker(&export);
+    let cross = core.consts().borrow().report();
+    let pi = core.pis().borrow().report();
+    eprintln!("{cross}\n{pi}");
+    Some((cross, pi))
+}
+
+/// **The Π merge, and the contrast with λ that made it worth doing.**
+///
+/// `ENV-UNIFY.md` §B5 measured, before either merge was built, that λ's
+/// one-sided shapes are *structural* divergence while Π's are the same
+/// skeleton wearing two symbols — 467+467 one-sided collapsing to 3+3 once the
+/// `FnSym` ids are blanked. This is that prediction, cashed: the shapes both
+/// dispatches ask for should dominate, where the λ table's
+/// `the_lam_populations_are_disjoint_on_an_inductive_only_file` pins the
+/// opposite for λ on the same corpus.
+///
+/// # Why this cell can fail
+///
+/// `askedByBoth` is asserted **positive** and `crossHitsChecker` likewise: a
+/// merge that renamed two tables into one without either engine ever reading
+/// the other's mint would leave both at zero and pass any `<=` assertion.
+#[test]
+fn one_pi_mint_for_both_engines() {
+    let Some(r) = pi_report("good/tutorial/034_boolType.ndjson") else { return };
+    let both = field(&r, "askedByBoth");
+    let sites = field(&r, "sites");
+    assert!(both > 0, "no Π shape was asked for by both engines — merged in name only:\n{r}");
+    assert!(
+        field(&r, "crossHitsChecker") > 0,
+        "no lookup was answered from the other engine's mint:\n{r}"
+    );
+    // The residue is the finding: on this file every shape either engine keys
+    // is keyed by both. Asserted as an identity rather than a bound, so that a
+    // shape appearing on one side only turns this red and gets looked at.
+    assert_eq!(both, sites, "a one-sided Π shape appeared — say which:\n{r}");
+    assert_eq!(field(&r, "inert"), 0, "a fibre construction refused:\n{r}");
+    assert_eq!(field(&r, "failed"), 0, "a mint failed outright:\n{r}");
+    assert_eq!(field(&r, "upgradeFailed"), 0, "{r}");
+}
+
+/// **The tiering's upgrade path, which the mini-first order never exercises.**
+///
+/// A `Π` site is two depths: [`nanoda_lib::pi_store::Fibre`] is what the symbol
+/// *is* and both engines get it, [`nanoda_lib::pi_store::Full`] is the universe
+/// layer only `mini` needs. Whoever asks first decides which is built, so when
+/// the **checker** mints first the entry is core-only and `mini` must *upgrade*
+/// it — keeping the symbol and adding the proofs — rather than mint a second.
+///
+/// Every other cell here runs mini first, so `upgrades` is 0 in all of them and
+/// this path would be a green cell that cannot go red. Hence checker first.
+///
+/// # Mutation, verified
+///
+/// Making the upgrade arm mint a fresh site instead of extending the stored one
+/// leaves `upgrades` at 0 and fails the first assertion; making it return the
+/// core-only entry unchanged makes `mini`'s `fibre_view` decline, which takes
+/// `034_boolType` off accepted and fails the verdict assertion below.
+#[test]
+fn a_checker_minted_pi_is_upgraded_not_reminted() {
+    let export = corpus().join("good/tutorial/034_boolType.ndjson");
+    if skip_guard::absent(&export) {
+        return
+    }
+    let core = EnvCore::fresh();
+    nanoda_lib::tg::install_shared_core(core.clone());
+    run_checker(&export);
+    let minted_by_checker = field(&core.pis().borrow().report(), "mintedByChecker");
+    assert!(minted_by_checker > 0, "the checker minted no Π site; the upgrade cannot be tested");
+
+    let (out, _ip) = mini::run::check_file_with_interp(
+        &export,
+        mini::run::Options::default(),
+        Interp::over(core.clone()),
+    );
+    assert!(out.verdict.is_accepted(), "mini accepts 034 after the checker: {:?}", out.verdict);
+    let r = core.pis().borrow().report();
+    eprintln!("{r}");
+    assert!(field(&r, "upgrades") > 0, "no site was upgraded — mini re-minted instead:\n{r}");
+    assert_eq!(field(&r, "upgradeFailed"), 0, "an upgrade failed:\n{r}");
+    // The point of the upgrade: the site count did not grow by a second copy
+    // of what the checker already minted.
+    assert_eq!(
+        field(&r, "mintedByChecker"),
+        minted_by_checker,
+        "the checker's mints changed while mini ran:\n{r}"
+    );
+    assert!(field(&r, "crossHitsMini") > 0, "mini never read the checker's mint:\n{r}");
 }
 
 /// **What the merge does not fix, pinned as a number.** On `034_boolType`

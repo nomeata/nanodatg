@@ -642,6 +642,76 @@ stage 6"):
   was the one named, and it turned out to be the third with the least to
   gain.
 
+  **The Π third has landed** (task #151, 2026-08-11): `checker/src/pi_store.rs`,
+  a `PiStore` on the `EnvCore` beside `LamStore`. `mini`'s `fibres` /
+  `fibre_by_sym` and the tg backend's `Shared::pi_infos` / `pi_by_dprod` are
+  gone; `Interp::fibre_site` and the tg `Π` clause both call `EnvCore::pi_site`.
+  `mini`'s `as_pi` reads the shared by-symbol index, so it takes apart a `Π`
+  the *checker* minted.
+
+  **The prediction cashed, on the same 91-export sweep:**
+
+  ```text
+  piTotal   sites=646  mintedByMini=626  mintedByChecker=20
+            askedByBoth=606  askedByMiniOnly=20  askedByCheckerOnly=20
+            crossHitsChecker=4783  crossHitsMini=0  upgrades=0  inert=0  failed=0
+  ```
+
+  **606 shapes now name one symbol where they named two**, against λ's 90 —
+  the order-of-magnitude the table above predicted, and the one-sided residue
+  is 20+20 against a predicted 3+3 per file. `crossHitsMini = 0` and
+  `upgrades = 0` are the harness, not findings: mini runs first here, so every
+  crossing is the checker reading mini's mint and no entry ever needs
+  upgrading. The checker-first order is a fixture of its own (below).
+
+  **The one structural difference from `LamStore`: two engines want two
+  depths.** The checker's `build_fibre` stopped after `image_symbol_n` +
+  `dprod_symbol_n`; `mini` went on through the rest of `DProdN` and four
+  universe lemmas, because it needs `dprod(h⃗,A) ∈ U(c)` and the checker never
+  asks. Always building the deeper one would charge the checker
+  `dprod_members_n`, `dprod_subset_funspace_n` and the universe layer at every
+  one of the 621 fibres it interprets. So the site is **tiered** — `Fibre` is
+  what the symbol *is*, `Full` is what mini proves about it, built on the first
+  ask that wants it and **upgrading the stored entry in place**, keeping the
+  symbol. `a_checker_minted_pi_is_upgraded_not_reminted` runs the checker
+  first and pins `mintedByChecker=3, upgrades=3, crossHitsMini=14,
+  upgradeFailed=0` with mini still accepting the file — without it the upgrade
+  arm would be a green cell that cannot go red, since every other cell runs
+  mini first.
+
+  **And unlike λ, it moved a verdict.** `003_arrowType` used to carry
+  `a_mismatched_defining_equation_is_declined_not_adopted`: its one definition
+  interpreted to different bodies under the two dispatches, so the statement
+  guard in `const_abbrev` refused mini's defining equation. It now
+  **converges** and the equation crosses — because its divergence *was* the
+  duplicate mint. The body is an arrow type, both engines built a `dprod` at the
+  constant fibre, and the two terms differed **only in the symbol**: exactly
+  `pi_store`'s header sentence, *a gap where reflexivity was the whole proof*.
+
+  That cell was therefore passing for the wrong reason — measuring the defect,
+  not the guard — and a fixture that green-lights on a defect stops testing the
+  moment the defect is fixed. It is **restated, not deleted**: `003` keeps a
+  cell (`the_arrow_type_converged_because_its_pi_symbol_is_now_one`) asserting
+  the convergence *and* that the two engines ask for the same Π shape, so the
+  cell says why rather than merely that; and the guard's falsifier moves to
+  `004_dependentType`, whose divergence is genuine. **The guard population is
+  not lost with it**: `declinedByCheckerDefeq` is **20** over 20 divergent files
+  after the merge.
+
+  Everything else is flat, as λ was: `init-prelude`'s ledger is byte-identical
+  (escapes 2 232, gaps 15 734, 159 803 derived), the arena is 152/0/2, and the
+  full `mini` and `nanoda_lib` suites are green.
+
+  **`∀` is not in this tranche and is the remaining third.** The checker's
+  `prop_infos`/`prop_by_chi` and mini's `conds`/`cond_by_sym`, ~545 more
+  duplicate mints, are the same pattern with one hazard `Π` does not have: the
+  checker's `build_cond` takes the domain parameter at the canonical slot
+  `hole_var(k)`, while mini's `cond_site` takes a `fresh_var()`. The keys agree
+  (the key is the fibre skeleton, which mentions neither) but `phi` and
+  `params` do not, so the merge needs mini moved onto the canonical slot first
+  — a change to a derivation, not a table move. Doing it here would have made
+  one commit that both merges a table and alters a proof.
+
   So the Π divergence is **99.5% same-skeleton-two-symbols** — the one-sided
   counts are equal file-by-file across all 89 exports, and sampled pairs are
   identical terms up to the interior `FnSym` id (the shared canonical

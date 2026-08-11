@@ -287,6 +287,12 @@ pub struct RouteReport {
     /// the other's mint. The measurement that distinguishes the one-lambda
     /// merge from a rename.
     pub lam: String,
+    /// The shared dependent-product mint's report, the same measurement for
+    /// `Π`. Separate from [`RouteReport::lam`] because the two merges have
+    /// very different residues and averaging them would hide that: λ's
+    /// one-sided shapes are genuine divergence, Π's were the same skeleton
+    /// under two symbols.
+    pub pi: String,
 }
 
 impl RouteReport {
@@ -303,6 +309,7 @@ impl RouteReport {
             cross: String::new(),
             tg: String::new(),
             lam: String::new(),
+            pi: String::new(),
         }
     }
 
@@ -508,6 +515,7 @@ impl Routed {
         }
         self.report.cross = ip.core().consts().borrow().report();
         self.report.lam = ip.core().lams().borrow().report();
+        self.report.pi = ip.core().pis().borrow().report();
         self.report.tg = nanoda_lib::tg::global_report();
         self.report
     }

@@ -1141,7 +1141,7 @@ use derived::prelude::{fast_forward, prelude, Prelude};
 // ─────────────────────────────────────────────────────────────────────────────
 
 use derived::ext::{
-    dprod_const_fibre_n, dprod_ext_n, dprod_symbol_n, image_symbol_n, lam_ext_n, lam_in_dprod_n,
+    dprod_const_fibre_n, dprod_ext_n, lam_ext_n, lam_in_dprod_n,
     lam_in_funspace_n,
 };
 use derived::funcs::{beta_conditional_n, lambda_n};
@@ -1273,15 +1273,18 @@ struct Syms {
 type LamInfo = crate::lam_store::LamSite;
 
 /// Everything known about one dependent-`Π` *fibre skeleton*. Shared by every
-/// `Π` whose body has that shape.
-struct PiInfo {
-    /// The head symbol of the interpretation, `dprod_C(h⃗, A)`.
-    dprod: FnSym,
-    /// The dependent-product machinery, when it was built; `None` for the inert
-    /// encoding, in which case `dprod` is an opaque symbol and the `Π` bridge
-    /// over it reports a gap.
-    fibre: Option<Fibre>,
-}
+/// `Π` whose body has that shape — **and, since task #151, by `mini` too**.
+///
+/// This was a private struct with `dprod` and `fibre` fields, and it is now
+/// `crate::pi_store`'s, for exactly [`LamInfo`]'s reason: the two engines
+/// computed the same key over the same shared core and then minted two `dprod`
+/// symbols for it, which is identity-not-memoisation. The field names are
+/// unchanged, so every `info.dprod` and `info.fibre.as_ref()` in this file
+/// reads the shared entry without knowing it moved.
+///
+/// The one new thing is that the shared site carries an optional *universe*
+/// layer (`PiSite::full`) which this engine never asks for and never pays for.
+type PiInfo = crate::pi_store::PiSite;
 
 /// Everything known about one `Prop`-valued `∀` *body skeleton*. Shared by
 /// every `∀` whose body has that shape.
@@ -1324,19 +1327,10 @@ struct PropInfo {
     params: Vec<FreeVar>,
 }
 
-/// The definitional-extension half of a dependent-`Π` skeleton.
-struct Fibre {
-    /// The fibre function `b(h⃗, x)`.
-    b: FnSym,
-    /// `⊢ ∀h⃗ ∀x. b(h⃗,x) = skeleton`.
-    b_def: Thm,
-    /// The Replacement image `img(h⃗, A) = { b(h⃗,x) : x ∈ A }`.
-    img: FnSym,
-    /// `⊢ ∀h⃗ ∀A ∀w. (w ∈ img(h⃗,A) ↔ ∃x. (x ∈ A ∧ w = b(h⃗,x)))`.
-    img_ax: Thm,
-    /// `⊢ ∀h⃗ ∀A ∀f. (f ∈ dprod(h⃗,A) ↔ (f ∈ fs(A,⋃img(h⃗,A)) ∧ section(f)))`.
-    dprod_def: Thm,
-}
+/// The definitional-extension half of a dependent-`Π` skeleton — shared, like
+/// [`PiInfo`] itself. The five fields are the ones this file reads.
+#[allow(dead_code)]
+type Fibre = crate::pi_store::Fibre;
 
 // The definitional-extension half of a lambda skeleton — the body symbol, its
 // defining equation and `lambda_n`'s characteristic theorem — is
@@ -1926,6 +1920,12 @@ pub struct EnvCore {
     /// [`EnvCore::x_canon`] and [`EnvCore::hole_var`], so the shapes were
     /// already one population and only the symbols were two.
     lams: Rc<std::cell::RefCell<crate::lam_store::LamStore>>,
+    /// **The shared dependent-product mint** (`crate::pi_store`): one `dprod`
+    /// symbol per fibre shape, for both engines. Here for [`EnvCore::lams`]'
+    /// reason, and it is the larger of the two — the Π shapes the two engines
+    /// keyed were 99.5 % the same skeleton under two symbols, against λ's
+    /// mostly-structural divergence. See `checker/src/pi_store.rs`.
+    pis: Rc<std::cell::RefCell<crate::pi_store::PiStore>>,
 }
 
 impl EnvCore {
@@ -1947,6 +1947,7 @@ impl EnvCore {
             machine: Rc::new(std::cell::RefCell::new(None)),
             consts: Rc::new(std::cell::RefCell::new(crate::const_store::ConstStore::default())),
             lams: Rc::new(std::cell::RefCell::new(crate::lam_store::LamStore::default())),
+            pis: Rc::new(std::cell::RefCell::new(crate::pi_store::PiStore::default())),
         }
     }
 
@@ -1960,6 +1961,32 @@ impl EnvCore {
     /// [`crate::lam_store::LamStore::site`] itself takes the kernel `Env`, so a
     /// caller must not be holding [`EnvCore::env_mut`] across it.
     pub fn lams(&self) -> &Rc<std::cell::RefCell<crate::lam_store::LamStore>> { &self.lams }
+
+    /// The shared dependent-product mint. Same rules as [`EnvCore::lams`].
+    pub fn pis(&self) -> &Rc<std::cell::RefCell<crate::pi_store::PiStore>> { &self.pis }
+
+    /// The shared site for a fibre shape, minting on first ask by either engine
+    /// and upgrading to the universe layer on the first ask that wants it —
+    /// the funnel both `mini`'s `Interp::fibre_site` and the tg backend's `Π`
+    /// clause go through. `want_full` is what separates them: `mini` needs
+    /// `dprod(h⃗,A) ∈ U(c)` and the checker never asks, so the checker does not
+    /// pay for it. See `crate::pi_store`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pi_site(
+        &self,
+        who: crate::lam_store::Minter,
+        pre: &derived::prelude::Prelude,
+        skel: &Term,
+        k: usize,
+        inert_on_refusal: bool,
+        want_full: bool,
+    ) -> Option<Rc<crate::pi_store::PiSite>> {
+        // Resolved before the `Env` is borrowed, exactly as in `lam_site`.
+        let hs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
+        let mut store = self.pis.borrow_mut();
+        let mut env = self.env.borrow_mut();
+        store.site(who, pre, &mut env, &hs, self.x_canon, skel, k, inert_on_refusal, want_full)
+    }
 
     /// The shared site for a body shape, minting on first ask by either
     /// engine — the funnel both `mini`'s `Interp::lam_site` and the tg
@@ -2097,14 +2124,6 @@ struct Shared {
     lam_exts: HashMap<(Term, Term), Option<Sealed>>,
     /// Dependent-product extensionality theorems, keyed the same way.
     pi_exts: HashMap<(Term, Term), Option<Sealed>>,
-    /// Head symbol (and, when built, fibre machinery) per distinct dependent-`Π`
-    /// body skeleton.
-    pi_infos: HashMap<Term, Rc<PiInfo>>,
-    /// The same entries, found by the `dprod` symbol instead of the skeleton.
-    /// A typing obligation arrives as a *term* `dprod_C(q⃗,A)` with no Lean `Π`
-    /// attached, so the lambda rule needs the fibre machinery behind its head
-    /// symbol; this is that lookup.
-    pi_by_dprod: HashMap<FnSym, (Term, Rc<PiInfo>)>,
     /// `⊢ ∀B ∀A. dprod(B,A) = fs(A,B)` at the **constant-fibre skeleton** — the
     /// interpreted arrow spelled as the library's function space. `⟦Π⟧` is a
     /// `dprod` at every codomain, so nothing this backend interprets is ever an
@@ -2499,11 +2518,8 @@ pub fn skeleton_keys() -> Option<(Vec<Term>, Vec<Term>, Vec<Term>)> {
         slot.borrow().as_ref().map(|sh| {
             let sh = sh.borrow();
             let lam_keys = sh.core.lams().borrow().keys();
-            (
-                lam_keys,
-                sh.pi_infos.keys().cloned().collect(),
-                sh.prop_infos.keys().cloned().collect(),
-            )
+            let pi_keys = sh.core.pis().borrow().keys();
+            (lam_keys, pi_keys, sh.prop_infos.keys().cloned().collect())
         })
     })
 }
@@ -2545,8 +2561,6 @@ fn new_shared(core: EnvCore) -> Rc<std::cell::RefCell<Shared>> {
             lam_betas: HashMap::new(),
             lam_exts: HashMap::new(),
             pi_exts: HashMap::new(),
-            pi_infos: HashMap::new(),
-            pi_by_dprod: HashMap::new(),
             dprod_fs: None,
             prop_infos: HashMap::new(),
             prop_by_chi: HashMap::new(),
@@ -4802,24 +4816,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     /// The fibre machinery for a `Π` skeleton, if that skeleton has been seen.
-    fn pi_info(&self, key: &Term) -> Option<Rc<PiInfo>> { self.shared.borrow().pi_infos.get(key).cloned() }
+    fn pi_info(&self, key: &Term) -> Option<Rc<PiInfo>> { self.core.pis().borrow().get(key).cloned() }
 
     /// The definitional extension behind one `Π` skeleton: the fibre symbol
     /// `b(h⃗,x) := skeleton`, its Replacement image, and the dependent product
     /// `dprod(h⃗,A) = Π(x:A). b(h⃗,x)`.
     ///
     /// Derived once per skeleton and shared by every occurrence of that shape.
-    fn build_fibre(&mut self, sk: &Term, holes: usize) -> Option<(FnSym, Fibre)> {
-        let mut ps: Vec<FreeVar> = Vec::with_capacity(holes + 1);
-        for i in 0..holes {
-            ps.push(self.hole_var(i));
-        }
-        ps.push(self.x_canon);
-        let (b, b_def) = derived::define_abbrev(&mut self.env_mut(), &ps, sk)?;
-        let (img, img_ax) = image_symbol_n(&mut self.env_mut(), b)?;
+    /// The shared fibre site for a skeleton, minting on first ask by *either*
+    /// engine.
+    ///
+    /// This used to be `build_fibre`, which ran `define_abbrev`,
+    /// `image_symbol_n` and `dprod_symbol_n` privately. The three moved into
+    /// `crate::pi_store` unchanged and in the same order; what is new is that
+    /// `mini` reaches the same entry, and that a refusal yields the inert
+    /// encoding here (`inert_on_refusal = true`) while `mini` declines.
+    ///
+    /// `want_full = false`: the universe layer (`dprod(h⃗,A) ∈ U(c)`) is
+    /// `mini`'s and this engine never asks, so this engine never pays for it.
+    fn fibre_site(&mut self, sk: &Term, holes: usize) -> Option<Rc<PiInfo>> {
         let pre = self.pre.clone();
-        let (dprod, dprod_def) = dprod_symbol_n(&mut self.env_mut(), &pre.ap, &pre.fs, img, b)?;
-        Some((dprod, Fibre { b, b_def, img, img_ax, dprod_def }))
+        self.core.pi_site(crate::lam_store::Minter::Checker, &pre, sk, holes, true, false)
     }
 
     /// The conditional-singleton machinery for a `∀` skeleton, if that skeleton
@@ -5216,23 +5233,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The tail of [`Self::interp_pi`]'s `Type` clause: register (or share) the
     /// fibre skeleton's machinery and record where this occurrence sits.
     fn finish_pi_site(&mut self, e: ExprPtr<'t>, sk: Term, holes: Vec<Term>, dom: Term) -> Option<Term> {
-        let info = match self.pi_info(&sk) {
-            Some(i) => i,
-            None => {
-                let arity = u32::try_from(holes.len() + 1).ok()?;
-                let info = match self.build_fibre(&sk, holes.len()) {
-                    Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
-                    // Inert: the right *shape*, so that the interpretation stays
-                    // compositional, but with no defining axioms and hence no
-                    // typing. A reported gap rather than a wrong answer.
-                    None => Rc::new(PiInfo { dprod: self.env_mut().declare(arity), fibre: None }),
-                };
-                let mut sh = self.shared.borrow_mut();
-                sh.pi_infos.insert(sk.clone(), info.clone());
-                sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
-                info
-            }
-        };
+        // One call, hit or mint: the shared store does the lookup, the
+        // `define_abbrev`/`image_symbol_n`/`dprod_symbol_n` chain and the inert
+        // fallback, and it is the only place any of the three now happen. The
+        // three-line insert into `pi_infos`/`pi_by_dprod` that used to be here
+        // is gone with them — a second table is what this merge removes.
+        let info = self.fibre_site(&sk, holes.len())?;
 
         let mut args = holes.clone();
         args.push(dom.clone());
@@ -8453,7 +8459,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             let h = self.hole_var(0);
             let const_dprod =
-                self.shared.borrow().pi_infos.get(&Term::var(h)).map(|i| i.dprod);
+                self.core.pis().borrow().get(&Term::var(h)).map(|i| i.dprod);
             if Some(f) != const_dprod {
                 return None
             }
@@ -10493,11 +10499,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         let fs_shape = head == self.pre.fs_sym() && targs.len() == 2 && targs[0] == dom;
         if !fs_shape
-            && !(targs.last() == Some(&dom) && self.shared.borrow().pi_by_dprod.contains_key(&head))
+            && !(targs.last() == Some(&dom) && self.core.pis().borrow().by_dprod(head).is_some())
         {
             note_lam_decline(if head == self.pre.fs_sym() && targs.len() == 2 {
                 LamDecline::TargetFsOtherDom
-            } else if self.shared.borrow().pi_by_dprod.contains_key(&head) {
+            } else if self.core.pis().borrow().by_dprod(head).is_some() {
                 LamDecline::TargetDprodOtherDom
             } else {
                 LamDecline::TargetNotAFunction
@@ -10580,7 +10586,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
 
         // ── Dependent: the fibre at the binder ───────────────────────────────
-        let (pkey, pinfo) = self.shared.borrow().pi_by_dprod.get(&head).cloned()?;
+        let (pkey, pinfo) = self.core.pis().borrow().by_dprod(head).map(|(k, s)| (k.clone(), s.clone()))?;
         if targs.last() != Some(&dom) {
             return None
         }
@@ -14454,19 +14460,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let sk = Term::var(h);
             // The constant-fibre skeleton's machinery — one table entry
             // corpus-wide, shared with `interp_pi`'s own registration.
-            let info = match self.pi_info(&sk) {
-                Some(i) => i,
-                None => {
-                    let info = match self.build_fibre(&sk, 1) {
-                        Some((dprod, fb)) => Rc::new(PiInfo { dprod, fibre: Some(fb) }),
-                        None => return None,
-                    };
-                    let mut sh = self.shared.borrow_mut();
-                    sh.pi_infos.insert(sk.clone(), info.clone());
-                    sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
-                    info
-                }
-            };
+            // Through the shared store like every other fibre — one table
+            // entry corpus-wide, and now one shared with `mini`, which reaches
+            // this same constant-fibre skeleton through `const_fibre_site`.
+            let info = self.fibre_site(&sk, 1)?;
             let fb = info.fibre.as_ref()?;
             let pre = self.pre.clone();
             let bridge = dprod_const_fibre_n(
@@ -15796,7 +15793,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             return self.ty_miss(crate::certify::TyGap::Lam)
         };
         let fs_shape = head == self.pre.fs_sym() && targs.len() == 2 && targs[0] == dom;
-        if !fs_shape && !(targs.last() == Some(&dom) && self.shared.borrow().pi_by_dprod.contains_key(&head)) {
+        if !fs_shape && !(targs.last() == Some(&dom) && self.core.pis().borrow().by_dprod(head).is_some()) {
             return self.ty_miss(crate::certify::TyGap::Lam)
         }
 
@@ -15836,7 +15833,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         } else {
             // ── Dependent: the fibre at the binder ───────────────────────────
             (|| {
-                let (pkey, pinfo) = self.shared.borrow().pi_by_dprod.get(&head).cloned()?;
+                let (pkey, pinfo) = self.core.pis().borrow().by_dprod(head).map(|(k, s)| (k.clone(), s.clone()))?;
                 let qholes: Vec<Term> = targs[..targs.len() - 1].to_vec();
                 let b_def = pinfo.fibre.as_ref()?.b_def.clone();
                 let mut binst = qholes.clone();
@@ -20557,8 +20554,8 @@ mod tests {
         fs: &derived::funspace::Funspace,
         b: FnSym,
     ) -> (FnSym, Thm, FnSym, Thm) {
-        let (img, img_ax) = image_symbol_n(env, b).expect("image_symbol_n");
-        let (dprod, dprod_def) = dprod_symbol_n(env, ap, fs, img, b).expect("dprod_symbol_n");
+        let (img, img_ax) = derived::ext::image_symbol_n(env, b).expect("image_symbol_n");
+        let (dprod, dprod_def) = derived::ext::dprod_symbol_n(env, ap, fs, img, b).expect("dprod_symbol_n");
         (img, img_ax, dprod, dprod_def)
     }
 
