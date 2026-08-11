@@ -115,17 +115,17 @@ pub(crate) fn ensure(
     let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let ctors = match c.environment().get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     let (np, n, ni) = (*num_params as usize, *num_minors as usize, *num_indices as usize);
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     // **No §6.2 split.** A class-(P) recursor's motive is `Sort 0` — the
     // absence of the extra level parameter is what put the declaration on this

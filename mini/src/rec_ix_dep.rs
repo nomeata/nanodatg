@@ -134,7 +134,7 @@ pub(crate) fn ensure(
     let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let ctors = match c.environment().get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
     let depth = np + 1 + n + ni + 1;
     let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(ARITY))?;

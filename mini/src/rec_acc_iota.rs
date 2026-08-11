@@ -133,7 +133,7 @@ pub(crate) fn fire(
         .environment()
         .owner(rec)
         .cloned()
-        .ok_or_else(|| Gap::NoInterpretation(*rec, rec_inst.to_vec()))?;
+        .ok_or(Gap::NoInterpretation(*rec))?;
     let bad = |w: &'static str| Gap::Recursor(ind_name, w, Cause::Threading);
     if crate::direct::clause_for(&ind_name) != Some(crate::direct::Clause::Acc) {
         return Err(bad(CLAUSE))

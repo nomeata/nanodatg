@@ -131,13 +131,13 @@ pub(crate) fn ensure(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     if (*num_params, *num_minors, *num_indices) != (2, 1, 1) {
         return Err(bad(SHAPE))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let u1 = crate::rec_dep::motive_level(&rec_ty, 2, 1).ok_or_else(|| bad(MOTIVE))?;

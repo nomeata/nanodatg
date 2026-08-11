@@ -122,7 +122,7 @@ pub(crate) fn ensure(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     // An indexed class-(P) family is a different construction and not a
     // relaxed guard on this one — `TruncRecursor`'s header says why: its `φ` is
@@ -133,7 +133,7 @@ pub(crate) fn ensure(
         return Err(Gap::IndexedFamily(*ind_name, "a class-(P) indexed eliminator"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);

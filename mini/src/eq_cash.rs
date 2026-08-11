@@ -365,7 +365,7 @@ pub fn cash_stmt(c: &mut Checker<'_, '_>, stmt: &E, mem: Thm) -> Result<Cashed, 
     };
     let eq_former = c
         .stored_term(&eq_name(), &inst)
-        .ok_or_else(|| gap!(Gap::NoInterpretation(eq_name(), inst.clone())))?;
+        .ok_or_else(|| gap!(Gap::NoInterpretation(eq_name())))?;
 
     // ── 3. the three arguments' interpretations and typings ─────────────────
     //

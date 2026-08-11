@@ -1497,13 +1497,18 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // is made off the clause for the reason `Acc`'s
                                 // is — so neither module declines for the
                                 // other.
-                                (Some(h), Some(ts), Some(inst))
+                                // `Some(_)`: the instantiation must be
+                                // computable for this arm to be reached, but
+                                // `iota_nat::fire` no longer takes it — the
+                                // parameter existed only to fill
+                                // `Gap::NoInterpretation`'s dead second field.
+                                (Some(h), Some(ts), Some(_))
                                     if crate::iota_nat::selects(self, name) =>
                                 {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::iota_nat::fire(
-                                        self, name, &inst, &rty, &h, &all, &ts, &cname,
-                                        &con_args, &rhs,
+                                        self, name, &rty, &h, &all, &ts, &cname, &con_args,
+                                        &rhs,
                                     )
                                     .map_err(Some)
                                 }
@@ -2107,7 +2112,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
         let Some(c) = th.ip.get_const(&(*name, crate::ground::ground_levels(&inst))) else {
-            return (Ev::missing(Gap::NoInterpretation(*name, inst)), None)
+            return (Ev::missing(Gap::NoInterpretation(*name)), None)
         };
         match &c.defeq {
             Some(s) => {
@@ -3673,7 +3678,8 @@ impl<'e, 'i> Checker<'e, 'i> {
                 if let Some(th) = self.th.as_mut() {
                     th.ip.lazy_fills += 1;
                 }
-                let declines_to = crate::zoneb::ensure(self, name, inst).err();
+                let declines_to =
+                    crate::zoneb::ensure(self, name, &crate::ground::ground_levels(inst)).err();
                 // A decline that nevertheless filled the store is not a reason:
                 // the constant is there and the caller should read it.
                 declines_to.filter(|_| missing(self))
@@ -3775,7 +3781,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 };
                 (Some(c.term.clone()), ev)
             }
-            None => (None, Ev::missing(Gap::NoInterpretation(*name, inst))),
+            None => (None, Ev::missing(Gap::NoInterpretation(*name))),
         }
     }
 

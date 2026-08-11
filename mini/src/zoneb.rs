@@ -189,14 +189,44 @@ pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
 /// Idempotent: a second call after a successful build is a store hit and
 /// returns without doing anything, and a second call after a decline returns
 /// the same reason.
-pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), Gap> {
+///
+/// # `inst` is `&[Level]`, and the split below is where groundness now lives
+///
+/// It was `&[u32]`, which made a ground schedule a *precondition of the type*
+/// rather than a choice — `mini/src/ground.rs`'s header on the same move for
+/// [`crate::interp::ConstKey`]. The retype is not blanket: what this function
+/// does with the two halves of `inst` is deliberately asymmetric, because the
+/// clause that justified the change needs exactly that asymmetry.
+///
+/// * **The constant's own instantiation stays a level vector.** A recursor's
+///   is its declaration's with the motive's level prepended, and that motive
+///   level is the one thing on this route that is polymorphic at a declaration
+///   with no parameters of its own — `Bool.rec.{u}`. It is the store key and
+///   it is passed to [`crate::recursor::ensure`] unflattened.
+/// * **The declaration's own instantiation is still required to be numerals.**
+///   Everything below the split — the carrier, the constructor spec, the
+///   truncation, the index walk — reads it through `ground::as_numeral`, and
+///   `LEVELPOLY.md` §5.3 sizes that interior at seven calls. Until those seven
+///   are done a symbolic declaration level is [`Gap::SymbolicLevel`], said once
+///   here rather than seven times inside.
+///
+/// So the clause this unlocks is precisely *the eliminator at a symbolic motive
+/// level over a parameter-free declaration*, and the type says so.
+pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[Level]) -> Result<(), Gap> {
     // **`Quot`'s four primitives come first, because none of them is an
     // inductive declaration.** They are `add_quot`'s opaque constants with no
     // `owner`, so every line below answers `no-interp` on the name before
     // reaching them; and they are §6.2 clauses rather than translations,
     // exactly as `crate::direct`'s `Eq` is. See `crate::quot`.
     if crate::quot::prim_for(name).is_some() {
-        return crate::quot::build(c, name, inst)
+        // `Quot.{u}` is level-polymorphic in its own right and `crate::quot`
+        // is keyed on the numeral (`Gap::Quotient` carries it, because the two
+        // clauses at `u = 0` and `u ≥ 1` are different constructions). Not
+        // this tranche's clause: refused at the boundary with the reason,
+        // rather than half-threaded inside.
+        let ls: Vec<u32> =
+            inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+        return crate::quot::build(c, name, &ls)
     }
     let env = c.environment();
     // Which declaration does this constant belong to? By index, not by scan.
@@ -204,7 +234,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
         Some(ConstantInfo::Inductive { .. }) => *name,
         _ => match env.owner(name) {
             Some(n) => *n,
-            None => return Err(Gap::NoInterpretation(*name, inst.to_vec())),
+            None => return Err(Gap::NoInterpretation(*name)),
         },
     };
     // **The declaration's own σ, which is not the constant's.** A constructor
@@ -215,16 +245,26 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     // lookup would miss with a reason naming the wrong thing.
     let nl = match env.get(&ind_name) {
         Some(ci) => ci.lparams().len(),
-        None => return Err(Gap::NoInterpretation(ind_name, inst.to_vec())),
+        None => return Err(Gap::NoInterpretation(ind_name)),
     };
     if inst.len() < nl {
-        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name))
     }
     // The constant's **own** σ, kept apart from the declaration's: a recursor's
     // store key is this one, and using the declaration's would put
     // `⟦PUnit.rec.{w,u}⟧` where `⟦PUnit.rec.{u}⟧` belongs.
-    let own_inst = inst.to_vec();
-    let ind_inst: Vec<u32> = inst[inst.len() - nl..].to_vec();
+    //
+    // **The own list keeps its levels and the declaration's is flattened to
+    // numerals here**, which is the asymmetry this function's header argues
+    // for. One `as_numeral` per declaration parameter, in one place, so the
+    // seven `ground::as_numeral` calls below it do not each have to be a
+    // separate frontier.
+    let own_inst: Vec<Level> = inst.to_vec();
+    let ind_inst: Vec<u32> = inst[inst.len() - nl..]
+        .iter()
+        .map(ground::as_numeral)
+        .collect::<Option<_>>()
+        .ok_or(Gap::SymbolicLevel)?;
     let inst = &ind_inst[..];
     let key = (ind_name, crate::ground::ground_levels(inst));
     {
@@ -304,11 +344,11 @@ fn nested_seen(c: &mut Checker<'_, '_>, ind_name: &Name) -> Option<Option<&'stat
 fn model_alias(
     c: &mut Checker<'_, '_>,
     name: &Name,
-    own: &[u32],
+    own: &[Level],
     ind_name: &Name,
     why: Option<&'static str>,
 ) -> Result<(), Gap> {
-    let key = (*name, crate::ground::ground_levels(own));
+    let key = (*name, crate::ground::key_levels(own));
     let model = {
         let app = c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.model_of.get(&key).cloned()
@@ -320,7 +360,7 @@ fn model_alias(
         return Err(Gap::IndSpec(*ind_name, why.unwrap_or("nested model not keyed here")))
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let Some(ci) = ip.get_const(&(model, crate::ground::ground_levels(own))).cloned() else {
+    let Some(ci) = ip.get_const(&(model, crate::ground::key_levels(own))).cloned() else {
         return Err(Gap::IndSpec(*ind_name, "nested model not interpreted"))
     };
     ip.put_const(key, ConstInterp { term: ci.term, typing: ci.typing, defeq: None });
@@ -340,14 +380,14 @@ fn record_reason(
     name: &Name,
     ind_name: &Name,
     inst: &[u32],
-    own: &[u32],
+    own: &[Level],
     g: Gap,
 ) {
     let is_rec = matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. }));
     let is_decl = name == ind_name;
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return };
     if is_rec {
-        app.rec_untranslated.insert((*name, crate::ground::ground_levels(own)), g);
+        app.rec_untranslated.insert((*name, crate::ground::key_levels(own)), g);
     } else if is_decl {
         app.untranslated.insert((*name, crate::ground::ground_levels(inst)), g);
     } else {
@@ -373,10 +413,10 @@ pub(crate) fn stored_or_reason_after(
     name: &Name,
     ind_name: &Name,
     inst: &[u32],
-    own: &[u32],
+    own: &[Level],
 ) -> Result<(), Gap> {
     if matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. })) {
-        if c.stored_term(name, own).is_some() {
+        if c.stored_term_at(name, own).is_some() {
             return Ok(())
         }
         // **The reason is recorded, because this runs once.** The eliminator is
@@ -387,7 +427,7 @@ pub(crate) fn stored_or_reason_after(
         let r = crate::recursor::ensure(c, ind_name, inst, name, own);
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.rec_untranslated.insert((*name, crate::ground::ground_levels(own)), g.clone());
+                app.rec_untranslated.insert((*name, crate::ground::key_levels(own)), g.clone());
             }
         }
         return r
@@ -405,7 +445,7 @@ pub(crate) fn stored_or_reason_after(
             return Err(g.clone())
         }
     }
-    Err(Gap::NoInterpretation(*name, inst.to_vec()))
+    Err(Gap::NoInterpretation(*name))
 }
 
 /// **Why `⟦name.{inst}⟧` is not in the store.** Reads three tables and builds
@@ -430,7 +470,7 @@ pub(crate) fn stored_or_reason_after(
 /// or a constant the environment does not own — and is not a fallback standing
 /// in for a reason that exists.
 pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Gap {
-    let bare = Gap::NoInterpretation(*name, inst.to_vec());
+    let bare = Gap::NoInterpretation(*name);
     let (ind_name, ind_inst, is_rec) = {
         let env = c.environment();
         let is_rec = matches!(env.get(name), Some(ConstantInfo::Recursor { .. }));
@@ -852,11 +892,11 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
         env.get(ind_name)
     else {
-        return Err(Gap::NoInterpretation(*ind_name, inst.to_vec()))
+        return Err(Gap::NoInterpretation(*ind_name))
     };
     let (np, ni) = (*num_params as usize, *num_indices as usize);
     if inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*ind_name, inst.to_vec()))
+        return Err(Gap::NoInterpretation(*ind_name))
     }
     // The branch decider, on the declaration's **own** level expression.
     let own = peel(ty, np + ni).ok_or(Gap::IndSpec(*ind_name, "type shape"))?;
@@ -3092,7 +3132,7 @@ pub(crate) fn former_at(
         .map(|ci| ci.lparams().to_vec())
         .unwrap_or_default();
     let lean_ty = ground::subst_ground(
-        &lean_ty.ok_or_else(|| Gap::NoInterpretation(*ind_name, inst.to_vec()))?,
+        &lean_ty.ok_or(Gap::NoInterpretation(*ind_name))?,
         &lparams,
         inst,
     );
@@ -3852,6 +3892,25 @@ pub(crate) fn store(
     inst: &[u32],
     t: Typing,
 ) -> Result<(), Gap> {
+    store_at(c, name, &crate::ground::ground_levels(inst), t)
+}
+
+/// [`store`] at an instantiation already in the store's own vocabulary — the
+/// counterpart of [`Checker::stored_term_at`], and for its reason: a caller
+/// holding a [`crate::interp::ConstKey`]'s levels must not round-trip them
+/// through a `Vec<u32>` it may not have.
+///
+/// **`Sealed` is what makes this safe at a variable rung.** A certificate
+/// derived under `{u ∈ ω}` and not discharged is refused the store here rather
+/// than written to it, so a route that forgets to close its level assumption
+/// gets a gap and not a lie. `crate::poly_run::PolyLedger::open` is the same
+/// funnel one level up.
+pub(crate) fn store_at(
+    c: &mut Checker<'_, '_>,
+    name: &Name,
+    levels: &[Level],
+    t: Typing,
+) -> Result<(), Gap> {
     let (tm, ev) = (t.tm, t.ev);
     let Some(term) = tm else { return Err(ev.reason(Gap::NoEndpoint)) };
     let typing = match ev {
@@ -3862,7 +3921,10 @@ pub(crate) fn store(
         Ev::Gap(g) => Err(g),
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    ip.put_const((*name, crate::ground::ground_levels(inst)), ConstInterp { term, typing, defeq: None });
+    ip.put_const(
+        (*name, crate::ground::key_levels(levels)),
+        ConstInterp { term, typing, defeq: None },
+    );
     Ok(())
 }
 

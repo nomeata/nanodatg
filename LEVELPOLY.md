@@ -792,7 +792,7 @@ THREADING-CENSUS §2).
    `mutual` or `Quot`**. The reachable ceiling for every zone-A clause put
    together was 25 files. The zone-B clause retired that ceiling by putting
    those declarations on the route — the denominator is 89 again and the
-   number against it is 22. See the step-5 status below.
+   number against it is 23. See the step-5 status below.
 
    The other is `typesOk` 76 against `typeEv` 68. Before the `Π` clause those
    two were equal — every type that interpreted also certified — and they are
@@ -966,13 +966,13 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 22 as of the zone-B clause, and
-   # **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
+   # de-scheduled route certifies end to end. 23 as of the first eliminator,
+   # and **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
    # `$?` must be its own statement: `echo "$(basename $f) $?"` reports
    # `basename`'s exit status, which reads as 89 clean files.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 22 × 0, 67 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 23 × 0, 66 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1137,7 +1137,7 @@ Third column of the same table, taken the same way:
 |---|---|---|---|---|
 | declarations attempted (`def`/`axiom`) | 147 | 147 | 147 | 147 |
 | zone-B declarations (`inductive`/`mutual`/`Quot`) | 108 skipped | 108 skipped | 108 skipped | **108 attempted** |
-| zone-B **constants** interpreted at their own levels | — | — | — | **119 / 362** |
+| zone-B **constants** interpreted at their own levels | — | — | — | **121 / 362** |
 | `⟦ty⟧` produced | 56 | 76 | **102** | 102 |
 | `⊢ ⟦ty⟧ ∈ ⟦Sort ℓ⟧` derived **and closed** | 56 | 68 | **74** | 74 |
 | `⟦val⟧` produced | 83 / 146 | 89 / 146 | **111** / 146 | 111 / 146 |
@@ -1145,7 +1145,7 @@ Third column of the same table, taken the same way:
 | generic points **stored** | — | — | **111** | 111 |
 | `⊢ ∀u⃗. ⋀(uᵢ∈ω) → f̂(u⃗) ∈ T̂(u⃗)` sealed | — | — | **42** | 42 |
 | **escaped assumptions (`open`)** | **0** | **0** | **0** | **0** |
-| whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 | 20 of 89 | **22 of 89** |
+| whole exports fully certified (`mini --poly` exits 0) | 18 of 89 | 18 of 89 | 20 of 89 | **23 of 89** |
 
 `valueEv` is the one column that did not move, and it did not move *by
 construction*: it counts the value's typing at the type inference assigned it,
@@ -1226,13 +1226,17 @@ time. `a_file_with_no_zone_b_is_clean_exactly_as_before` is the control.
 **The denominator is 89 again.** The 25 was the skip's ceiling, not the
 design's.
 
-| | |
-|---|---|
-| zone-B constants owed | **362** |
-| interpreted at their own levels | **119** |
-| `symbolic-level` | 240 |
-| `ind-spec(…: parameter reduction)` | 3 |
-| whole exports certified | 20 → **22 of 89** |
+| | after the zone-B clause | **+ the first eliminator** |
+|---|---|---|
+| zone-B constants owed | 362 | 362 |
+| interpreted at their own levels | 119 | **121** |
+| `symbolic-level` | 240 | 235 |
+| `ind-spec(…: parameter reduction)` | 3 | 6 |
+| whole exports certified | 22 of 89 | **23 of 89** |
+
+The three that moved from `symbolic-level` to `ind-spec` are **better
+reporting, not a regression**: those eliminators now get past the boundary and
+report their declaration's own reason instead of the frontier's.
 
 Every pre-existing poly column is **byte-identical per file** — the clause is
 purely additive on this corpus, which also says the zone-A route was not
@@ -1262,16 +1266,61 @@ whatever `Bool` does**, so a declaration this route interprets completely still
 cannot be certified. That is why only two files flipped rather than the
 thirteen a zone-A reading predicts.
 
-**Eight tutorial files are clean but for exactly those**: `033_empty`,
+**Eight tutorial files were clean but for exactly those**: `033_empty`,
 `034_boolType`, `035_twoBool`, `036_andType`, `041_natDef`,
 `056_typeWithTypeField`, `078_And.right`, `097_aNatLit` — zone A clean, and
-every zone-B refusal on the file a lone-motive-level eliminator. **The next
-clause is the eliminator at a symbolic motive level over a parameter-free
-declaration, and it is worth eight files on its own.** Nothing in it needs a
-construction `derived/src/levels/` does not have *as far as this tranche can
-see* — the motive's level enters as `⟦Sort u⟧ = srt(û)`, which `Interp::sort_of`
-already answers at any level — but that is a prediction and this strand's
-briefs have been wrong about size five times running.
+every zone-B refusal on the file a lone-motive-level eliminator.
+
+##### The hedge, resolved by measurement before any code was written
+
+The paragraph above used to end *"nothing in it needs a construction
+`derived/src/levels/` does not have as far as this tranche can see … but that
+is a prediction"*. It was tried rather than left as one. Under
+`Checker::poly(env, ip, &[u])`, on `Empty`:
+
+| | |
+|---|---|
+| `⟦Sort u⟧` | builds — `Interp::sort_of` |
+| `⟦Empty → Sort u⟧`, the motive's own type | interprets, **no gap** — the `Π` clause at a variable rung |
+| `⟦C t⟧` under the opened nest | interprets |
+| the whole `∀ (C : Empty → Sort u) (t : Empty), C t` nest | opens and returns a term |
+
+**`derived/src/levels/` has what the motive level needs. This is assembly, not
+mathematics, and there is no fundamental blocker here either.**
+
+##### The first eliminator, landed — and it is `Empty.rec`
+
+`crate::recursor::empty_rec`, and the reason it could go first is that **it
+never reads `u₁`**. Its obligation is discharged from the major premise alone
+by `EmptyDecl::anything`, whose `φ` is the caller's; the bottom term is `•` at
+every `u`. Every other route reaches `rec_dep::motive_level` and splits on
+`u₁ = 0`.
+
+`033_empty` is clean, `zoneBOk` is 121, and `Empty.rec.{u}` is in the store at
+`[u]` — a key one longer than its declaration's, which is the first fixture on
+this branch where the two lists are not equal.
+
+##### What the remaining seven owe, by route
+
+Measured, not inferred — a temporary tag on each arm of `recursor::ensure`.
+Of the eliminators that reach a route at all:
+
+| route | reaching it | of the seven files |
+|---|---|---|
+| `crate::rec_dep` (class T) | **27** | `034`, `035`, `041`, `056` |
+| `crate::rec_prop` (class S) | 9 | `036`, `078` |
+| `crate::rec_nat` | 2 | `097` |
+| `crate::rec_s_ix` | 1 | — |
+
+**`rec_dep` at a symbolic motive level is the next clause and is worth four
+files.** What all four routes owe is not the *reader* — `motive_level` — but
+the **split**: `prop != (site.u1 == 0)` picks between two constructions, a
+`Prop`-valued motive and a value-valued one, and at a variable `u` neither
+branch may be taken. The replacement is §1.4's conditional inside the target
+term — `derived::levels::ite0`, the same construction the `Π` clause spends —
+with `Interp::sort_of` for `⟦Sort u₁⟧` and `derived::levels::utower` for the
+rung in place of `prelude.tower.at`. All three exist; none is consumed here
+yet, and that is the honest statement of what is left.
 
 The remaining eleven zone-A-clean files are blocked on something else and are
 named so the next tranche does not size them together: `037_prodType`,
@@ -1283,18 +1332,34 @@ level gap at all**.
 
 ##### What the boundary costs, sized
 
-`zoneb::ensure` takes `inst: &[u32]`, and that is the whole frontier: a
-constant can be asked about only at numerals, so at its own parameters only a
-constant with none. Retyping it to `&[Level]` is §5.3 step 2 for zone B and it
-is **75 `: &[u32]` signatures across 28 files** (`zoneb.rs` 16, `recursor.rs`
-6, the `rec_*`/`class_*`/`iota_*` groups the rest) — mechanical, but not one
-commit. The genuinely non-mechanical interior is much smaller: outside its
+`zoneb::ensure` took `inst: &[u32]`, which made a ground schedule a
+*precondition of the type*. It takes `&[Level]` now, and **the retype was not
+blanket** — the order is `ConstKey`'s, where confining groundness to one
+function is what made the rest countable:
+
+* the constant's **own** instantiation stays a level vector and is what
+  `recursor::ensure` receives, because the motive level is the polymorphic
+  part;
+* the **declaration's** is flattened to numerals by one `as_numeral` at the
+  split, standing in for the seven interior calls rather than pre-empting them;
+* every eliminator route but `empty_rec` converts at one named predicate and
+  answers `Gap::SymbolicLevel` — a reason, not a silence.
+
+Four signatures changed, not 75. The 75 remain the eventual volume and are not
+worth landing ahead of the clauses that justify them.
+
+The genuinely non-mechanical interior is unchanged and untouched: outside its
 tests `zoneb.rs` calls `ground::as_numeral` **four** times (the `Prop` test at
 the truncation branch, the resultant sort, the ctor-index numerals, the field
 level) and `ground::subst_ground` **three** (the declaration's type, its
 constructors' types, and the Lean type the recursor is stated against). Those
-seven are where a zone-B clause would first need something new, and none of
-them has been attempted.
+seven are what the ~70 eliminators whose *declaration* is polymorphic are
+waiting on, and none has been attempted.
+
+`Gap::NoInterpretation`'s second field went with the retype. It was
+`Vec<u32>`, never read — `Ledger::key` renders `no-interp({name})` and nothing
+matches on it — and its type was the same ground assumption. A dead field that
+also blocks the de-grounding is deleted rather than widened.
 
 **No fundamental blocker was found in this tranche either.** Nothing the
 ω-vocabulary could not state came up; what came up is a boundary type and an

@@ -5,7 +5,7 @@
 //! # Interface
 //!
 //! ```text
-//! iota_nat::fire(checker, Nat.rec, σ, rec_ty, ⟦Nat.rec⟧, args, ⟦args⟧, ctor, ctor_args, rhs)
+//! iota_nat::fire(checker, Nat.rec, rec_ty, ⟦Nat.rec⟧, args, ⟦args⟧, ctor, ctor_args, rhs)
 //!   -> Result<(Thm, Term), Gap>
 //! ```
 //!
@@ -97,7 +97,6 @@ pub(crate) fn selects(c: &Checker<'_, '_>, rec: &Name) -> bool {
 pub(crate) fn fire(
     c: &mut Checker<'_, '_>,
     rec: &Name,
-    rec_inst: &[u32],
     rec_ty: &E,
     head_tm: &Term,
     args: &[E],
@@ -110,7 +109,7 @@ pub(crate) fn fire(
         .environment()
         .owner(rec)
         .cloned()
-        .ok_or_else(|| Gap::NoInterpretation(*rec, rec_inst.to_vec()))?;
+        .ok_or(Gap::NoInterpretation(*rec))?;
     let bad = |w: &'static str| Gap::Recursor(ind_name, w, Cause::Threading);
     if crate::direct::clause_for(&ind_name) != Some(crate::direct::Clause::Nat) {
         return Err(bad(CLAUSE))

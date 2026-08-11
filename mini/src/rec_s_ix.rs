@@ -123,10 +123,10 @@ pub(crate) fn ensure(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let (np, n, ni) = (*num_params as usize, *num_minors as usize, *num_indices as usize);
     if n != 1 || cs.walk.spec.len() != 1 || cs.np() != np || cs.ni() != ni || ni == 0 {
@@ -134,10 +134,10 @@ pub(crate) fn ensure(
     }
     let ctor = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0],
-        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
     let Some(ctor_info) = env.get(&ctor) else {
-        return Err(Gap::NoInterpretation(ctor, ind_inst.to_vec()))
+        return Err(Gap::NoInterpretation(ctor))
     };
     let cty = ground::subst_ground(ctor_info.ty(), lparams, rec_inst);
     let nf = cs.walk.spec.base.ctors[0].order.len();

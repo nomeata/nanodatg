@@ -561,7 +561,7 @@ impl Ledger {
     pub fn key(g: Option<&Gap>) -> String {
         match g {
             Some(Gap::StructProj(n)) => format!("proj({n})"),
-            Some(Gap::NoInterpretation(n, _)) => format!("no-interp({n})"),
+            Some(Gap::NoInterpretation(n)) => format!("no-interp({n})"),
             // **The level is in the key**, because the quotient row is two
             // clauses and every `Quot`-bearing declaration is scheduled at
             // both: a key without it cannot tell a half-closed row from an
@@ -1235,7 +1235,7 @@ pub(crate) fn fill_declaration(
         let Some(sigmas) = schedule.get(n) else { continue };
         for sigma in sigmas {
             let mut c = Checker::threaded(env, ip);
-            let _ = crate::zoneb::ensure(&mut c, n, sigma);
+            let _ = crate::zoneb::ensure(&mut c, n, &crate::ground::ground_levels(sigma));
         }
     }
 }
@@ -1267,7 +1267,7 @@ mod tests {
     fn a_reason_key_is_wire_safe() {
         let n = Name::simple("T");
         let gaps = [
-            Gap::NoInterpretation(n, vec![0, 1]),
+            Gap::NoInterpretation(n),
             Gap::Quotient(0, crate::quot::Prim::Quot),
             Gap::Quotient(1, crate::quot::Prim::Mk),
             Gap::Axiom(n),

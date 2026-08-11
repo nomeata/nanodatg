@@ -165,7 +165,7 @@ const LIFT_DOM: &str =
 /// case — `add_quot`'s order — and the length is checked against the constant's
 /// declared parameter list rather than against the table.
 pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), Gap> {
-    let miss = || Gap::NoInterpretation(*name, inst.to_vec());
+    let miss = || Gap::NoInterpretation(*name);
     let bad = |w: &'static str| Gap::IndSpec(Name::simple("Quot"), w);
     let prim = prim_for(name).ok_or_else(miss)?;
 
@@ -285,7 +285,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
             };
             let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
                 Some(t) => t,
-                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"))),
             };
             let (a_mem, ps, p_mems) =
                 (mems[2].clone(), vec![xs[0].clone(), xs[1].clone()], vec![mems[0].clone(), mems[1].clone()]);
@@ -321,7 +321,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
             let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
             let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
                 Some(t) => t,
-                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"))),
             };
             let (h_mem, q_mem) = (mems[3].clone(), mems[4].clone());
             let (q_tm, ps) = (xs[4].clone(), vec![xs[0].clone(), xs[1].clone()]);
@@ -405,7 +405,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Ty
             let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
             let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
                 Some(t) => t,
-                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"))),
             };
             let f_mem = mems[3].clone();
             let ps = vec![xs[0].clone(), xs[1].clone()];
@@ -499,7 +499,7 @@ fn quot_classes_bottom(
         // `⟦Quot.mk α r a⟧ = class(⟦α⟧, R̄, ⟦a⟧)`, in the codomain's own spine.
         Prim::Mk => {
             let Some(Some(former)) = former else {
-                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+                return gap(Gap::NoInterpretation(Name::simple("Quot")))
             };
             let got = crate::quot_classes::mk_at(
                 &q, ip, &former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2], &cod_tm,
@@ -512,7 +512,7 @@ fn quot_classes_bottom(
         // `⟦Quot.ind α r β h q⟧ = •`, in `⟦β q⟧` by no-junk.
         Prim::Ind => {
             let (Some(Some(former)), Some(Some(mk_former))) = (former, mk_former) else {
-                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+                return gap(Gap::NoInterpretation(Name::simple("Quot")))
             };
             let point = ip.point();
             let got = crate::quot_classes::ind_at(
@@ -528,7 +528,7 @@ fn quot_classes_bottom(
         // declaration's codomain interprets to.
         Prim::Lift => {
             let (Some(Some(former)), Some(Some(eq_former))) = (former, eq_former) else {
-                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+                return gap(Gap::NoInterpretation(Name::simple("Quot")))
             };
             let got = crate::quot_classes::lift_at(
                 &q, ip, &former, &eq_former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2],

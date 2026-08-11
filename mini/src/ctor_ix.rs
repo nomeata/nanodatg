@@ -1425,8 +1425,8 @@ mod tests {
         let miss: &[u32] = &[9];
         let c2 = ctors[2];
         assert_eq!(
-            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),
-            Gap::NoInterpretation(c2, miss.to_vec()),
+            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, &crate::ground::ground_levels(miss)).unwrap_err(),
+            Gap::NoInterpretation(c2),
             "with nothing recorded, a store miss is an absence and says so"
         );
         let want = Gap::IndexedCtor(c2, INDEX_TYPE, Cause::Scope);
@@ -1436,7 +1436,7 @@ mod tests {
                 .insert((c2, crate::ground::ground_levels(miss)), want.clone());
         }
         assert_eq!(
-            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, miss).unwrap_err(),
+            crate::zoneb::stored_or_reason_after(&mut c, &c2, &t, miss, &crate::ground::ground_levels(miss)).unwrap_err(),
             want,
             "with a reason recorded, the same miss must report the reason"
         );

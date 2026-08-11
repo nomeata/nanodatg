@@ -123,7 +123,7 @@ use kernel::{Formula, Term, Thm};
 use crate::direct::Clause;
 use crate::env::ConstantInfo;
 use crate::ev::{Cause, Ev, Gap};
-use crate::expr::{Name, E};
+use crate::expr::{Level, Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
 
@@ -147,15 +147,37 @@ pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 /// The declaration is already translated when this runs — `zoneb::ensure`
 /// builds it first and returns before reaching here if it could not — so the
 /// route below is a statement about `T`, never a retry of the carrier.
+///
+/// # `rec_inst` is `&[Level]` and `ind_inst` is not, which is the clause
+///
+/// The recursor's own list is its declaration's with the **motive's level
+/// prepended**, and that prefix is polymorphic even where the declaration has
+/// no parameters at all: `Bool.rec.{u}` carries it whatever `Bool` does.
+/// `LEVELPOLY.md` §5.3 measures 51 of the 111 blocked eliminators at exactly
+/// that shape — a lone motive level over a parameter-free declaration — which
+/// is why the type of *this* parameter is where the de-grounding starts and
+/// not at `ind_inst`.
+///
+/// **Every route below except [`empty_rec`] still wants numerals, and each is
+/// declined by one predicate rather than half-threaded.** `numerals` is that
+/// predicate; a route reaching it with a symbolic motive level answers
+/// [`Gap::SymbolicLevel`], which is a reason and not a silence. They come off
+/// this list one at a time as their `u₁` is derived — [`crate::rec_dep`]'s
+/// `Site::u1` and the `prop != (u1 == 0)` split are what each of them owes.
 pub(crate) fn ensure(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     ind_inst: &[u32],
     rec_name: &Name,
-    rec_inst: &[u32],
+    rec_inst: &[Level],
 ) -> Result<(), Gap> {
+    // The routes that have not been de-grounded yet. Bound once, so that a
+    // route added later cannot quietly acquire a numeral it did not ask for.
+    let numerals = || -> Result<Vec<u32>, Gap> {
+        rec_inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)
+    };
     match crate::direct::clause_for(ind_name) {
-        Some(Clause::Eq) => return eq_rec(c, ind_name, ind_inst, rec_name, rec_inst),
+        Some(Clause::Eq) => return eq_rec(c, ind_name, ind_inst, rec_name, &numerals()?),
         // **`Acc.rec` is [`crate::rec_acc`], and it is two rules.** The route
         // is named here rather than left to fall through, because every test
         // below is a *store read* on a table `Acc` is in none of — the
@@ -166,7 +188,7 @@ pub(crate) fn ensure(
         // is how `Acc` sat misfiled as `indexed-family` for the life of the
         // project.
         Some(Clause::Acc) => {
-            return crate::rec_acc::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
+            return crate::rec_acc::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
         }
         // **`Nat.rec` is [`crate::rec_nat`].** Named here for the reason `Acc`
         // is: every test below is a *store read* on a table `Nat` is in none
@@ -175,7 +197,7 @@ pub(crate) fn ensure(
         // `crate::rec_dep`, which would report that a family it never
         // translated has no carrier.
         Some(Clause::Nat) => {
-            return crate::rec_nat::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
+            return crate::rec_nat::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
         }
         None => {}
     }
@@ -194,13 +216,13 @@ pub(crate) fn ensure(
         if cs.spec.len() != 1 {
             return Err(Gap::Recursor(*ind_name, CLASS_S_EMPTY, Cause::Threading))
         }
-        return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
+        return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, &numerals()?, cs)
     }
     // Class (S) **at an index** — the same store read one table along, and
     // before class (P) because `zoneb::ensure` decides the two on the
     // eliminator trichotomy and a declaration is in exactly one table.
     if let Some(cs) = crate::class_s_ix::of(c, ind_name, ind_inst) {
-        return crate::rec_s_ix::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
+        return crate::rec_s_ix::ensure(c, ind_name, ind_inst, rec_name, &numerals()?, cs)
     }
     // **Class (P), and before the zero-constructor test for the reason class
     // (S) is: the carrier route decides.** A `Prop` that failed Lean's
@@ -213,7 +235,7 @@ pub(crate) fn ensure(
         c.interp().and_then(|ip| ip.ind_apparatus()).and_then(|a| a.truncs.get(&key).cloned())
     };
     if let Some(tt) = tt {
-        return crate::rec_trunc::ensure(c, ind_name, ind_inst, rec_name, rec_inst, tt)
+        return crate::rec_trunc::ensure(c, ind_name, ind_inst, rec_name, &numerals()?, tt)
     }
     // Class (P) **at an index** — the same store read one table along, and it
     // has to be *before* the fall-through rather than merely somewhere: without
@@ -222,7 +244,7 @@ pub(crate) fn ensure(
     // class-(T) route's answer about a family that **is** translated, as class
     // (P), by [`crate::class_p_ix`].
     if let Some(cp) = crate::class_p_ix::of(c, ind_name, ind_inst) {
-        return crate::rec_trunc_ix::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cp)
+        return crate::rec_trunc_ix::ensure(c, ind_name, ind_inst, rec_name, &numerals()?, cp)
     }
     let empty = matches!(
         c.environment().get(ind_name),
@@ -231,7 +253,7 @@ pub(crate) fn ensure(
     if empty {
         return empty_rec(c, ind_name, ind_inst, rec_name, rec_inst)
     }
-    crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
+    crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
 }
 
 /// **The eliminator of a declaration with no constructors** —
@@ -265,19 +287,37 @@ pub(crate) fn ensure(
 /// the declared codomain — then the derived membership is compared against
 /// `• ∈ ⟦C t⟧` before it is accepted. A recursor that is not of this shape
 /// cannot make that comparison succeed.
+///
+/// # The motive's level is never read, and that is why this is the first
+/// eliminator off the ground schedule
+///
+/// Every other route in this module reaches [`crate::rec_dep::motive_level`]
+/// and splits on `u₁ = 0` — a `Prop`-valued motive and a value-valued one are
+/// two constructions — so a symbolic `u` leaves them with no branch to take
+/// until the split becomes the `ite0` term §1.4 describes. This one has no
+/// split: the obligation is discharged from the major premise alone by
+/// `EmptyDecl::anything`, whose `φ` is the caller's, and `•` is the bottom term
+/// at every `u`. `u` appears only in `⟦Sort u⟧` inside the motive's *type*,
+/// which is [`crate::interp::Interp::sort_of`]'s answer at any level and the
+/// `Π` clause's binder — both already built.
+///
+/// So this clause spends **no new mathematics**, exactly as the three before
+/// it did, and what it demonstrates is that the motive level is a threading
+/// obstacle rather than a mathematical one. `LEVELPOLY.md` §5.3 carries the
+/// measurement that answered it before the code was written.
 fn empty_rec(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     ind_inst: &[u32],
     rec_name: &Name,
-    rec_inst: &[u32],
+    rec_inst: &[Level],
 ) -> Result<(), Gap> {
     let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     if *num_minors != 0 {
         return Err(bad("no constructors: the recursor has minors"))
@@ -286,10 +326,14 @@ fn empty_rec(
         return Err(Gap::IndexedFamily(*ind_name, "an indexed recursor at a non-indexed route"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let np = *num_params as usize;
-    let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+    // `subst_levels`, not `subst_ground`: Lean's `instantiate_lparams` at an
+    // instantiation that need not be numerals. `mini/src/ground.rs`'s header —
+    // nothing in that function ever required groundness, only its caller's
+    // type did.
+    let rec_ty = ground::subst_levels(ty, lparams, rec_inst);
     let depth = np + 2;
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("no constructors: arity"))?;
@@ -315,7 +359,7 @@ fn empty_rec(
     };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(empty_bottom(c, &site)) };
     let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    crate::zoneb::store(c, rec_name, rec_inst, t)
+    crate::zoneb::store_at(c, rec_name, rec_inst, t)
 }
 
 /// What [`empty_bottom`] needs: the declaration, its erased carrier, and the
@@ -408,13 +452,13 @@ fn eq_rec(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     if (*num_params, *num_minors, *num_indices) != (2, 1, 1) {
         return Err(bad("Eq.rec: recursor shape"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let codomain =
@@ -735,3 +779,4 @@ mod tests {
         assert_eq!(set, want, "…in ⟦∀ C t. C t⟧");
     }
 }
+

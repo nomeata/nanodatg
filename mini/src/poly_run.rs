@@ -74,20 +74,38 @@
 //! 25 of the 89 tutorial files: 64 contain a zone-B declaration and no zone-A
 //! clause could touch them. **The denominator is 89 again.**
 //!
-//! What the attempt measures, over the corpus: **119 of 362** zone-B constants
-//! interpret at their own parameters. The other 243 are 240 `symbolic-level`
-//! and 3 `ind-spec(…: parameter reduction)`, and the 240 split — measured, not
-//! predicted — into **55 type formers, 74 constructors and 111 eliminators**.
-//! The frontier is one predicate: `zoneb::ensure` takes `inst: &[u32]`, so a
-//! constant can be asked about only at numerals, and at a constant's *own*
-//! parameters that means only a constant with none.
+//! What the attempt measures, over the corpus: **121 of 362** zone-B constants
+//! interpret at their own parameters. The other 241 are 235 `symbolic-level`
+//! and 6 `ind-spec(…: parameter reduction)`, and the blocked population splits
+//! — measured, not predicted — into **55 type formers, 74 constructors and 106
+//! eliminators**.
 //!
-//! **The finding worth carrying: a declaration with no universe parameter still
-//! owes a polymorphic eliminator.** `Bool.rec.{u}` carries the motive's level
-//! whatever `Bool` does, and 51 of the 111 blocked eliminators are exactly that
-//! shape — a lone motive level over a parameter-free declaration. Eight
-//! tutorial files are clean but for those, so that is the next clause and it is
-//! worth eight files on its own.
+//! # The frontier is in two halves and only one of them is still a type
+//!
+//! `zoneb::ensure` takes `inst: &[Level]`. It splits: the constant's **own**
+//! instantiation stays a level vector, the **declaration's** must still be
+//! numerals. So the two halves are
+//!
+//! * **the declaration's levels** — `Prod.{u,v}`, `Eq.{u}`, `Quot.{u}` — which
+//!   `ground::as_numeral` refuses at one place, standing in for the seven
+//!   `as_numeral`/`subst_ground` calls in `zoneb.rs`'s interior; and
+//! * **the eliminator's motive level**, which is polymorphic *even where the
+//!   declaration is not*. `Bool` has no universe parameter and translates;
+//!   `Bool.rec.{u}` carries the motive's level whatever `Bool` does.
+//!
+//! The second half is where this route now is. `crate::recursor::empty_rec` is
+//! through — it never reads `u₁`, so `Empty.rec.{u}` costs
+//! [`crate::interp::Interp::sort_of`] and the already-landed `Π` clause and
+//! nothing else — and `033_empty` is clean on the strength of it. **Every other
+//! eliminator stops at `crate::rec_dep::motive_level`**, whose header says what
+//! they owe: not the reader, the `u₁ = 0` *split*, as §1.4's conditional inside
+//! the term.
+//!
+//! Of the eliminators that reach a route at all: **27 `rec_dep`, 9 `rec_prop`,
+//! 2 `rec_nat`, 1 `rec_s_ix`**. Seven tutorial files are clean but for one
+//! eliminator each — four of them `rec_dep`, two `rec_prop`, one `rec_nat` —
+//! so `rec_dep` at a symbolic motive level is the next clause and is worth
+//! four files.
 //!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
@@ -711,30 +729,33 @@ fn zone_b(env: &Environment, ip: &mut Interp, d: &Declaration, led: &mut PolyLed
             // constant nothing can interpret, which is what this `Gap` says.
             PolyLedger::note(
                 &mut led.zone_b_blocked,
-                Some(&Gap::NoInterpretation(*n, Vec::new())),
+                Some(&Gap::NoInterpretation(*n)),
             );
             continue
         };
         let own: Vec<Level> = lps.iter().map(|u| Level::param(*u)).collect();
-        let Some(nums) = own.iter().map(crate::ground::as_numeral).collect::<Option<Vec<u32>>>()
-        else {
-            PolyLedger::note(&mut led.zone_b_blocked, Some(&Gap::SymbolicLevel));
-            continue
-        };
         // `Checker::poly` and not `Checker::threaded`, even where `lps` is
         // empty and the two would derive the same theorems: this route's
         // symbol numbering has to be a function of the route and not of which
         // constructor a given arm happened to pick.
         //
         // With `lps` empty it opens no `uᵢ ∈ ω`, so there is nothing for
-        // `discharge_levels` to close and nothing that could reach the store
-        // open — which is why zone B has no `open` column of its own here.
-        // The moment `lps` is non-empty that stops being true, and `Sealed`
-        // inside zone B is what will refuse it rather than this loop.
+        // `discharge_levels` to close. Where it is **not** empty — every
+        // eliminator, whose motive level is its own — the assumptions are live
+        // for the whole build and `Sealed` inside `crate::zoneb::store_at` is
+        // what refuses a certificate that escaped with one, which is why zone
+        // B has no `open` column of its own here.
         let Some(mut c) = Checker::poly(env, ip, &lps) else {
             unreachable!("the apparatus built at route entry")
         };
-        let r = crate::zoneb::ensure(&mut c, n, &nums);
+        // **The levels go through, not their numerals.** This used to test the
+        // whole vector with `ground::as_numeral` and report `symbolic-level`
+        // for anything else — the frontier when `zoneb::ensure` took `&[u32]`.
+        // It takes `&[Level]` now and makes the split itself, per its header:
+        // the declaration's own levels must still be numerals, the constant's
+        // own prefix need not be. Reporting it here as well would be a second
+        // frontier disagreeing with the first.
+        let r = crate::zoneb::ensure(&mut c, n, &own);
         // **The store is the verdict, not the `Result`.** `ensure` answers
         // `Ok` having filled the declaration's key, and the constant asked for
         // is one of several it fills; reading the return value alone would
@@ -1021,6 +1042,66 @@ mod tests {
         // The row exists whatever the buckets in it say, so the census cannot
         // vanish silently the way a deleted test does.
         assert!(led.rows().iter().any(|r| r.starts_with("polyzoneb")), "{:?}", led.rows());
+    }
+
+    /// **The eliminator of a parameter-free declaration is built at a
+    /// *symbolic* motive level** — the first eliminator off the ground
+    /// schedule, and the answer to whether the motive level needs mathematics
+    /// `derived/src/levels/` does not have.
+    ///
+    /// `Empty : Type` has no universe parameter, so its type former goes
+    /// through at the empty instantiation like any other; `Empty.rec.{u}`
+    /// carries the motive's level and used to stop at the `&[u32]` boundary.
+    /// It goes through now, and what it spends is
+    /// [`crate::interp::Interp::sort_of`] for `⟦Sort u⟧` and the already-landed
+    /// `Π` clause for the motive's own type `⟦Empty → Sort u⟧` — **no new
+    /// mathematics**, which is why `crate::recursor::empty_rec` is the route
+    /// that could go first: it never reads `u₁`.
+    ///
+    /// # Both keys, and they are different keys
+    ///
+    /// `⟦Empty⟧` is stored at `[]` and `⟦Empty.rec⟧` at `[u]`. Asserting both
+    /// is the point rather than belt-and-braces: the two instantiations differ
+    /// by exactly the motive level, and a clause that keyed the eliminator on
+    /// its declaration's list would put `⟦Empty.rec⟧` at `[]` and every later
+    /// lookup would miss. That confusion is what `zoneb::ensure`'s own/ind
+    /// split exists to prevent, and this is the first fixture where the two
+    /// lists are not equal.
+    #[test]
+    fn a_parameter_free_declarations_eliminator_builds_at_a_symbolic_motive_level() {
+        let e = n("Empty");
+        let d = Declaration::Inductive {
+            name: e,
+            lparams: Vec::new(),
+            num_params: 0,
+            ty: sort(Level::zero().succ()),
+            ctors: Vec::new(),
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("Empty is accepted");
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        // The type former and `Empty.rec` — both owed, both met.
+        assert_eq!((led.zone_b_ok, led.zone_b_consts), (2, 2), "{:?}", led.rows());
+        assert!(led.is_clean(), "{:?}", led.rows());
+        owed_is_met_or_explained(&led);
+        // `⟦Empty⟧` at the declaration's own (empty) instantiation…
+        assert!(ip.get_const(&(e, Vec::new())).is_some(), "⟦Empty⟧");
+        // …and `⟦Empty.rec⟧` at the *recursor's* own, which is one longer.
+        let rec = Name::str(&e, "rec");
+        let lps = env.get(&rec).expect("Empty.rec is generated").lparams().to_vec();
+        assert_eq!(lps.len(), 1, "the motive's level is the recursor's own parameter");
+        let own: Vec<Level> = lps.iter().map(|u| Level::param(*u)).collect();
+        assert!(
+            ip.get_const(&(rec, crate::ground::key_levels(&own))).is_some(),
+            "⟦Empty.rec.{{u}}⟧ at a symbolic motive level: {:?}",
+            led.rows()
+        );
+        // Not at the declaration's list — the keys are not interchangeable.
+        assert!(
+            ip.get_const(&(rec, Vec::new())).is_none(),
+            "the eliminator must not be keyed on its declaration's instantiation"
+        );
     }
 
     /// **A `mutual` block is recorded and never handed to `zoneb::ensure`** —

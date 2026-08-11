@@ -202,10 +202,10 @@ pub(crate) fn ensure(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
     // **The indexed eliminator, and it is two constructions, not one.**
@@ -247,7 +247,7 @@ pub(crate) fn ensure(
     }
     let ctors = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
-        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let depth = np + 1 + n + 1;
@@ -305,6 +305,31 @@ pub(crate) fn ensure(
 /// recursor, and with the indexed decline above: the motive binder is the same
 /// binder and §6.2's split on `u₁` is the same split, so a second reader would
 /// be a second chance to disagree.
+///
+/// # This `Option<u32>` is the level-polymorphic frontier for every eliminator
+/// but one
+///
+/// `LEVELPOLY.md` §5.3: `crate::recursor::ensure` now takes the recursor's own
+/// instantiation as `&[Level]`, because the motive's level is polymorphic even
+/// at a declaration with no parameters — `Bool.rec.{u}`. `crate::recursor`'s
+/// `empty_rec` needs no `u₁` at all and is through; **every other route stops
+/// here**, and the `None` this returns at a symbolic motive sort is what they
+/// stop on.
+///
+/// What they owe is not this reader — it is the *split*. [`Site::u1`] feeds
+/// `prop != (site.u1 == 0)` in [`rec_bottom`] and the same test in
+/// `crate::rec_prop`, `crate::rec_nat` and `crate::rec_s_ix`: a `Prop`-valued
+/// motive and a value-valued one are two constructions, and at a variable `u`
+/// neither branch may be taken. The replacement is §1.4's conditional **inside
+/// the target term** — `derived::levels::ite0`, the same construction the `Π`
+/// clause spends — with `⟦Sort u₁⟧` as
+/// [`crate::interp::Interp::sort_of`] rather than `Interp::sort`, and the rung
+/// as `derived::levels::utower` rather than `prelude.tower.at`. All three exist.
+///
+/// Measured over the corpus, of the eliminators that reach a route at all:
+/// **27 take [`ensure`], 9 `crate::rec_prop`, 2 `crate::rec_nat`, 1
+/// `crate::rec_s_ix`.** This module is therefore the next clause and it is
+/// worth four of the seven files that owe only an eliminator.
 pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &after.view() else { return None };

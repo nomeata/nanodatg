@@ -136,7 +136,7 @@ pub fn inhabit(
     ty_tm: &kernel::Term,
 ) -> Result<Thm, Gap> {
     let bad = |w: &'static str| Gap::IndSpec(*name, w);
-    let miss = || Gap::NoInterpretation(*name, inst.to_vec());
+    let miss = || Gap::NoInterpretation(*name);
     // The declared type, from the environment rather than from the ledger's
     // substituted copy: this module states its depth against what the *export*
     // says, which is the half of "the name is not the evidence" that is cheap.

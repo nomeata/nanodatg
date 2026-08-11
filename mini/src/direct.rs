@@ -273,14 +273,14 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
         env.get(name)
     else {
-        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name))
     };
     let (np, ni, nc) = cl.arity();
     if (*num_params, *num_indices, ctors.len()) != (np, ni, nc) {
         return Err(bad("direct clause: declaration shape"))
     }
     if inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*name, inst.to_vec()))
+        return Err(Gap::NoInterpretation(*name))
     }
     let depth = (np + ni) as usize;
     let lean_ty = ground::subst_ground(ty, lparams, inst);

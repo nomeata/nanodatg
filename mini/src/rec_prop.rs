@@ -157,7 +157,7 @@ pub(crate) fn ensure(
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
     else {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     };
     // An indexed family never reaches the class-(S) carrier — `LeProp` is
     // stated at `ni = 0` — so this is the statement that the *recursor* agrees.
@@ -165,7 +165,7 @@ pub(crate) fn ensure(
         return Err(Gap::IndexedFamily(*ind_name, "an indexed recursor at the class-(S) route"))
     }
     if rec_inst.len() != lparams.len() {
-        return Err(Gap::NoInterpretation(*rec_name, rec_inst.to_vec()))
+        return Err(Gap::NoInterpretation(*rec_name))
     }
     let np = *num_params as usize;
     if *num_minors != 1 || cs.spec.len() != 1 || cs.np() != np {
@@ -173,7 +173,7 @@ pub(crate) fn ensure(
     }
     let ctor = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) if ctors.len() == 1 => ctors[0],
-        _ => return Err(Gap::NoInterpretation(*ind_name, ind_inst.to_vec())),
+        _ => return Err(Gap::NoInterpretation(*ind_name)),
     };
 
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);

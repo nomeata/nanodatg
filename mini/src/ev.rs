@@ -115,8 +115,15 @@ pub enum Gap {
     /// `Cause::Assumption` — which used to be this variant's axis — has no
     /// occupant left and is gone.
     Axiom(Name),
-    /// A constant's interpretation is not in the store at these ground levels.
-    NoInterpretation(Name, Vec<u32>),
+    /// A constant's interpretation is not in the store.
+    ///
+    /// **The instantiation used to be a second field and is gone.** It was
+    /// `Vec<u32>`, never read — `Ledger::key` renders `no-interp({name})` and
+    /// nothing matches on it — and its *type* was the ground-schedule
+    /// assumption `LEVELPOLY.md` §5.3 step 2 is removing: a constant declined
+    /// at a symbolic level could not be named by this variant at all. A dead
+    /// field that also blocks the de-grounding is deleted rather than widened.
+    NoInterpretation(Name),
     /// **`Quot` at `u ≥ 1`** — the equivalence-class construction, which is
     /// `derived/src/quot/`'s and is a different clause from the `Sort 0` one.
     ///
