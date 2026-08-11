@@ -3381,3 +3381,59 @@ the sentence to be able to write.** If some row did rise, the trade has to name
 it. See `MEASUREMENTS.md`, "The head reduction that never reached its delta
 branch", and `DECISIONS.md`'s 2026-08-08 "SKIP is not PASS" entry, of which this
 is the same idea applied to a number rather than to a skipped test.
+
+## 2026-08-11 — A guard may not ratchet a total it is not named for
+
+Tasks #152 and #137, and the fifteenth recorded instance of this project's
+oldest failure: *a check reporting success having done nothing*. The previous
+fourteen were found one at a time and fixed one at a time. This is the first
+sweep, and what it produced is four rules rather than four fixes.
+
+### The finding that names the class
+
+`the_general_iota_rule_computes_on_the_prelude` ratcheted **`TOTAL gaps`**, a
+number every clause of the checker contributes to, and its failure message read
+*"the general ι path regressed"*. Its own comments record the ledger being
+re-based twice by other people's work — most explicitly by `beta_arg_typing`,
+15 542 → 15 761, with **"the ι path itself is flat — no `iota` row moved"**.
+
+So the guard had two defects at once, and the second is worse than the first. A
+guard re-based silently has stopped guarding. A guard that **misattributes**
+sends the next reader to the wrong file, and it does so with the authority of a
+red test.
+
+The total is still worth guarding — it is the number the project is judged on —
+so it moved to `the_prelude_ledger_totals_are_ratcheted`, which claims exactly
+it and says at the assertion that it names no subject. The ι test now ratchets
+`gap: iota`, which is 1 278 and is its own.
+
+### The four rules
+
+1. **Ratchet the component you are named for.** Where a total genuinely is the
+   subject, give it its own test and say so at the assertion.
+2. **Reading a row must fail when the row is gone.** A reader that returns 0 for
+   a label matching nothing turns every `== 0` and `<= n` over it green. Two
+   tests had independently written that check as a local closure; it is hoisted
+   as `row`, against the permissive `rows_or_zero`, which is *named* for its
+   silence.
+3. **Where absent legitimately means zero, anchor on something always emitted.**
+   Some rows are printed only when nonzero, so a permissive read is correct —
+   but only after `assert_is_a_report` has established a report exists. Without
+   an anchor a dead subprocess is indistinguishable from a clean run, and
+   nothing reads the exit status.
+4. **Every loop needs a floor.** A `for` over a corpus sweep or an allowlist is
+   satisfied by an empty collection, and deleting an allowlist's last entry is
+   routine maintenance.
+
+### And the rule that found the bug in the fix
+
+**A guard nobody has watched fail is a guard nobody has tested.** Every rule
+above was added by mutating it and observing the red. One of the floors turned
+out **never to have been written** — the script that added it raised before
+writing, the suite went green, and only the mutation found it. That is this
+entry's own subject happening to the fix for this entry's own subject, which is
+the best argument available that the mutation step is not optional.
+
+`ci/test-boundary.sh` has demonstrated the same discipline for CI *rules* since
+2026-08-09 and caught two real bugs in its own rule. These four extend it to the
+suites.

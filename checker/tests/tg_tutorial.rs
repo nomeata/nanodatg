@@ -8,6 +8,43 @@
 //!
 //! Only meaningful with `--features tg`; otherwise the backend is
 //! `NullCertifier` and there is nothing to check.
+//!
+//! # How a guard in this file goes quiet, and the four rules against it
+//!
+//! Tasks #152 and #137. Every assertion here is read out of the backend's
+//! **text report**, and every way of reading text has a way of returning
+//! *nothing* that looks like a *zero*. This project has fourteen recorded
+//! instances of a check reporting success having done nothing; five of the
+//! mechanisms live in this file, so they are named here rather than one comment
+//! at a time.
+//!
+//! 1. **A guard may not ratchet a total it is not named for.** A whole-ledger
+//!    number is moved by every contributor, so a component-named test that pins
+//!    one fails for other people's reasons and — worse — blames its own subject
+//!    in the message. [`the_general_iota_rule_computes_on_the_prelude`] pinned
+//!    `TOTAL gaps` and was demonstrably re-based twice with the ι path flat. It
+//!    now ratchets `gap: iota`; the totals moved to
+//!    [`the_prelude_ledger_totals_are_ratcheted`], which claims exactly them.
+//! 2. **Assert on [`row`], never on [`rows_or_zero`].** The permissive reader
+//!    returns 0 for a label matching nothing, so a renamed row turns every
+//!    `== 0` and `<= n` over it green. `row` asserts the label is present first.
+//!    Two tests here had independently written that check as a local closure
+//!    before it was hoisted.
+//! 3. **Where absent legitimately *means* zero, anchor on something that is
+//!    always emitted.** The backend prints `conditional derivations:` only when
+//!    the count is nonzero, and lists only the section rows it has — so a
+//!    permissive read is right, but only once [`assert_is_a_report`] has
+//!    established that a report exists at all. Without the anchor, a dead
+//!    subprocess reads as a clean run.
+//! 4. **A loop needs a floor.** Every `for` over a corpus sweep or an allowlist
+//!    is satisfied by an empty collection. Deleting the last entry of an
+//!    allowlist is routine maintenance; deleting it silently is not. Six sweeps
+//!    and five allowlists here carry `assert!(!…is_empty())` for that reason.
+//!
+//! And: **a guard nobody has watched fail is a guard nobody has tested.** Each
+//! rule above was added by mutating it and observing the red — including one
+//! floor that turned out never to have been written, which only the mutation
+//! found.
 
 #![cfg(feature = "tg")]
 
@@ -360,6 +397,12 @@ fn proof_irrelevance_files_are_fully_derived() {
     if skip_guard::absent(&dir) {
         return
     }
+    // **The floor.** Every assertion in this loop is about the entries; over an
+    // empty list there are none, and the test is green. Removing an entry is the
+    // routine maintenance action when a file starts gapping, so the last one can
+    // go the same way as the others. `mini/tests/mutual.rs` carries this floor on
+    // its own allowlist; this file had it on none of five.
+    assert!(!PROOF_IRRELEVANCE_DERIVED.is_empty(), "the `PROOF_IRRELEVANCE_DERIVED` allowlist is empty — this test would pass having checked nothing");
     for name in PROOF_IRRELEVANCE_DERIVED {
         let f = dir.join(format!("{name}.ndjson"));
         assert!(f.exists(), "missing corpus file {}", f.display());
@@ -384,6 +427,12 @@ fn the_bool_recursor_file_is_fully_derived() {
     if skip_guard::absent(&dir) {
         return
     }
+    // **The floor.** Every assertion in this loop is about the entries; over an
+    // empty list there are none, and the test is green. Removing an entry is the
+    // routine maintenance action when a file starts gapping, so the last one can
+    // go the same way as the others. `mini/tests/mutual.rs` carries this floor on
+    // its own allowlist; this file had it on none of five.
+    assert!(!RECURSOR_DERIVED.is_empty(), "the `RECURSOR_DERIVED` allowlist is empty — this test would pass having checked nothing");
     for name in RECURSOR_DERIVED {
         let f = dir.join(format!("{name}.ndjson"));
         assert!(f.exists(), "missing corpus file {}", f.display());
@@ -401,6 +450,12 @@ fn tutorial_files_are_fully_derived() {
     if skip_guard::absent(&dir) {
         return
     }
+    // **The floor.** Every assertion in this loop is about the entries; over an
+    // empty list there are none, and the test is green. Removing an entry is the
+    // routine maintenance action when a file starts gapping, so the last one can
+    // go the same way as the others. `mini/tests/mutual.rs` carries this floor on
+    // its own allowlist; this file had it on none of five.
+    assert!(!FULLY_DERIVED.is_empty(), "the `FULLY_DERIVED` allowlist is empty — this test would pass having checked nothing");
     for name in FULLY_DERIVED {
         let f = dir.join(format!("{name}.ndjson"));
         assert!(f.exists(), "missing corpus file {}", f.display());
@@ -506,6 +561,12 @@ fn files_with_known_gaps_are_still_accepted() {
     if skip_guard::absent(&dir) {
         return
     }
+    // **The floor.** Every assertion in this loop is about the entries; over an
+    // empty list there are none, and the test is green. Removing an entry is the
+    // routine maintenance action when a file starts gapping, so the last one can
+    // go the same way as the others. `mini/tests/mutual.rs` carries this floor on
+    // its own allowlist; this file had it on none of five.
+    assert!(!HAS_GAPS.is_empty(), "the `HAS_GAPS` allowlist is empty — this test would pass having checked nothing");
     for name in HAS_GAPS {
         let f = dir.join(format!("{name}.ndjson"));
         let (accepted, derived, gaps) = check(&f);
@@ -530,6 +591,12 @@ fn partially_derived_files_stay_within_their_budget() {
     if skip_guard::absent(&dir) {
         return
     }
+    // **The floor.** Every assertion in this loop is about the entries; over an
+    // empty list there are none, and the test is green. Removing an entry is the
+    // routine maintenance action when a file starts gapping, so the last one can
+    // go the same way as the others. `mini/tests/mutual.rs` carries this floor on
+    // its own allowlist; this file had it on none of five.
+    assert!(!GAP_BUDGET.is_empty(), "the `GAP_BUDGET` allowlist is empty — this test would pass having checked nothing");
     for (name, budget) in GAP_BUDGET {
         let f = dir.join(format!("{name}.ndjson"));
         let (accepted, _, gaps) = check(&f);
@@ -549,12 +616,21 @@ fn partially_derived_files_stay_within_their_budget() {
 #[test]
 fn tg_backend_still_rejects_bad_files() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bad");
-    for entry in std::fs::read_dir(&dir).expect("fixtures/bad").flatten() {
-        let p = entry.path();
-        if p.extension().is_some_and(|e| e == "ndjson") {
-            let (accepted, _, _) = check(&p);
-            assert!(!accepted, "{}: accepted an ill-typed file with the TG backend", p.display());
-        }
+    let files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("fixtures/bad")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .collect();
+    // **The floor.** This is the only place the TG backend is checked against
+    // ill-typed input, and it is a "nothing happens" test: an empty directory,
+    // or one whose files stop ending in `.ndjson`, satisfies every assertion
+    // below for free. `.expect` covers a *missing* directory and not an empty
+    // one. `checker/tests/corpus.rs` protects the identical loop this way.
+    assert!(!files.is_empty(), "no committed bad fixtures found in {} — the only negative test of the TG backend would pass having checked nothing", dir.display());
+    for p in &files {
+        let (accepted, _, _) = check(p);
+        assert!(!accepted, "{}: accepted an ill-typed file with the TG backend", p.display());
     }
 }
 
@@ -629,8 +705,38 @@ fn escaped_assumptions_are_reported_as_gaps() {
     }
 }
 
-/// The backend's whole report for one export, as text.
+/// The backend's whole report for one export, as text — **memoised on the
+/// export path**.
+///
+/// The report is a pure function of this binary and that file, so running it
+/// twice can only produce the same text twice. It is also the most expensive
+/// thing in this suite: about four minutes for `init-prelude` in the debug
+/// profile.
+///
+/// **That cost was load-bearing in the wrong way.** It is the stated reason
+/// guards for *different* subjects were asserted off one run — "because that
+/// run is expensive" — and sharing a test is how
+/// [`the_general_iota_rule_computes_on_the_prelude`] came to carry a ratchet on
+/// the ledger *total*, which every contributor's traffic moves and which
+/// therefore stopped guarding the ι path it is named for (task #152). A guard
+/// should be split from its neighbours whenever its subject is, and the memo is
+/// what makes that free.
 fn report(export: &Path) -> String {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<OnceLock<String>>>>> =
+        OnceLock::new();
+    // Per-key `OnceLock`, so two tests asking about *different* exports run in
+    // parallel and two asking about the same one share a single run rather than
+    // serialising the whole suite behind one mutex.
+    let cell = {
+        let mut g = CACHE.get_or_init(Default::default).lock().expect("report cache poisoned");
+        Arc::clone(g.entry(export.to_path_buf()).or_default())
+    };
+    cell.get_or_init(|| run_report(export)).clone()
+}
+
+/// [`report`] without the memo — one spawn of the checker.
+fn run_report(export: &Path) -> String {
     let cfg_path = tmp_cfg("rep", export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
@@ -643,8 +749,68 @@ fn report(export: &Path) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// Sum the counts of every report row whose text starts with `label`.
-fn rows_totalling(text: &str, label: &str) -> u64 {
+/// **The report is a report at all.** Panics unless `text` carries the two lines
+/// the backend emits unconditionally.
+///
+/// This is the anchor the two permissive readers below rest on, and the
+/// distinction it draws is the one that matters for this whole class of guard:
+///
+/// * a row that is **absent because its count is zero** is legitimate — the
+///   backend emits `conditional derivations:` only `if made > 0`
+///   (`tg.rs:19625`), and the `general inductive path` section lists only the
+///   rows it has, so `001_basicDef` has none at all;
+/// * a row that is **absent because the report is not there** — the subprocess
+///   died (no caller reads its exit status), the format changed, the label was
+///   renamed — is a guard that has stopped guarding.
+///
+/// Reading a missing row as 0 conflates the two, and every caller of
+/// [`escaped_count`] asserts the result *is* 0. Anchoring on lines that are
+/// always emitted separates them: the permissive read is then a statement about
+/// the count, not about whether anything ran.
+fn assert_is_a_report(text: &str, what: &str) {
+    for anchor in ["derived (real kernel Thm)", "TOTAL gaps"] {
+        assert!(
+            text.lines().any(|l| l.trim_start().starts_with(anchor)),
+            "{what}: the output has no `{anchor}` line, so it is not a backend report — \
+             reading a row out of it as zero would pass having measured nothing.\n{text}"
+        );
+    }
+}
+
+/// Sum the counts of every report row whose text starts with `label`, and
+/// **assert that at least one row matches**. This is the one to use when a
+/// bound is being asserted.
+///
+/// # The defect it exists for (task #152's sibling)
+///
+/// [`rows_or_zero`] returns 0 for a label that matches nothing. So a row that is
+/// renamed, or that drops out of the report because the code emitting it went
+/// away, reads **zero** — and every `assert_eq!(.., 0)` and `assert!(.. <= n)`
+/// over it then passes having measured nothing. The guard does not fail; it goes
+/// quiet, which is worse, because a quiet guard is indistinguishable from a
+/// working one.
+///
+/// Two tests in this file had already worked this out and written the check as a
+/// local closure, independently, with almost the same message. It is hoisted
+/// here so the third one does not have to rediscover it, and so that the
+/// distinction between the two readers is visible at every call site: `row` when
+/// you are about to assert, [`rows_or_zero`] only when the report genuinely
+/// omits the row unless it is nonzero — and then say which row and why.
+fn row(text: &str, label: &str) -> u64 {
+    assert!(
+        text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
+        "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
+    );
+    rows_or_zero(text, label)
+}
+
+/// Sum the counts of every report row whose text starts with `label`, or **0 if
+/// there is no such row**.
+///
+/// The permissive reader. Named for its silence because that silence is the
+/// mechanism behind a whole class of guards that pass having measured nothing —
+/// see [`row`], which is what to call when the next thing you do is assert.
+fn rows_or_zero(text: &str, label: &str) -> u64 {
     text.lines()
         .map(str::trim_start)
         .filter(|l| l.starts_with(label))
@@ -737,16 +903,16 @@ fn the_two_clauses_of_the_interpretation_never_disagree() {
             "gap: lam congruence: one proof λ and one Λ",
             "gap: congruence: one proof application and one",
         ] {
-            let mixed = rows_totalling(&text, row);
+            let mixed = rows_or_zero(&text, row);
             assert_eq!(mixed, 0, "{name}: {mixed} term(s) classified one way and compared against another");
         }
-        derived += rows_totalling(&text, "by ty_pi_prop");
-        missing += rows_totalling(&text, "no evidence: ty_pi_prop");
-        undet += rows_totalling(&text, "no evidence: ty_pi_undet");
-        by_param += rows_totalling(&text, "a universe parameter:");
-        lam_point += rows_totalling(&text, "λ interpreted as •");
-        app_point += rows_totalling(&text, "application interpreted as •");
-        lam_typed += rows_totalling(&text, "by ty_lam");
+        derived += rows_or_zero(&text, "by ty_pi_prop");
+        missing += rows_or_zero(&text, "no evidence: ty_pi_prop");
+        undet += rows_or_zero(&text, "no evidence: ty_pi_undet");
+        by_param += rows_or_zero(&text, "a universe parameter:");
+        lam_point += rows_or_zero(&text, "λ interpreted as •");
+        app_point += rows_or_zero(&text, "application interpreted as •");
+        lam_typed += rows_or_zero(&text, "by ty_lam");
     }
     // **The two term-level clauses are taken, and by this many terms.** Held as
     // ratchets so that deleting either branch — which no disagreement row would
@@ -846,10 +1012,10 @@ fn the_pre_pass_predicts_every_instantiation_the_backend_interprets() {
     for f in &files {
         let text = report(f);
         let name = f.file_stem().unwrap().to_string_lossy().into_owned();
-        let miss = rows_totalling(&text, "…at an instantiation the pre-pass did NOT predict");
+        let miss = rows_or_zero(&text, "…at an instantiation the pre-pass did NOT predict");
         assert_eq!(miss, 0, "{name}: {miss} constant instantiation(s) the pre-pass did not schedule");
         unpredicted += miss;
-        predicted += rows_totalling(&text, "constants interpreted at a scheduled instantiation");
+        predicted += rows_or_zero(&text, "constants interpreted at a scheduled instantiation");
     }
     // A zero miss row proves nothing if nothing was audited.
     assert!(predicted > 0, "the audit never ran: no constant instantiation was checked against the schedule");
@@ -869,7 +1035,20 @@ fn escaped_count(export: &Path) -> u64 {
     let _ = std::fs::remove_file(&cfg_path);
     let text = String::from_utf8_lossy(&out.stderr);
     // "… , N accounted for by a rule, M escaped (max K assumptions)"
-    let Some(line) = text.lines().find(|l| l.trim_start().starts_with("conditional derivations:")) else {
+    //
+    // **Absent is a failure, not zero.** Every caller of this function asserts
+    // the result *is* zero, so returning 0 for a missing line means a renamed
+    // report row, a changed stderr format, or a subprocess that died (the exit
+    // status is not read) turns four escape assertions green having parsed
+    // nothing. The same line is parsed twice more in this file — `check` uses
+    // `unwrap_or(u64::MAX)` and the ledger test uses `.expect(..)` — and both
+    // fail loudly when it is missing. This was the outlier, and it was the one
+    // whose result is compared against zero.
+    assert_is_a_report(&text, &format!("escaped_count({})", export.display()));
+    // Emitted only `if made > 0`, so a genuine zero has no line. That is fine
+    // *because* the anchor above has already established the report exists.
+    let Some(line) = text.lines().find(|l| l.trim_start().starts_with("conditional derivations:"))
+    else {
         return 0
     };
     let toks: Vec<&str> = line.split_whitespace().collect();
@@ -1073,10 +1252,10 @@ fn the_projection_typing_rule_fires() {
     let (mut inferred, mut no_evidence, mut searched, mut not_claim) = (0u64, 0u64, 0u64, 0u64);
     for f in &files {
         let text = report(f);
-        inferred += rows_totalling(&text, "by ty_proj");
-        no_evidence += rows_totalling(&text, "no evidence: ty_proj");
-        searched += rows_totalling(&text, "by Proj: the field's own typing");
-        not_claim += rows_totalling(&text, "no evidence: ty_not_the_claim");
+        inferred += rows_or_zero(&text, "by ty_proj");
+        no_evidence += rows_or_zero(&text, "no evidence: ty_proj");
+        searched += rows_or_zero(&text, "by Proj: the field's own typing");
+        not_claim += rows_or_zero(&text, "no evidence: ty_not_the_claim");
     }
     assert!(inferred >= 27, "inference typed only {inferred} projections, expected at least 27");
     assert_eq!(no_evidence, 0, "{no_evidence} projection typings had no evidence; the rule declined");
@@ -1137,7 +1316,7 @@ fn a_constructor_rule_is_keyed_by_its_universe_levels() {
     // Both `List.nil` obligations must be answered by the rule. A zero-gap file
     // in which the clause simply never fired would pass the assertions above
     // and prove nothing.
-    let by_rule = rows_totalling(&report(&f), "by CtorApp:");
+    let by_rule = rows_or_zero(&report(&f), "by CtorApp:");
     assert_eq!(by_rule, 2, "list-two-levels: {by_rule} obligations answered by the constructor rule, expected 2");
 }
 
@@ -1150,6 +1329,7 @@ fn a_constructor_rule_is_keyed_by_its_universe_levels() {
 /// The general path's report rows for one export, as `(label, count)`.
 fn gen_rows(export: &Path) -> Vec<(String, u64)> {
     let text = report(export);
+    assert_is_a_report(&text, &format!("gen_rows({})", export.display()));
     let mut out = Vec::new();
     let mut inside = false;
     for l in text.lines() {
@@ -1175,6 +1355,22 @@ fn gen_rows(export: &Path) -> Vec<(String, u64)> {
 }
 
 /// One row of the general path's ledger, or 0 when the row is absent.
+/// One row of the `general inductive path` section, by exact label, or **0 when
+/// the section does not list it**.
+///
+/// The section lists only the rows it has — `001_basicDef` has none at all — so
+/// absent really does mean zero here, and [`gen_rows`] anchors on the report
+/// existing before saying so. What that anchor cannot catch is a **renamed
+/// label**, which would read zero over all 91 tutorials and turn both
+/// `no_tutorial_export_*` sweeps green having measured nothing.
+///
+/// That liveness is witnessed elsewhere, deliberately and not by accident:
+/// [`the_general_iota_rule_computes_on_the_prelude`] reads `GEN_NESTS`,
+/// `GEN_FIRED` and `GEN_TPOLICY` on `init-prelude` through a reader that
+/// **panics** when the label is absent. So a rename fails there, loudly, and the
+/// sweeps here are permitted their silence because something else is holding it.
+/// If those three labels ever stop being read strictly on a corpus that has
+/// them, this comment is wrong and these sweeps are vacuous again.
 fn gen_row(export: &Path, label: &str) -> u64 {
     gen_rows(export).into_iter().find(|(l, _)| l == label).map(|(_, n)| n).unwrap_or(0)
 }
@@ -1425,6 +1621,11 @@ fn no_tutorial_export_builds_a_general_recursor_nest() {
         std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
     files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
     files.sort();
+    // A "nothing happens" test: `assert_eq!(n, 0)` over an empty corpus holds
+    // for free, so this floor is the only thing that makes it a test. Four
+    // sweeps in this file already carried it; this one and its sibling below
+    // did not.
+    assert!(!files.is_empty(), "no tutorial exports found");
     for f in &files {
         let n = gen_row(f, GEN_NESTS);
         assert_eq!(
@@ -1486,7 +1687,16 @@ fn the_general_iota_rule_computes_on_the_prelude() {
         return
     }
     let text = report(&f);
-    let row = |label: &str| -> u64 {
+    // A row of the report's `the general inductive path` section, by exact
+    // label. Distinct from the file-wide [`row`], which matches by prefix
+    // anywhere in the report; this one is scoped to the section, so two rows
+    // with the same label in different sections cannot be confused.
+    //
+    // **Panics when the label is absent**, for [`row`]'s reason: a section row
+    // that is renamed would otherwise read zero, and while the three ratchets
+    // below happen to be `≥` and so would fail anyway, the next one added here
+    // might be `≤` or `== 0` and would not.
+    let path_row = |label: &str| -> u64 {
         let mut inside = false;
         for l in text.lines() {
             if l.trim_start().starts_with("the general inductive path") {
@@ -1504,9 +1714,9 @@ fn the_general_iota_rule_computes_on_the_prelude() {
                 }
             }
         }
-        0
+        panic!("the `general inductive path` section has no `{label}` row — it would read zero")
     };
-    let fired = row(GEN_FIRED);
+    let fired = path_row(GEN_FIRED);
     assert!(
         fired >= 80,
         "the general ι rule computed at {fired} sites, expected at least 80 — \
@@ -1527,9 +1737,9 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // `≥ 5`, and the rebuild row is pinned at zero next to it: a store that
     // silently stopped hitting would push this row back up and fail *there*,
     // which is what keeps `5` from being a loosening.
-    let nests = row(GEN_NESTS);
+    let nests = path_row(GEN_NESTS);
     assert!(nests >= 5, "only {nests} general recursor nests, expected at least 5");
-    let declined = row(GEN_TPOLICY);
+    let declined = path_row(GEN_TPOLICY);
     assert!(
         declined > 0,
         "no recursor declined on the `T`-policy; policy 3 is not being enforced"
@@ -1543,12 +1753,8 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // A missing row would read zero and pass, so the row's presence is asserted
     // first: this must fail when the ledger changes, not go quiet.
     for label in [GEN_SPEC_DECLINED, GEN_REC_REBUILT, NEST_DECLINED, CTOR_NEST_DECLINED] {
-        assert!(
-            text.lines().any(|l| l.trim_start().starts_with(label)),
-            "the report no longer has a `{label}` row"
-        );
         assert_eq!(
-            rows_totalling(&text, label),
+            row(&text, label),
             0,
             "`{label}` is nonzero: the interpretation is not canonical across declarations"
         );
@@ -1576,7 +1782,7 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // RecBottom::General(..))` at the store site): this reads 85 again and fails
     // here, with `CONST_REMINT` back at 173.
     assert_eq!(
-        rows_totalling(&text, IND_REMINT),
+        row(&text, IND_REMINT),
         0,
         "`{IND_REMINT}` is nonzero: an inductive or recursor has two denotations in one run"
     );
@@ -1590,7 +1796,7 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // still mentioning a universe parameter, and the two backends build
     // `imax`/`max` level terms of different shapes for it. Both are levers of
     // their own; neither is a nest.
-    let const_remint = rows_totalling(&text, CONST_REMINT);
+    let const_remint = row(&text, CONST_REMINT);
     assert!(
         const_remint <= 15,
         "`{CONST_REMINT}` is {const_remint}, ratchet 15 — a store stopped hitting"
@@ -1616,11 +1822,70 @@ fn the_general_iota_rule_computes_on_the_prelude() {
         "the report no longer has a `{POP_IRREL}` row"
     );
     assert_eq!(
-        rows_totalling(&text, POP_IRREL),
+        row(&text, POP_IRREL),
         0,
         "proof irrelevance searched for a premise inference had already established"
     );
-    let gaps = rows_totalling(&text, "TOTAL gaps");
+    // ── The ratchet on THIS test's own subject (task #152) ───────────────────
+    //
+    // Every gap row the ι path originates, and nothing else. It used to be the
+    // ledger *total*, which meant this guard failed for other people's reasons
+    // and — worse — told them the ι path had regressed when it had not. The
+    // total is still ratcheted, in
+    // [`the_prelude_ledger_totals_are_ratcheted`], under a name that claims it.
+    //
+    // Two rows on this corpus: `iota: this recursor has no curried
+    // interpretation` (792) and `iota: the major premise is not a constructor`
+    // (486). `row` sums by prefix, so a *third* ι row appearing is
+    // counted here automatically rather than silently landing in the total —
+    // which is the property that makes this the right thing to ratchet.
+    //
+    // `row` rather than `rows_or_zero`: a renamed row reads zero and this
+    // ratchet would pass having measured nothing. That is the defect class this
+    // pass is about, and it applies to the fix as much as to the bug.
+    const IOTA_GAPS: &str = "gap: iota";
+    let iota_gaps = row(&text, IOTA_GAPS);
+    assert!(
+        iota_gaps > 0 && iota_gaps <= 1278,
+        "init-prelude: {iota_gaps} ι gaps, ratchet 1278 — the general ι path regressed. \
+         Unlike the ledger total this one IS about this test's subject: 792 `no curried \
+         interpretation` + 486 `major premise is not a constructor`."
+    );
+}
+
+/// **The whole-ledger ratchets, and they are named for what they are.**
+///
+/// `TOTAL gaps` and the boundary-escape count over `init-prelude`. Both are
+/// **totals**: every clause of the checker contributes, so *any* contributor's
+/// traffic moves them and no failure here names a subject.
+///
+/// # Why this is a test of its own (task #152)
+///
+/// These two assertions used to live inside
+/// [`the_general_iota_rule_computes_on_the_prelude`], whose message read "the
+/// general ι path regressed". That was false whenever it fired for anyone
+/// else's reason, and it did: the entry beginning "Moved 15 542 → 15 761"
+/// below records the ledger being re-based by `beta_arg_typing` with **the ι
+/// path itself flat — no `iota` row moved**. A guard re-based silently is a
+/// guard that has stopped guarding, and one whose message misattributes the
+/// cause is worse, because it sends the next reader to the wrong file.
+///
+/// So the total lives here, under a name that claims exactly it, and the ι
+/// test now ratchets the ι rows. Both are kept: the total is worth guarding —
+/// it is the number the project is judged on — but it is not evidence about any
+/// component, and a guard may not borrow a neighbour's subject for its message.
+///
+/// **Moving either number requires a written trade**, in the comments below,
+/// beside the ones already there. That discipline is why the history of every
+/// previous move is recorded rather than overwritten.
+#[test]
+fn the_prelude_ledger_totals_are_ratcheted() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = report(&f);
+    let gaps = row(&text, "TOTAL gaps");
     // 15572 → 15492 when the type former's `np > 0` nest landed: twelve more ι
     // sites and 1164 more `CtorApp` typing discharges. 15492 → 15423 when
     // projection congruence and proof irrelevance became rules fed by the
@@ -1679,7 +1944,12 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // its delta branch for the first time on heads `TgBackend::parts` had no
     // shape for. Locked in rather than left slack, because a ratchet that only
     // ever loosens has stopped measuring.
-    assert!(gaps > 0 && gaps <= 15734, "init-prelude: {gaps} gaps, ratchet 15734 — the general ι path regressed");
+    assert!(
+        gaps > 0 && gaps <= 15734,
+        "init-prelude: {gaps} gaps, ratchet 15734 — SOME clause of the ledger regressed. \
+         This is the whole-ledger total and it does not say which; read the per-row gap \
+         table in the report, and see the per-origin ratchets for the named subjects."
+    );
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1725,7 +1995,11 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // before and after), which is what distinguishes this from every route that
     // shrank a residue by outrunning it, and no row of the gap ledger rose —
     // 12 more real kernel theorems. +0.67 % instructions.
-    assert!(esc <= 2232, "init-prelude: {esc} escapes, ratchet 2232 — the general ι path regressed");
+    assert!(
+        esc <= 2232,
+        "init-prelude: {esc} escapes, ratchet 2232 — SOME clause let an assumption reach the \
+         boundary. Whole-ledger, like the gap ratchet above; it does not name a subject."
+    );
 }
 
 /// **How much of the prelude is actually translated** — the declaration-typing
@@ -1812,27 +2086,20 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
         return
     }
     let text = report(&f);
-    let row = |label: &str| -> u64 {
-        assert!(
-            text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
-            "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
-        );
-        rows_totalling(&text, label)
-    };
 
-    let seen = row("declarations with a value");
-    let nokey = row("…of a temporary declaration, which no store can key");
-    let gap = row("…whose typing inference could not justify at all");
-    let cond = row("…derived only under antecedents (not stored)");
-    let from_infer = row("…carried out of inference, not searched for");
-    let refused = row("…derived, but the store's own checks refused it");
-    let stored = row("…stored as ⟦c⟧ ∈ ⟦T⟧");
-    let hit = row("uses answered from the store");
-    let miss = row("uses with no entry (or at other levels)");
-    let miss_cond = row("…of them against a typing that was derived and discarded");
-    let cond_hyp = row("…the antecedents they carry, each a hoisted guarded family");
-    let cond_nest = row("…of them a family of families, which peeling declines");
-    let cond_mem = row("…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt");
+    let seen = row(&text, "declarations with a value");
+    let nokey = row(&text, "…of a temporary declaration, which no store can key");
+    let gap = row(&text, "…whose typing inference could not justify at all");
+    let cond = row(&text, "…derived only under antecedents (not stored)");
+    let from_infer = row(&text, "…carried out of inference, not searched for");
+    let refused = row(&text, "…derived, but the store's own checks refused it");
+    let stored = row(&text, "…stored as ⟦c⟧ ∈ ⟦T⟧");
+    let hit = row(&text, "uses answered from the store");
+    let miss = row(&text, "uses with no entry (or at other levels)");
+    let miss_cond = row(&text, "…of them against a typing that was derived and discarded");
+    let cond_hyp = row(&text, "…the antecedents they carry, each a hoisted guarded family");
+    let cond_nest = row(&text, "…of them a family of families, which peeling declines");
+    let cond_mem = row(&text, "…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt");
 
     // **Every pair is accounted for.** This is the assertion the split exists
     // for: while the residue was arithmetic, `Gap` and `Conditional` were one
@@ -1958,23 +2225,16 @@ fn the_translated_row_measures_the_goals_population_and_may_not_narrow() {
         return
     }
     let text = report(&f);
-    let row = |label: &str| -> u64 {
-        assert!(
-            text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
-            "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
-        );
-        rows_totalling(&text, label)
-    };
 
-    let scheduled = row("scheduled (declaration, σ) pairs, all kinds");
-    let skipped = row("…skipped as non-standard axioms");
-    let population = row("POPULATION (scheduled − skipped)");
-    let reached = row("…pairs the walk entered");
-    let collapsed = row("…scheduled pairs absorbed by Inductive/Quot");
-    let eligible = row("…of the population, carrying a value");
-    let sealed = row("SEALED AND PUBLISHED");
-    let distinct = row("…distinct declarations behind them");
-    let seen = row("declarations with a value");
+    let scheduled = row(&text, "scheduled (declaration, σ) pairs, all kinds");
+    let skipped = row(&text, "…skipped as non-standard axioms");
+    let population = row(&text, "POPULATION (scheduled − skipped)");
+    let reached = row(&text, "…pairs the walk entered");
+    let collapsed = row(&text, "…scheduled pairs absorbed by Inductive/Quot");
+    let eligible = row(&text, "…of the population, carrying a value");
+    let sealed = row(&text, "SEALED AND PUBLISHED");
+    let distinct = row(&text, "…distinct declarations behind them");
+    let seen = row(&text, "declarations with a value");
 
     // The report prints its own bug-report line when either identity fails or
     // the seal refuses, so a failure here should never be the first notice.
@@ -2095,7 +2355,7 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
     // — and the population, not the rate, is what changed. See
     // `MEASUREMENTS.md`, "Typing the reduction's own arguments", for what the
     // extra reductions bought.
-    let proj_red = rows_totalling(&text, "gap: proj_reduce");
+    let proj_red = row(&text, "gap: proj_reduce");
     assert!(
         proj_red > 0 && proj_red <= 661,
         "init-prelude: {proj_red} proj_reduce gaps, ratchet 661 — projection reduction regressed"
@@ -2120,7 +2380,7 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
     // before is admitted now, which is the property a reach ratchet is a proxy
     // for. See `MEASUREMENTS.md`, "The head reduction that never reached its
     // delta branch".
-    let threaded = rows_totalling(&text, THREADED);
+    let threaded = row(&text, THREADED);
     assert!(
         threaded >= 9,
         "only {threaded} projection reductions reached the threaded derivation, expected at least 9 — \
@@ -2128,14 +2388,14 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
     );
 
     // The search population is untouched: 34, 41 and 0 at the measurement.
-    assert_eq!(rows_totalling(&text, FALLTHROUGH), 0, "the admit fall-through is deleted and must stay deleted");
+    assert_eq!(row(&text, FALLTHROUGH), 0, "the admit fall-through is deleted and must stay deleted");
     assert!(
-        rows_totalling(&text, SHORTCUT) <= 34,
+        row(&text, SHORTCUT) <= 34,
         "the `beta`/`zeta`/`delta`/`iota` proof shortcut is searching more than it did — \
          projection reduction is supposed to be fed, not to search"
     );
     assert!(
-        rows_totalling(&text, LAM_CLAUSE) <= 41,
+        row(&text, LAM_CLAUSE) <= 41,
         "`point_the_subject` is searching more than it did"
     );
 }
@@ -2156,6 +2416,10 @@ fn no_tutorial_export_reaches_the_general_iota_rule() {
         std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
     files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
     files.sort();
+    // As in the sibling sweep: `assert_eq!(n, 0)` over no files is not a
+    // measurement. This one is doubly exposed, because `gen_row` used to return
+    // 0 for an absent label too.
+    assert!(!files.is_empty(), "no tutorial exports found");
     for f in &files {
         let n = gen_row(f, GEN_FIRED);
         assert_eq!(
@@ -2213,12 +2477,12 @@ fn every_theorem_memo_rechecks_its_recall() {
     let (mut recalls, mut ht_bad, mut stored, mut am_bad) = (0u64, 0u64, 0u64, 0u64);
     for f in &files {
         let text = report(f);
-        recalls += rows_totalling(&text, "has-type memo recalls re-checked");
-        ht_bad += rows_totalling(&text, "HAS-TYPE MEMO RECALLS NOT MATCHING");
+        recalls += rows_or_zero(&text, "has-type memo recalls re-checked");
+        ht_bad += rows_or_zero(&text, "HAS-TYPE MEMO RECALLS NOT MATCHING");
         // This row's trailing token is a word, not a count, so its *presence*
         // is what is read — and the row prints only when something was stored.
         stored += text.lines().filter(|l| l.trim_start().starts_with("argument typings handed off")).count() as u64;
-        am_bad += rows_totalling(&text, "ARG-MEM RECALLS NOT MATCHING");
+        am_bad += rows_or_zero(&text, "ARG-MEM RECALLS NOT MATCHING");
     }
     assert!(recalls > 0, "the has-type memo never replayed a positive entry; the check cannot fail");
     assert!(stored > 0, "the application check handed nothing off; the handoff check cannot fail");
