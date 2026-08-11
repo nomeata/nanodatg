@@ -1,0 +1,244 @@
+# MEASUREMENT PROBE — origin 2 split by head constant, and the operand census.
+# Worktree-only, never to be landed.
+#
+# `git apply scripts/nat-major-probe.diff` onto a scratch worktree, then
+#
+#   cargo build --release --features tg,stepcount --bin nanoda_bin
+#   ./target/release/nanoda_bin cfg.json                     # censuses, side-effect free
+#   NANODA_IOTA_ASSUME=natlit    …                           # delete Nat.ble at literals
+#   NANODA_IOTA_ASSUME=natnonlit …                           # delete Nat.beq, operands not literal
+#   NANODA_IOTA_ASSUME=natop     …                           # both
+#   NANODA_IOTA_ASSUME=notctor   …                           # the OfNat.ofNat/projection residue
+#   NANODA_NAT_CMP_MIN=256       …                           # withhold GMP beq/ble under 256
+#
+# `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
+# `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`.
+#
+# What it adds:
+#
+#   * `derive_iota_core` returns THREE reason strings where it returned one, so
+#     `origin_bit` gives each its own bit and the sub-tree column prices each
+#     separately: an accelerated `Nat` op at literal operands, the same at
+#     non-literal operands, and the residue. `iota_assume` gains the matching
+#     keys, so each is deleted alone and its prediction checked against its own
+#     deletion. The split is read off `NameCache` — the same pointers
+#     `try_reduce_nat` matches — not off a spelling.
+#   * `NAT_MAJOR` / `NAT_INST` — the firings by operand *shape* and by operand
+#     *value*, which is what refuted the brief: 55 distinct `Nat.ble` instances,
+#     every operand <= 12.
+#   * `CMP_BITS` — every accelerated `Nat.beq`/`ble` the run performs, bucketed
+#     by operand bit width. 612 of 643 are <= 4 bits.
+#   * `NANODA_NAT_CMP_MIN` — withholds the GMP acceleration below a threshold so
+#     the comparison unfolds structurally instead. The deletion measurement for
+#     "is the acceleration what blocks this origin". It is not: the origin is
+#     unchanged at 466 own / 3 161 sub-tree, and the ledger is 148 gaps worse.
+#
+# Ledger byte-identical with the censuses in and no env var set: 15 734 gaps,
+# 2 232 escapes, 159 803 derived.
+diff --git a/checker/src/tc.rs b/checker/src/tc.rs
+index a444b2f..38192c5 100644
+--- a/checker/src/tc.rs
++++ b/checker/src/tc.rs
+@@ -610,6 +610,9 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         r.and_then(|_| self.admit(x, y, Admit::UnitLike))
+     }
+ 
++    #[allow(dead_code)]
++    fn __probe_marker(&self) {}
++
+     fn do_nat_bin(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, op: NatBinOp) -> Option<ExprPtr<'t>> {
+         use NatBinOp::*;
+         let (x, y) = (self.whnf(x), self.whnf(y));
+@@ -627,8 +630,31 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+             XOr => self.ctx.mk_nat_lit_quick(nat_xor(&arg1, &arg2)),
+             Shl => self.ctx.mk_nat_lit_quick(nat_shl(arg1, arg2)),
+             Shr => self.ctx.mk_nat_lit_quick(nat_shr(arg1, arg2)),
+-            Beq => self.ctx.bool_to_expr(arg1 == arg2),
+-            Ble => self.ctx.bool_to_expr(arg1 <= arg2),
++            // PROBE (uncommitted): withhold the acceleration at SMALL operands,
++            // so the comparison unfolds structurally and the backend can see it.
++            // `NANODA_NAT_CMP_MIN=n`: accelerate only when max(a,b) >= n.
++            Beq | Ble => {
++                static MIN: std::sync::OnceLock<Option<num_bigint::BigUint>> = std::sync::OnceLock::new();
++                let m = MIN.get_or_init(|| {
++                    std::env::var("NANODA_NAT_CMP_MIN").ok().and_then(|s| s.parse::<u64>().ok()).map(num_bigint::BigUint::from)
++                });
++                if let Some(m) = m {
++                    if &arg1 < m && &arg2 < m {
++                        return None
++                    }
++                }
++                {
++                    let bits = arg1.bits().max(arg2.bits());
++                    let b = if bits <= 4 { 0 } else if bits <= 8 { 1 } else if bits <= 16 { 2 }
++                            else if bits <= 32 { 3 } else if bits <= 64 { 4 } else { 5 };
++                    crate::tc::CMP_BITS[b].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++                }
++                if matches!(op, Beq) {
++                    self.ctx.bool_to_expr(arg1 == arg2)
++                } else {
++                    self.ctx.bool_to_expr(arg1 <= arg2)
++                }
++            }
+         }
+     }
+     
+@@ -2884,3 +2910,17 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         None
+     }
+ }
++
++// PROBE (uncommitted): the operand size distribution of every accelerated
++// Nat comparison the checker performs, bucketed by bit width.
++pub static CMP_BITS: [std::sync::atomic::AtomicU64; 6] =
++    [const { std::sync::atomic::AtomicU64::new(0) }; 6];
++pub fn cmp_bits_report() -> String {
++    use std::sync::atomic::Ordering::Relaxed;
++    let l = ["<=4 bits", "<=8", "<=16", "<=32", "<=64", ">64"];
++    let mut s = String::from("  PROBE: accelerated Nat.beq/ble by operand bit width\n");
++    for (i, n) in l.iter().enumerate() {
++        s.push_str(&format!("    {n:<76}  {:>8}\n", CMP_BITS[i].load(Relaxed)));
++    }
++    s
++}
+diff --git a/checker/src/tg.rs b/checker/src/tg.rs
+index cef12d7..ccde5dc 100644
+--- a/checker/src/tg.rs
++++ b/checker/src/tg.rs
+@@ -12222,6 +12222,67 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+                 let mut g = NOT_CTOR_NAMES.lock().expect("not_ctor_names poisoned");
+                 *g.entry(format!("{kind:<11} {sp}")).or_insert(0u64) += 1;
+             }
++            // ── PROBE (uncommitted): split this origin by head constant ──────
++            // A name-cached `Nat` operation is served by `try_reduce_nat`, not
++            // by delta, so its sub-tree is the payoff of the *numeral fact*.
++            // Everything else here is a delta step that did not happen. Two
++            // origins, so `origin_report` prices each and `NANODA_IOTA_ASSUME`
++            // can delete each alone.
++            {
++                let nc = &ctx.export_file.name_cache;
++                let is_natop = [
++                    nc.nat_ble, nc.nat_beq, nc.nat_add, nc.nat_sub, nc.nat_mul,
++                    nc.nat_pow, nc.nat_div, nc.nat_mod, nc.nat_gcd, nc.nat_land,
++                    nc.nat_lor, nc.nat_xor, nc.nat_shl, nc.nat_shr, nc.nat_succ,
++                ]
++                .iter()
++                .any(|n| *n == Some(cname));
++                #[cfg(feature = "stepcount")]
++                {
++                    // What the operands look like, syntactically, and under
++                    // which recursor — the question the brief says to refute:
++                    // are these literal operands or something one level up?
++                    let sp_rec = {
++                        let (f, _) = ctx.unfold_apps(redex);
++                        match ctx.read_expr(f) {
++                            Expr::Const { name, .. } => self.spell(ctx, name).to_string(),
++                            _ => "?".to_string(),
++                        }
++                    };
++                    let shape = |e: ExprPtr<'t>| match ctx.read_expr(e) {
++                        Expr::NatLit { .. } => "lit",
++                        Expr::Const { .. } => "const",
++                        Expr::App { .. } => "app",
++                        Expr::Local { .. } => "local",
++                        Expr::Proj { .. } => "proj",
++                        _ => "other",
++                    };
++                    let ops: Vec<&str> = ctor_args.iter().map(|a| shape(*a)).collect();
++                    let sp = self.spell(ctx, cname);
++                    let vals: Vec<String> = ctor_args
++                        .iter()
++                        .map(|a| match ctx.get_bignum_from_expr(*a) {
++                            Some(v) => v.to_string(),
++                            None => "?".to_string(),
++                        })
++                        .collect();
++                    {
++                        let mut g = NAT_INST.lock().expect("nat_inst poisoned");
++                        *g.entry(format!("{sp} {}", vals.join(" "))).or_insert(0u64) += 1;
++                    }
++                    let mut g = NAT_MAJOR.lock().expect("nat_major poisoned");
++                    *g.entry(format!("{sp} ({}) under {sp_rec}", ops.join(","))).or_insert(0u64) += 1;
++                }
++                if is_natop {
++                    let all_lit = !ctor_args.is_empty()
++                        && ctor_args.iter().all(|a| matches!(ctx.read_expr(*a), Expr::NatLit { .. }));
++                    return Err(if all_lit {
++                        "iota: the major premise is an accelerated Nat op at LITERAL operands"
++                    } else {
++                        "iota: the major premise is an accelerated Nat op, operands not literal"
++                    })
++                }
++            }
+             return Err("iota: the major premise is not a constructor")
+         };
+         let idx = c.ctor_idx as usize;
+@@ -16842,6 +16903,14 @@ fn iota_assume(why: &str) -> bool {
+         // origin, so a combined run cannot check a single prediction.
+         Some("nonest") => why == "iota: this recursor has no curried interpretation",
+         Some("notctor") => why == "iota: the major premise is not a constructor",
++        // PROBE (uncommitted): origin 2, split by head constant.
++        Some("natlit") => why == "iota: the major premise is an accelerated Nat op at LITERAL operands",
++        Some("natnonlit") => why == "iota: the major premise is an accelerated Nat op, operands not literal",
++        Some("natop") => why.starts_with("iota: the major premise is an accelerated Nat op"),
++        Some("notctor2") => {
++            why == "iota: the major premise is not a constructor"
++                || why.starts_with("iota: the major premise is an accelerated Nat op")
++        }
+         Some(_) => true,
+     }
+ }
+@@ -16856,6 +16925,14 @@ static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+ #[cfg(feature = "stepcount")]
+ static NOT_CTOR_NAMES: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+     std::sync::Mutex::new(std::collections::BTreeMap::new());
++/// PROBE (uncommitted): the operand shapes and the recursor, per firing.
++#[cfg(feature = "stepcount")]
++static NAT_MAJOR: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++/// PROBE (uncommitted): the DISTINCT instances, by operand value.
++#[cfg(feature = "stepcount")]
++static NAT_INST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
+ /// What the major premise's head is when it is not a constructor — the second
+ /// origin's census.
+ static NOT_CTOR: [std::sync::atomic::AtomicU64; 10] =
+@@ -16978,6 +17055,38 @@ pub fn origin_report() -> String {
+             }
+         }
+     }
++    #[cfg(feature = "stepcount")]
++    {
++        let g = NAT_MAJOR.lock().expect("nat_major poisoned");
++        if !g.is_empty() {
++            let mut v: Vec<(&String, &u64)> = g.iter().collect();
++            v.sort_by(|a, b| b.1.cmp(a.1));
++            s.push_str(&format!(
++                "  PROBE: the second origin, by operand shape and recursor — {} distinct\n",
++                v.len()
++            ));
++            for (r, n) in v.iter().take(40) {
++                s.push_str(&format!("    {r:<76}  {n:>8}\n"));
++            }
++        }
++    }
++    #[cfg(feature = "stepcount")]
++    {
++        let g = NAT_INST.lock().expect("nat_inst poisoned");
++        if !g.is_empty() {
++            let mut v: Vec<(&String, &u64)> = g.iter().collect();
++            v.sort_by(|a, b| b.1.cmp(a.1));
++            s.push_str(&format!(
++                "  PROBE: DISTINCT instances — {} distinct, {} firings\n",
++                v.len(),
++                v.iter().map(|(_, n)| **n).sum::<u64>()
++            ));
++            for (r, n) in v.iter().take(500) {
++                s.push_str(&format!("    {r:<76}  {n:>8}\n"));
++            }
++        }
++    }
++    s.push_str(&crate::tc::cmp_bits_report());
+     if NOT_CTOR.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+         s.push_str("  the second origin, by what the major premise's head IS\n");
+         for (i, l) in [

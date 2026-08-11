@@ -7946,3 +7946,152 @@ distinct structures seen at the head and not a partition of the 659.)
 
 `several constructors` is the largest unassigned item; it is terminal, so its
 2 144 should hold to within 9 %.
+
+## Origin 2 is not the bignum bridge — it is 55 facts at operands ≤ 12 — 2026-08-11
+
+*Task #127. Baseline `origin/master` at `c31c707`; `release`,
+`--features tg,stepcount`, `vendor/arena-tests/good/init-prelude.ndjson`,
+`num_threads: 1`. Instrument: `scripts/nat-major-probe.diff`, worktree-only,
+ledger byte-identical with the censuses in and no environment variable set
+(15 734 gaps, 2 232 escapes, 159 803 derived, verified again after the probe was
+inverse-applied). **Measured before anything was built, and the two claims the
+brief rested on are both refuted.**
+
+### The origin, split by head constant and priced by its own deletion
+
+The previous section priced origin 2 at 3 066 as one population. Splitting the
+reason string by head constant — read off `NameCache`, the same pointers
+`try_reduce_nat` matches, not off a spelling — gives each constituent its own
+bit, so `origin_report` predicts each separately and `NANODA_IOTA_ASSUME`
+deletes each alone.
+
+| deleted | acq | gaps | fall | predicted |
+|---|---:|---:|---:|---:|
+| — (baseline) | — | 15 734 | — | — |
+| `Nat.ble`/`Nat.beq` at **literal** operands | 466 | 12 775 | **2 959** | 3 161 |
+| `Nat.beq`, operands **not** literal | 14 | 15 668 | **66** | 82 |
+| both of the above | 480 | 12 709 | **3 025** | 3 243 |
+| `OfNat.ofNat` ×5 + one projection | 6 | 15 693 | **41** | 43 |
+
+**2 959 + 66 + 41 = 3 066**, the whole of origin 2, exactly. Additivity now
+holds at the second level of the partition as well as the first, and each
+prediction is within 7 % of its own deletion.
+
+So the tranche is one line: **`Nat.ble` at literal operands, 2 959 gaps, 18.8 %
+of the ledger.** The other two constituents are 107 gaps between them.
+
+### What the operands actually are — and this is the refutation
+
+| firing | count |
+|---|---:|
+| `Nat.ble (lit,lit)` under `Bool.rec` | 466 |
+| `Nat.beq (app,app)` under `Bool.rec` | 10 |
+| `OfNat.ofNat (const,lit,app)` under `Nat.rec` | 5 |
+| `Nat.beq (const,const) / (app,const) / (const,app)` under `Bool.rec` | 4 |
+
+The 466 are **55 distinct instances, and every operand is ≤ 12** — `Nat.ble 0 0`
+(56 firings), `Nat.ble 1 0` (56), `Nat.ble 1 1` (24), `Nat.ble 2 1` (24), down a
+tail of 6s to `Nat.ble 12 11`. Not one of them is large.
+
+`NAT-BRIDGE-FEASIBILITY.md` §1.3 measured the demand at **2³² and 2⁶⁴**, and
+this document's previous section carried that into the brief for the tranche.
+Both are right about **acceptance** and wrong about **certification**, because
+they are two different populations: §1.3 found the comparisons that are
+*unaffordable to unfold* (55 296 unrollings), and this finds the comparisons
+that *reach the ι rule as a major premise*. The whole run's accelerated
+comparison demand, bucketed:
+
+| operand bit width | accelerated `Nat.beq`/`ble` |
+|---|---:|
+| ≤ 4 | **612** |
+| ≤ 8 | 0 |
+| ≤ 16 | 3 |
+| ≤ 32 | 2 |
+| ≤ 64 | 18 |
+| > 64 | 8 |
+
+**643 comparisons in the entire certifying run, 612 of them at four bits.** The
+31 large ones are §1.3's `isValidChar_UInt32` and `USize.size_eq` sites and they
+are not where the gaps are.
+
+### And the cause is not the acceleration either
+
+The brief's diagnosis was that `Nat.ble` is never unfolded — matched by name in
+`NameCache` and computed natively, so `reduce_rec`'s internal `whnf(major)`
+takes that path with no certificate requested — and that the missing thing is
+therefore `⟦Nat.ble a b⟧ = ⟦Bool.true⟧`. The first half is true. The second does
+not follow, and the deletion says so.
+
+`NANODA_NAT_CMP_MIN=256` withholds the acceleration below the threshold, so
+every one of the 55 instances unfolds structurally through `Nat.ble`'s
+`brecOn`/`below` nest instead — the exact inverse of §1's renaming experiment,
+restricted to the operands that can afford it. The origin **does not move**:
+
+| | baseline | acceleration withheld < 256 |
+|---|---:|---:|
+| `iota: … accelerated Nat op at LITERAL operands` own / sub-tree | 466 / 3 161 | **466 / 3 161** |
+| `proj_reduce` own | 659 | 670 |
+| `iota: the major premise is not a constructor` own | 6 | 16 |
+| `nat_reduce` own / sub-tree | 32 / 111 | 25 / 92 |
+| **gaps** | **15 734** | **15 882** |
+
+Unchanged to the firing, and the ledger is **148 gaps worse**. The reason is
+structural rather than arithmetical: `reduce_rec` reduces the major premise
+*internally* and hands `iota` the **unreduced** redex, so `derive_iota_core`
+reads `Nat.ble 3 5` off `args[major]` however that term reduced. The origin is
+`derive_iota` having no route that reduces a major premise at all — 480 of its
+486 firings happen to be a `Nat` operation because those are the reductions
+`init-prelude` puts under a recursor, not because the acceleration is involved.
+
+The seven `nat_reduce` admissions that *did* close are the other half of the
+same fact: where a certificate **is** requested, the structural unfolding at
+small operands is derivable today.
+
+### What this means for the tranche, and it is two changes, neither alone
+
+For one firing the checker takes `Bool.rec … (Nat.ble 3 5) ⟶ Bool.rec … Bool.true
+⟶ minor`. Certifying it needs
+
+1. **the reduction certificate** `⟦Nat.ble 3 5⟧ = ⟦Bool.true⟧`, which today is
+   `Admit::NatRed`, an admission; and
+2. **the plumbing** — `reduce_rec` recording the major's own reduction as a step
+   the backend sees, so `iota` can lift it by congruence and then fire at the
+   constructor.
+
+Neither is worth anything alone, and both directions are measured rather than
+argued. (1) alone: the run above, worth −148. (2) alone: the ι rule would derive
+a congruence over a premise that is itself a gap, so it *relays* instead of
+originating and the row moves from `iota` to `nat_reduce` with the count
+unchanged — the same mechanic that makes 68 gaps whose reason string reads like
+an origin be relays. Together they are worth the measured 2 959.
+
+**This is the third time on this arc that a population's own size named the
+wrong work.** Beta's domain premise was 6 170 declines worth zero; the reduct's
+typing 9 306 worth fifteen; and this one is real at 2 959 but wanted a different
+construction from the one its census suggested, at a fifth of the bit width.
+
+### Task #94's `ble`/`beq` exist, are certified, and have no consumer
+
+`derived/src/nat/compare.rs` and `derived::nat::Eval::{ble, blt, beq}` are a
+complete certified evaluator for exactly these two operations — the twelve
+digit equations, the ends, and a measured `12·bits + 7` primitive inferences.
+**Nothing outside `derived/tests/nat.rs` calls them.** `mini/src/nat_clause.rs`
+builds a `Compare` and hands it to the evaluator (`enable_compare`), and no
+route in `mini/` ever asks the evaluator for a comparison; `checker/src/tg.rs`
+does not reach `derived::nat` at all — it uses the old standalone
+`derived::wnat::Nat`. So the engine that produces this ledger has no access to
+the construction built for it.
+
+Two things follow for whoever wires it up.
+
+* **At four bits the cost is nothing.** `12·bits + 7` is **55 inferences** per
+  comparison, and 612 comparisons is ~34 k against the run's 159 803 derived
+  theorems. The 2⁶⁴ figure (775) applies to 8 of 643 firings.
+* **`Compare` is ω-valued and the fact needed is `Bool`-valued.**
+  `ble(x,y)` is `iszero(sub(x,y))`, yielding `succ 0`/`0` in ω; the 466 firings
+  need `⟦Nat.ble a b⟧ = ⟦Bool.true⟧` where `⟦Bool.true⟧` is a constructor of the
+  general inductive translation of Lean's `Bool`. There is no occurrence of
+  `Bool` anywhere in `derived/src/nat/`. That bridge does not exist and is the
+  named piece of missing work, alongside identifying `⟦Nat.ble⟧` — the imported
+  `brecOn` nest — with `Compare::ble`, which is what `derived::nat::uniqueness`
+  is for.

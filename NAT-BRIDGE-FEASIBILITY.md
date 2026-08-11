@@ -7,6 +7,8 @@ it; where a claim is inferred rather than observed it says so.
 
 **Contents.** §1 is the one that decides the order of the chain: does
 `init-prelude` need literal *computation*, or only literal *representation*?
+§1.5 is the correction that came out of pricing the tranche: §1's sizes are the
+*acceptance* demand, and the *certification* demand is sixteen times narrower.
 §2 is `NAT-REPRESENTATION.md` §10.1 — whether `mini` can derive `Nat.add`'s
 defining equations from the export's `brecOn`/`below` nest — answered on two
 axes that must not be conflated. §3 is where Lean declares the characteristic
@@ -158,6 +160,29 @@ for step 3: what `init-prelude` wants is a **comparison** kernel, and `beq`/`ble
 on a canonical binary representation are single Θ(bits) passes — Coq's
 `compare_cont`, `NAT-REPRESENTATION.md` §3.1 — which is the cheapest thing in
 the whole operation table.
+
+### 1.5 Acceptance and certification want different sizes — measured
+
+**This section's sizes are the *acceptance* demand and must not be read as the
+certification demand.** The two are different populations and the difference is
+a factor of sixteen in bit width.
+
+§1.2 switches an operation off and asks *which conversions become unaffordable*;
+the answer is the ones whose unfolding is enormous, so it selects for large
+operands by construction — 55 296 unrollings at `Nat.ble 55297 4294967296`. The
+proof backend's demand is a different question: *which comparisons does a
+certificate have to be produced for*. Counted over a whole `--features tg` run
+on this file (`scripts/nat-major-probe.diff`; `MEASUREMENTS.md`, "Origin 2 is
+not the bignum bridge"), it is **643 accelerated `beq`/`ble` calls, 612 of them
+at four bits or fewer** and 31 above eight. The 466 that block an ι rule — 2 959
+gaps, 18.8 % of the gap ledger, the second-largest origin in it — are **55
+distinct instances with every operand ≤ 12**.
+
+So the payoff-carrying work is a comparison kernel at *single-digit* operands,
+where `NAT-REPRESENTATION.md` §6.0's measured `12·bits + 7` is 55 inferences
+rather than 775. The bignum path is still needed — 8 firings are above 64 bits,
+and §1.2 says the file does not check at all without them — but it is 8 firings,
+not the tranche.
 
 ---
 
@@ -543,6 +568,10 @@ worry about the cost of `rep` disappears with `rep`.
 
 ## 5. Reproducing
 
+* §1.5: `git apply scripts/nat-major-probe.diff`, then
+  `cargo build --release --features tg,stepcount --bin nanoda_bin` and one run
+  per `NANODA_IOTA_ASSUME` key; the diff's header lists them. The censuses are
+  side-effect free — the ledger is byte-identical with them in.
 * §1: `python3 rename_ops.py <in> <out> <ops…>`, then
   `( ulimit -v 4194304; ./target/release/nanoda_bin cfg.json )` with
   `nat_extension` and `string_extension` on. The renamer and the
@@ -570,10 +599,19 @@ worry about the cost of `rep` disappears with `rep`.
    fix it because every binder entry mints fresh kernel variables.
    `MINI-HANDOFF.md` §40 has the three memos that were tried and what each
    measured.
-2. **What `Nat.beq`/`Nat.ble` cost on the binary representation, measured.**
-   §1.3 says the demanded conversions are comparisons at `2⁶⁴`;
-   `NAT-REPRESENTATION.md` §6.4 predicts Θ(bits) for them. Nobody has counted
-   the kernel inferences.
+2. **~~What `Nat.beq`/`Nat.ble` cost on the binary representation, measured.~~
+   Answered — §1.5.** `NAT-REPRESENTATION.md` §6.0 counted the inferences
+   (`12·bits + 7`, so 775 at 64 bits) and §1.5 counts the demand: 643 calls in a
+   certifying run, 612 at four bits. The item's own premise — "the demanded
+   conversions are comparisons at `2⁶⁴`" — was the mistake, and it is §1.5's
+   subject: that is the acceptance demand, not the certification demand.
+
+   What replaces it is the **consumer**. `derived::nat::Eval::{ble, beq}` is
+   built, certified and called by nothing outside `derived/tests/nat.rs`;
+   `checker/src/tg.rs` does not reach `derived::nat` at all. And `Compare` is
+   ω-valued (`succ 0`/`0`) where the 466 blocked firings need
+   `⟦Nat.ble a b⟧ = ⟦Bool.true⟧` — there is no occurrence of `Bool` anywhere in
+   `derived/src/nat/`. That bridge is the missing piece, not the arithmetic.
 3. **Whether any `Nat.rec` in `init-prelude` iterates over a large literal.**
    Still open, and `NAT-REPRESENTATION.md` §10.2 is still the statement of it.
    §1 narrows it: the two fatal sites are `decide`-shaped, so the *known*
