@@ -8982,3 +8982,134 @@ unmoved at 44. Nothing here has fed you anything.
 constructor` is 486 before this tranche and 486 after. Origin 2 is untouched by
 the degenerate recursor, which is what disjointness predicted — the two ι rows
 name different failures, and this one closed only its own.
+
+## Link 4 cannot be built: the bridge is over a carrier the checker does not use — 2026-08-11
+
+*Task #128. Baseline this tree, `13 254 / 2 432 / 162 483`, arena 152/0/2.
+Release, `--features tg,stepcount`, `good/init-prelude.ndjson`,
+`num_threads: 1`. The brief was "one call in `checker/src/tg.rs` to
+`derived::nat::ble_transfer`". **No line of it was written**, because the census
+this project adopted one tranche ago said not to, and then two checks in the
+code said it could not be.*
+
+### The chain, re-measured against the new baseline — it transfers exactly
+
+| | gaps | vs baseline | escapes | derived |
+|---|---:|---:|---:|---:|
+| baseline (degenerate recursor wired) | 13 254 | — | 2 432 | 162 483 |
+| **link 2 alone** (`NANODA_ASSUME=nat_reduce`) | 13 168 | **−86** | 2 457 | 162 594 |
+| **link 3 alone** (`NANODA_NAT_RULED=1`) | 14 196 | **+942** | 2 432 | 163 425 |
+| **the pair** | **10 657** | **−2 597** | 3 134 | 167 666 |
+
+**−86, +942, −2 597: the same three deltas as against 15 734.** The numeral
+bridge and the degenerate recursor are exactly additive — not superadditive,
+not sub — which is a fact worth having, because it says the two tranches touch
+disjoint populations and the −2 597 was safe to carry across a 2 480-gap
+landing. Link 3 alone is still worse than doing nothing.
+
+### The census inside the rule, and it is *good*
+
+`scripts/nat-red-census.diff`. Every `Admit::NatRed` the checker asks about, by
+head constant and operand shape, with link 3 switched on so the population is
+the one link 4 would face:
+
+| head | operands | count |
+|---|---|---:|
+| **`Nat.ble`** | **two numerals, both ≤ 12** | **466** |
+| `Nat.ble` | not both numerals | 17 |
+| `Nat.beq` | not both numerals | 13 |
+| `Nat.pow` | not both numerals | 5 |
+| `Nat.succ` | not a numeral | 2 |
+| | **total** | **503** |
+
+**466 of 503 — 92.6 % — is exactly the shape `ble_transfer` serves**, and every
+one of them at operands ≤ 12. This is the opposite of the projection census one
+tranche ago, where the construction reached 18 of 178. Shape coverage is not the
+obstacle here. Two other things are, and both are read off the code rather than
+inferred.
+
+### Obstacle 1: the literal has no content, and cannot acquire any
+
+`TgBackend::interp`'s `Expr::NatLit` arm gives each value **one opaque nullary
+symbol**, `env.declare(0)`, and `Shared::lit_syms`' own comment says why: *"these
+symbols carry no axioms"*. So `⟦Nat.ble 3 5⟧` is
+`app(app(⟦Nat.ble⟧, lit₃), lit₅)` over two constants about which **nothing
+whatever is provable**.
+
+`Eval::ble_bool` proves `⊢ bleb(t,f,num 3,num 5) = t`, where `num` is
+`derived::nat::Binary`'s LSB-outermost binary numeral. No theorem relates `lit₃`
+to `num(3)`, and none can be derived: an axiom-free symbol admits every
+interpretation. The bridge's conclusion is about a term the checker never builds.
+
+### Obstacle 2: two different `Nat`s, and nothing joins them
+
+`⟦Nat⟧` is `derived::wnat::Nat::ty` (`tg.rs`, `nat_shape`'s arm) — the W-type
+`N = W(1+1, rec₊(λ_.0, λ_.1), U(1+1))`, whose `zero` is `⟨inl •, ∅⟩`.
+`ble_uniqueness` quantifies `x ∈ ω` over `derived::nat`'s **von Neumann** `ω`,
+whose zero is `∅`. These are different sets, and the separation is deliberate on
+both sides: `derived/src/nat/` never mentions `wnat`, and `wnat.rs`'s header
+says in as many words that *"the ω-tower is not needed"*.
+
+So `⊢ ∀x ∀y ∈ ω. app(app(g,x),y) = bleb(t,f,x,y)` at `g := ⟦Nat.ble⟧` is a
+statement about `⟦Nat.ble⟧` applied off its own domain. There is no transport in
+`derived/` and none in `checker/`.
+
+`NAT-BRIDGE-FEASIBILITY.md` §4.6 writes link 2 as
+`⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` — `⟦Nat.ble⟧` and `ω` in
+one formula — which is where the two carriers were silently identified. §4.5
+settles it the other way in the same document: *"`⟦Nat⟧` stays exactly what the
+general inductive translation produces"*. Both cannot be true.
+
+**Why no measurement caught this.** `NANODA_ASSUME=nat_reduce` makes
+`admit_or_acquire` *acquire* the fact instead of admitting it. It simulates a
+derivation without asking where the derivation would live, so the −2 597 above
+is the value of the numeral fact **being true**, not of this bridge being able
+to prove it. Three seats have now measured that number; none of them was
+measuring link 2.
+
+### What §4.4 said, and it is stale in the good direction
+
+*"`natAddSucc` does not [certify], so the bridge still cannot be instantiated."*
+It does now: all seventeen characteristic equations, `natBleZ`, `natBleSZ` and
+`natBleSS` among them, are `None` in `mini/tests/nat_equations.rs`. Deriving the
+three clauses is no longer an obstacle. The carrier is.
+
+### The route the census actually points at, and its price
+
+The corpus has **35 distinct `NatLit` values in total**, of which **13 are ≤ 12**
+and the largest is **2⁶⁴**. The `Nat.ble` population is entirely inside the 13.
+
+And the checker **already reduces these by ι**: `TypeChecker::reduce_rec` calls
+`ctx.nat_lit_to_constructor(ptr)`, turning `3` into `Nat.succ 2` one step at a
+time, on the W-nat the interpretation actually uses. The reduction happens; it
+is only *silent*, exactly as the major's own whnf was before link 3.
+
+So the missing fact is not a bignum bridge over a second carrier. It is **one
+defining equation per small literal** —
+`⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})` and `⊢ lit₀ = ⟦Nat.zero⟧` — which
+
+* keeps every literal a **nullary symbol**, so no term grows;
+* costs at most `0+1+⋯+12 = 78` abbreviations on this corpus, gated on a value
+  the `NatLit` node carries, so the interpretation stays a function of the node
+  (the substitution-stability the projection tranche was refuted on);
+* leaves `2⁶⁴` opaque exactly as today, and the census says it is never asked;
+* makes `nat_lit_to_constructor`'s step a **δ step over an abbreviation**, which
+  `Certifier::delta` already serves;
+* needs **nothing** from `derived::nat` — no `ω`, no binary numerals, no
+  `ble_uniqueness`, no `Eval`.
+
+The remaining question, and it is the next census rather than the next build:
+`try_reduce_nat` short-circuits `Nat.ble` *before* δ, so the certifiable route is
+only reached if the accelerator stands aside at small operands. That is a
+reduction-hot-path change in `tc.rs` and it should be priced —
+`perf stat -e instructions`, unary at ≤ 12 against native bignum — before it is
+written.
+
+### The standing finding
+
+*"Origin 2 is not the bignum bridge — it is 55 facts at operands ≤ 12"* is a
+section of this file from earlier the same day. Links 1 and 2 are a bignum
+bridge, built over a third carrier, for operands this corpus does not contain.
+The population census was right and was not carried into the construction; the
+census **inside the rule** is what would have caught it, and it costs one
+afternoon less than the bridge did.

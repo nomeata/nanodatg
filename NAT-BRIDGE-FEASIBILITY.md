@@ -571,10 +571,10 @@ largest single origin in the ledger. What has to exist, for
 
 | # | link | state |
 |---|---|---|
-| 1 | `⊢ bleb(t,f,num a,num b) = t` at literal operands | **built** — `derived::nat::Boolean`, `Eval::ble_bool`, 70 inferences at four bits |
-| 2 | `⊢ ∀x ∀y ∈ ω. app(app(⟦Nat.ble⟧,x),y) = bleb(t,f,x,y)` | **built** — `derived::nat::ble_uniqueness`, fired by `ble_transfer` |
+| 1 | `⊢ bleb(t,f,num a,num b) = t` at literal operands | **built, and off the path** — `derived::nat::Boolean`, `Eval::ble_bool`, 70 inferences at four bits; `num` is a binary numeral over `ω` |
+| 2 | `⊢ ∀x ∀y ∈ ω. app(app(g,x),y) = bleb(t,f,x,y)` | **built, and off the path** — `derived::nat::ble_uniqueness`, fired by `ble_transfer`. This row **used to read `⟦Nat.ble⟧` for `g`**, and that is the error: the theorem quantifies `x ∈ ω`, von Neumann, while `⟦Nat⟧` is `derived::wnat`'s W-type. See §4.7 |
 | 3 | `reduce_rec` recording the major premise's own whnf as a step the backend sees | **built** — `666c297`, gated on `reduct::fully_ruled`, ledger byte-identical |
-| 4 | `checker/src/tg.rs` calling `ble_transfer` so `Admit::NatRed` *is* a rule | **not built** — the consumer, and the only thing still missing |
+| 4 | `checker/src/tg.rs` calling `ble_transfer` so `Admit::NatRed` *is* a rule | **cannot be built as written** — §4.7 |
 
 None of the links is worth anything without the others, and that is now
 **measured** rather than argued (`MEASUREMENTS.md`, "The numeral bridge, priced
@@ -697,3 +697,47 @@ operands. It is a named non-item, not an oversight.
 4. **`div`/`mod`'s characterisation.** No equation exists to gate on. The
    `Acc.rec`/fuel fixpoint equation is the shape, `checker/src/tests/natlit.rs:35`
    already pins the bignum side, and nothing has been designed.
+
+
+**4.7 Link 4 cannot be built, and the census says it should not be.** Task #128,
+2026-08-11, measured; the full account is in `MEASUREMENTS.md`, *"Link 4 cannot
+be built: the bridge is over a carrier the checker does not use"*. Three things,
+in the order they were checked:
+
+*The census inside the rule is good.* Of the 503 `Admit::NatRed` sites the
+checker asks about with link 3 switched on, **466 — 92.6 % — are `Nat.ble` at
+two numerals, all at operands ≤ 12**, exactly the shape `ble_transfer` serves.
+Shape coverage is not the obstacle. `scripts/nat-red-census.diff`.
+
+*Obstacle 1, the literal has no content.* `interp`'s `Expr::NatLit` arm gives
+each value one `env.declare(0)`, and `Shared::lit_syms` says in its own comment
+that these symbols carry no axioms. `⟦3⟧` and `num(3)` cannot be related,
+because an axiom-free symbol admits every interpretation.
+
+*Obstacle 2, two `Nat`s.* `⟦Nat⟧` is `derived::wnat::Nat::ty`, whose zero is
+`⟨inl •, ∅⟩`; `ω`'s is `∅`. `derived/src/nat/` never mentions `wnat` and
+`wnat.rs` says the ω-tower is not needed. Nothing joins them. §4.6's link-2 row
+and §4.5's *"`⟦Nat⟧` stays exactly what the general inductive translation
+produces"* cannot both be true, and §4.5 is the one the code implements.
+
+*Why the chain measurement did not catch it.* `NANODA_ASSUME=nat_reduce` makes
+the origin *acquire* the fact rather than admit it. It prices the numeral fact
+being **true**, not this bridge being able to prove it. The −2 597 is real and
+reproduces exactly against the post-degenerate-recursor baseline (−86 / +942 /
+−2 597, unchanged); it is simply not a measurement of link 2.
+
+*§4.4 is stale, in the good direction.* All seventeen characteristic equations
+now certify, `natBleZ`/`natBleSZ`/`natBleSS` included. Deriving the clauses is no
+longer what blocks this.
+
+*What the census points at instead.* The corpus has 35 distinct `NatLit` values,
+13 of them ≤ 12, largest 2⁶⁴; the `Nat.ble` population lies entirely in the 13.
+`reduce_rec` **already** reduces them by ι through `nat_lit_to_constructor`, on
+the W-nat the interpretation actually uses — silently, exactly as the major's
+own whnf was before link 3. The missing fact is one defining equation per small
+literal, `⊢ lit_n = app(⟦Nat.succ⟧, lit_{n−1})`, keeping every literal a nullary
+symbol and costing ≤ 78 abbreviations here. It needs nothing from
+`derived::nat`. The open question is whether `try_reduce_nat` may stand aside at
+small operands so the certifiable route is reached at all, and that is a
+reduction-hot-path change to be priced with `perf stat -e instructions` before
+it is written.

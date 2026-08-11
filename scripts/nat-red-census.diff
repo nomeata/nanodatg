@@ -1,0 +1,144 @@
+# MEASUREMENT PROBE — the `Admit::NatRed` population, split by head constant
+# and operand shape. Worktree-only, never to be landed.
+#
+# `git apply scripts/nat-red-census.diff` onto a scratch worktree, then
+#
+#   cargo build --release --features tg,stepcount --bin nanoda_bin
+#   ./target/release/nanoda_bin cfg.json                 # the census as it stands
+#   NANODA_NAT_RULED=1 ./target/release/nanoda_bin …     # with link 3 switched on
+#
+# `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
+# `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`.
+#
+# WHY IT EXISTS. `derived::nat::ble_transfer` serves exactly one shape —
+# `Nat.ble` at two numerals — and a deletion of the `nat_reduce` row prices the
+# whole row rather than that shape. This is the census *inside the rule*: how
+# much of the population a construction can reach, asked before it is built.
+# The answer on `init-prelude` (2026-08-11) is 466 of 503 with link 3 on, all at
+# operands ≤ 12; the other 37 are `Nat.beq`, `Nat.pow` and `Nat.succ` at
+# non-numeral arguments, which this bridge does not serve at all.
+#
+# What it adds: a `BTreeMap` census keyed `<head> <operand shape> <magnitude>`,
+# filled at `TypeChecker::admit` when the site is `Admit::NatRed`, and printed
+# after `inst_report`. Nothing is decided by it; the ledger is byte-identical
+# with it applied.
+diff --git a/checker/src/tc.rs b/checker/src/tc.rs
+index 38615a0..782e89f 100644
+--- a/checker/src/tc.rs
++++ b/checker/src/tc.rs
+@@ -2236,8 +2236,76 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+     /// Convenience: admit an equality the checker believes but cannot yet
+     /// justify. Each call site names itself via one of `certify::admits`, so
+     /// the remaining holes are enumerable. See `certify.rs`.
++    #[allow(clippy::type_complexity)]
+     pub(crate) fn admit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, site: Admit) -> DefEq<'t, 'p> {
+         crate::certify::bump_admit(site);
++        // ── PROBE (task #128 census, worktree only) ──────────────────────────
++        // Every `Admit::NatRed` the checker is asked about, split by the head
++        // constant and by whether both operands are already numeral literals.
++        // `derived::nat::ble_transfer` serves exactly `Nat.ble` at two numerals,
++        // so this says what fraction of the population the construction reaches
++        // before it is wired.
++        #[cfg(feature = "stepcount")]
++        if matches!(site, Admit::NatRed) {
++            let (f, args) = self.ctx.unfold_apps(x);
++            let head = match self.ctx.read_expr(f) {
++                Const { name, .. } => {
++                    fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: crate::util::NamePtr<'t>, out: &mut String) {
++                        match ctx.read_name(n) {
++                            crate::name::Name::Anon => {}
++                            crate::name::Name::Str(pre, sfx, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(ctx.read_string(sfx).as_ref());
++                            }
++                            crate::name::Name::Num(pre, i, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(&i.to_string());
++                            }
++                        }
++                    }
++                    let mut buf = String::new();
++                    go(self.ctx, name, &mut buf);
++                    buf
++                }
++                _ => "<not a constant>".to_string(),
++            };
++            let lit = |e: crate::util::ExprPtr<'t>| -> Option<u64> {
++                match self.ctx.read_expr(e) {
++                    crate::expr::Expr::NatLit { ptr, .. } => {
++                        self.ctx.read_bignum(ptr).and_then(|b| u64::try_from(b).ok())
++                    }
++                    _ => None,
++                }
++            };
++            let shape = match args.as_slice() {
++                [a] => match lit(*a) {
++                    Some(_) => "1 numeral",
++                    None => "1 NON-numeral",
++                },
++                [a, b] => match (lit(*a), lit(*b)) {
++                    (Some(_), Some(_)) => "2 numerals",
++                    _ => "2 args, NOT both numerals",
++                },
++                _ => "other arity",
++            };
++            let big = args
++                .iter()
++                .filter_map(|a| lit(*a))
++                .max()
++                .map_or("-".to_string(), |m| match m {
++                    0..=12 => "max<=12".to_string(),
++                    13..=255 => "max<=255".to_string(),
++                    _ => "max>255".to_string(),
++                });
++            let mut g = crate::tc::NAT_RED_CENSUS.lock().expect("nat census poisoned");
++            *g.entry(format!("{head:<24} {shape:<26} {big}")).or_insert(0u64) += 1;
++        }
+         Some(self.certifier.admit(self.ctx, x, y, site.name()))
+     }
+ 
+@@ -3077,3 +3145,25 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         None
+     }
+ }
++
++// ── PROBE (task #128 census, worktree only) ──────────────────────────────────
++/// Every `Admit::NatRed` the checker asks about, keyed by head constant and
++/// operand shape. Printed by `nat_red_census`, called from the report.
++#[cfg(feature = "stepcount")]
++pub(crate) static NAT_RED_CENSUS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++/// The census, rendered.
++#[cfg(feature = "stepcount")]
++pub fn nat_red_census() -> String {
++    let g = NAT_RED_CENSUS.lock().expect("nat census poisoned");
++    if g.is_empty() {
++        return String::new()
++    }
++    let total: u64 = g.values().sum();
++    let mut s = format!("PROBE nat_reduce census — {} rows, {total} firings\n", g.len());
++    for (k, n) in g.iter() {
++        s.push_str(&format!("  {k:<70} {n:>8}\n"));
++    }
++    s
++}
+diff --git a/checker/src/tg.rs b/checker/src/tg.rs
+index f652fc4..4b81faa 100644
+--- a/checker/src/tg.rs
++++ b/checker/src/tg.rs
+@@ -20107,6 +20107,8 @@ pub fn global_report() -> String {
+     s.push_str(&split_report());
+     s.push_str(&gen_report());
+     s.push_str(&inst_report());
++    #[cfg(feature = "stepcount")]
++    s.push_str(&crate::tc::nat_red_census());
+     s.push_str(&translated_report());
+     s.push_str(&provenance);
+     if total == 0 && proved > 0 {
