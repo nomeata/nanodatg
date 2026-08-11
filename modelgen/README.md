@@ -299,16 +299,20 @@ recursion at a maybe-zero sort, one level-arithmetic gap, a linearly recursive
 declaration with **no base constructor** (its spine has no zero fibre), an
 index erasure whose recursive occurrence is only visible through βζ — or hidden
 behind it — and, on the graph arm, a constructor **index that is not literally
-one of its own data fields**, since inversion at an arbitrary index would then
-have to be stated at a transport.
-**On the non-recursive subsingleton that last one is closed** and its
-complement with it: an index position may be a *pivot* — literally a data
-field, which the model substitutes the recursor's own index argument for — or
-any term at all over the parameters, the data fields and the proof fields,
-which the model equates. `MODELGEN.md` §8.17 is the derivation and
-`tests/prim_idx.lean` the grid. The one shape that is still refused there is a
-pivot whose *own type* mentions a non-pivot index, which no Mathlib declaration
-has. The **basis exemption** is not on this list at all: `Eq`, `Nat`, `PSigma`
+one of its own data fields and is at a data position**, since inversion at an
+arbitrary index would then have to be stated at a transport.
+**Both subsingleton arms take a mixed index vector now.** An index position may
+be a *pivot* — literally a data field, which the model substitutes the
+recursor's own index argument for — or any term at all over the parameters, the
+data fields and the proof fields, which arm F equates and which arm G needs
+nothing for when the position's type is a `Prop`: the constructor's index
+expression and the recursor's index argument are then two proofs of one
+proposition, and the kernel identifies them. That is `Acc.below`'s shape and
+every `.below` Lean mints beside a recursive `Prop`. `MODELGEN.md` §8.17 and
+§8.17.1 are the derivation and `tests/prim_idx.lean` the grid. Two shapes are
+still refused: a pivot whose *own type* mentions a non-pivot index (arm F), and
+a non-pivot at a **data** index position on the graph arm (arm G). **No Mathlib
+declaration has either** — the full export declines nothing. The **basis exemption** is not on this list at all: `Eq`, `Nat`, `PSigma`
 and `PULiftP` are what the construction is written in, they are reported
 `exempt` rather than `declined`, and their absence from the models is what
 makes it well-founded.
@@ -344,7 +348,12 @@ does the indexed subsingleton at **any** number of constructor fields
 (`HEq`) — that arm shipped bounded at one field on a measurement that
 re-measuring did not reproduce, and `MODELGEN.md` §8.2 records the episode.
 Every remaining decline names a compiled prototype under
-`scripts/inductive-basis/` that would close it.
+`scripts/inductive-basis/` that would close it — **with one exception**, and it
+is worth the sentence because five of these were closed by finding the
+prototype already written. The graph arm's **data** non-pivot has none:
+`AccFromChoice.lean` records that case as the one the recipe is *not* uniform
+in, and the construction for it is prose in `MODELGEN.md` §8.17 and not a
+compiled file. It is also not a Mathlib shape.
 
 On Mathlib (5.6 GB export, 670,630 declarations):
 

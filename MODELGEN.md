@@ -3591,8 +3591,12 @@ vectors that mention no field, where this arm takes only vectors that are
 *nothing but* fields. The two refusals are one refusal, an index position is a
 **pivot** (literally a data field, which the model substitutes) or is not (which
 the model equates), and both arms need both. §8.17 closes arm F's half and
-states arm G's construction; the guard here is unchanged and now prints the
-reason in those terms.
+**§8.17.1 closes this one** — the guard here now asks its question of the
+non-pivots at *data* positions only, because at an index position typed by a
+`Prop` the constructor's index expression and the recursor's index argument
+are two proofs of one proposition and the kernel identifies them. What is
+left of the refusal is a constant or a term at a data position, which is
+`BadC` and is no Mathlib declaration.
 
 ### Fixtures and mutations
 
@@ -5878,7 +5882,8 @@ is what makes the construction well-founded and must stay unmodelled. The two
 singleton boundaries were filed beside it here and that was wrong — they are
 arm G's and arm F's own **limits**, an index that is not one of the
 constructor's data fields and index expressions that mention its own fields —
-and §8.17 shows the two are one limit and closes arm F's half. So the *whole* remaining question about
+and §8.17 shows the two are one limit, closes arm F's half and — with §8.17.1 —
+closes arm G's. So the *whole* remaining question about
 this construction's reach on Mathlib is **two classes of four declarations
 between them**: three whose `B` needs to see the label's data, which is
 `WFromPaths.lean` and costs `Classical.choice` on every constant — §8.16 took
@@ -6418,8 +6423,9 @@ limits**, which is a different thing and was overstated by this section.
 | singleton boundaries — **arm limits**, one per arm | 2 | `CategoryTheory.Functor.IsHomLift` (arm F: a pivot in the index vector), `Acc.below` (arm G: a non-pivot in it) |
 
 So the honest headline at this commit is **2 declines and 3 exempt**, not 5.
-§8.17 shows that the two singleton rows are *one* limit seen from its two ends,
-closes arm F's half — `IsHomLift` models — and writes arm G's out. It also
+§8.17 shows that the two singleton rows are *one* limit seen from its two ends
+and closes arm F's half — `IsHomLift` models; §8.17.1 closes arm G's, and
+`Acc.below` models too. It also
 gives the exemption its own row in the report, so that a census does not have
 to walk its own number back in the next sentence.
 
@@ -6529,7 +6535,8 @@ Written that way:
 | | arm F, non-recursive | arm G, recursive |
 |---|---|---|
 | **before** | every position a non-pivot | every position a pivot |
-| **now** | any mixture | every position a pivot |
+| **with this section** | any mixture | every position a pivot |
+| **with §8.17.1** | any mixture | any mixture whose non-pivots are at `Prop`s |
 
 Arm F declined at the first pivot and arm G at the first non-pivot; between
 them sat `MixI`, `SvIx`, `IsHomLift`, `Acc.below`, `Inf.below` and every
@@ -6638,30 +6645,28 @@ not a bound but a missing case. Their paragraphs in that file's header were
 corrected where a reader meets them. `Inf.below` is what is left of that file's
 subsingleton refusals, and `prim_idx.lean` carries the rest of the grid.
 
-### Arm G's half, written out and not built
+### Arm G's half, written out — and it was the wrong construction
 
-The same generalisation on the graph route is a larger change and is **not**
-made here. What it is, so that it is a plan and not a remainder:
+The same generalisation on the graph route was costed here as a larger change:
 `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗`, whose right-hand side lands at
-the constructor's own index expressions. With a non-pivot among them the two
-sides sit at different indices, so the equation has to be stated at a transport
-of `step f⃗ g⃗` along the very packed equation arm F now carries — an `Eq.rec`
-at `Sort v` over the non-pivot subsequence, whose motive needs a carrier
-inhabitant at each packed point and gets one by a second `Eq.rec` into `Prop`
-from `T._model.ctor_0 f⃗`. Three consequences make it tractable rather than
-open-ended:
+the constructor's own index expressions; with a non-pivot among them the two
+sides sit at different indices, so the equation would have to be stated at a
+transport of `step f⃗ g⃗` along the very packed equation arm F carries — an
+`Eq.rec` at `Sort v` over the non-pivot subsequence, whose motive needs a
+carrier inhabitant at each packed point and gets one by a second `Eq.rec` into
+`Prop` from `T._model.ctor_0 f⃗`. Three consequences were listed as making it
+tractable: the two inversions `graph_unique` composes transport along **the
+same** `heq`, so the congruence gains a layer and not a case split; at the
+constructor `heq` is `Eq.refl` and the transport reduces away; and
+`T._model.ind` already carries arbitrary indices.
 
-* the two inversions `graph_unique` composes are transports along **the same**
-  `heq` — two proofs of one `Eq`, hence one term — so the congruence gains one
-  layer and not a case split;
-* at the constructor `heq` is `Eq.refl` and the transport reduces away, so
-  `Graph.inv`'s and `graph_exists`' witnesses are unchanged;
-* `T._model.ind`, the `Prop`-motive fold, is the Church route's own and already
-  carries arbitrary indices, so nothing before the graph moves.
-
-`tests/prim_idx.lean`'s `Rxh` and `Rvx` are `Inf.below` and `Acc.below`
-transcribed and are what go green when it is built, together with the five
-`.below` rows the fixtures already carry by accident.
+**None of that was needed, and §8.17.1 is why.** The plan is kept above because
+it is still the construction the *data* column would need — `BadC` is on the
+wrong side of it and no Mathlib declaration is — but for the class the corpus
+actually holds, the equation it threads is an equation between two proofs, and
+the kernel had already discharged it. `tests/prim_idx.lean`'s `Rxh` and `Rvx`
+are `Inf.below` and `Acc.below` transcribed, and they went green without one
+line of transport.
 
 ### Exempt is not declined
 
@@ -6697,7 +6702,8 @@ Exit 0, **3.397 T instructions** (363.4 s wall on a contended box).*
 | planner level comparisons / escapes | 203 / 0 | 203 / 0 |
 | instructions | 3.388 T | **3.397 T** |
 
-**One decline on Mathlib, and it is `Acc.below`.**
+**One decline on Mathlib, and it is `Acc.below`** — at this commit. §8.17.1
+closes it too, and the census above is superseded by the one there.
 
 ```text
 Acc.below: declined — prim model shape: Acc.below.intro's index 1 is not one of
@@ -6754,10 +6760,191 @@ variable index position needs the field's sort, which needs type inference the
 script does not do. The distinction does not move any of the three buckets — a
 mixed row stays mixed either way — and it is the buckets the arms turn on.
 
+**§8.17.1 splits the mixed bucket once more and the script still cannot see
+it.** What decides arm G now is whether a mixed row's non-pivots sit at
+`Prop`-typed index *positions*, and that needs the sort of the position's
+declared type — the same type inference the paragraph above says is missing.
+The generator is the measurement instead: on the full export it declines
+nothing, so **both** mixed occupants are on the proof side, and so is every
+`.below`.
+
+## 8.17.1 Arm G's half: no transport, because the whole class is the proof column
+
+The claim §8.17 left for the next seat — *the same equation threaded through
+`GraphInv`, `Graph.inv`, `graph_unique`, `graph_exists` and `rec_graph`, with a
+`Sort v` transport whose motive needs a second `Eq.rec` into `Prop`* — is
+**refuted at the first of the five**, and the refutation is one sentence long.
+
+Split the non-pivot positions once more, by the *type* of the index position
+rather than by the shape of the expression sitting in it:
+
+| a non-pivot index position is at | arm F | arm G |
+|---|---|---|
+| a **data** type (`N`, `α : Sort u`, …) | packed into the one `Eq` | **declines** — the transport above is genuinely owed |
+| a **`Prop`** | packed into the one `Eq`, which `rfl` then inhabits | **nothing at all** |
+
+At a `Prop`-typed index position `ι⃗_ctor[j]` and `ι⃗[j]` are two proofs of one
+proposition. The kernel identifies them by **definitional proof irrelevance**,
+so `motive ι⃗_ctor (ctor f⃗)` and `motive ι⃗ t` are the same type, `step f⃗ g⃗`
+already has the type `GraphInv` wants to equate it at, and every statement in
+the arm is well-typed exactly as it was written for the all-pivot case. It
+propagates through the telescope as well: a later index type mentioning `j` is
+defeq at the two, so a whole *suffix* of proof positions is free, and that is
+what makes the rule a rule and not a special case at `ni = 2`.
+
+**And that is the entire corpus class.** `Acc.below`'s index 1 has type
+`Acc r a`; every `.below` Lean mints beside a recursive `Prop` has that shape,
+because `T.below` is `… → (a : ι) → T a → Prop` and the `T a` position is
+where the `T.mk` lands. The transport §8.17 costed is owed only where a
+non-pivot sits at a **data** position, and the corpus has no such recursive
+`Prop`: `BadC` in `tests/prim_graph.lean` is that shape reached deliberately
+and it is still a decline.
+
+### What actually changed, and it is two sites
+
+* **The arm-G guard** asks its question of the non-pivots at **data**
+  positions (`gNonPivData`) rather than of every non-pivot (`gNonPiv`). It
+  asks it of *every* one of them, not of the first, which is what
+  `tests/prim_idx.lean`'s new `Rgd` pins.
+* **`GraphInv`'s index test** — the line that used to demand
+  `ι⃗_ctor == ι⃗` syntactically, and refuse otherwise — is **definitional**.
+  That is the whole of the threading: at a pivot the two terms are the same
+  term, at a proof position they are defeq, and there was never anything out
+  of place to transport.
+
+Nothing was added to `Graph.inv`, `graph_unique`, `graph_exists` or
+`rec_graph`. The arm emits the same twelve declarations it always did.
+
+### The mutation sweep, and the backstop that is measured as one
+
+| mutation | red |
+|---|---|
+| **P** the guard dropped, every non-pivot free | `BadC`, `BadC.below` — at `GraphInv`'s own test, with its message |
+| **Q** the guard asked of the *first* non-pivot rather than of every one | `Rgd`, `Rgd.below`; `BadC` green |
+| **R** either half reverted — the guard back to `gNonPiv`, or the index test back to syntactic | `Rxh`, `Rvx`, `Inf.below`, `Rv.below`, `Rxh.below`, `Rvx.below`, `Ac.below`, `G1.below`–`G5.below`; every arm-F cell green |
+| **T** `GraphInv`'s index test dropped | **nothing** — behind the guard it cannot fire |
+
+**T is the honest row.** Behind the guard the test is unreachable: at a pivot
+the two terms are identical and at a proof position they are defeq, so no
+input reaches it. It earns its lines under **P** and **Q**, where it is what
+turns a widened guard into a *named decline* instead of a kernel diagnostic —
+with **P and T together** `BadC` reaches the kernel and is rejected at
+`BadC._model.graph_inv_ty` with an application type mismatch. That is the
+measurement, and it is why the test stays.
+
+### This one was *not* already on disk — and the near miss is worth the line
+
+Five times on this arc the construction turned out to have been derived in
+`scripts/inductive-basis/` and never generated, most recently `PropArms.lean`'s
+target 5 in §8.17. **This is the first one where the answer is no.** All 22
+files there were read for it: none states the rule for an index *position*
+typed by a `Prop`, and none mentions `Acc.below`, `Inf.below` or the generic
+`T.below` at all. The structural reason is that every graph-route model in
+that directory has exactly **one** index and it is always a bare variable, so
+the question could not come up.
+
+What *is* there is the same fact one slot over, and the arm has been standing
+on it since the day it was written. `AccFromChoice.lean:44-48`:
+
+> The `CAcc`-proof argument `t` is a non-issue exactly as sketched — `CAcc r x`
+> is a Prop, so `motive x t` and `motive x t'` are DEFINITIONALLY equal and
+> every `t`/`h`/`s` in sight is interchangeable by proof irrelevance. That is
+> what lets `GraphInv` universally quantify its `h` and close its `rfl`.
+
+That is the **subject** slot — `Acc.rec`'s `(t : Acc r a)` — not an index. The
+whole of §8.17.1 is the observation that an index position typed by a `Prop`
+is the same slot in a different position, and that the arm therefore already
+knew how to do it. `PropArms.lean`'s target 2 is the other near miss: it works
+`Nat.le.below` out in full and notes in as many words that its index 2 is "a
+PROOF, and its type mentions the first" — but by the Church arm, which has no
+Henry-Ford equation to be excused from, and its verdict credits the Church
+motive swallowing the telescope rather than proof irrelevance.
+
+**The lesson is not the same as the previous five.** There the gap was
+recorded and unbuilt; here the gap was *mis-costed* — written out in §8.17 as
+a five-declaration transport by a seat reasoning from the arm-F side, where
+the equation is real. A plan is a hypothesis too, and this one was refuted by
+looking at the type of the index rather than at the shape of the term in it.
+
+`Rgd` is the one cell added, and it is added for **Q** alone:
+
+```lean
+inductive Rgd : Inf → N → Prop where
+  | mk (a : Inf) (h : Rgd a N.z) : Rgd (Inf.mk a) N.z
+```
+
+a **proof** non-pivot at index 0 standing in front of a **data** non-pivot at
+index 1. It declines naming index **1**, and `BadC` — whose first non-pivot is
+already the data one — cannot say that. Its `Rgd.below` follows it by
+accident, at three indices, which is the same statement once more.
+
+### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, **3.387 T instructions** (399.3 s wall on a contended box).*
+
+| | §8.17 | **and with arm G's half** |
+|---|---|---|
+| **models** | 6,881 | **6,882** |
+| **declines** | 1 | **0** |
+| **exempt** — the basis, on its own row | 3 | 3 |
+| statements compared / differing | 18,509 / 0 | **18,511 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+| instructions | 3.397 T | **3.387 T** |
+
+**No decline on Mathlib.** Every non-exempt inductive in the export models:
+6,882 / 6,882 is **100 %**, and against the whole 6,885 verdicts, **99.96 %** —
+the remaining three being `Eq`, `Nat` and `PSigma`, which are what the
+construction is written in and whose absence is what makes it well-founded.
+
+`Acc.below` is a **12-declaration** model, arm G's own twelve with nothing left
+to splice by the time it is reached, and the emitted file grew by exactly
+**94,968 bytes** (5,851,543,902 → 5,851,638,870). That is the whole diff: one
+model added and one decline removed. The instruction count moved **−0.3 %**
+for one more model, which is noise on this box in the direction that says so —
+§8.17's run measured 3.397 T for strictly less work.
+
+**The change is a no-op on everything that modelled before.** The seven
+`--prim-models` fixtures are the control: every model list in `prim_shapes`,
+`prim_carve`, `prim_w`, `prim_late_basis` and `w_core` is unchanged to the
+declaration, and the four that move — `prim_idx`, `prim_graph`,
+`prim_graph_pre`, `prim_declines` — move only by turning arm-G declines into
+models of 12 or 13. `Test.lean` is **517 checks, 0 failed**.
+
+**Replayed from bytes, with the kernel on: 692,967 declarations accepted, 0
+rejected** — `envprobe target/mgidx-mathlib.out.ndjson C`, from an empty
+environment over the whole 5,851,638,870-byte file. **+12 against §8.17's
+692,955, and it is `Acc.below`'s twelve declarations and nothing else** — the
+check `addChecked` cannot do, because it sees only the environment the run
+itself built and not the position a model lands at in the file. The +12 also
+says the arm emitted its ordinary twelve and no transport: had the `Eq.rec`
+tower §8.17 costed been built, this number would carry it.
+
+### The three columns, and every row of the corpus classified
+
+The split the owner asked for, at the end of the arc:
+
+| | count | which |
+|---|---|---|
+| **closed** — modelled, kernel-checked, statement pinned against the installed recursor | **6,882** | every inductive in the export but the three below |
+| **certifiable** — an arm limit, a construction that is derived but not generated | **0** | — |
+| **exempt** — closed by definition, unmodelled so the construction is well-founded | **3** | `Eq`, `Nat`, `PSigma` |
+
+**The certifiable column is empty for the first time.** Every census in §8 has
+had one: §8.16.8's five, §8.17's one. `BadC`'s class — a recursive `Prop` with
+a non-pivot at a *data* index position — is still not generated and is still
+written out in §8.17, but it is a **fixture** row and not a corpus row, so it
+does not belong in this table. If Mathlib ever grows one, it declines with the
+message §8.17.1 names and this column is where it lands.
+
 ### What is left, exactly
 
 * **3 exempt.** `Eq`, `Nat`, `PSigma` — the basis, unmodelled by definition.
-* **1 decline.** `Acc.below`, at arm G's half of the axis above. The
-  construction that closes it is written out in this section; it is a day's
-  work on `graphArm` and it is not started.
-* **0 open classes.** Every other shape in Mathlib models.
+* **0 declines.** `Acc.below` was the last one and §8.17.1 closes it — for
+  two sites and no new declaration, not the day's work on `graphArm` this
+  section costed. The construction written out above is still owed by the
+  **data** column, which no Mathlib declaration occupies and which
+  `tests/prim_graph.lean`'s `BadC` and `tests/prim_idx.lean`'s `Rgd` hold
+  open as fixtures.
+* **0 open classes.** Every shape in Mathlib models.

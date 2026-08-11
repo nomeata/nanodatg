@@ -19,23 +19,46 @@
    * a **pivot** — literally one of the constructor's data fields. The model
      substitutes the recursor's own index argument for it.
    * anything else — an arbitrary term over the parameters, the data fields and
-     the *proof* fields. Nothing can be recovered from such a position, so it is
-     discharged by a **Henry-Ford equation at the non-pivot subsequence**.
+     the *proof* fields. Nothing can be recovered from such a position, so arm
+     F discharges it by a **Henry-Ford equation at the non-pivot subsequence**
+     and arm G, where the position is at a `Prop`, by nothing at all: see
+     below, it is where the two rows end in different places.
 
    Read that way the two arms' old limits were **one** limit seen from its two
    ends: arm F took only all-non-pivot index vectors and arm G only all-pivot
    ones, and everything between them fell through the gap —
    `CategoryTheory.Functor.IsHomLift` and `Acc.below`, the corpus's last two
-   non-exempt declines, one on each side. Arm F now covers its whole row.
+   non-exempt declines, one on each side.
 
    |            | ground | pivot | expr over data | expr over proof |
    |------------|--------|-------|----------------|-----------------|
    | non-rec, F | `Fg`   | `Fall3`, `Fdup`, `Fdep` | `Fdup`, `Fdep` | `Fxh` |
-   | rec, G     | `BadC` (`prim_graph`) | `Rv` | — | `Rxh`, `Rvx` |
+   | rec, G     | `BadC` (`prim_graph`), `Rgd` | `Rv`, `Rvx` | — | `Rxh`, `Rvx`, `Rgd` |
 
-   Arm F's row models. Arm G's row declines but for `Rv`, at the arm's own
-   named reason, and `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written
-   deliberately rather than met by accident.
+   **Both rows model but for the ground column of arm G's**, and the reason
+   the two rows end in different places is the third splitting of the axis and
+   the last: a non-pivot index position is either at a **data** type or at a
+   `Prop`. Arm F must equate either way — it packs a `PSigma` and builds an
+   `Eq.rec`, and at a proof position that equation is inhabited by `rfl` and
+   costs nothing but is still written. **Arm G need not equate at a proof
+   position at all.** Its `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗` at
+   the constructor's own index vector `ι⃗_ctor`, and where `ι⃗_ctor[j]` and
+   `ι⃗[j]` are both proofs of one proposition the kernel identifies them by
+   proof irrelevance: the statement is already the one wanted, and there is
+   nothing to transport. It propagates through the telescope, too — a later
+   index type mentioning `j` is defeq at the two — so a whole *suffix* of
+   proof positions is free.
+
+   That is the entire corpus class. `Acc.below`'s index 1 is `Acc r a`, and
+   every `.below` Lean mints beside a recursive `Prop` is that shape, which is
+   why `Inf.below`, `Rv.below`, `Rxh.below` and `Rvx.below` arrive here by
+   accident and why `prim_graph`'s whole `G*.below` column moved with them.
+   `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written deliberately rather
+   than met by accident, and they are the two the arm was built for.
+
+   What is left is a non-pivot at a **data** position, where the transport
+   `MODELGEN.md` §8.17 costed really is owed and really is not built: `BadC`
+   in `prim_graph`, and `Rgd` here.
 
    # Why every cell needs a leading non-pivot
 
@@ -69,9 +92,15 @@
      (`k h`), and no data fields at all: `Inf.below`'s shape without the
      recursion. **Green under every mutation in the sweep, and that is the
      finding rather than a gap** — see below.
-   * `Fmid` — the **refusal**.
-   * `Rv` — arm G's control, `Acc`'s own shape; `Rxh` and `Rvx` its two
-     refusals.
+   * `Fmid` — arm F's **refusal**.
+   * `Rv` — arm G's control, `Acc`'s own shape, every index a pivot; `Rxh` and
+     `Rvx` its two mixed cells, a proof non-pivot beside no pivot and beside
+     one.
+   * `Rgd` — arm G's **refusal**, and a sharper one than `BadC`: a **proof**
+     non-pivot at index 0 standing in front of a **data** non-pivot at index
+     1. It declines naming index **1**, which is what says the arm asks its
+     question of every non-pivot and not of the first one it meets. `BadC`
+     alone cannot say that — its first non-pivot is already the data one.
 
    | mutation | red |
    |---|---|
@@ -83,6 +112,19 @@
    | **H** the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
    | **C** the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
    | **D** the non-pivot subsequence reversed | nothing here; `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
+   | **P** arm G's guard dropped, every non-pivot taken as free | `BadC`, `BadC.below` — they decline at `GraphInv`'s own test instead |
+   | **Q** arm G's guard asked of the *first* non-pivot rather than of every one | `Rgd`, `Rgd.below`; `BadC` green |
+   | **R** either half of arm G's change reverted — the guard back to every non-pivot, or `GraphInv`'s index test back to syntactic | `Rxh`, `Rvx` and every `.below` here and in `prim_graph`; every arm-F cell green |
+
+   **`GraphInv`'s index test is a backstop and is measured as one.** Dropping
+   it alone (mutation **T**) is green everywhere, because behind the guard it
+   cannot fire: at a pivot the two index terms are the same term and at a
+   proof position they are defeq. Under **P** it is what catches `BadC`, and
+   under **Q** it is what catches `Rgd` — and with **both** it and the guard
+   gone, `BadC` reaches the kernel and is rejected at
+   `BadC._model.graph_inv_ty` with an application type mismatch. That is the
+   measurement that says the test is worth its lines: it is the difference
+   between a named decline and a kernel diagnostic when the guard is widened.
 
    **C and D cascade.** A decline moves a splice, so both take out the whole W
    core fragment in `prim_declines`, `prim_carve` and `prim_w`; the columns
@@ -112,7 +154,7 @@
    witness that it is inhabited and works; `Fp` would have been a second
    witness of the same nothing.
 
-   # The refusal, and it is a real one
+   # Arm F's refusal, and it is a real one
 
    `Fmid : (α : Type) → α → α → Prop` with `mk (x : N) : Fmid N x N.z` is a
    pivot whose *own type* is the ground index before it. The model reads a data
@@ -123,16 +165,16 @@
    target is on the wrong side of it**: `IsHomLift`'s `φ : a ⟶ b` names only
    pivots and `Acc.below`'s `a : α` only a parameter.
 
-   # Arm G's two, and what closes them
+   # Arm G's refusal, and it is one column and not a row
 
-   `Rxh` and `Rvx` decline at the same generalisation arm F now has, on the
-   other arm: `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗`, whose right-hand
-   side lands at the constructor's index expressions, and with a non-pivot
-   among them the two sides sit at different indices, so the equation needs a
-   transport along the very packed equation arm F carries. `MODELGEN.md` §8.17
-   writes that construction out. It is not built, and these two — with
-   `Inf.below`, `Rv.below` and the rest Lean mints beside a recursive `Prop` —
-   are what go green when it is.
+   `Rgd` and `prim_graph`'s `BadC` decline at the generalisation arm F has and
+   arm G does not: `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗`, whose
+   right-hand side lands at the constructor's index expressions, and with a
+   **data** non-pivot among them the two sides sit at genuinely different
+   indices, so the equation needs a transport along the very packed equation
+   arm F carries. `MODELGEN.md` §8.17 writes that construction out and §8.17.1
+   says why it is not owed for the proof column. It is not built, and these
+   two are what go green when it is.
 
    `Inf` and `N` beside them are the controls that say the arms are not
    swallowing the file: `Inf` is arm G's degenerate positive and `N` an
@@ -191,3 +233,6 @@ inductive Rvx (r : N → N → Prop) (mo : (a : N) → Rv r a → Prop) :
   | intro (x : N) (h : (y : N) → r y x → Rv r y)
           (b : (y : N) → (a : r y x) → Rvx r mo y (h y a))
           (m : (y : N) → (a : r y x) → mo y (h y a)) : Rvx r mo x (Rv.mk x h)
+
+inductive Rgd : Inf → N → Prop where
+  | mk (a : Inf) (h : Rgd a N.z) : Rgd (Inf.mk a) N.z

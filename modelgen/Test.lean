@@ -388,18 +388,23 @@ modelled there too — that row is the splice-and-model fix (§8.13), and it is
 the fixture that would go red if layer 3 went back to being unable to model
 what it introduces. It appears exactly once despite two shapes needing it,
 which is the re-modelling guard.
-`Inf` in `prim_declines` was a refusal until this arm landed and is now a
-model; `Inf.below` is not, and neither are the other `.below` declarations
-Lean mints for these shapes — their index is `T.mk a` rather than one of the
-constructor's own data fields, so inversion cannot be stated at an arbitrary
-index. `BadC` is the same refusal reached deliberately, and `prim_idx`'s `Rxh`
-and `Rvx` are `Inf.below` and `Acc.below` written deliberately.
-**That reason is now arm G's alone.** Arm F models the same index shapes — a
-pivot anywhere in the telescope, an expression over a data or a proof field
-beside it — so `MixI` and `SvIx` in `prim_declines` moved from its declines to
-its models in the same commit that added `prim_idx`, and the decline path they
-occupied no longer exists. `prim_idx` is the grid; `MODELGEN.md` §8.17 is the
-derivation and the two arms' shared statement of the limit.
+`Inf` in `prim_declines` was a refusal until the graph arm landed, and
+`Inf.below` beside it until the index axis closed — as were every other
+`.below` declaration Lean mints for these shapes, `prim_idx`'s `Rxh` and `Rvx`
+(`Inf.below` and `Acc.below` written deliberately) and `prim_graph`'s whole
+`G*.below` column. Their index is `T.mk a`, which is not one of the
+constructor's own data fields but **is a proof**, and two proofs of one
+proposition are one term to the kernel: the inversion is statable at an
+arbitrary index with no transport at all (`MODELGEN.md` §8.17.1).
+**What is left of that refusal is a non-pivot at a *data* position**, and
+`BadC` is it, reached deliberately. `Rgd` beside it in `prim_idx` is the cell
+that says the arm asks the question of **every** non-pivot rather than of the
+first: a proof position standing in front of a data one.
+Arm F models its whole row of the same axis — a pivot anywhere in the
+telescope, an expression over a data or a proof field beside it — so `MixI`
+and `SvIx` in `prim_declines` moved from its declines to its models in the
+commit that added `prim_idx`. `prim_idx` is the grid; `MODELGEN.md` §8.17 is
+the derivation and the two arms' shared statement of the limit.
 `BoxF` is still a decline and **declines for a different reason than it used
 to**. The planner's level equality is complete now
 ([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
@@ -436,16 +441,18 @@ def expectedPrim : List Row :=
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
        ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6), ("_wcore.HEq", 4),
-       ("_wcore.PProd", 4), ("MixI", 4), ("Binder", 12), ("SvIx", 4)],
+       ("_wcore.PProd", 4), ("MixI", 4), ("Inf.below", 12), ("Binder", 12),
+       ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
       , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")])
   -- **The index axis**, as a grid rather than as the shapes the corpus
   -- happens to have (`MODELGEN.md` §8.17, `tests/prim_idx.lean`'s header).
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
   -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
   -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
-  -- index expression over a proof field — and arm G's declines but for `Rv`.
+  -- index expression over a proof field — and **arm G's row models too now**,
+  -- because at a non-pivot whose own type is a `Prop` the two index vectors
+  -- are two proofs of one proposition and the kernel identifies them.
   --
   -- **Three counts here are the arms, not the cells.** `Rv` is 17 because it
   -- is the first arm-G model in the file and carries the splice (`PSigma`,
@@ -453,39 +460,45 @@ def expectedPrim : List Row :=
   -- `Inf` behind it is 12, arm G's twelve declarations with nothing left to
   -- splice; `N` is 9 for the `Type` route's own basis. Every arm-F cell is 4 —
   -- `self`, `ctor_0`, `rec_0`, `iota_0_0` — including `Fall3`, whose carrier
-  -- packs nothing and whose recursor builds no `Eq.rec`.
+  -- packs nothing and whose recursor builds no `Eq.rec`. The **13**s are the
+  -- twelve plus the `funext` `Graph.unique`'s congruence needs when a
+  -- recursive field carries binders, exactly as in `prim_graph`; `Inf`, `Rxh`
+  -- and `Rxh.below` are 12 because theirs do not. **Mixedness costs nothing**
+  -- — that is the point of the arm, and these counts are where it is
+  -- measured rather than argued.
   --
-  -- The seven declines are arm G's one limit, six times over plus `Fmid`.
-  -- `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written deliberately;
-  -- `Inf.below`, `Rv.below` and `Rvx.below` are the same shape arriving by
-  -- accident, which is the fixture saying the boundary is where it says it is.
+  -- `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written deliberately, and
+  -- `Inf.below`, `Rv.below`, `Rxh.below` and `Rvx.below` are the same shape
+  -- arriving by accident — which is the fixture saying the boundary is where
+  -- it says it is, now from the green side.
+  --
+  -- **Three declines, and the two new ones are the two halves of the guard.**
+  -- `Rgd` — a **proof** non-pivot standing in front of a **data** one — is red
+  -- exactly when the arm asks its question of the *first* non-pivot rather
+  -- than of every one, and `BadC` in `prim_graph` survives that mutation. It
+  -- declines naming index **1** and not index 0, which is the claim.
+  -- `Rgd.below` beside it is the same shape at three indices. `Fmid` is arm
+  -- F's own refusal and is untouched.
   , ("prim_idx",
-      [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Inf", 12), ("Fam", 4),
-       ("Fg", 4), ("Fall3", 4), ("Fxh", 4), ("Fdep", 4), ("Fdup", 4)],
+      [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 12),
+       ("Rxh", 12), ("Rxh.below", 12), ("Fam", 4), ("Inf.below", 12),
+       ("Fg", 4), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 4), ("Fdep", 4),
+       ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("Rvx", "prim model shape: Rvx.intro's index 1 is not one of its own data fields")
-      , ("Rxh", "prim model shape: Rxh.mk's index 0 is not one of its own data fields")
-      , ("Rxh.below", "prim model shape: Rxh.below.mk's index 0 is not one of its own")
-      , ("Inf.below", "prim model shape: Inf.below.mk's index 0 is not one of its own")
-      , ("Rv.below", "prim model shape: Rv.below.mk's index 1 is not one of its own")
-      , ("Fmid", "prim model shape: Fmid.mk's index 1 is one of its own data fields but its type mentions index 0")
-      , ("Rvx.below", "prim model shape: Rvx.below.intro's index 1 is not one of its own")])
+      , ("Rgd", "prim model shape: Rgd.mk's index 1 is not one of its own data fields")
+      , ("Rgd.below", "prim model shape: Rgd.below.mk's index 1 is not one of its own data fields")
+      , ("Fmid", "prim model shape: Fmid.mk's index 1 is one of its own data fields but its type mentions index 0")])
   , ("prim_graph",
-      [("G1", 15), ("Nonempty", 4), ("G4", 15), ("Ac", 13), ("N", 8),
-       ("G3", 13), ("G2", 13), ("G5", 13)],
+      [("G1", 15), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
+       ("N", 8), ("Ac.below", 13), ("G3", 13), ("G3.below", 13),
+       ("G1.below", 12), ("G2", 13), ("G5", 13), ("G5.below", 13),
+       ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("G4.below", "prim model shape: G4.below.mk's index 1 is not one of its own")
       , ("BadC", "prim model shape: BadC.mk's index 0 is not one of its own")
-      , ("BadC.below", "prim model shape: BadC.below.mk's index 0 is not one of its own")
-      , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")
-      , ("G3.below", "prim model shape: G3.below.mk's index 1 is not one of its own")
-      , ("G1.below", "prim model shape: G1.below.mk's index 0 is not one of its own")
-      , ("G5.below", "prim model shape: G5.below.mk's index 3 is not one of its own")
-      , ("G2.below", "prim model shape: G2.below.mk's index 1 is not one of its own")])
-  , ("prim_graph_pre", [("Ac", 13), ("Nonempty", 4)],
+      , ("BadC.below", "prim model shape: BadC.below.mk's index 0 is not one of its own")])
+  , ("prim_graph_pre", [("Ac", 13), ("Ac.below", 13), ("Nonempty", 4)],
       [ ("PSigma", "prim model: a basis primitive")
-      , ("Eq", "prim model: a basis primitive")
-      , ("Ac.below", "prim model shape: Ac.below.intro's index 1 is not one of its own")])
+      , ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
   -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat

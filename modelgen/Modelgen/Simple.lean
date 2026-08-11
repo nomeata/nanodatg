@@ -162,13 +162,16 @@ single-valuedness and is propositional.
 * **a recursive declaration with no base constructor** — uninhabited, and the
   tuple tower has no spine-zero fibre to build. Surfaced by arm C's skeleton
   and named there (§8.15).
-* **a recursive subsingleton whose data fields are not the conclusion's
-  indices** — the graph arm's own boundary, not the class: a *recursive
-  subsingleton* models, by [`Modelgen.graphArm`]. What that arm cannot reach
-  is an index it cannot invert at: a constant (`mk : P 0 → P 0`) or one built
-  from a proof field, which is the shape of the `below` Lean mints beside
-  every recursive `Prop`. `INDUCTIVE-BASIS.md` §3.2 is the carrier and
-  `MODELGEN.md` §8.7 the arm.
+* **a recursive subsingleton with a non-pivot index at a *data* position** —
+  the graph arm's own boundary, not the class: a *recursive subsingleton*
+  models, by [`Modelgen.graphArm`]. What that arm cannot reach is an index it
+  cannot invert at *and* cannot let the kernel identify — a constant
+  (`mk : P 0 → P 0`), or a term over the fields, at a position whose type is
+  data. At a position whose type is a **`Prop`** it needs nothing: the two
+  index terms are two proofs of one proposition and proof irrelevance closes
+  it, which is what puts the `below` Lean mints beside every recursive `Prop`
+  — `Acc.below` included — on the modelled side. `INDUCTIVE-BASIS.md` §3.2 is
+  the carrier, `MODELGEN.md` §8.7 the arm and §8.17.1 the index axis.
 * **indices or recursion at a maybe-zero sort** — neither is threaded
   through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
@@ -1401,8 +1404,11 @@ the conclusion's indices.
 That substitution is what `GraphInv` is stated by: inversion at an arbitrary
 index `ι⃗` must conclude `val = step f⃗ g⃗`, whose right-hand side lands at the
 quantified fields' own index expressions, so those expressions have to *be*
-`ι⃗`. Quantifying the data fields instead would need the index's injectivity,
-which is exactly the case `AccFromChoice.lean` records as not uniform.
+`ι⃗` — **definitionally**, which at a pivot means the same term and at an
+index position typed by a `Prop` means proof irrelevance (`MODELGEN.md`
+§8.17.1). Quantifying the data fields instead would need the index's
+injectivity, which is exactly the case `AccFromChoice.lean` records as not
+uniform.
 
 `k` receives the full field vector, the ones actually bound, and the
 telescope's result type. -/
@@ -1653,11 +1659,18 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
         withLocalDeclD `val (motAt is t) fun val => do
           let body ← fields (some is) fun fs bnd res => do
             -- With the data fields supplied as the index variables the
-            -- constructor's own index expressions **are** `ι⃗`, and that is
-            -- what makes the equation below statable at an arbitrary index.
-            unless (← idxOfRes res) == is do
-              badShape s!"{c.tname}'s constructor does not present its indices as its \
-own data fields"
+            -- constructor's own index expressions have to **be** `ι⃗`, and
+            -- that is what makes the equation below statable at an arbitrary
+            -- index. At a pivot they are it on the nose; at a non-pivot whose
+            -- type is a `Prop` they are two proofs of one proposition, so the
+            -- test is *definitional* and not syntactic. It is the whole of
+            -- arm G's half of the index axis, and the reason no transport is
+            -- built: nothing here is out of place to begin with.
+            let e ← idxOfRes res
+            for j in [0:ni] do
+              unless ← isDefEq e[j]! is[j]! do
+                badShape s!"{c.tname}'s constructor does not present its index {j} as \
+its own data field"
             withLocalDeclD `D (.sort .zero) fun D => do
               mkForallFVars (bnd ++ #[D])
                 (.forallE `k (← invArmTyAt is t val fs D) D .default)
@@ -2505,11 +2518,14 @@ application of {tname}"
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
   let mut gNf := 0
-  -- The index positions that are **not** pivots, in telescope order.
+  -- The index positions that are **not** pivots, in telescope order, and the
+  -- subsequence of those whose own *type* is not a `Prop` — see the arm-G
+  -- guard below for why the two are different questions.
   let mut gNonPiv : Array Nat := #[]
+  let mut gNonPivData : Array Nat := #[]
   if armGRec || armFNonRec then
     if armGRec then for n in graphNames do taken n
-    let (a, b, cc, npv) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+    let (a, b, cc, npv, npd) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
       let tele ← instForall cty ps
       let nfg := numForalls tele
@@ -2565,19 +2581,37 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
                   badShape s!"{cn}'s index {j} is one of its own data fields but its \
 type mentions index {m}, which is not — so the field cannot be read off the index \
 without a transport the model does not build"
-        return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!))
+          -- A non-pivot position whose declared type is a `Prop` is a **proof
+          -- position**, and the two arms treat it differently; the arm-G guard
+          -- below is what the distinction is for.
+          let mut npd : Array Nat := #[]
+          for j in [0:ni] do
+            if !piv[j]! && !(← ilevel (← ityp is[j]!)).normalize.isZero then
+              npd := npd.push j
+          return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!), npd)
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
+    gNonPivData := npd
 
-  -- **Arm G is still the all-pivot half**, and that is now a named boundary
-  -- rather than an unexamined one: the graph route's `GraphInv ι⃗ t val`
-  -- concludes `val = step f⃗ g⃗`, whose right-hand side lands at the
-  -- constructor's own index expressions, and with a non-pivot position among
-  -- them the two sides sit at different indices and the equation needs a
-  -- transport along the same packed equation arm F carries. `MODELGEN.md`
-  -- §8.17 writes that construction out; it is not built here.
+  -- **Arm G's half of the index axis, and it is not the equation §8.17
+  -- planned.** The graph route's `GraphInv ι⃗ t val` concludes
+  -- `val = step f⃗ g⃗`, whose right-hand side lands at the constructor's own
+  -- index expressions `ι⃗_ctor`; where those are not `ι⃗` the two sides sit at
+  -- different indices and the statement does not typecheck. §8.17 costed that
+  -- as a transport along arm F's packed equation, threaded through five
+  -- declarations. **At a non-pivot whose own type is a `Prop` no transport is
+  -- needed at all**: `ι⃗_ctor[j]` and `ι⃗[j]` are then two proofs of one
+  -- proposition, the kernel identifies them by proof irrelevance, and every
+  -- statement in the arm is already well-typed as written. It propagates, too
+  -- — a later index type mentioning `j` is defeq at the two, so a whole
+  -- suffix of proof positions is free — and it is exactly the class the
+  -- corpus holds: `Acc.below`'s index 1 is `Acc r a`, and every `.below` Lean
+  -- mints beside a recursive `Prop` is that shape.
+  --
+  -- What is left is a non-pivot at a **data** position — `BadC`'s constant
+  -- `N.z` — where the transport really is owed and really is not built.
   let armG := armGRec
-  if armG && !gNonPiv.isEmpty then
-    badShape s!"{exportCtors[0]!.1}'s index {gNonPiv[0]!} is not one of its own data \
+  if armG && !gNonPivData.isEmpty then
+    badShape s!"{exportCtors[0]!.1}'s index {gNonPivData[0]!} is not one of its own data \
 fields, so the graph route's inversion cannot be stated at an arbitrary index (the \
 packed non-pivot equation arm F carries is not threaded through the graph)"
 
