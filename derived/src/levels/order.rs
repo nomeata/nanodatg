@@ -14,6 +14,7 @@
 //! ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (m ⊆ n ↔ (m ∈ n ∨ m = n)))       [Order::sub_iff]
 //! ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (m ∪ n) ∈ ω)                     [Order::max_in_omega]
 //! ⊢ ∀m ∀n. (m ⊆ (m ∪ n) ∧ n ⊆ (m ∪ n))                         [Order::max_ub]
+//! ⊢ ∀m ∀n. (¬(n = ∅) → ¬((m ∪ n) = ∅))                         [Order::max_ne_zero]
 //! ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → ((m ∪ n) = m ∨ (m ∪ n) = n))     [Order::max_absorb]
 //! ⊢ ∀n. (n ∈ ω → (∅ ∈ n ∨ ∅ = n))                              [Order::zero_least]
 //! ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → (m ∈ n → succ(m) ∈ succ(n)))     [Order::succ_mono_mem]
@@ -22,7 +23,10 @@
 //!
 //! [`Order::max_ub`] holds for *all* sets, so it is stated without the `ω`
 //! guard the design sketch carried — a caller with the guard in hand drops it
-//! by weakening, never the other way round. [`Order::max`] spells the term
+//! by weakening, never the other way round. [`Order::max_ne_zero`] is
+//! unconditional for the same reason and for one more: its caller reads a level
+//! *term* and has no membership to spend, so a guarded statement would be
+//! unusable there rather than merely heavier. [`Order::max`] spells the term
 //! `m ∪ n`, and [`Order::mem_bin_union_iff`] is the membership condition it
 //! answers to ([`crate::sums::mem_bin_union_iff`], re-exported here because
 //! every `max` fact above is cashed through it). [`order`] is the entry point;
@@ -50,7 +54,7 @@ use crate::funspace::bin_union;
 use crate::recursion::{induction_scheme, mem_succ_self, OmegaCore, Peano, Rec};
 use crate::separation::{or_intro_left, or_intro_right};
 use crate::{
-    a1i, and_intro, and_left, and_right, com12, disj_inject, eq_symm_imp, ex_falso,
+    a1i, and_intro, and_left, and_right, com12, contrapos, disj_inject, eq_symm_imp, ex_falso,
     exists_intro_imp, gen_all, hyp_and, hyp_iff_mpr, hyp_mp, hyp_or_elim, iff_mp, iff_mpr,
     imp_mono_r, imp_refl, inst_all, mpd_const, syl, uncurry,
 };
@@ -70,6 +74,22 @@ pub struct Order {
     /// `⊢ ∀m ∀n. (m ⊆ (m ∪ n) ∧ n ⊆ (m ∪ n))` — unconditional; see the module
     /// documentation.
     pub max_ub: Thm,
+    /// `⊢ ∀m ∀n. (¬(n = ∅) → ¬((m ∪ n) = ∅))` — a `max` with a nonzero **right**
+    /// operand is nonzero.
+    ///
+    /// Unconditional, like [`Order::max_ub`] it is cashed through, and that is
+    /// the whole reason it is stated rather than left to the caller: the
+    /// `ω`-guarded route through [`Order::sub_iff`] proves the same thing and
+    /// makes every consumer produce `n ∈ ω` and `(m ∪ n) ∈ ω` first. The
+    /// consumer here is `mini`'s binder collapse, which walks an interpreted
+    /// `Π`'s guard as a *term* and has no level expression to read a
+    /// membership off — see `mini::interp::Interp::level_guard_at`.
+    ///
+    /// **The right operand and not both**, because the one caller is `imax`:
+    /// `imax(m,n)` is `ite0(n, ∅, m ∪ n)`, so the operand a settled guard is
+    /// about is always the second. A left-hand twin is [`max_ub`]'s other
+    /// conjunct and four lines, and is not written because nothing asks.
+    pub max_ne_zero: Thm,
     /// `⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → ((m ∪ n) = m ∨ (m ∪ n) = n))`.
     pub max_absorb: Thm,
     /// `⊢ ∀n. (n ∈ ω → (∅ ∈ n ∨ ∅ = n))`.
@@ -109,6 +129,7 @@ pub fn order(env: &mut Env, r: &Rec) -> Option<Order> {
         max_absorb(env, &core, &sets, &trichotomy, &sub_iff, &absorb_left, &absorb_right)?;
     let max_in_omega = max_in_omega(env, &core, &sets, &max_absorb)?;
     let succ_mono_mem = guard_succ_mono(env, &core, &succ_mono)?;
+    let max_ne_zero = max_ne_zero(env, &core, &sets, &max_ub)?;
 
     Some(Order {
         sets,
@@ -117,6 +138,7 @@ pub fn order(env: &mut Env, r: &Rec) -> Option<Order> {
         sub_iff,
         max_in_omega,
         max_ub,
+        max_ne_zero,
         max_absorb,
         zero_least,
         succ_mono_mem,
@@ -695,6 +717,93 @@ fn max_ub(env: &mut Env, sets: &Sets, bin_iff: &Thm) -> Option<Thm> {
         "max_ub: unexpected shape"
     );
     Some(out)
+}
+
+/// `⊢ ∀x. (x ⊆ ∅ → x = ∅)` — a subset of the empty set is empty.
+///
+/// Extensionality one way and vacuity the other: the forward half of
+/// `z ∈ x ↔ z ∈ ∅` *is* the subset hypothesis instantiated, and the backward
+/// half is [`OmegaCore::empty_ax`] and `ex_falso`, which needs no hypothesis at
+/// all. No `ω` anywhere — this is pure set theory, and stating it that way is
+/// what keeps [`max_ne_zero`] unguarded.
+fn sub_empty(env: &mut Env, core: &OmegaCore) -> Option<Thm> {
+    let (x, z) = (env.fresh_var(), env.fresh_var());
+    let (tx, tz) = (Term::var(x), Term::var(z));
+    let zero = core.zero();
+    let sub = kernel::thm::subset(env, tx.clone(), zero.clone());
+    let (mem_zx, mem_z0) = (Formula::mem(tz.clone(), tx.clone()), Formula::mem(tz.clone(), zero.clone()));
+
+    // `x ⊆ ∅ → (z ∈ x → z ∈ ∅)`, which is the hypothesis opened at `z`, and
+    // `x ⊆ ∅ → (z ∈ ∅ → z ∈ x)`, which ignores it.
+    let fwd = crate::prim::ax_inst(sub.clone(), tz.clone()).ok()?;
+    let bwd = a1i(
+        &syl(&inst_all(&core.empty_ax, std::slice::from_ref(&tz))?, &ex_falso(mem_zx.clone()))?,
+        sub.clone(),
+    );
+    let iff_at = hyp_and(&fwd, &bwd)?;
+    let pointwise = Formula::iff(mem_zx, mem_z0);
+    debug_assert_eq!(
+        *iff_at.concl(),
+        Formula::imp(sub.clone(), pointwise.clone()),
+        "sub_empty: the pointwise biconditional drifted"
+    );
+
+    // `∀z` under the hypothesis, then Extensionality at `(x, ∅)`.
+    let all = Thm::mp(
+        &crate::prim::ax_dist(z, sub.clone(), pointwise).ok()?,
+        &Thm::gen(z, &iff_at),
+    )?;
+    let ext_at = inst_all(&Thm::ax_extensionality(env), &[tx.clone(), zero.clone()])?;
+    let out = syl(&all, &ext_at)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(sub, Formula::eq(tx, zero)),
+        "sub_empty: unexpected shape"
+    );
+    Some(Thm::gen(x, &out))
+}
+
+/// `⊢ ∀m ∀n. (¬(n = ∅) → ¬((m ∪ n) = ∅))` — see [`Order::max_ne_zero`].
+///
+/// Contraposition of `(m ∪ n) = ∅ → n = ∅`: [`max_ub`]'s right conjunct is
+/// `n ⊆ (m ∪ n)` unconditionally, the equation carries it to `n ⊆ ∅` in one
+/// Leibniz step, and [`sub_empty`] finishes.
+fn max_ne_zero(env: &mut Env, core: &OmegaCore, sets: &Sets, max_ub: &Thm) -> Option<Thm> {
+    let (m, n) = (env.fresh_var(), env.fresh_var());
+    let (tm, tn) = (Term::var(m), Term::var(n));
+    let zero = core.zero();
+    let bu = bin_union(sets, tm.clone(), tn.clone());
+
+    let ub = inst_all(max_ub, &[tm.clone(), tn.clone()])?;
+    let n_sub_bu = Thm::mp(
+        &and_right(
+            kernel::thm::subset(env, tm, bu.clone()),
+            kernel::thm::subset(env, tn.clone(), bu.clone()),
+        ),
+        &ub,
+    )?;
+    // `(m ∪ n) = ∅ → (n ⊆ (m ∪ n) → n ⊆ ∅)`, with the second premise in hand.
+    let w = env.fresh_var();
+    let carried = mpd_const(
+        &Thm::eq_leibniz(
+            bu.clone(),
+            zero.clone(),
+            w,
+            kernel::thm::subset(env, tn.clone(), Term::var(w)),
+        ),
+        &n_sub_bu,
+    )?;
+    let to_empty = syl(&carried, &inst_all(&sub_empty(env, core)?, std::slice::from_ref(&tn))?)?;
+    let out = contrapos(&to_empty)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(
+            Formula::not(Formula::eq(tn, zero.clone())),
+            Formula::not(Formula::eq(bu, zero))
+        ),
+        "max_ne_zero: unexpected shape"
+    );
+    Some(gen_all(&[m, n], &out))
 }
 
 /// `⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → ((m ∪ n) = m ∨ (m ∪ n) = n))` — on `ω` the

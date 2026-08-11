@@ -44,6 +44,7 @@ fn exported_shapes() {
         &ord.sub_iff,
         &ord.max_in_omega,
         &ord.max_ub,
+        &ord.max_ne_zero,
         &ord.max_absorb,
         &ord.zero_least,
         &ord.succ_mono_mem,
@@ -112,6 +113,25 @@ fn exported_shapes() {
         *ord.max_ub.concl(),
         Formula::forall(m, Formula::forall(n, Formula::and(sub_m_bu, sub_n_bu))),
         "max_ub has the wrong shape"
+    );
+
+    // ⊢ ∀m ∀n. (¬(n = ∅) → ¬((m ∪ n) = ∅)) — unconditional, and about the
+    // **right** operand. The two arguments are distinct variables here for the
+    // usual reason: `∀m ∀n. (¬(m = ∅) → ¬((m ∪ n) = ∅))` is a different
+    // theorem and one variable cannot tell them apart.
+    assert_eq!(
+        *ord.max_ne_zero.concl(),
+        Formula::forall(
+            m,
+            Formula::forall(
+                n,
+                Formula::imp(
+                    Formula::not(Formula::eq(tn.clone(), zero.clone())),
+                    Formula::not(Formula::eq(bu.clone(), zero.clone()))
+                )
+            )
+        ),
+        "max_ne_zero has the wrong shape"
     );
 
     // ⊢ ∀m ∀n. ((m ∈ ω ∧ n ∈ ω) → ((m ∪ n) = m ∨ (m ∪ n) = n))
@@ -296,4 +316,46 @@ fn max_on_a_concrete_pair() {
         Formula::eq(ord.max(one, two.clone()), two),
         "max(1,2) did not come out as 2"
     );
+}
+
+/// **`max_ne_zero` spent, at three left operands including `∅`.**
+///
+/// The shape assertion above pins what the theorem says; this pins that it can
+/// be *used* — the premise discharged from `succ_ne_zero`, the conclusion
+/// coming back at the union term `Order::max` builds. That is all a test adds
+/// over the constructor here, and it should not be read as more: the
+/// derivation's own `debug_assert`s pin every intermediate, so a wrong step
+/// returns `None` from `order()` and never reaches an assertion.
+///
+/// Three left operands and not one. `∅` is the case a derivation that argued
+/// from the *left* operand's nonemptiness cannot do; `1` is the case where the
+/// two operands coincide and a proof could confuse them; `2` is the first where
+/// the left side is the larger, so the union is not the operand the premise is
+/// about.
+#[test]
+fn a_union_with_a_nonzero_right_operand_is_nonzero() {
+    let (_env, r, ord) = setup();
+    let core = r.core();
+    let zero = r.zero();
+    let one = r.succ_of(zero.clone());
+    let two = r.succ_of(one.clone());
+
+    // `⊢ ¬(1 = ∅)`, the one premise, from `0 ∈ ω`.
+    let ne = Thm::mp(
+        &inst_all(&r.peano.succ_ne_zero, std::slice::from_ref(&zero)).expect("succ_ne_zero at ∅"),
+        &core.zero_mem,
+    )
+    .expect("¬(1 = ∅)");
+    assert_eq!(*ne.concl(), Formula::not(Formula::eq(one.clone(), zero.clone())));
+
+    for m in [zero.clone(), one.clone(), two.clone()] {
+        let at = inst_all(&ord.max_ne_zero, &[m.clone(), one.clone()]).expect("max_ne_zero");
+        let out = Thm::mp(&at, &ne).expect("the premise is exactly ¬(1 = ∅)");
+        assert!(out.hyps().is_empty(), "the conclusion carries a hypothesis");
+        assert_eq!(
+            *out.concl(),
+            Formula::not(Formula::eq(ord.max(m.clone(), one.clone()), zero.clone())),
+            "the union is not reported nonzero at this left operand"
+        );
+    }
 }
