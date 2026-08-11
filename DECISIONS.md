@@ -2556,7 +2556,7 @@ a rewrite*; (B) minted, instantiated once, read off, dropped — the shape
 | memoised binder sites (`LamSite`, `FibreSite`, `CondSite`), each keyed by its skeleton and feeding `funcs::lambda_n` | `interp.rs:1768`, `:2048`, `:2343` |
 | an eliminator term stored with its axiom for a later ι consumer (`DepElim`, `RecAccElim`) | `rec_dep.rs:927`; `rec_ix_dep.rs:438`; `rec_acc_value.rs:262` |
 | `DeclSpec`'s `βⱼ` / `γⱼ`, i.e. `derived`'s own interface | `zoneb.rs:1863`, `:1947` |
-| a deliberately **opaque** field type in a test fixture | `proj_data.rs:841` (`#[cfg(test)]`) |
+| a deliberately **opaque** field type in a test fixture | `proj_data.rs`'s `tests::field` (`#[cfg(test)]`) |
 
 `derived/src`'s 25 are all the same shape at library scale: the symbol is the
 construction's named product (`app`, `prod`, `sum`, the carrier, the recursor)

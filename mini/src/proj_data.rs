@@ -108,11 +108,10 @@
 //! conclusion against `yⱼ` on the nose, so a chain that walked into the wrong
 //! component is a `None` and never an equation about the wrong field.
 
-use kernel::{Env, Formula, FreeVar, Term, Thm};
+use kernel::{Env, Formula, Term, Thm};
 
 use derived::inductive::decl_proj::{proj_of, DeclProj};
 use derived::inductive::{Inductive, Machine};
-use derived::sigma::Telescope;
 
 use crate::env::ConstantInfo;
 use crate::ev::Gap;
@@ -133,20 +132,6 @@ fn congr_of(env: &mut Env, g: &dyn Fn(Term) -> Term, ab: &Thm) -> Option<Thm> {
     let phi = Formula::eq(g(a.clone()), g(Term::var(x)));
     let leib = Thm::eq_leibniz(a.clone(), b, x, phi);
     Thm::mp(&Thm::mp(&leib, ab)?, &Thm::eq_refl(g(a)))
-}
-
-/// The tag component's payload, `π₂(π₁ z)` — the constructor's packed
-/// telescope element, for a **one-constructor** declaration.
-///
-/// `π₂` and not an injection inverse: `Inj₀(x)` is `inl(x) = ⟨∅,x⟩`, so the
-/// payload is literally the pair's second component and no inverse symbol is
-/// needed. At a declaration with more than one constructor the *same* term
-/// would still be the payload of whichever `Injᵢ` the element carries, which is
-/// precisely why the tag has to be identified before this is meaningful — and
-/// why every consumer of this file must be single-constructor.
-pub(crate) fn payload(mach: &Machine, z: Term) -> Term {
-    let ap = &mach.wt.sums.ap;
-    mach.proj.snd_of(ap, mach.proj.fst_of(ap, z))
 }
 
 /// `⟦proj[T,j] s⟧ = πⱼ(⟦s⟧) = compⱼ(π₂(π₁ ⟦s⟧))`.
@@ -305,19 +290,17 @@ pub(crate) fn stuck_leg(
 /// `⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — **unconditional**, and the whole computation rule
 /// route (b) needs.
 ///
+/// **[`derived::inductive::decl_proj::computes`], not a chain of its own.** The
+/// chain used to live here, and `DeclProj::over_declaration` compared what it
+/// was handed against `proj_of` precisely because the derivation was outside
+/// `derived/`. It is inside now — `derived::inductive::degen` needs the same
+/// equation and has no `mini` to ask — so keeping a copy here would be the
+/// second spelling that comparison exists to catch. The comparison stays; what
+/// it now guards is a caller who builds its own, which `derived`'s own test
+/// deliberately does.
+///
 /// `ind` must have exactly one constructor with no recursive field; `ys` are
-/// its `k` fields. The chain, in the order it is built:
-///
-/// ```text
-/// π₁ ⟨Inj₀(tuple), f(∅)⟩  = Inj₀(tuple)        Proj::fst
-/// Inj₀(tuple)             = ⟨∅, tuple⟩         ISumSyms::inj_ax at depth 0
-/// π₂ ⟨∅, tuple⟩           = tuple              Proj::snd
-/// π₂ ⟨y_q, rest⟩          = rest               Proj::snd, q < j
-/// π₁ ⟨y_j, rest⟩          = y_j                Proj::fst
-/// ```
-///
-/// with one [`congr_of`] between consecutive steps, because each rewrites a
-/// *subterm* of the next one's subject.
+/// its `k` fields.
 pub(crate) fn computes(
     env: &mut Env,
     mach: &Machine,
@@ -325,89 +308,23 @@ pub(crate) fn computes(
     j: usize,
     ys: &[Term],
 ) -> Option<Thm> {
-    if ind.spec.ctors.len() != 1 || j >= ys.len() {
-        return None
-    }
-    let s = &mach.wt.sums;
-    let ap = &s.ap;
-    let ctor = ind.ctor_term(mach, 0, ys, &[])?;
-    let tuple = Telescope::tuple_of(s, ys);
-    let tag = mach.syms.inj(0, tuple.clone())?;
-    let recf = derived::recarg::RecArg::of(s, &mach.cases, &[]);
-
-    // ── the tag, out of the outer pair ──────────────────────────────────────
-    let e_tag = derived::inst_all(&mach.proj.fst, &[tag.clone(), recf])?;
-    if e_tag.concl().as_eq()? != (mach.proj.fst_of(ap, ctor.clone()), tag.clone()) {
-        return None
-    }
-
-    // ── the payload, out of the tag: unfold `Inj₀`, then `π₂` ──────────────
-    let unfold = derived::inst_all(mach.syms.inj_ax(0)?, std::slice::from_ref(&tuple))?;
-    let (_, inl) = unfold.concl().as_eq()?;
-    if inl != s.inl(tuple.clone()) {
-        return None
-    }
-    let snd = |t: Term| mach.proj.snd_of(ap, t);
-    let e_pay = {
-        let a = congr_of(env, &snd, &e_tag)?;
-        let b = congr_of(env, &snd, &unfold)?;
-        let via = derived::eq_trans(env, &a, &b)?;
-        let step = derived::inst_all(&mach.proj.snd, &[s.zero(), tuple.clone()])?;
-        derived::eq_trans(env, &via, &step)?
-    };
-    if e_pay.concl().as_eq()? != (payload(mach, ctor.clone()), tuple.clone()) {
-        return None
-    }
-
-    // ── down the telescope: `j` tails, then one head ────────────────────────
-    let mut cur = e_pay;
-    for q in 0..j {
-        let rest = Telescope::tuple_of(s, &ys[q + 1..]);
-        let step = derived::inst_all(&mach.proj.snd, &[ys[q].clone(), rest])?;
-        let lift = congr_of(env, &snd, &cur)?;
-        cur = derived::eq_trans(env, &lift, &step)?;
-    }
-    let fst = |t: Term| mach.proj.fst_of(ap, t);
-    let head = derived::inst_all(
-        &mach.proj.fst,
-        &[ys[j].clone(), Telescope::tuple_of(s, &ys[j + 1..])],
-    )?;
-    let lift = congr_of(env, &fst, &cur)?;
-    let out = derived::eq_trans(env, &lift, &head)?;
-
-    // The conclusion is checked against `yⱼ` and against the term-former this
-    // module hands out, so a chain that walked into the wrong component — or a
-    // `term` that stopped counting somewhere else — is a `None`.
-    if out.concl().as_eq()? != (term(mach, j, ctor), ys[j].clone()) {
-        return None
-    }
-    Some(out)
+    derived::inductive::decl_proj::computes(env, mach, ind, j, ys).ok()
 }
 
 /// Every computation rule of one declaration, at fresh field variables, and
 /// the theorems [`DeclProj`] derives from them.
 ///
-/// The `k` rules are what `over_declaration` compares against
-/// [`proj_of`] before deriving anything, so this function's whole
-/// responsibility is to produce them **at the variables it is about to hand
-/// over** — `yvs` and `computes[j]`'s `yⱼ` are the same variable by
-/// construction, not by check.
+/// **[`DeclProj::build`], which is the loop this used to be**: mint `k` field
+/// variables, derive the rules at them, and hand them to `over_declaration`, so
+/// that `yvs` and `computes[j]`'s `yⱼ` are the same variable by construction
+/// rather than by check. It moved down with [`computes`] itself.
 ///
 /// One `w_rect` Separation is minted per call, for all `k + 1` theorems, so a
 /// caller memoises this per declaration ([`IndApparatus::decl_proj`]).
 ///
 /// [`IndApparatus::decl_proj`]: crate::interp::IndApparatus::decl_proj
 pub(crate) fn build(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option<DeclProj> {
-    let c = ind.spec.ctors.first()?;
-    if ind.spec.ctors.len() != 1 {
-        return None
-    }
-    let k = c.args.len();
-    let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
-    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
-    let rules: Vec<Thm> =
-        (0..k).map(|j| computes(env, mach, ind, j, &ys)).collect::<Option<_>>()?;
-    DeclProj::over_declaration(env, mach, ind, &yvs, &rules)
+    DeclProj::build(env, mach, ind).ok()
 }
 
 /// `⟦proj[T,j] s⟧` **and** `Γ ⊢ ⟦proj[T,j] s⟧ ∈ ⟦βⱼ⟧`, at a class-(T) structure

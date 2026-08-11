@@ -7815,8 +7815,10 @@ measured *widening the gate*, which lets the same policy fail one level later.
 What these 400 want is not a wider gate but **no policy at all**.
 
 **This is a `derived/` construction, not a `checker/` one** — a degenerate
-recursor in `derived::inductive`, beside `GenRecursor` rather than inside it. Per
-standing instruction it is named here rather than built.
+recursor in `derived::inductive`, beside `GenRecursor` rather than inside it. It
+is **built**: `derived/src/inductive/degen.rs`, and the section *The degenerate
+recursor is built* below is what it turned out to be. This paragraph used to end
+"per standing instruction it is named here rather than built".
 
 ### Beyond this corpus
 
@@ -8333,3 +8335,132 @@ that succeeded* under an assumption nobody discharged. Deleting all sixteen
 origins raises escapes to 4 298, because the deletions themselves are
 acquisitions — that 2 066 is the measurement's own cost and no real construction
 pays it.
+## The degenerate recursor is built — 103 declarations, and it is the projection rule too — 2026-08-11
+
+*`derived/src/inductive/degen.rs`, built off `origin/master` at `e41d4d8` and
+rebased onto `f2de92b`. The baseline was re-run on this tree before anything
+else and is byte-identical with the ledger every section above quotes —
+**15 734 gaps / 2 232 escapes / 159 803 derived** — so nothing here moved the
+checker. The construction is in `derived/` and is **not wired**; `checker/` had
+two live seats on the same pass, so the consumer count is named below rather
+than measured.*
+
+### What it is
+
+```text
+drec(s, z) := app(…app(s, π₀ z)…, π_{k-1} z)              [DegenRec::value_of]
+⊢ ∀y⃗. πⱼ(ctor₀(y⃗)) = yⱼ                                   [DegenRec::proj_computes]
+⊢ ∀s ∀y⃗. drec(s, ctor₀(y⃗)) = app(…app(s,y₀)…,y_{k-1})     [DegenRec::iota]
+```
+
+Both theorems **unconditional and closed** — `∀s ∀y⃗` binds everything, so the
+declaration's parameters do not occur. That is not a presentational choice; it is
+the whole content of the diagnosis, and it is pinned as a test rather than
+asserted:
+
+| the general (S4) needs | why | the degenerate ι rule |
+|---|---|---|
+| a target set `T` | the W-recursor's values must land somewhere | none — no recursion |
+| `HYP` | the step must be typed into `T` | none |
+| `Hᵢ^ctor` | recursive children must be in the carrier | none — no children |
+| `z ∈ ind(p⃗)` | to apply a function-set at `z` | none — `drec` is a term |
+| `p⃗` | `βⱼ` and the type-former nest | none — assumes nothing about the fields |
+
+`ctor₀(y⃗)` is `⟨Inj₀(tuple y⃗), f()⟩`, every layer a literal Kuratowski pair, so
+the projections compute on the term. **No Separation, no Replacement, no symbol
+minted at all** — a build costs `k` chains of `j + 3` projection instantiations
+and `k` Leibniz steps, and `derived/tests/degen.rs` brackets a build (and a
+decline) with two probe symbols to check the environment does not grow.
+`GenRecursor::build`'s header records the opposite: a late refusal there used to
+leave one Replacement per constructor behind. So a consumer may try this path
+first for nothing.
+
+### The population, statically, and it is the whole of it
+
+Read off `init-prelude.ndjson` (`scripts/`-style scan, no checker run). The
+construction's gate is `ctors == 1 ∧ ¬isRec`:
+
+| | |
+|---|---:|
+| one-constructor, unindexed, non-nested, single-block types | 105 |
+| …of them **recursive** (the gate's one real exclusion) | **0** |
+| …nullary (allowed, but `t_policy` 1 already serves them) | 2 |
+| **pass the gate** | **103** |
+
+**Zero recursive**, which was the load-bearing thing to refute first: a
+one-constructor *recursive* declaration's ι rule needs an induction hypothesis
+and therefore the W-recursor, and the construction would have covered only part
+of the census. It covers all of it. The 100 ι-firing recursors of *Origin 1's
+tail is one shape* and the 8 projection-reducing structures of *Origin 3,
+`proj_reduce`* are both subsets of these 103.
+
+### The ledger fall, re-measured on this tree
+
+| | gaps | fall |
+|---|---:|---:|
+| baseline | 15 734 | — |
+| the structures' ι acquired (`NANODA_IOTA_ASSUME=struct`) | **13 254** | **2 480** |
+
+400 ι equations acquired; escapes 2 232 → 2 432, the visible price of the
+acquisition. This reproduces the earlier deletion exactly.
+
+### The second consumer, and why it needed no second theorem
+
+`proj_reduce` — 659 gaps, 2 467 sub-tree, measured by deletion at **1 618** — is
+the same eliminator asked by different syntax. `(mk a⃗).j ⟶ aⱼ` *is*
+`S.rec C f (S.mk a⃗) ⟶ f a⃗` at the projection motive, and all eight structures
+whose projections reduce uncertified are one-constructor and non-recursive:
+
+| `PProd` | `OfNat` | `PULift` | `Fin` | `Char` | `Array` | `PLift` | `ULift` |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 114 | 37 | 8 | 7 | 6 | 2 | 2 | 2 |
+
+**8 of 8 pass the gate** (checked field by field against the export: one
+constructor, `isRec` false, no indices, no nesting, fields ≥ 1).
+
+So the projection rule is `DegenRec::proj_computes[j]` — not a step of the ι
+derivation that happens to be exported, but the ingredient the ι rule is *built
+from*. One term-former (`decl_proj::proj_of`), one theorem, one bundle cached per
+declaration, two consumers. Pairwise measured deletions compose exactly here
+(2 480 + 1 618 = **4 098**, 26.0 % of the ledger), and by the superadditivity
+note in `origin_report`'s header that is a floor.
+
+### One spelling, and where it now lives
+
+`⊢ πⱼ(ctor₀(y⃗)) = yⱼ` was `mini::proj_data::computes`, taken by
+`DeclProj::over_declaration` as an *argument* precisely because the only
+consumer was outside `derived/`. `degen.rs` is inside it and has no `mini` to
+ask, so the derivation moved down to `decl_proj::computes` rather than being
+copied up, `DeclProj::build` is the one-call bundle it feeds, and
+`mini::proj_data`'s two functions are now delegations. The comparison against
+`proj_of` stays: what it guards is a caller who builds its own chain, which
+`derived/tests/decl_proj.rs` does deliberately.
+
+### What is not measured here, and what it would take
+
+**The consumer's count.** "Skip is not pass": a construction the route never
+reaches is worth nothing, and this one is not yet reached. Wiring is a
+`checker/tg.rs` change and that file had two live seats on this pass, so it is
+named:
+
+* a `RecBottom::Degen(Rc<DegenRec>)` arm, gated **before** `gen_rec_bottom`'s
+  `t_policy` refusal, on `ctors == 1 ∧ recs == 0`;
+* `rec_nest`'s `bottom_body` for it is `DegenRec::value_of` at the walk's own
+  minor and major variables — **no `t_policy` call**, which is the point;
+* a `fire_degen` beside `fire_general`: the existing `GenCtorBridge` to get from
+  the Lean spine `⟦S.mk α f⃗⟧` to `ctor₀(⟦f⃗⟧)`, then `DegenRec::iota`
+  instantiated at `⟦f⃗⟧`. No `HYP` assembly, no `gen_minor_typed`, no
+  `GenTyNest`, no carrier bridge — the four things `fire_general` spends most of
+  its length on;
+* for the projection consumer, `interp`'s `Expr::Proj` arm to produce
+  `DegenRec::proj_at` instead of the opaque `syms.proj`, and `proj_red` to fire
+  `proj_computes[j]` through the same bridge. `mini` already interprets
+  projections this way (`proj_data::term`, route (b)), so this is the checker
+  adopting a term-former that exists rather than a new one.
+
+**What could still cost coverage at the seam.** The gate admits 103/103, so
+anything lost is checker-side plumbing shared with the general path:
+`gen_ind` must translate the declaration (283 do on this corpus; the counted
+declines are 227 "constructors not yet in the environment" and 27 class-S/P) and
+`GenCtorBridge` must build. Neither can be measured from `derived/`, and both are
+the *same* plumbing `fire_general`'s 92 live ι sites already exercise.
