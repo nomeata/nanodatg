@@ -966,13 +966,13 @@ THREADING-CENSUS §2).
    done > poly.txt
 
    # …and the headline, which is the row to quote: how many whole exports the
-   # de-scheduled route certifies end to end. 24 as of the u₁ = 0 split,
+   # de-scheduled route certifies end to end. 27 as of the binder collapse,
    # and **of 89** — the ceiling of 25 was the zone-B *skip*, which is gone.
    # `$?` must be its own statement: `echo "$(basename $f) $?"` reports
    # `basename`'s exit status, which reads as 89 clean files.
    for f in vendor/arena-tests/good/tutorial/*.ndjson; do
      ./target/debug/mini --poly "$f" >/dev/null 2>&1; echo $?
-   done | sort | uniq -c        # 24 × 0, 65 × 4, 2 × 2 (frontend declines)
+   done | sort | uniq -c        # 27 × 0, 62 × 4, 2 × 2 (frontend declines)
    ```
 2. **`ConstKey` widens** from `(Name, Vec<u32>)` to `(Name, CanonLevels)`
    where `CanonLevels` is the canonicalised level-expression vector (the
@@ -1431,11 +1431,16 @@ each concrete:
   `cndd` is *not* `Interp::cond_site`'s (one body shape, two `FnSym`s — see
   `pi_kit`'s own header), so `as_pi` has no entry for it. A `CondSite` over the
   fibre site's `b` with `PiRules::cndd`/`cndd_ax` closes it; deliberately not
-  landed here, because nothing consumes it until the split does.
+  landed here, because nothing consumes it until the split does. **Correct as
+  written, and landed two tranches later** — see the binder collapse.
 * **The collapse is recursive over the level expression.** Under
   `¬(û₁ = ∅)` an outer binder's guard is `(imax k u₁)̂ = ite0(û₁, ∅, k̂ ∪ û₁)`,
   which needs `¬(k̂ ∪ û₁ = ∅)` from `Order::max_ub`; under `û₁ = ∅` every such
-  level is `∅` outright, since `imax ℓ 0 = 0`.
+  level is `∅` outright, since `imax ℓ 0 = 0`. **Correct as written**, and the
+  one prediction on this strand that survived a build unamended — with the
+  qualification that `max_ub` had to be cashed into a new unconditional
+  `Order::max_ne_zero`, because the recursion runs over a *term* and cannot
+  produce the `∈ ω` premises the guarded route would want.
 
 **This is not the `Π` clause's shape and the difference is worth naming.**
 There, `ite0` *removed* the split: `pi_imax_dep` states both cases in one
@@ -1487,20 +1492,24 @@ to be blind at.
   content — `U₀ = {0,1}` is not a universe, is transitive because proof
   irrelevance makes every member of a member `•`, and holds `∅` because `0`
   **is** `∅`.
-* **The `cndd` registration — still not needed, and now for a measured
-  reason.** The `Prop` arm never reaches `as_pi` on the 15 that certify, and
-  the one collapse it does need is not at a binder: `⟦Sort u₁⟧ = U₀`
-  (`Interp::sort_u0_at`), spent where `minor_at` reaches proof irrelevance,
-  because `point_of_proof` is stated over `U₀` and a field-free constructor's
-  minor arrives as a scope *variable* rather than as `•`. The registration is
-  what the remaining 12 want.
-* **The recursion over the level expression — not spent, and the reason is the
-  `∀n ∈ ω`.** The nonzero arm needs **no** guard at all. `DepRecursor` hides
-  its target behind `COD(C,V)`, and the two new `Srt` facts discharge `COD` at
-  `srt(û₁)` for *every* `û₁ ∈ ω`, so `pre_at` and `dep_bottom` build at a
-  variable rung unchanged. The `imax`/`max_ub` recursion is real and is,
-  again, what the remaining 12 want — it belongs with the `cndd` registration
-  in one `Interp`-level "collapse this binder under this guard" clause.
+* **The `cndd` registration — not spent by the 15 that certify, and wanted by
+  the remaining 12.** The `Prop` arm never reaches `as_pi` on a field-free
+  constructor, and the one collapse it does need there is not at a binder:
+  `⟦Sort u₁⟧ = U₀` (`Interp::sort_u0_at`), spent where `minor_at` reaches
+  proof irrelevance, because `point_of_proof` is stated over `U₀` and a
+  field-free constructor's minor arrives as a scope *variable* rather than as
+  `•`. (Landed in the next tranche; see the binder collapse below.)
+* **The recursion over the level expression — not spent by the 15, and the
+  reason is the `∀n ∈ ω`.** `DepRecursor` hides its target behind `COD(C,V)`,
+  and the two new `Srt` facts discharge `COD` at `srt(û₁)` for *every*
+  `û₁ ∈ ω`, so `pre_at` and `dep_bottom` build at a variable rung unchanged.
+  The `imax`/`max_ub` recursion belongs with the `cndd` registration in one
+  `Interp`-level "collapse this binder under this guard" clause, and that is
+  what the next tranche built. **What this bullet said next was wrong**: it
+  read the absence of a `COD` guard as "the nonzero arm needs no guard at
+  all". `COD` needs none; the nonzero arm's *binders* need one exactly as the
+  zero arm's do, which a field-free constructor cannot show because it has no
+  binder.
 * **The cost nobody listed, and it was the one that stopped the build.**
   `derived::define_abbrev` refuses a body with a free variable outside its
   prefix; at a variable rung the eliminator's term mentions `û`, so
@@ -1515,8 +1524,72 @@ than removing it. `⟦T.rec.{u}⟧` is `ite0(û₁, •, drec t)`, whose value a
 instantiation is §6.2's own: **one interpretation, at every point of the level
 space at once**, which is this strand's objective stated as a term.
 
-Gate baselines move to **24 × exit 0, 65 × exit 4, 2 × exit 2** and
-`zoneBOk = 136 / 362`; `open` is 0 on every file, the accounting identity
+##### The binder collapse — and the recursor row goes to zero
+
+The `Interp`-level *"collapse this binder under this guard"* clause the two
+bullets above deferred is `Interp::as_pi_mem` / `as_pi_at`, and it closed the
+remaining 12.
+
+| | + the `u₁ = 0` split | **+ the binder collapse** |
+|---|---|---|
+| zone-B constants owed | 362 | 362 |
+| interpreted at their own levels | 136 | **148** |
+| `recursor(…: a minor premise …)` | 12 | **0** |
+| `symbolic-level` | 208 | 208 |
+| whole exports certified | 24 of 89 | **27 of 89** |
+
+`148 + 214 = 362`. The **entire `recursor(…)` family is now absent** from the
+zone-B histogram: what remains is `symbolic-level` (208, the
+declaration-polymorphic frontier) and `ind-spec(…: parameter reduction)` (6).
+
+The clause is three pieces, and one of them is the second `derived` addition
+this strand has needed:
+
+* **`Order::max_ne_zero`** — `⊢ ∀m ∀n. (¬(n = ∅) → ¬((m ∪ n) = ∅))`,
+  **unconditional**. `Order::max_ub`'s right conjunct plus a new private
+  `sub_empty` (`⊢ ∀x. (x ⊆ ∅ → x = ∅)`, Extensionality one way and the vacuity
+  of `∅` the other) and one contraposition. The `ω`-guarded route through
+  `Order::sub_iff` proves the same thing and is unusable: `Interp` walks the
+  guard as a **term** and holds no `∈ ω` about its operands. Right operand
+  only, because the one caller is `imax`, whose guard *is* its second argument.
+* **`Interp::level_guard_at`** — the recursion, over the level **term** rather
+  than the `Level`, because `minor_at` has no Lean type on its stack. Two
+  clauses: the base is the term the split's own hypothesis is about, and the
+  step is `imax`, where under `û₁ = ∅` `Ite0::when_zero` gives `∅` outright
+  (`imax ℓ 0 = 0` is what the model term already says) and under `¬(û₁ = ∅)`
+  `when_nonzero` gives `k̂ ∪ û₁`, which `max_ne_zero` refutes. `succ`, `max`
+  and a foreign parameter decline.
+* **The `cndd` registration** — one `CondSite` over the fibre site's
+  `b`/`b_ax`/`skel` with `PiRules::cndd`/`cndd_ax` for `chi`, filed in
+  `pi_kit`. `Interp::pi_cndd_at` is the `Prop` mirror of `pi_dprod_at`.
+
+**Two corrections, both found by probe before a line of the clause was
+written**, and the first refutes this section's own last bullet:
+
+* **Both arms need the collapse, not just the zero one.** The claim that the
+  nonzero arm *"needs no guard at all"* was measured over `Bool` and `Color`,
+  whose constructors are field-free and whose minor premises open **no binder**.
+  At the first field-carrying constructor all four declarations decline at
+  level 0 of their first minor premise on the zero arm *and* on the nonzero
+  one. What survives is the narrower true statement: `COD` needs no hypothesis
+  on either arm, because `Srt::empty_mem`/`Srt::transitive` are `∀n ∈ ω`.
+* **There is a *second* blind `as_pi`, one level below `minor_at`'s.**
+  `rec_dep::ih_transport` reads the induction-hypothesis binder's domain
+  `⟦∀z:γ, C (f z)⟧`, which is a conditional too. Only a **function-typed**
+  recursive slot reaches it, so it is invisible on `N`/`TwoBool`: with
+  `minor_at` alone fixed, three of the four certified and `RTree` sat at 7/8.
+  It also needs the equation in the *other* direction — the introduction rules
+  land in the collapsed clause and the caller's conclusion is stated at the
+  conditional — which is why `as_pi_at` hands the collapse back rather than
+  spending it.
+
+Forty of `as_pi`'s 42 direct call sites are still blind at a variable rung.
+Two moved, and that is the whole of what the eliminator route reaches; the rest
+are behind callers that hold no `Guard` yet, and the ~70 declaration-polymorphic
+eliminators are behind `symbolic-level`, which is a different frontier.
+
+Gate baselines move to **27 × exit 0, 62 × exit 4, 2 × exit 2** and
+`zoneBOk = 148 / 362`; `open` is 0 on every file, the accounting identity
 `zone_b_ok + Σ zone_b_blocked == zone_b_consts` holds, and Gate A is
 byte-identical against a build of the parent commit.
 

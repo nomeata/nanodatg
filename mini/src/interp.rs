@@ -529,6 +529,34 @@ pub enum PiShape {
     Prop { site: CondSite, dom: Term },
 }
 
+/// **The `u₁ = 0` split's own hypothesis, carried into the walk below it.**
+///
+/// [`crate::rec_dep::split_bottom`] runs each clause under one half of excluded
+/// middle; everything below it that has to *settle a guard* — which is every
+/// binder of every minor premise, see [`Interp::as_pi_mem`] — needs that half
+/// in its hands. One value and not two `Option<Thm>` fields, because the arms
+/// are exclusive and a context carrying both would have a state that means
+/// nothing.
+///
+/// Absent on the scheduled path, where the motive level is a numeral and
+/// [`Interp::as_pi`] answers on its own.
+#[derive(Clone)]
+pub enum Guard {
+    /// `Γ ⊢ û₁ = ∅` — the eliminator is a proof.
+    Zero(Thm),
+    /// `Γ ⊢ ¬(û₁ = ∅)` — the eliminator is a value.
+    NonZero(Thm),
+}
+
+impl Guard {
+    /// The hypothesis itself, whichever half this is.
+    pub fn thm(&self) -> &Thm {
+        match self {
+            Guard::Zero(t) | Guard::NonZero(t) => t,
+        }
+    }
+}
+
 impl PiShape {
     /// The domain, whichever clause built it.
     pub fn dom(&self) -> Term {
@@ -2282,11 +2310,11 @@ impl Interp {
     /// [`Interp::as_pi`] decomposes it exactly as it does a scheduled one.
     /// [`Interp::retarget_set`] carries a membership along the equation.
     ///
-    /// The `Prop` half is *not* built here, and that is the boundary rather
-    /// than an omission: `cndd`'s symbol is [`Interp::pi_kit`]'s own and is not
-    /// in [`Interp::as_pi`]'s table (see `pi_kit`'s header — one body shape,
-    /// two `FnSym`s), so unlocking it costs a registration this branch has no
-    /// consumer for yet.
+    /// The `Prop` half is [`Interp::pi_cndd_at`], and it used to be absent
+    /// here: `cndd`'s symbol is [`Interp::pi_kit`]'s own (see that header — one
+    /// body shape, two `FnSym`s) and was in no table, so unlocking it cost a
+    /// registration that had no consumer. The `u₁ = 0` split's zero arm is the
+    /// consumer, and `pi_kit` now files the `CondSite`.
     ///
     /// Nothing is trusted: the term must be an `ite0` at the guard the theorem
     /// refutes, and the conclusion is compared against the equation expected.
@@ -2303,6 +2331,181 @@ impl Interp {
         let out = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, nonzero)?;
         let want = Formula::eq(t.clone(), args[2].clone());
         (*out.concl() == want).then_some(out)
+    }
+
+    /// **`Γ ⊢ ⟦Π x:A. B⟧ = cndd(q⃗,⟦A⟧)`** — the `Prop` half of
+    /// [`Interp::pi_dprod_at`], unlocked by `Γ ⊢ ℓ̂₂ = ∅`.
+    ///
+    /// `pi_dprod_at`'s header used to say this half was *"not built here, and
+    /// that is the boundary rather than an omission"*, because `cndd`'s symbol
+    /// was in no table and unlocking it would have had no consumer. It has one
+    /// now — [`Interp::as_pi_mem`] on the zero arm of the eliminator's `u₁ = 0`
+    /// split — and the registration it needed is one struct in
+    /// [`Interp::pi_kit`].
+    pub fn pi_cndd_at(&mut self, t: &Term, zero: &Thm) -> Option<Thm> {
+        let lp = self.levels()?;
+        let (f, args) = self.parts_of(t)?;
+        if f != lp.i.sym || args.len() != 3 {
+            return None
+        }
+        if *zero.concl() != Formula::eq(args[0].clone(), lp.zero()) {
+            return None
+        }
+        let out = Thm::mp(&derived::inst_all(&lp.i.when_zero, &args)?, zero)?;
+        let want = Formula::eq(t.clone(), args[1].clone());
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// **`Γ ⊢ ℓ̂ = ∅` or `Γ ⊢ ¬(ℓ̂ = ∅)` for a level *term*, under the split's
+    /// own half of excluded middle** — the recursion the binder collapse runs
+    /// on.
+    ///
+    /// # Why a term and not a [`Level`]
+    ///
+    /// Every other reader on this route takes the level expression, because it
+    /// has one. [`crate::rec_dep::minor_at`] does not: it walks the *set* each
+    /// binder's scope typing names, and a minor premise's Lean type is nowhere
+    /// on its stack. So the recursion is over what it can see — the guard term
+    /// [`Interp::pi_term_of`] put in the `ite0` — and the grammar it descends
+    /// is exactly the one [`level_term_over`] emits for `imax`.
+    ///
+    /// # Two clauses, and that is the whole of it
+    ///
+    /// * **Base.** `ℓ̂` is the term the hypothesis is already about. Compared,
+    ///   not assumed: a guard belonging to some other parameter falls through
+    ///   to `None` rather than borrowing this one's answer.
+    /// * **`imax`.** `(imax ℓ ℓ')̂` is `ite0(ℓ̂', ∅, ℓ̂ ∪ ℓ̂')`, and *the guard of
+    ///   an `imax` is its own right operand*, so the recursion is on `ℓ̂'` and
+    ///   the two halves diverge only at the end:
+    ///   - under `ℓ̂' = ∅` the conditional **is** `∅` — `Ite0::when_zero`, and
+    ///     nothing further, because Lean's `imax ℓ 0 = 0` is what the model
+    ///     term already says;
+    ///   - under `¬(ℓ̂' = ∅)` it is `ℓ̂ ∪ ℓ̂'`, and that is nonzero because its
+    ///     right operand is — `derived::levels::order::Order::max_ne_zero`,
+    ///     stated unconditionally for exactly this caller, which holds no
+    ///     `∈ ω` about `ℓ̂` and has nowhere to get one.
+    ///
+    /// `succ`, `max` and a bare foreign parameter all answer `None`. A
+    /// successor could be settled by [`Interp::level_nonzero`] and is not,
+    /// because that function reads a `Level`; nothing on this route has asked,
+    /// and a second spelling of the same fact is a second chance to disagree.
+    ///
+    /// Nothing is trusted: the union's left operand is recovered by taking the
+    /// term apart and then **rebuilding** `ℓ̂ ∪ ℓ̂'` and comparing, so a third
+    /// argument that is not this `imax`'s union declines instead of being
+    /// instantiated at.
+    pub fn level_guard_at(&mut self, t: &Term, guard: &Guard) -> Option<Thm> {
+        let lp = self.levels()?;
+        let zero = lp.zero();
+        let want = match guard {
+            Guard::Zero(_) => Formula::eq(t.clone(), zero.clone()),
+            Guard::NonZero(_) => Formula::not(Formula::eq(t.clone(), zero.clone())),
+        };
+        if *guard.thm().concl() == want {
+            return Some(guard.thm().clone())
+        }
+        let (f, args) = self.parts_of(t)?;
+        if f != lp.i.sym || args.len() != 3 {
+            return None
+        }
+        let inner = self.level_guard_at(&args[0], guard)?;
+        let out = match guard {
+            // `ite0(ℓ̂', a, ·) = a`, which is `= ∅` exactly when `a` is `∅` —
+            // and the conclusion check below is what says so, so there is no
+            // separate test for the middle argument here.
+            Guard::Zero(_) => Thm::mp(&derived::inst_all(&lp.i.when_zero, &args)?, &inner)?,
+            Guard::NonZero(_) => {
+                let eq = Thm::mp(&derived::inst_all(&lp.i.when_nonzero, &args)?, &inner)?;
+                let m = self.union_left(&lp, &args[2], &args[0])?;
+                let union_ne = Thm::mp(
+                    &derived::inst_all(&lp.ord.max_ne_zero, &[m, args[0].clone()])?,
+                    &inner,
+                )?;
+                // `¬(· = ∅)` back along `ℓ̂ = ℓ̂ ∪ ℓ̂'`, one Leibniz step.
+                let w = self.fresh_var();
+                let hole = Formula::not(Formula::eq(Term::var(w), zero.clone()));
+                let leib = Thm::eq_leibniz(args[2].clone(), t.clone(), w, hole);
+                let back = derived::eq_symm(&mut self.core.env_mut(), &eq)?;
+                Thm::mp(&Thm::mp(&leib, &back)?, &union_ne)?
+            }
+        };
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `ℓ̂` from `ℓ̂ ∪ ℓ̂'`, given the right operand — taken apart and then
+    /// **rebuilt and compared**, which is what makes it safe for
+    /// [`Interp::level_guard_at`] to name no `derived` symbol here.
+    fn union_left(&self, lp: &LevelPoly, u: &Term, right: &Term) -> Option<Term> {
+        let (_, outer) = self.parts_of(u)?;
+        let [inner] = outer.as_slice() else { return None };
+        let (_, pair) = self.parts_of(inner)?;
+        let [m, _] = pair.as_slice() else { return None };
+        (lp.max(m.clone(), right.clone()) == *u).then(|| m.clone())
+    }
+
+    /// **`⟦Π x:A. B⟧` decomposed at a variable rung** — [`Interp::as_pi`] where
+    /// the head is a clause's own, and §1.4's conditional collapsed under the
+    /// caller's guard where it is not.
+    ///
+    /// This is the clause `crate::rec_dep::motive_level_of`'s header called the
+    /// per-binder frontier, and it belongs here rather than in any one
+    /// eliminator route because `as_pi`'s blindness is shared: the 12 constants
+    /// the `u₁ = 0` split left behind are the field-carrying constructors of
+    /// four declarations, and the same collapse is what the declaration-
+    /// polymorphic eliminators will want.
+    ///
+    /// Takes the **membership** rather than the term and hands one back,
+    /// because a walk that collapsed the set and kept the old typing would have
+    /// to retarget at every call site; where `as_pi` already answers, the
+    /// membership comes back untouched and this costs nothing.
+    ///
+    /// # The measurement that sized it, and what it corrected
+    ///
+    /// The `u₁ = 0` split's own header records that *"the nonzero arm needs no
+    /// collapse and no hypothesis"*. That was measured on `Bool` and `Color`,
+    /// whose constructors are field-free and whose minor premises therefore
+    /// open **no binder at all**. Probed at the first constructor that carries
+    /// a field, *both* arms are blind here — `TwoBool`, `N`, `RTree` and
+    /// `TypeWithTypeField` each decline at level 0 of their first minor
+    /// premise on the zero arm *and* on the nonzero one. The correction is
+    /// narrow and worth having exactly: the arms differ in what they spend
+    /// ([`Interp::pi_cndd_at`] versus [`Interp::pi_dprod_at`]), not in whether
+    /// they need this.
+    pub fn as_pi_mem(&mut self, mem: &Thm, guard: Option<&Guard>) -> Option<(PiShape, Thm)> {
+        let (_, set) = mem.concl().as_mem()?;
+        let (shape, collapse) = self.as_pi_at(&set, guard)?;
+        match collapse {
+            None => Some((shape, mem.clone())),
+            Some(eq) => Some((shape, self.retarget_set(mem, &eq)?)),
+        }
+    }
+
+    /// [`Interp::as_pi_mem`] with no membership to carry — the shape, and the
+    /// collapse equation `⟦Π x:A. B⟧ = …` when one was needed.
+    ///
+    /// The equation is handed back rather than spent because its two consumers
+    /// want it in opposite directions: [`crate::rec_dep::minor_at`] moves a
+    /// typing *onto* the collapsed set and walks it, while
+    /// [`crate::rec_dep::ih_transport`] builds its result at the collapsed set
+    /// and has to land back on the caller's own `⟦∀z:γ, C (f z)⟧`. `None` here
+    /// means `as_pi` answered on its own and nothing moved.
+    pub fn as_pi_at(&mut self, t: &Term, guard: Option<&Guard>) -> Option<(PiShape, Option<Thm>)> {
+        if let Some(shape) = self.as_pi(t) {
+            return Some((shape, None))
+        }
+        let guard = guard?;
+        let lp = self.levels()?;
+        let (f, args) = self.parts_of(t)?;
+        if f != lp.i.sym || args.len() != 3 {
+            return None
+        }
+        let settled = self.level_guard_at(&args[0], guard)?;
+        let collapse = match guard {
+            Guard::Zero(_) => self.pi_cndd_at(t, &settled)?,
+            Guard::NonZero(_) => self.pi_dprod_at(t, &settled)?,
+        };
+        let (_, collapsed) = collapse.concl().as_eq()?;
+        Some((self.as_pi(&collapsed)?, Some(collapse)))
     }
 
     // ────────────────────────────────────────────────────── application ──
@@ -2511,24 +2714,35 @@ impl Interp {
     /// [`Interp::fibre_by_sym`] is for, and is `QUOT-MODEL.md` §2.1's own
     /// invariant. An `fs` term is not an interpreted `Π` and answers `None`.
     ///
-    /// # This is the de-scheduled route's frontier, and it is here rather than
-    /// in any clause
+    /// # This function is blind at a variable rung, and the way back is
+    /// [`Interp::as_pi_mem`]
     ///
     /// The dispatch is on the **head symbol**, and at a variable rung
     /// [`Interp::pi_term_of`] emits `ite0(ℓ̂₂, cndd, dprod)` — §1.4's
     /// conditional, whose head is neither table's. So a `Π` the de-scheduled
-    /// clause *interprets and certifies* does not come apart again, and the
+    /// clause *interprets and certifies* does not come apart here, and the
     /// **42 call sites of this function, in 20 modules** — every minor premise,
-    /// every constructor bottom, every ι rule — are blind on that route.
+    /// every constructor bottom, every ι rule — are blind if they ask it
+    /// directly.
     ///
     /// That is not a defect of this function: `Dep` and `Prop` are two clauses
     /// and answering either would be deciding `ℓ₂ = 0`, which is the one
-    /// question a parameter forbids. The way back is to settle the guard and
-    /// collapse the term first — [`Interp::level_nonzero`] and
-    /// [`Interp::pi_dprod_at`] where the level is a *successor*, which needs no
-    /// case analysis and is what the eliminator's motive binder is; a case split
-    /// on `û₁ = ∅` where it is not. `crate::rec_dep::motive_level_of`'s header
-    /// carries the measurement.
+    /// question a parameter forbids. What a caller does instead is settle the
+    /// guard and collapse the term first, and there are two ways to:
+    ///
+    /// * where the level is a **successor**, [`Interp::level_nonzero`] settles
+    ///   it with no case analysis — that is the eliminator's motive binder, and
+    ///   `crate::rec_dep::collapse_motive_ty` is the consumer;
+    /// * where it is not, the guard is settled by **hypothesis**, and
+    ///   [`Interp::as_pi_mem`] is this function under one — the two clauses of
+    ///   the `u₁ = 0` split, each spending its own half.
+    ///
+    /// Two of the 42 sites have moved onto `as_pi_mem`, both in
+    /// `crate::rec_dep` (`minor_at`'s binder walk and `ih_transport`'s
+    /// induction-hypothesis domain), which is the whole of what the eliminator
+    /// route reaches. The other forty are still direct calls and still blind on
+    /// that route; each is a site whose caller has no guard yet, and moving one
+    /// is a matter of threading `Guard` to it rather than of new mathematics.
     pub fn as_pi(&self, t: &Term) -> Option<PiShape> {
         let (f, mut args) = self.parts_of(t)?;
         if let Some(site) = self.fibre_by_sym.get(&f) {
@@ -3029,6 +3243,26 @@ impl Interp {
             )?
         };
         let kit = Rc::new(kit);
+        // **The registration [`Interp::as_pi`] needs on the `Prop` branch.**
+        // `cndd` is the Prop clause's head at a variable rung, and until this
+        // line it was in no table, so a `Π` the de-scheduled clause built and
+        // certified came apart only on the `dprod` side. The `CondSite` is the
+        // fibre site's own `b`/`b_ax`/`skel` with `cndd` for `chi` — the same
+        // three things `cond_site` pairs its own singleton with, and they must
+        // be the fibre's, because `pi_rules` validated `cndd_ax` against
+        // `dp.b`. See this function's header on the two `FnSym`s.
+        let cnd = CondSite {
+            b: site.b,
+            skel: site.skel.clone(),
+            b_ax: site.b_ax.clone(),
+            chi: kit.cndd,
+            chi_ax: kit.cndd_ax.clone(),
+            phi,
+            params,
+            holes: Vec::new(),
+            k: site.k,
+        };
+        self.cond_by_sym.insert(kit.cndd, cnd);
         self.pi_kits.insert(site.skel.clone(), kit.clone());
         Some(kit)
     }
@@ -4512,6 +4746,115 @@ mod tests {
         assert!(
             ip.ite0_merge(&uhat, &a, &b, w, &phi, &both_n, &hn).is_none(),
             "an arm under the wrong guard must be refused"
+        );
+    }
+
+    /// **A binder of an interpreted `Π` comes apart again under either half of
+    /// the split** — [`Interp::as_pi_at`], [`Interp::level_guard_at`] and the
+    /// `cndd` registration, which together are the per-binder frontier the
+    /// `u₁ = 0` split left behind.
+    ///
+    /// The `Π` here is spelled the way a minor premise's outer binder is: the
+    /// codomain's level is `imax w u`, so its guard is `ite0(û, ∅, ŵ ∪ û)` and
+    /// **not** `û` itself. That is the case the recursion exists for — a base
+    /// case alone passes when the guard is the split's own term, which is only
+    /// the *innermost* binder of any minor premise, and every declaration in
+    /// the corpus that reaches here has at least one binder above it.
+    ///
+    /// Both directions, and they are not the same clause: under `û = ∅` the
+    /// term is the conditional singleton `pi_kit` mints ([`Interp::pi_cndd_at`],
+    /// and `as_pi` finds it only because `pi_kit` registers it), under
+    /// `¬(û = ∅)` it is the dependent product ([`Interp::pi_dprod_at`]). The
+    /// two heads are compared against the site's own symbols, so an arm that
+    /// collapsed to the *other* clause is caught here rather than three steps
+    /// later.
+    ///
+    /// Four negatives: no guard at all; a guard about a parameter this level
+    /// does not mention; a level former the recursion refuses (`max`, which is
+    /// zero at some instantiations and nonzero at others and has no `ite0` to
+    /// descend); and — the soundness one — [`Interp::pi_cndd_at`] handed the
+    /// *nonzero* half, which must not produce the `Prop` clause.
+    #[test]
+    fn a_binder_collapses_to_one_clause_under_either_half_of_the_split() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let (lp, vars) = omega_vars(&mut ip);
+        let (u, w_lvl) = (p("u"), p("w"));
+        let uhat = ip.level_term(&u, &vars).expect("û");
+        let l2 = Level::imax(w_lvl, u);
+        let guard_tm = ip.level_term(&l2, &vars).expect("the codomain's guard");
+        assert_ne!(guard_tm, uhat, "the guard must be an imax, not the split's own term");
+
+        // `Π (x : U₁). x` at codomain level `imax w u`, built exactly as
+        // `Checker::pi_evidence_poly` builds it.
+        let mut sc = Scopes::new();
+        let dom = ip.sort(1);
+        let tok = sc.open(&mut ip.env_mut(), dom.clone());
+        let bv = sc.get(0).unwrap().var();
+        let site = ip.fibre_site(&Term::var(bv), bv).expect("fibre site");
+        let _ = sc.close(tok);
+        let kit = ip.pi_kit(&site).expect("the dependent Π kit");
+        let pi = ip.pi_term_of(&site, &kit, dom.clone(), &l2, &vars).expect("⟦Π x:A. B⟧");
+        assert!(ip.as_pi(&pi).is_none(), "the conditional's head is neither clause's");
+
+        let is_zero = Formula::eq(uhat.clone(), lp.zero());
+        let hz = Guard::Zero(crate::scope::test_support::assume(is_zero.clone()));
+        let hn =
+            Guard::NonZero(crate::scope::test_support::assume(Formula::not(is_zero.clone())));
+
+        // ── `û = ∅`: the Prop clause, `cndd` ────────────────────────────────
+        let (shape, eq) = ip.as_pi_at(&pi, Some(&hz)).expect("the zero arm collapses");
+        let eq = eq.expect("a collapse happened");
+        match &shape {
+            PiShape::Prop { site: cs, dom: d } => {
+                assert_eq!(cs.chi, kit.cndd, "the zero arm must land on pi_kit's own cndd");
+                assert_eq!(*d, dom, "the domain must survive the collapse");
+            }
+            PiShape::Dep { .. } => panic!("the zero arm produced the value clause"),
+        }
+        assert_eq!(
+            *eq.concl(),
+            Formula::eq(pi.clone(), ip.mk(kit.cndd, vec![dom.clone()])),
+            "the collapse must equate the conditional with the branch its guard selects"
+        );
+        assert_eq!(eq.hyps().len(), 1, "and must carry the guard rather than hide it");
+
+        // ── `¬(û = ∅)`: the value clause, `dprod` ───────────────────────────
+        let (shape, eq) = ip.as_pi_at(&pi, Some(&hn)).expect("the nonzero arm collapses");
+        let eq = eq.expect("a collapse happened");
+        match &shape {
+            PiShape::Dep { site: fs, dom: d } => {
+                assert_eq!(fs.dp.dprod, site.dp.dprod, "the nonzero arm must land on this dprod");
+                assert_eq!(*d, dom, "the domain must survive the collapse");
+            }
+            PiShape::Prop { .. } => panic!("the nonzero arm produced the proof clause"),
+        }
+        assert_eq!(
+            *eq.concl(),
+            Formula::eq(pi.clone(), ip.dprod_term(&site, dom.clone())),
+            "the collapse must equate the conditional with the dependent product"
+        );
+
+        // ── the negatives ───────────────────────────────────────────────────
+        assert!(ip.as_pi_at(&pi, None).is_none(), "no guard, no collapse");
+        let vhat = ip.level_term(&p("v"), &vars).expect("v̂");
+        let foreign = Guard::Zero(crate::scope::test_support::assume(Formula::eq(
+            vhat,
+            lp.zero(),
+        )));
+        assert!(
+            ip.as_pi_at(&pi, Some(&foreign)).is_none(),
+            "a guard about another parameter must not settle this one"
+        );
+        let maxed = ip.level_term(&Level::max(p("w"), p("u")), &vars).expect("ŵ ∪ û");
+        assert!(
+            ip.level_guard_at(&maxed, &hn).is_none(),
+            "a bare max has no ite0 to descend and must not be guessed at"
+        );
+        let settled_nonzero = ip.level_guard_at(&guard_tm, &hn).expect("¬(imax(ŵ,û) = ∅)");
+        assert!(
+            ip.pi_cndd_at(&pi, &settled_nonzero).is_none(),
+            "the Prop clause must not be unlocked by a refutation of its guard"
         );
     }
 

@@ -122,15 +122,23 @@
 //! wrong — recorded because getting it wrong twice would be worse.** It said
 //! the remaining cost was `Interp::as_pi`'s 42 blind call sites, at *every*
 //! binder of *every* minor premise. `crate::rec_dep::split_bottom` runs both
-//! clauses under their own hypotheses and merges them with `Ite0`; the nonzero
-//! arm needs no collapse (`COD` is discharged at `srt(û₁)` for every `û₁ ∈ ω`
-//! by the two `Srt` facts) and the zero arm needs one, `⟦Sort u₁⟧ = U₀`. The
-//! `zoneBOk` column moved 121 → 136 and the 27 split rows became 15
-//! certifications and 12 declines. Those 12 are the `as_pi` frontier, and every
-//! one of them is a declaration with a **field-carrying** constructor — the
-//! only shape whose minor premise has a binder to be blind at. It is still one
-//! frontier shared with the ~70 declaration-polymorphic eliminators; it was
-//! never the whole of the eliminator clause.
+//! clauses under their own hypotheses and merges them with `Ite0`; `COD` needs
+//! no guard on either arm (it is discharged at `srt(û₁)` for every `û₁ ∈ ω` by
+//! the two `Srt` facts) and the zero arm needs one collapse away from any
+//! binder, `⟦Sort u₁⟧ = U₀`. The `zoneBOk` column moved 121 → 136 and the 27
+//! split rows became 15 certifications and 12 declines. Those 12 were the
+//! `as_pi` frontier, and every one of them is a declaration with a
+//! **field-carrying** constructor — the only shape whose minor premise has a
+//! binder to be blind at.
+//!
+//! **The binder collapse then landed too, and closed all 12**:
+//! `Interp::as_pi_mem` settles the guard by hypothesis and takes the
+//! conditional apart, `zoneBOk` 136 → **148**, and the whole `recursor(…)`
+//! family left the histogram. Two blind sites moved, not forty: `minor_at`'s
+//! binder walk and `ih_transport`'s induction-hypothesis domain. And the sizing
+//! was wrong once more, in the same direction as before — **both** arms need
+//! the collapse. "The nonzero arm needs no guard" was measured over
+//! field-*free* constructors, which open no binder at all.
 //!
 //! # What is *not* here yet, stated so a zero row is readable
 //!
@@ -967,6 +975,33 @@ mod tests {
         );
     }
 
+    /// `inductive R : Type` with `R.z : R`, `R.s : R → R` and
+    /// `R.t : R → R → R` — the shape whose minor premises **open binders**.
+    ///
+    /// Three constructors of three different arities, and that is the point:
+    /// a collapse applied at the outermost binder only certifies `R.s` and
+    /// declines `R.t`, and one applied nowhere still certifies `R.z`, whose
+    /// minor premise has no binder at all. Nothing under two field-carrying
+    /// arities can tell those three apart.
+    fn field_ind() -> (Environment, Declaration) {
+        let r = n("R");
+        let rr = || konst(r, [].into());
+        let d = Declaration::Inductive {
+            name: r,
+            lparams: Vec::new(),
+            num_params: 0,
+            ty: sort(Level::zero().succ()),
+            ctors: vec![
+                (Name::str(&r, "z"), rr()),
+                (Name::str(&r, "s"), forall(rr(), rr())),
+                (Name::str(&r, "t"), forall(rr(), forall(rr(), rr()))),
+            ],
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("a recursive inductive is accepted");
+        (env, d)
+    }
+
     /// `inductive T : Type` with `n` nullary constructors, in the environment.
     fn nullary_ind(names: &[&str]) -> (Environment, Declaration) {
         let d = Declaration::Inductive {
@@ -1276,6 +1311,115 @@ mod tests {
             ip.ind_apparatus().is_some_and(|a| !a.dep_elims.contains_key(&key)),
             "the split path must file no dep_elim: ⟦T.rec⟧ is the conditional, not drec"
         );
+    }
+
+    /// **An eliminator whose minor premises open binders** — the per-binder
+    /// frontier the `u₁ = 0` split left behind, closed by
+    /// `crate::interp::Interp::as_pi_mem`.
+    ///
+    /// `an_eliminator_is_one_conditional_term_at_a_symbolic_motive_level`'s `T`
+    /// is an enumeration: every constructor is field-free, so no minor premise
+    /// has a binder and `Interp::as_pi` is never reached. That is exactly why
+    /// it certified while `N`, `TwoBool`, `RTree` and `TypeWithTypeField` did
+    /// not, and this fixture is the other side of that line — `R.s` and `R.t`
+    /// carry fields, so `minor_at` walks a `Π` whose interpretation is §1.4's
+    /// conditional and has to settle the guard to walk it.
+    ///
+    /// **Both arms need it, which corrected the sizing this was handed with.**
+    /// The split's own header records the nonzero arm as needing no hypothesis;
+    /// measured here, it needs one per binder just as the zero arm does. What
+    /// differs is only which clause the guard selects.
+    ///
+    /// Positive throughout, so nothing in it rots on progress: 5 of 5 zone-B
+    /// constants, `is_clean`, `open == 0`, and the bottom of `⟦R.rec.{u}⟧`
+    /// still the conditional — the last because a collapse that leaked into the
+    /// *eliminator's own* level, rather than staying at the minor premises',
+    /// would take one clause and be greener for it.
+    #[test]
+    fn a_minor_premise_with_fields_collapses_its_binders_at_a_symbolic_motive_level() {
+        let (env, d) = field_ind();
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+        assert_eq!(
+            (led.zone_b_ok, led.zone_b_consts),
+            (5, 5),
+            "the type former, three constructors and R.rec, all interpreted: {:?}",
+            led.rows()
+        );
+        assert!(led.is_clean(), "{:?}", led.rows());
+        assert_eq!(led.open, 0, "the split's two assumptions were both discharged");
+        owed_is_met_or_explained(&led);
+
+        let rec = Name::str(&n("R"), "rec");
+        let lps = env.get(&rec).expect("R.rec is generated").lparams().to_vec();
+        let own: Vec<Level> = lps.iter().map(|u| Level::param(*u)).collect();
+        let key = (rec, crate::ground::key_levels(&own));
+        let stored = ip.get_const(&key).expect("⟦R.rec.{u}⟧").term.clone();
+        let ite0 = ip.levels().expect("the ω-vocabulary").i.sym;
+        let mut cur = stored;
+        let mut depth = 0;
+        while let Some((site, _)) = ip.as_lam(&cur) {
+            cur = site.skel.clone();
+            depth += 1;
+        }
+        assert_eq!(depth, 5, "the nest binds the motive, three minors and the major premise");
+        let (head, args) = ip.parts_of(&cur).expect("the bottom is an application");
+        assert_eq!(head, ite0, "the eliminator's bottom is still §1.4's conditional");
+        assert_ne!(args[1], args[2], "the two clauses must not be the same term");
+    }
+
+    /// **An infinitary constructor's induction hypothesis, at a variable
+    /// rung** — the *second* blind `as_pi` on this route, and the one the
+    /// fixture above cannot reach.
+    ///
+    /// `Q.f : (E → Q) → Q` has a **function-typed** recursive slot, so
+    /// `rec_dep::minor_at` opens an induction-hypothesis binder as well as a
+    /// field binder and hands its domain — `⟦∀z:E, C (f z)⟧`, itself §1.4's
+    /// conditional — to `rec_dep::ih_transport`, one level below where the
+    /// minor premise's own collapse happens. A plain recursive slot (`R.s`,
+    /// `R.t` above) has no crossing and never goes there, which is why this is
+    /// a second fixture and not another constructor in the first: measured on
+    /// the corpus, `RTree` was the one declaration of the four that still
+    /// declined after `minor_at` alone was fixed.
+    ///
+    /// `E` has two constructors and `Q` two, so the block owes 4 + 4 = 8
+    /// zone-B constants; the assertion is the whole pair, met.
+    #[test]
+    fn an_infinitary_minor_premise_transports_its_hypothesis_at_a_symbolic_motive_level() {
+        let (e, q) = (n("E"), n("Q"));
+        let (ee, qq) = (|| konst(e, [].into()), || konst(q, [].into()));
+        let de = Declaration::Inductive {
+            name: e,
+            lparams: Vec::new(),
+            num_params: 0,
+            ty: sort(Level::zero().succ()),
+            ctors: vec![(Name::str(&e, "a"), ee()), (Name::str(&e, "b"), ee())],
+        };
+        let dq = Declaration::Inductive {
+            name: q,
+            lparams: Vec::new(),
+            num_params: 0,
+            ty: sort(Level::zero().succ()),
+            ctors: vec![
+                (Name::str(&q, "z"), qq()),
+                (Name::str(&q, "f"), forall(forall(ee(), qq()), qq())),
+            ],
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &de).expect("E is accepted");
+        crate::kernel::add(&mut env, &dq).expect("an infinitary constructor is accepted");
+        let ds = [de, dq];
+        let mut ip = Interp::new();
+        let led = run(&env, &ds, &mut ip);
+        assert_eq!(
+            (led.zone_b_ok, led.zone_b_consts),
+            (8, 8),
+            "two type formers, four constructors and two eliminators: {:?}",
+            led.rows()
+        );
+        assert!(led.is_clean(), "{:?}", led.rows());
+        assert_eq!(led.open, 0, "every assumption the two splits opened was discharged");
+        owed_is_met_or_explained(&led);
     }
 
     /// **A `mutual` block is recorded and never handed to `zoneb::ensure`** —

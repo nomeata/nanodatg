@@ -375,36 +375,45 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
 ///   blind at all of them, and that the clause is a per-binder collapse run
 ///   twice. [`split_bottom`] was built and the corpus measured:
 ///
-///   - **The nonzero arm needs no collapse and no hypothesis.** `DepRecursor`
-///     is stated behind `COD(C,V)` at an arbitrary target, and the two new
-///     `Srt` facts discharge `COD` at `srt(û₁)` for every `û₁ ∈ ω`. `pre_at`
-///     — every minor premise included — builds at a variable rung unchanged.
-///   - **The zero arm needs exactly one collapse and it is not at a binder.**
+///   - **The `COD` obligation needs no collapse and no hypothesis on either
+///     arm.** `DepRecursor` is stated behind `COD(C,V)` at an arbitrary
+///     target, and the two `Srt` facts discharge `COD` at `srt(û₁)` for every
+///     `û₁ ∈ ω`. That much of the bullet's correction stands, and it is what
+///     [`cod_at_rung`] rests on.
+///   - **The zero arm needs one collapse away from a binder**, and it is
 ///     `⟦Sort u₁⟧ = U₀` ([`crate::interp::Interp::sort_u0_at`]), spent once per
 ///     minor premise where [`minor_at`] reaches proof irrelevance, because
 ///     `point_of_proof` is stated over `U₀`.
-///   - **The per-binder frontier is real and it is 12 constants, not the
-///     queue.** With the split landed, the eliminators that still decline are
-///     `N` (7), `TwoBool` (2), `RTree` (2) and `TypeWithTypeField` (1) —
-///     every one of them a declaration with a *field-carrying* constructor,
-///     which is where [`minor_at`]'s walk opens a binder at all. A
-///     constructor with no fields has no binder to be blind at, and that is
-///     the whole of `Bool` (12) and `Color` (3), which now certify.
+///   - **The per-binder collapse is real, is needed on *both* arms, and is
+///     [`crate::interp::Interp::as_pi_mem`].** The `u₁ = 0` split left 12
+///     constants at four declarations — `N` (7), `TwoBool` (2), `RTree` (2),
+///     `TypeWithTypeField` (1) — every one with a *field-carrying*
+///     constructor, which is where [`minor_at`]'s walk opens a binder at all.
+///     A constructor with no fields has no binder to be blind at, and that is
+///     the whole of `Bool` (12) and `Color` (3), which certified without it.
+///
+///     **"The nonzero arm needs no hypothesis" was measured on those
+///     field-free declarations and is false in general.** Probed at the first
+///     field-carrying constructor, all four decline at level 0 of their first
+///     minor premise on the zero arm *and* on the nonzero one. What differs
+///     between the arms is which clause the settled guard selects
+///     (`pi_cndd_at` versus `pi_dprod_at`), not whether one is needed.
 ///
 ///   What survives of the bullet is its shape claim, and it is right: the
 ///   clause runs each arm under its own hypothesis and merges with `Ite0`,
-///   where the `Π` clause's `ite0` *removed* the split. The cost estimate was
-///   the wrong part.
+///   where the `Π` clause's `ite0` *removed* the split.
 ///
 /// Measured over the corpus, of the eliminators that reach a route at all:
 /// **27 take [`ensure`], 9 `crate::rec_prop`, 2 `crate::rec_nat`, 1
-/// `crate::rec_s_ix`.** Of the 27, **15 now certify** and 12 are the
-/// per-binder frontier above. `as_pi` still has **42 call sites in 20
-/// modules** and is still blind at a variable rung, so the per-binder collapse
-/// remains the shared frontier of those 12 and of the ~70 eliminators whose
-/// declaration is itself polymorphic — but it is *not* what this route's
-/// split cost, and sizing the next tranche off the call-site count would
-/// repeat this bullet's mistake.
+/// `crate::rec_s_ix`.** All **27 now certify**, and the [`MINOR`] row is
+/// absent from the zone-B histogram. `as_pi` still has forty direct call
+/// sites that are blind at a variable rung; two moved onto `as_pi_mem` here,
+/// and the rest are reached by no route the de-scheduled arm runs yet. The
+/// ~70 eliminators whose *declaration* is itself polymorphic will want the
+/// same collapse, and it is on [`crate::interp::Interp`] rather than in this
+/// module for that reason — but they are behind `symbolic-level`, which is a
+/// different frontier, and sizing that tranche off this one's call-site count
+/// would repeat this bullet's original mistake.
 pub(crate) fn motive_level_of(rec_ty: &E, np: usize, ni: usize) -> Option<Level> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &after.view() else { return None };
@@ -602,18 +611,24 @@ pub(crate) const SYMBOLIC_SPLIT: &str =
 /// worth keeping** — see [`motive_level_of`]'s header, which carries the
 /// correction:
 ///
-/// * **The nonzero arm needs no hypothesis at all.** `DepRecursor` is stated at
+/// * **Neither arm needs a hypothesis for `COD`.** `DepRecursor` is stated at
 ///   an arbitrary target set behind `COD(C,V)`, and `Srt::transitive` /
 ///   `Srt::empty_mem` discharge `COD` at `srt(û₁)` for *every* `û₁ ∈ ω` — the
 ///   `∀n ∈ ω` in those two statements is doing the work a case split was
-///   budgeted for. So `dep_bottom` builds unconditionally at a variable rung
-///   and the assumption below is spent only to shape the arm for the merge.
-/// * **The zero arm needs exactly one collapse, and it is not at a binder.**
+///   budgeted for.
+/// * **Both arms need one per binder of every field-carrying minor premise.**
+///   The interpretation of such a binder's type is §1.4's conditional, and
+///   [`crate::interp::Interp::as_pi_mem`] settles it — `pi_cndd_at` under the
+///   zero half, `pi_dprod_at` under the nonzero one. **This corrects what this
+///   header used to say.** It recorded the nonzero arm as needing no
+///   hypothesis at all, which was measured over `Bool` and `Color`: a
+///   field-free constructor's minor premise opens no binder, so `as_pi` is
+///   never reached there. It is reached at the first constructor that carries
+///   a field, on both arms.
+/// * **The zero arm needs one collapse away from a binder as well.**
 ///   `⟦Sort u₁⟧ = U₀` ([`crate::interp::Interp::sort_u0_at`]), consumed once
 ///   per minor premise at [`minor_at`]'s proof-irrelevance step, because
-///   `point_of_proof` is stated over `U₀`. `as_pi` is not reached on either arm
-///   at a field-free constructor, and where it is reached the domain is a
-///   `dprod` the walk opened itself.
+///   `point_of_proof` is stated over `U₀`.
 ///
 /// # The store, and the one thing this must not do
 ///
@@ -639,7 +654,11 @@ fn split_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term,
         .sort_u0_at(&site.u1, &site.levels, &h)
         .ok_or_else(|| bad(SPLIT_U0))
         .and_then(|eq| {
-            let cx0 = Cx { sort_u0: Some(eq), ..cx.clone() };
+            let cx0 = Cx {
+                sort_u0: Some(eq),
+                guard: Some(crate::interp::Guard::Zero(h.clone())),
+                ..cx.clone()
+            };
             prop_bottom(ip, site, at, &cx0)
         });
     // Discharged whether or not the arm built. The `Scopes` is local, so an
@@ -663,7 +682,12 @@ fn split_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term,
 
     // ── `¬(û₁ = ∅)`: the eliminator is a value ──────────────────────────────
     let (tok, h) = scopes.assume(Formula::not(is_zero.clone()));
-    let arm1 = dep_bottom(ip, site, at, cx);
+    // **The nonzero arm carries the hypothesis too.** It needs none for `COD`
+    // — `Srt::empty_mem` and `Srt::transitive` are `∀n ∈ ω` — but it needs one
+    // per *binder* of every field-carrying minor premise, which is what
+    // [`crate::interp::Interp::as_pi_mem`] spends it on.
+    let cx1 = Cx { guard: Some(crate::interp::Guard::NonZero(h.clone())), ..cx.clone() };
+    let arm1 = dep_bottom(ip, site, at, &cx1);
     let (b_tm, b_thm) = match arm1 {
         Ok(v) => v,
         Err(e) => {
@@ -782,6 +806,7 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
         c_in_fs,
         c_fibre,
         sort_u0: None,
+        guard: None,
     })
 }
 
@@ -828,6 +853,21 @@ pub(crate) struct Cx {
     /// move; at a ground `u₁ ≥ 1` the `Prop` clause is not taken at all. Only
     /// the split's zero arm both needs the equation and can have it.
     pub(crate) sort_u0: Option<Thm>,
+    /// **The split's own half of excluded middle, on *both* arms** — and `None`
+    /// on the whole scheduled path, where the motive level is a numeral.
+    ///
+    /// The sibling of [`Cx::sort_u0`] and filled at the same two places, but by
+    /// both arms rather than one: `⟦Sort u₁⟧ = U₀` is asymmetric — the zero arm
+    /// is the only one that can name `Prop` — while the *binder* collapse is
+    /// symmetric. [`minor_at`] is blind at a variable rung in either direction
+    /// and [`crate::interp::Interp::as_pi_mem`] settles either, spending
+    /// `pi_cndd_at` under one and `pi_dprod_at` under the other.
+    ///
+    /// **That symmetry is a correction**: [`split_bottom`]'s header records the
+    /// nonzero arm as needing no hypothesis, which was measured over
+    /// field-*free* constructors, where a minor premise opens no binder. See
+    /// [`crate::interp::Interp::as_pi_mem`].
+    pub(crate) guard: Option<crate::interp::Guard>,
 }
 
 /// **The motive binder's scope typing, at the dependent product** — the
@@ -1665,8 +1705,13 @@ pub(crate) fn minor_at(
     let mut f_tm = cx.s_tms[i].clone();
     let mut f_mem = cx.s_mems[i].clone();
     for (l, at_slot) in lvl_rec.iter().enumerate().take(nlev) {
-        let set = f_mem.concl().as_mem()?.1;
-        let shape = ip.as_pi(&set)?;
+        // **The binder collapse, and the one line of this walk that is not the
+        // scheduled one.** At a numeral motive level this is `as_pi` and the
+        // membership comes back untouched; at a variable rung the set is
+        // §1.4's conditional and `Cx::guard` is what settles it. See
+        // [`crate::interp::Interp::as_pi_mem`].
+        let (shape, moved) = ip.as_pi_mem(&f_mem, cx.guard.as_ref())?;
+        f_mem = moved;
         let gen = at_slot.and_then(|j| cross[j].as_ref());
         let dom = match gen {
             None => shape.dom(),
@@ -2174,7 +2219,13 @@ fn ih_transport(
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
     let point = ip.point();
-    let shape = ip.as_pi(dom)?;
+    // **The second blind `as_pi` of this walk, and the last one on this
+    // route.** The induction-hypothesis binder's domain is `⟦∀z:γ, C (f z)⟧`,
+    // which is §1.4's conditional at a variable rung exactly as the minor's own
+    // binders are; [`minor_at`] collapses those and this one is reached through
+    // `shape.dom()`, one level below. See
+    // [`crate::interp::Interp::as_pi_at`].
+    let (shape, collapse) = ip.as_pi_at(dom, cx.guard.as_ref())?;
     if shape.dom() != cr.gamma {
         return None
     }
@@ -2276,6 +2327,16 @@ fn ih_transport(
     let landed = match v {
         None => point,
         Some(vt) => cr.pushed(vt),
+    };
+    // Back onto the caller's own spelling: the introduction rules above land in
+    // whichever clause the collapse chose, and what the minor premise's binder
+    // is typed at is the conditional. Reflexivity where nothing collapsed.
+    let out = match collapse {
+        None => out,
+        Some(eq) => {
+            let back = derived::eq_symm(&mut ip.env_mut(), &eq)?;
+            ip.retarget_set(&out, &back)?
+        }
     };
     if *out.concl() != Formula::mem(landed, dom.clone()) {
         return None
