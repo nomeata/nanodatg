@@ -274,12 +274,12 @@ pub trait Certifier<'t, 'p> {
     ///
     /// ## What the proof premises are, and why they are these
     ///
-    /// A backend that interpreted structures would want the constructor's own
-    /// computation rule and would need none of the parameters below. This one
-    /// does not interpret them (`INDUCTIVES.md`), so the derivation available to
-    /// it is the *other* one: if both endpoints are proofs then each interprets
-    /// to `•` by Carneiro's Theorem 6.7 and the step is those two equations
-    /// composed. `redex_proof` and `reduct_proof` are exactly Theorem 6.7's
+    /// A backend with an authoritative structure interpretation can use the
+    /// constructor's computation rule and needs none of the proof parameters
+    /// below. A backend without one still has the independent proof route: if
+    /// both endpoints are proofs then each interprets to `•` by Carneiro's
+    /// Theorem 6.7 and the step is those two equations composed. `redex_proof`
+    /// and `reduct_proof` are exactly Theorem 6.7's
     /// premises per side — `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` — and `None` means the
     /// checker's own inference does not make that side a proof.
     ///

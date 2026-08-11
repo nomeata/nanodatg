@@ -950,6 +950,45 @@ stage 6"):
   TG can soundly consume the direct constructor theorem but cannot compose it
   in front of the reduced-subject cases.
 
+* **B8** — projection subject traces cross the checker/TG boundary — **landed
+  for the non-increasing subset** (2026-08-11). `reduce_proj` now retains the
+  exact memoised whnf trace which exposed the constructor. A dedicated trace
+  node certifies that subject reduction on demand and passes the reduced
+  subject plus its certificate to `Certifier::proj_red`; TG composes it in
+  front of B7's shared constructor abbreviation and computation theorem. No
+  normalisation is rerun, no backend calls the checker, and a readiness query
+  is a pure lookup of mini's already-published translation rather than an eager
+  construction of the projection package.
+
+  The readiness gate is load-bearing. An unrestricted version also exposed
+  unsupported ι traces and made `proj_reduced_carrier` **139 → 167** gaps
+  before the outer projection could decline. The landed gate admits the
+  established beta/zeta/delta/sort rules and recursively ready projection
+  steps, but not ι or an admitted step. Thus the δ cases and `nestedFst` now
+  compose, while `recFst` remains the one `proj_reduce` residue until its
+  `Two.rec` ι certificate exists. It also declines projection heads carrying a
+  subsequent application spine, whose separate application-congruence leg is
+  not yet recorded.
+
+  On `proj_reduced_subject.ndjson`, real derivations **226 → 262**, total TG
+  gaps **31 → 12**, and `proj_reduce` **5 → 1**. On
+  `proj_stuck_subject.ndjson`, derivations **499 → 541**, gaps **36 → 9**, and
+  `proj_reduce` **3 → 0**. The two exact controls are unchanged:
+  `proj_reduced_carrier` stays **139** and `field_in_u0_by_carrier` stays
+  **0**. The full Nat handoff also benefits from ready PProd projection
+  subjects: derivations **2015 → 2035**, gaps **172 → 164**, and
+  `proj_reduce` **18 → 14**, while all 10 zero and 13 successor ι ratchets stay
+  fixed.
+
+  Median retired `instructions:u` over three runs, same debug-with-optimisation
+  binaries, moved from B7's `proj_reduced_subject` **4,677,391,237** to
+  **4,740,693,840** (**+1.35%**) and `nat_char_equations`
+  **9,976,861,130 → 10,076,244,553** (**+1.00%**). Every substantial command
+  was capped at 8 GiB virtual memory. The next projection blocker is now
+  precise: certify the currently gated ι subject family (the remaining
+  `recFst` cell) before widening the gate; after that, record the application
+  congruence leg for projection heads used as functions.
+
 **Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
 axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
 `checker/src/routed.rs`, the checker's half). The policy function is

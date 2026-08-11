@@ -19643,18 +19643,17 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
-    /// **Projection reduction**, and the honest statement of what this backend
-    /// can say about one.
+    /// **Projection reduction**, through mini's authoritative class-(T)
+    /// package when one exists and through proof irrelevance otherwise.
     ///
-    /// It cannot say the thing a reader expects. `(mk a₁ … aₙ).i ⟶ aⱼ` is the
-    /// constructor's own computation rule, and this backend has no
-    /// interpretation of structures, so it has no axiom about `mk`, none about
-    /// `proj` beyond its being a function symbol, and therefore no derivation of
-    /// the reduction *as a reduction*. That is `INDUCTIVES.md`'s scope, not
-    /// threading debt, and it is what the `proj_reduce` gap has always meant.
+    /// For an eligible structure, mini has already published the translation
+    /// it accepted. The checker may additionally hand over the exact whnf
+    /// certificate which exposed the constructor; this method consumes it and
+    /// composes the retained constructor abbreviation and computation theorem.
+    /// No structure is translated here and no reduction is rerun.
     ///
-    /// What it can say is the other thing, and the checker now hands over
-    /// exactly what saying it needs. If both endpoints are proofs then each
+    /// The independent fallback is the one available for proof endpoints. If
+    /// both endpoints are proofs then each
     /// interprets to `•` — Carneiro's Theorem 6.7, [`Self::point_of_proof_from`]
     /// — and the two equations compose to the claim. No property of projections
     /// enters that argument at all; it is true of the endpoints of *any* step
@@ -19698,9 +19697,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let reason = crate::certify::Admit::ProjRed.name();
         let (ta, tb) = (self.interp(ctx, redex), self.interp(ctx, reduct));
         // Which structure is being projected, and does the checker hold the two
-        // proof premises this rule's only derivation needs? The first says
-        // whether this origin and the ι structure origin are the same missing
-        // construction; the second splits the origin by cause, as at ι.
+        // proof premises needed by the independent proof shortcut?
         #[cfg(feature = "stepcount")]
         let note = |k: usize| PROJ_RED[k].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Both sides took one of §6.2's split clauses, or the interpretation
@@ -19709,9 +19706,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             return self.proved(Thm::eq_refl(ta))
         }
         // The inductive declaration was dispatched to mini exactly once. For
-        // a direct constructor redex, consume the computation theorem retained
-        // in that declaration's shared projection package. No acceptance
-        // check, fallback checker, or parallel TG carrier is involved.
+        // a direct or checker-reduced constructor redex, consume the computation
+        // theorem retained in that declaration's shared projection package. No
+        // acceptance check, fallback checker, or parallel TG carrier is involved.
         let reduced_subject = reduced_subject.and_then(|(subject, cert)| {
             self.consume(&cert).map(|cert| (subject, cert))
         });

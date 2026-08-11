@@ -138,7 +138,7 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
     assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
-    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:172")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:164")), "the measured full-fixture baseline moved:\n{stdout}");
     assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
@@ -147,9 +147,12 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
 /// Mini owns the `Pair`/`Tri` declarations and publishes their class-(T)
 /// translations. TG interprets projections with that shared machine, lifts
 /// projection congruence through the same tuple projection, and consumes the
-/// retained constructor computation rule for direct redexes. The remaining
-/// projection reductions are deliberately the subject-whnf continuation: the
-/// current `proj_red` interface does not carry that trace certificate.
+/// retained constructor computation rule for direct redexes. The projection
+/// trace now also retains a subject's already-computed whnf certificate and
+/// hands it to TG: delta-only and nested projection subjects compose without a
+/// second reduction. Iota-containing traces remain behind the readiness gate
+/// until that iota family itself certifies, so exposing an independently
+/// unsupported rule cannot increase the ledger.
 #[test]
 fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let direct = run_on("proj_reduced_subject.ndjson", &["--no-modelgen", "--verbose"]);
@@ -159,8 +162,9 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
         stdout.contains("route\tmode=Split\ttoMini=3\ttoChecker=10\tunclaimed=0"),
         "the projection fixture was not handled by the one dispatch loop:\n{stdout}",
     );
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 31, "the direct projection ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 5, "two direct computation rules were not consumed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 12, "the reduced-subject projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 1, "a ready subject trace was not consumed:\n{stdout}");
+    assert!(!stdout.contains("gap: whnf"), "a subject trace drifted from its endpoints:\n{stdout}");
     assert!(
         !stdout.contains("beta: the contracted body does not match its interpretation"),
         "the projection interpretation changed underneath a shared lambda graph:\n{stdout}",
@@ -169,10 +173,23 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let congr = run_on("proj_stuck_subject.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&congr.stdout);
     assert_eq!(congr.status.code(), Some(4), "the fixture's remaining TG debt moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 36, "the projection congruence ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 3, "the direct computation control regressed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 9, "the nested projection ratchet moved:\n{stdout}");
+    assert!(!stdout.contains("gap: proj_reduce"), "a nested subject trace was not consumed:\n{stdout}");
     assert!(
         !stdout.contains("def_eq_proj: derived equation does not match the claim"),
         "projection congruence used the retired opaque spelling:\n{stdout}",
     );
+
+    // This subject reaches PProd only through a still-unsupported iota family.
+    // Asking for that trace used to add 28 gaps; the readiness gate must leave
+    // the exact pre-tranche control untouched.
+    let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&carrier.stdout);
+    assert_eq!(carrier.status.code(), Some(4), "the carrier control's verdict moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 139, "an unsupported iota trace was exposed:\n{stdout}");
+
+    let u0 = run_on("field_in_u0_by_carrier.ndjson", &["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&u0.stdout);
+    assert_eq!(u0.status.code(), Some(0), "the zero-gap projection control regressed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 0, "the zero-gap projection control moved:\n{stdout}");
 }

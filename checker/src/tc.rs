@@ -2334,10 +2334,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// One recorded **projection reduction**, asked of the backend with the
     /// premises the backend cannot get for itself.
     ///
-    /// [`Certifier::proj_red`] says what those premises are and why they are
-    /// per-side proof witnesses rather than anything about projections. What
-    /// belongs here is why they are gathered *now* rather than when the step was
-    /// recorded: [`Self::proof_witness`] runs inference on both endpoints, and
+    /// [`Certifier::proj_red`] says what those premises are: the already-recorded
+    /// subject trace when one is ready, plus the independent per-side proof
+    /// witnesses. What belongs here is why they are gathered *now* rather than
+    /// when the step was recorded: certifying the trace and
+    /// [`Self::proof_witness`] both ask the backend for real derivations, and
     /// most weak-head reductions are performed for a caller that wants the
     /// reduct and no certificate at all. Recording the step costs a few words;
     /// this costs two inferences, and it is paid only when a
