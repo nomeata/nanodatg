@@ -5424,8 +5424,9 @@ Exit 0, 342.9 s wall, 23.9 GB peak RSS, **3.398 T instructions**.*
 with the numerator exactly as it did in §8.15: 6,868 / 6,881 is **99.8 %**,
 against 6,770 / 6,832 = 99.1 %.
 
-**The 13, in full** — and this is the whole remaining residue of the third
-construction on Mathlib:
+**The 13, in full** — the residue at *this* commit. §8.16.4 takes two of the
+three infinitary rows away and reclassifies the third, so the standing census
+is the 11 there and not this table.
 
 | what | count | which |
 |---|---|---|
@@ -5455,7 +5456,11 @@ rather than lost.** The arithmetic closes exactly: 51 = 49 closed + 1 + 1.
   `erasureBareWhy` (any constructor, anywhere) and `branchingWhy` is what
   makes the two populations countable, and it moves one declaration from 51 to
   the infinitary bucket, which is why that bucket reads 3 here and 2 there.
-  Which of the two `_model.aux` occupants it is was not separately measured.
+  **It is `Lean.Json…_model.aux`**, and §8.16.4's dump of that family is what
+  says so: its `aux.3.cons` has two bare recursive fields and comes *before*
+  `aux.5.inner`, so the old scan reported *branching* and stopped.
+  `Lean.PrefixTreeNode…_model.aux` reaches its own redex at `aux.3.inner`
+  before any constructor branches, so it was always in the infinitary bucket.
 
 **The certifiability column, which is not the coverage column.** Every one of
 the 49 has a *branching* erasure by construction — that is what the guard was
@@ -5475,3 +5480,220 @@ exercising it, the exact shape of a coverage loss that a green suite does not
 report. `Inf2` (`inode : (n : N) → (N → Inf2 n) → Inf2 (N.s n)`) replaces it
 and declines at `erasure … is not bare`, which is the half of the old reason
 that is still open and is what the three infinitary corpus occupants above hit.
+
+### 8.16.4 The infinitary residue — two were a redex, one is a W-type
+
+**Verdict: §8.16.3's "3 infinitary erasures" are two shapes and not one, and
+the larger half was never infinitary.** `Lean.Json…_model.aux` and
+`Lean.PrefixTreeNode…_model.aux` were declining on an **unreduced application**
+that this file's guards read as a lambda; they model now, and nothing about the
+erasure had to move. `PFunctor.Approx.CofixA` is the real shape, and it does
+not belong in this bucket at all — it belongs with `WType`.
+
+The brief that opened this tranche asked whether the three were one shape. They
+are not, and the answer came at the *first* target rather than the third: one
+dump of `Lean.Json._model.0._model.aux`'s constructors was enough.
+
+#### What the two were
+
+Lean's nested specialisation instantiates a container's parameters and does not
+βζ-normalise what comes out. `Std.DTreeMap.Internal.Impl α β` has a **dependent
+value field**
+
+```text
+Impl.inner : Nat → (k : α) → β k → Impl α β → Impl α β → Impl α β
+```
+
+and both `Lean.Json` and `Lean.PrefixTreeNode` nest through it — through
+`Std.TreeMap.Raw`, which is that type — at `β := fun _ => T`. So the
+specialised block, and therefore the `_model.aux` family the composition hands
+layer 3, carries the field as written:
+
+```text
+Lean.Json._model.0._model.aux.5.inner :
+  Nat → (k : String) →
+    (fun x => Lean.Json._model.0._model.aux Lean.Json._model.0._model.tag.0) k →
+      … aux tag.5 → … aux tag.5 → … aux tag.5
+```
+
+`Expr.getAppFn` of that third field is a **lambda**, so `erasureBareWhy`'s
+`dom.getAppFn.isConstOf tname` answered *no* and the declaration was reported
+as having "a recursive occurrence that is not a bare `T`" — an infinitary
+field. There is no binder over the occurrence. There is an application nobody
+reduced.
+
+**This is §5.1 one layer down, and it is the same function that fixes it.**
+§5.1 is exactly this defect at layer 1, where it cost these same two
+declarations their *nested* models until [`Modelgen.Gen.occIdx?`] and its two
+siblings started reading a type's head through [`Modelgen.headNorm`] — β and ζ,
+iterated, no constant unfolded. What §5.1 could not see is that layer 1's
+output is layer 3's input: the block it repairs is the block the composition
+then hands `primIso`, and the redex is still in it. So the repair is the same
+call in four more places and deliberately not a second function.
+
+#### What moved
+
+Four guards, and each asks a question whose answer is invariant under βζ:
+
+| site | the question |
+|---|---|
+| `erasureBareWhy` | is every recursive occurrence a bare `T p⃗ e⃗`? — arm C's guard |
+| arm C's `ctorIdxAt` | what are that occurrence's index arguments? |
+| [`Modelgen.recSlotOf`] | the same bareness question, for the tuple tower |
+| [`Modelgen.tagFactored`] | what binders does a recursive field have? — a redex has none to peel until it is reduced |
+
+**`mentionsAny` is left on the *written* domain and no emitted type is
+normalised.** That is the constraint that keeps the change to four lines:
+[`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] replace a recursive field's
+**whole domain**, so the only thing they need from the guard is agreement about
+*which* fields are recursive — and a domain they replace entirely, they never
+read. A declaration whose constructor types are already βζ-normal — every one
+that modelled before — therefore takes exactly the path it took before, byte
+for byte, and the control run confirms it: with `headNorm` neutralised the
+report over a 2.37 M-line Mathlib prefix differs in **exactly these two
+declarations and their two skeletons**, and in nothing else.
+
+#### The one that stays, and why it is filed under the wrong heading
+
+```text
+PFunctor.Approx.CofixA F : ℕ → Type (max uA uB)
+  | continue : CofixA F 0
+  | intro {n} : ∀ a, (F.B a → CofixA F n) → CofixA F (n+1)
+```
+
+`F.B a → CofixA F n` is a **real** function type: there is a binder, the
+occurrence is under it, and there is no whole domain for the erasure to
+replace. But the second fact about it is the one that settles the bucket: the
+binder's type is `F.B a`, which mentions the constructor's **earlier field**
+`a` — so `B` does not factor through the tag, and the run has been printing
+`B factors through the tag: no` on this decline all along. Its index erasure,
+if one could be taken, is
+
+```text
+Skel | intro : ∀ (a : F.A), (F.B a → Skel) → Skel
+```
+
+which is `WType F` — the very declaration in the not-tag-factored bucket
+beside `PSet` and `FirstOrder.Language.Term`. So closing the erasure for
+`CofixA` would splice a skeleton arm W declines, `Iso.requires` would withdraw
+the model, and the run would have paid for the splice first. **`CofixA` is a
+true W-type wearing an index**, and the honest census files it with the other
+three rather than with the two that were an artifact.
+
+#### The residue the guard keeps, named rather than hand-waved
+
+A field can mention `T` **only inside a binder that βζ discards**. A container
+at `β := fun _ => N` whose *key* is the recursive one gives
+
+```text
+(fun x : T p⃗ e⃗ => N) k
+```
+
+whose reduct is `N`: the field is not recursive, and the only occurrence of `T`
+is in a binder type the reduction throws away. `mentionsAny` says *recursive*
+— it must, because `eraseCtorTy` replaces on that test — and the erasure would
+then replace a domain that is not recursive at all. Closing this needs the
+erasure to **normalise** a field rather than replace it, which is a different
+construction; no declaration in Mathlib is this shape, so it is declined and
+named. `nest_fam_arg`'s `OK` and `Key` are the two fixture occupants, and their
+message says **vanishing mention** and never *infinitary* — there is no binder
+over an occurrence, because there is no occurrence.
+
+#### The pin
+
+`modelgen/tests/nest_fam_arg.lean` is §5.1's own sweep over how a container is
+*applied*, so it is already the file that holds this shape — and it has moved
+from `expectedOwn` to **`expectedPrim`**, because the redex reaches layer 3 and
+that is where it now has to be measured. The row asserts everything the
+non-prim row did, in the same order, and the composition's third step besides:
+nine `_model.aux` families and their nine skeletons, 337 statements compared
+against the installed recursors' own rules with 0 differing, 36 recursors
+against Lean's with 0 differing.
+
+Three mutations, all run interpreted (`lake build Modelgen.Simple` plus a
+probe):
+
+| mutation | result |
+|---|---|
+| `headNorm` → identity at all four sites | all nine `_model.aux` rows lost; every one back to `infinitary` |
+| `headNorm` → β only, no ζ | **exactly `Zeta` lost**, the other eight unaffected |
+| the guard reads through `headNorm`, `ctorIdxAt` does not | all nine lost, and the *failure mode is a decline* — `…'s recursive field is not `T` at n parameters and m indices` — not an emission |
+
+The second is the row that makes the pin a measurement rather than a
+restatement: `Zeta.obj : RB N (fun _ => let X := L Zeta; X) → Zeta` is the only
+occupant whose reduct needs ζ as well as β, and one `headBeta` loop passes the
+other eight. The third is the one that matters for safety: the guard and the
+index reader must agree about the same field, and when they do not, arm C
+refuses rather than carving against the wrong index vector.
+
+`prim_carve`'s `Inf2` is untouched and is still the erasure guard's live
+occupant — `inode : (n : N) → (N → Inf2 n) → Inf2 (N.s n)` is a real binder,
+which is exactly the shape `CofixA` is and this tranche does not close. So no
+occupant had to be replaced here.
+
+#### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, 337.8 s wall, 23.9 GB peak RSS, **3.400 T instructions**.*
+
+| | §8.16.3 | **and reading the head through `headNorm`** |
+|---|---|---|
+| models | 6,868 | **6,872** |
+| declines | 13 | **11** |
+| statements compared / differing | 18,434 / 0 | **18,474 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+
+**+4 models is 2 families and their 2 skeletons**, so the denominator moves
+with the numerator again: 6,872 / 6,883 is **99.84 %**. The instruction count
+is +0.06 %, which is the two extra models and not the reduction — `headNorm`
+runs only at four guards and is the identity on every βζ-normal domain.
+
+**The whole report diffs in four lines.** Against §8.16.3's run over the same
+5.6 GB input, the only changes anywhere in 6,872 models are the two new
+`_model.aux` rows, their two `_model.skel` rows, and the two declines those
+replace. The recursor count does not move, because these are declarations the
+composition emits and not the export's own.
+
+**The 11, in full** — the standing residue of the third construction on
+Mathlib, every one classified:
+
+| what | count | which |
+|---|---|---|
+| **not tag-factored** — the true W-types | 4 | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
+| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| name taken | 2 | `Lean.Syntax…_model.tag`, `Lean.Syntax…_model.aux` |
+| singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+
+**The infinitary bucket is gone as a bucket.** Two of its three occupants were
+an artifact of how the guard read a redex; the third is a W-type and is filed
+with the W-types, which is why that row reads 4 where §8.16.3's read 3. The
+declaration is *also* indexed and *also* infinitary and the tool still declines
+it at the erasure guard — the reclassification is about which job would close
+it, and that job is a non-tag-factored W, not an erasure.
+
+**What each remaining class would take**, so that 11 is a plan and not a
+remainder:
+
+* **the 4 W-types** need a `B` that can see the label's data, which is
+  `WFromPaths.lean`'s decidable-equality step at the label type and costs
+  `Classical.choice` on every constant — §8.16 measured that trade and took the
+  tagged construction instead. This is the one class where the *certifiability*
+  column, not the coverage column, is what is holding.
+* **the 3 basis primitives** are the exemption that makes the construction
+  well-founded and must stay unmodelled.
+* **the 2 name-taken** are not a shape at all: `Lean.Syntax` is replayed at
+  line 9,948 of the export and `PSigma` at line 95,424, so when the
+  composition's third step reaches `Lean.Syntax._model.0._model.tag` the
+  primitive it needs is *reserved by the input and not yet installed*.
+  `runFilter` already has the machinery for that — `waitingPrim` holds a model
+  back until [`Modelgen.primReady`] — but [`Modelgen.primCompose`] passes
+  `canWait := false` and has no way to reach the queue, so a composition-emitted
+  declaration cannot wait where an input declaration can. **This is a different
+  class from the `_mgalt` alias-root retry**, which fires on
+  `Decline.nameLost` (our own name, normalised onto another of ours) and not on
+  `Decline.nameTaken` (the input's name, coming later); the retry is working as
+  designed and these two were never in its reach.
+* **the 2 singleton boundaries** are `Acc.below`'s index that is not one of its
+  own data fields, and `IsHomLift`'s index expressions that mention its own
+  fields — both `MODELGEN.md` §8.7's and arm F's own limits, unchanged.

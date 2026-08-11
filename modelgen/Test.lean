@@ -293,23 +293,11 @@ def expectedOwn : List Row :=
       [("C", 14), ("A1", 34), ("A1._model.0", 30), ("X", 23),
        ("X._model.0", 20)], [])
   , ("nest_mutual_index", [("MA", 32), ("MA._model.0", 28)], [])
-    -- **§5.1's gap, closed, and the sweep that says how far.** `RB α β`'s
-    -- second parameter is a family, so the block holds `β k` as the redex
-    -- `(fun _ => B₀) k`; `JT` and `PT` are `Lean.Json` and
-    -- `Lean.PrefixTreeNode` at that shape and were Mathlib's only two
-    -- declines. `OK` nests in the **first** argument — `dependent_fields`'s
-    -- `Ctr KTree (fun _ => N)` at this container — and was a model before the
-    -- fix and after it, so the whole table lives in one file and a repair that
-    -- passes the gap by breaking the shape beside it is caught. Eleven of the
-    -- twelve were red on the commit before this row changed and the twelfth is
-    -- `OK`; the source's table says which mutation each one kills.
-  , ("nest_fam_arg",
-      [("OK", 13), ("OK._model.0", 12), ("JT", 15), ("JT._model.0", 14),
-       ("PT", 13), ("PT._model.0", 12), ("PTP", 13), ("PTP._model.0", 12),
-       ("Deep", 21), ("Deep._model.0", 18), ("Idx", 21), ("Idx._model.0", 18),
-       ("Both", 13), ("Both._model.0", 12), ("Two", 13), ("Two._model.0", 12),
-       ("Flat", 12), ("Flat._model.0", 10), ("Key", 21), ("Key._model.0", 18),
-       ("Zeta", 21), ("Zeta._model.0", 18), ("Ix", 15), ("Ix._model.0", 14)], [])
+    -- **`nest_fam_arg` is §5.1's sweep and it has moved to `expectedPrim`**,
+    -- because the redex it exists for reaches layer 3 as well and that is
+    -- where it now has to be measured. The row there asserts everything this
+    -- one did — the nested and mutual counts, in the same order — and the
+    -- composition's third step on top.
     -- ── the second construction: a plain mutual block ──────────────────────
     --
     -- **`Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
@@ -572,6 +560,95 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model shape: a basis primitive")
       , ("Bad", "prim model shape: Bad.lim has a recursive field that is not a bare \
           occurrence of Bad")])
+  -- **§5.1's sweep, run through all three layers.** `RB α β`'s second
+  -- parameter is a family, so specialising it leaves the constructor field
+  -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
+  -- exactly what the composition hands layer 3, so the redex arrives *here*
+  -- too. `JT` and `PT` are `Lean.Json` and `Lean.PrefixTreeNode` at that
+  -- shape, and their `_model.aux` families were the two declarations the
+  -- Mathlib run reported as **infinitary** until the guards in
+  -- `Modelgen/Simple.lean` started reading a field's head through
+  -- [`Modelgen.headNorm`], the same function §5.1 put in front of layer 1's
+  -- three readers. Nine `_model.aux` rows here are that repair; `Zeta`'s is
+  -- the one that needs ζ and not β alone.
+  --
+  -- The row asserts everything the old non-prim `nest_fam_arg` row did — the
+  -- nested and mutual counts, in the same order — and the third step besides,
+  -- so nothing moved to get here. **`OK` nests in the container's *first*
+  -- argument** and was a model at layer 1 before §5.1's fix and after it, so
+  -- the table lives in one file and a repair that passes the gap by breaking
+  -- the shape beside it is caught; eleven of the twelve were red on the commit
+  -- that closed §5.1 and the twelfth is `OK`, and the source's table says
+  -- which mutation each one kills.
+  --
+  -- **`RB` is 170 because it is this file's first W target** and therefore the
+  -- one that carries the fragment's splice: `RB.node` has two recursive
+  -- fields, so the tuple tower declines it and arm W models it. The eighteen
+  -- `_wcore` rows after it are the fragment being modelled in turn
+  -- (`Iso.requires`' rule). Both numbers are facts about *ordering*.
+  --
+  -- **Three declines, and each is a different boundary.**
+  --
+  -- * `OK` and `Key` are the **vanishing mention**: the family parameter is
+  --   `fun _ => N`, so the field is `(fun x : T … => N) k`, whose reduct is
+  --   `N` and which is therefore not recursive at all — but the written
+  --   domain mentions `T` in the discarded binder, and that is the test
+  --   `eraseCtorTy` and `spineSwap` replace a whole domain on. Reading the
+  --   head through `headNorm` is not enough to model these; the erasure would
+  --   have to *normalise* the field rather than replace it. No declaration in
+  --   Mathlib is this shape, so it is recorded and named rather than built.
+  --   Their message must not say *infinitary* — there is no binder over an
+  --   occurrence, because there is no occurrence.
+  -- * `Flat` is §8.15's withdrawal at a skeleton with **no base constructor**,
+  --   the same inner reason as `prim_carve`'s `NoBase`, reached here by a
+  --   container with no recursive field of its own.
+  , ("nest_fam_arg",
+      [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model.skel", 6),
+       ("RB", 170),
+       ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
+       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 15),
+       ("Nonempty", 4), ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 4), ("_wcore.PProd", 4),
+       ("RB2", 6), ("Ctr", 4),
+       ("OK", 13), ("OK._model.0", 12), ("OK._model.0._model.tag", 6),
+       ("JT", 15), ("JT._model.0", 14), ("JT._model.0._model.tag", 6),
+       ("JT._model.0._model.aux", 12),
+       ("JT._model.0._model.aux._model.skel", 16),
+       ("PT", 13), ("PT._model.0", 12), ("PT._model.0._model.tag", 6),
+       ("PT._model.0._model.aux", 10),
+       ("PT._model.0._model.aux._model.skel", 14),
+       ("PTP", 13), ("PTP._model.0", 12), ("PTP._model.0._model.tag", 6),
+       ("PTP._model.0._model.aux", 10),
+       ("PTP._model.0._model.aux._model.skel", 14),
+       ("Deep", 21), ("Deep._model.0", 18), ("Deep._model.0._model.tag", 8),
+       ("Deep._model.0._model.aux", 14),
+       ("Deep._model.0._model.aux._model.skel", 18),
+       ("Idx", 21), ("Idx._model.0", 18), ("Idx._model.0._model.tag", 8),
+       ("Idx._model.0._model.aux", 14),
+       ("Idx._model.0._model.aux._model.skel", 18),
+       ("Both", 13), ("Both._model.0", 12), ("Both._model.0._model.tag", 6),
+       ("Both._model.0._model.aux", 10),
+       ("Both._model.0._model.aux._model.skel", 14),
+       ("Two", 13), ("Two._model.0", 12), ("Two._model.0._model.tag", 6),
+       ("Two._model.0._model.aux", 10),
+       ("Two._model.0._model.aux._model.skel", 14),
+       ("Flat", 12), ("Flat._model.0", 10), ("Flat._model.0._model.tag", 6),
+       ("Key", 21), ("Key._model.0", 18), ("Key._model.0._model.tag", 8),
+       ("Zeta", 21), ("Zeta._model.0", 18), ("Zeta._model.0._model.tag", 8),
+       ("Zeta._model.0._model.aux", 14),
+       ("Zeta._model.0._model.aux._model.skel", 18),
+       ("Ix", 15), ("Ix._model.0", 14), ("Ix._model.0._model.tag", 6),
+       ("Ix._model.0._model.aux", 12),
+       ("Ix._model.0._model.aux._model.skel", 16)],
+      [ ("Eq", "prim model shape: a basis primitive")
+      , ("OK._model.0._model.aux", "prim model shape: an indexed family at a \
+          never-zero sort whose index erasure is not bare")
+      , ("Flat._model.0._model.aux", "prim model shape: the spliced inductive \
+          Flat._model.0._model.aux._model.skel did not model")
+      , ("Key._model.0._model.aux", "prim model shape: an indexed family at a \
+          never-zero sort whose index erasure is not bare")])
   ]
 
 structure TAcc where

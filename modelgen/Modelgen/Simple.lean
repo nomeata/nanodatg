@@ -140,7 +140,14 @@ single-valuedness and is propositional.
 * **indexed at a never-zero sort whose index erasure is not bare** — a
   recursive occurrence under a binder or inside a container, which the erasure
   cannot replace: there is no whole domain to swap. That is *infinitary* and it
-  is the arm's remaining boundary.
+  is the arm's remaining boundary. **The head is read through
+  [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
+  what Lean's nested specialisation leaves at a container's family parameter —
+  is the bare occurrence it reduces to and not a binder; `MODELGEN.md` §8.16.4,
+  and §5.1 is the same repair at layer 1. A second and rarer refusal shares the
+  guard: a field whose type mentions `T` **only inside a binder βζ discards**
+  is not recursive at all, and the erasure would replace it anyway — the
+  message calls that a *vanishing mention* and never *infinitary*.
   An indexed family whose erasure is bare is no longer a refusal, **however
   many recursive fields its constructors have**: it is **arm C**
   ([`Modelgen.primIso`]'s `armC`), thesis §5.2's skeleton-plus-`good` standing
@@ -984,6 +991,44 @@ sub-terms at spines `n₁` and `n₂` cannot both sit in one fibre `V n` unless
 the spine is generalised to a tree — which is the very inductive being built.
 That is plan B's territory, and `Lean.ParserDescr` lives there. -/
 
+/-! ### Reading a field's head, at layer 3
+
+**`Expr.getAppFn` on `(fun x => T p⃗ e⃗) k` is a lambda**, so every "is the
+recursive occurrence a bare `T p⃗ e⃗`" test in this file answers *no* on a
+field whose type is a redex — and reports it as infinitary, which it is not:
+there is no binder over the occurrence at all, only an application nobody
+reduced.
+
+That is Lean's own nested specialisation and not a hypothetical. A container
+with a dependent value field — `Impl α β | inner : … → (k : α) → β k → …` —
+specialised at `β := fun _ => T` carries the field as `(fun x => T) k`, and a
+`let` in the family's body survives the same way. **`MODELGEN.md` §5.1 is this
+defect at layer 1**, where it cost `Lean.Json` and `Lean.PrefixTreeNode` their
+nested models until [`Modelgen.Gen.occIdx?`] and its two siblings started
+reading through [`Modelgen.headNorm`]. Layer 3 is the same two declarations
+one step further on: their `_model.aux` families are what the composition
+hands *this* file, and the redex is still in them.
+
+So the repair is the same function and deliberately not a second one — β and
+ζ, iterated, no constant unfolded. It is applied where this file asks a
+question whose answer is invariant under β and ζ:
+
+* **is the occurrence bare** — [`Modelgen.recSlotOf`] and `erasureBareWhy`;
+* **what are its index arguments** — arm C's `ctorIdxAt`;
+* **what binders does a recursive field have** — [`Modelgen.tagFactored`],
+  which has none to peel until the redex is gone.
+
+and **nowhere else**. `mentionsAny` — *is* this field recursive — stays on the
+written domain, because [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`]
+replace a recursive field's whole domain and the two must agree about which
+fields those are. No emitted type is normalised. A declaration whose
+constructor types are already βζ-normal — every one that modelled before this
+— therefore takes exactly the path it took before, byte for byte.
+
+`PFunctor.Approx.CofixA`'s `(F.B a → CofixA n)` is a *real* infinitary field
+and none of this touches it; `prim_carve`'s `Inf2` is the fixture for that and
+is still the erasure guard's live occupant. -/
+
 /-- **Does `B` factor through the constructor tag?** — the one question that
 decides whether a declaration W can model is *certifiable*.
 
@@ -1024,8 +1069,10 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
     while t matches .forallE .. do
       let .forallE _ dom b _ := t | unreachable!
       if mentionsAny #[tname] dom then
-        -- peel the field's own binder telescope and check each binder type
-        let mut d := dom
+        -- peel the field's own binder telescope and check each binder type.
+        -- Through `headNorm`: a redex has no binders to peel until it is
+        -- reduced, and the binders it hides are the ones this is asking about.
+        let mut d := headNorm dom
         let mut j := 0
         while d matches .forallE .. do
           let .forallE _ z db _ := d | unreachable!
@@ -1057,7 +1104,14 @@ def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
         badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
 Nat and a constructor takes one predecessor, so a branching constructor needs the \
 W/path construction (plan B){bill}"
-      unless d.getAppFn.isConstOf tname do
+      -- The same two reasons the indexed guard separates below: a mention the
+      -- reduct keeps and does not head with `tname` is a real binder or a real
+      -- nesting; a mention the reduct *loses* was never over the occurrence.
+      unless mentionsAny #[tname] (headNorm d) do
+        badShape s!"{cn} has a field whose type mentions {tname} only inside a binder \
+that βζ-reduction discards, so the spine would take a predecessor from a field that is \
+not recursive{bill}"
+      unless (headNorm d).getAppFn.isConstOf tname do
         badShape s!"{cn} has a recursive field that is not a bare occurrence of \
 {tname} — under a binder, or nested, neither of which the tuple tower reaches{bill}"
       slot := some i
@@ -2131,8 +2185,26 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if mentionsAny #[tname] dom && !dom.getAppFn.isConstOf tname then
-          return some s!"infinitary: {cn} has a recursive occurrence that is not a bare \
+        if mentionsAny #[tname] dom then
+          let d := headNorm dom
+          -- **Two reasons, and they are not the same shape.** The field is
+          -- *recursive* exactly when the written domain mentions `tname`,
+          -- because that is the test [`Modelgen.eraseCtorTy`] and
+          -- [`Modelgen.spineSwap`] replace a whole domain on and the three
+          -- have to agree. But a mention can sit in a **binder that βζ
+          -- discards** — a container's family parameter at
+          -- `β := fun _ => N` leaves `(fun x : T p⃗ e⃗ => N) k`, whose reduct
+          -- is `N` and which is therefore not recursive at all. The erasure
+          -- would replace it anyway, with the skeleton's own carrier, so this
+          -- is a decline; but calling it *infinitary* would name a binder over
+          -- the occurrence that is not there. `nest_fam_arg`'s `OK` and `Key`
+          -- are the fixture's two occupants and the corpus has none.
+          if !mentionsAny #[tname] d then
+            return some s!"vanishing mention: {cn} has a field whose type mentions \
+{tname} only inside a binder that βζ-reduction discards, so the erasure would replace \
+a domain that is not recursive"
+          if !d.getAppFn.isConstOf tname then
+            return some s!"infinitary: {cn} has a recursive occurrence that is not a bare \
 {tname}"
         t := b
     return none
@@ -2164,8 +2236,9 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       badShape s!"an indexed family at a never-zero sort whose index erasure is not \
         bare (arm C splices the erasure and carves the family out of it — \
         MODELGEN.md §8.15 — so its reach is bounded by whether that erasure \
-        models, and an infinitary erasure moves the erasure itself: a field \
-        under a binder has no whole domain to replace); \
+        models, and an erasure that is not bare moves the erasure itself: \
+        neither a field under a binder nor a mention βζ discards has a whole \
+        domain to replace, and `why` says which this is); \
         erasure linear: no; B factors through the tag: \
         {if tagFactored tname np exportCtors then "yes" else "no"}\
         ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}\
@@ -2830,8 +2903,12 @@ the subsingleton rule that minted {ern} does not hold of it"
         let idx := (args.extract np args.size).map (·.replaceFVars fs gs)
         let mut slots : Array (Nat × Array Expr) := #[]
         for i in [0:nf] do
-          let ft ← ityp fs[i]!
-          if mentionsAny #[tname] ft then
+          let ft0 ← ityp fs[i]!
+          -- `headNorm`: the guard above read this field's bareness through the
+          -- same reduction, so the index arguments have to be read through it
+          -- too, or the two disagree about the very same field.
+          let ft := headNorm ft0
+          if mentionsAny #[tname] ft0 then
             let fargs := ft.getAppArgs
             unless ft.getAppFn.isConstOf tname && fargs.size == np + ni do
               badShape s!"{cn}'s recursive field is not {tname} at {np} parameters \
