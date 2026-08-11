@@ -3499,13 +3499,68 @@ accelerator fires, and it fires small.
 ### What this commits to
 
 1. `⟦Nat⟧` in `tg.rs` becomes `derived::nat`'s `ω` — the object `mini` already
-   uses — and `⟦lit n⟧` becomes `num(n)`. `derived::wnat` **stays**: it is the
+   uses — and `⟦lit n⟧` becomes `num(n)`. ~~`derived::wnat` **stays**: it is the
    internal W-type of the general inductive translation (`carrier.rs`,
-   `recursor.rs`, `cumul/*`, `wlist*`, `isum`) and that role is untouched. What
-   changes is only *which object `⟦Nat⟧` names*.
+   `recursor.rs`, `cumul/*`, `wlist*`, `isum`) and that role is untouched.~~
+   **Struck — that was a name census over doc comments, and it is wrong.**
+   `use crate::wnat` appeared nine times in `derived/src/`: seven inside
+   `wnat_rec/*` and one in `cumul/witness.rs`. `inductive/*`, `isum/*` and
+   `wlist*` contained **none** — what they use is `r.omega()`, ω as
+   infrastructure, which is a different role and is untouched. `derived::wnat`,
+   `derived::wnat_rec` and `derived::cumul::witness` are **deleted** (2026-08-11,
+   task #127): the point of the switch is that there is one `Nat`.
 2. Every `Admit::NatRed` becomes a certificate built from `derived::nat`'s
    binary operations. "Where the nanoda code uses a bignum library, we have to
    justify that claim using our derived operations on binary numbers."
+
+### What landed, and where the second clause actually stops — 2026-08-11
+
+Clause 1 is done, in three commits, and clause 2 is **not**, for a reason worth
+recording because both this entry and the tranche's brief described it as
+wiring.
+
+| | gaps | escapes | instructions |
+|---|---:|---:|---:|
+| before | 11 825 | 2 629 | 351.84 G |
+| `⟦Nat⟧ = ω` | 11 825 | 2 629 | 351.46 G |
+| `⟦lit n⟧ = num(n)` | **11 821** | **2 625** | 367.0 G |
+| `wnat` deleted | 11 821 | 2 625 | 367.25 G |
+
+**The carrier unification is worth ~0 gaps on its own, and that is the correct
+result rather than a disappointing one.** Origin 2 is `Nat.ble lit₃ lit₅`
+failing to fire ι, and what blocks it is not *which* object `⟦Nat⟧` is — it is
+that the checker cannot justify the accelerator's answer at all. The unification
+is the precondition; clause 2 is the payoff, and it is untouched: `iota: the
+major premise is not a constructor` is 550 own / 3 254 sub-tree before and
+after, and worth **3 566** by deletion at today's baseline (the 3 066 in this
+entry was measured at a 15 734 baseline and is stale).
+
+**Clause 2 is not wiring.** `derived::nat::ble_uniqueness` is built and asks the
+checker for three clauses about `⟦Nat.ble⟧`:
+
+```text
+∀y ∈ ω.       app(app(g,0), y)           = ⟦Bool.true⟧
+∀x ∈ ω.       app(app(g, succ x), 0)     = ⟦Bool.false⟧
+∀x,y ∈ ω.     app(app(g, succ x), succ y) = app(app(g,x), y)
+```
+
+Its header says a checker "can derive the three clauses for that set by δ and
+ι". Measured against the export, it cannot — not yet. `Nat.ble`'s value in
+`init-prelude` is
+
+```text
+λ. λ. (Nat.brecOn (λ. ∀. Bool) #1 (λ.λ.λ. … Bool.true … Bool.false … ) #0)
+```
+
+so the clauses are statements about a `brecOn`/`below`/`PProd` nest, **at
+schematic arguments `x, y` ranging over `ω`**, not at literals. Deriving them
+means running δ and ι symbolically under a universal quantifier — the
+"producing side … a wall, not a bootstrap" `MEASUREMENTS.md` already recorded
+for this frontier. The ι rules are now in the right shape for it
+(`Nat::iota_succ` is `∀c ∀g ∀n. (n ∈ ω → …)`, so instantiating at a variable is
+free, where the W presentation's carried `HYP`), but the machinery that walks a
+Lean definition at a variable does not exist. That is clause 2's real content
+and it is a tranche, not a link.
 
 ### The measurement that says cost is not the obstacle
 

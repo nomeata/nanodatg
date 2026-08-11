@@ -9687,3 +9687,117 @@ The three runs above took 28.9 s, 32.5 s and 33.1 s in the order the
 instructions *fell*. Two other seats were live. This is the 2.1×-on-load
 machine the header warns about, and it is recorded here as one more instance
 rather than as a result.
+
+## The `Nat` carrier, unified — and what that is worth — 2026-08-11
+
+*Task #127, three commits. `⟦Nat⟧` was `derived::wnat`'s W-type,
+`derived/src/nat/` was von Neumann `ω`, and `⟦lit n⟧` was one opaque
+`env.declare(0)` per value: three carriers, no two of them related. There is now
+one. `DECISIONS.md`, 2026-08-11, is the decision; `NAT-REPRESENTATION.md` §0.1
+is the inventory.*
+
+### The chain, link by link
+
+| | gaps | escapes | derived | instructions |
+|---|---:|---:|---:|---:|
+| baseline (`b4eaf4e`) | 11 825 | 2 629 | 164 109 | 351.84 G |
+| `⟦Nat⟧ = ω` | 11 825 | 2 629 | 164 109 | 351.46 G |
+| `⟦lit n⟧ = num(n)` | **11 821** | **2 625** | 164 109 | 367.0 G |
+| `wnat`/`wnat_rec`/`cumul::witness` deleted | 11 821 | 2 625 | 164 109 | 367.25 G |
+
+**Chain total: −4 gaps, −4 escapes, +4.4 % instructions, −3 019 lines.**
+
+Read as a chain, that is a precondition paid for and not a payoff taken. The
+payoff is origin 2, and origin 2 did not move: `iota: the major premise is not a
+constructor` is **550 own / 3 254 sub-tree** before and after. It is worth
+**3 566 gaps** by deletion at today's baseline —
+`NANODA_ASSUME='iota: the major premise is not a constructor'` takes 11 825 to
+8 259, at +235 escapes and an assumption ceiling of 36 → 78. (`DECISIONS.md`
+carries **3 066** for the same origin; that was measured by the same deletion at
+a **15 734** baseline and is stale, not wrong.)
+
+### Why link 1 is byte-identical, and why that is the right answer
+
+`Nat.ble lit₃ lit₅` cannot fire ι because its major premise is an opaque
+constant. *Which* set `⟦Nat⟧` is has no bearing on that. So a carrier swap that
+worked and a carrier swap that silently stopped firing produce the same ledger,
+the same escape count and the same 164 109 certificates — and no total in the
+project's report can tell them apart.
+
+`the_omega_nat_arm_is_reached_on_the_prelude` is what does: built = 1,
+asked = 96, fired 33 at `Nat.zero` + 63 at `Nat.succ`, `asked == fired`.
+Verified by mutation — `fire_nat` refusing at entry takes the ledger to
+**12 375 (+550)** with both firing rows at 0 and `asked` still 96.
+
+### What the two links bought that the gap total does not show
+
+| | before | after |
+|---|---:|---:|
+| typing obligations asked | 53 373 | 53 277 |
+| …discharged | 7 691 | 8 686 |
+| …carried as assumptions | 45 682 | 44 591 |
+| `by Numeral: a Nat literal lies in ω` | — | 590 |
+| raw hoists, "a hole at their own check" | 2 976 | 2 325 |
+
+The 96 fewer *asked* are link 1's, and they are exactly one per ι site: ω's
+`iota_zero` has no hypothesis and `iota_succ` only `n ∈ ω`, so `derived::wnat_rec`'s
+`HYP := z ∈ T ∧ s ∈ fs(N, fs(T,T))` — two `mem_obligation`s, a `mem_along`
+transport, two `reassume`s and an `and_intro` — is gone. The 995 more
+*discharged* are link 2's: a literal has a typing for the first time.
+
+**One thing link 1 did not buy, and I predicted it would.** The zero ι step is
+now unconditional where it rested on the two minors' typings, and I wrote that
+those certificates had been escaping at the boundary. They had not — the
+assumptions were being discharged downstream, `escaped` is unmoved at 2 629
+across link 1, and `conditional derivations … made` is unmoved at 33 270.
+Corrected in the code's own doc.
+
+`Nat.rec` also stopped forcing `RecCore` — `Recursor::new` plus totality, the
+largest derivation in `derived` — which any file reducing a `Nat` used to pay.
+It has moved rather than gone: `List.rec` and the general path still force it.
+
+### Link 2's +4.4 % is the representation's price and is not recoverable here
+
+`num(n)` is Θ(log n) nodes where a symbol is one — `num(2⁶⁴)` is 66 — so every
+term mentioning a literal is larger to hash, compare and rewrite, and
+`init-prelude` has 4 984 literal occurrences over 35 distinct values. Nothing in
+link 2 is wasted work: all 4 984 take the numeral route and **zero** fall back
+to a symbol. Link 4 of the plan is what buys it back.
+
+### Link 4 was priced as wiring and it is not — measured against the export
+
+`NAT-REPRESENTATION.md` §0.1 called the accelerator's certificate "built and
+unwired", and `derived/src/nat/ble_unique.rs`'s own header says a checker "can
+derive the three clauses for that set by δ and ι". The `derived/` half is built.
+The `checker/` half is not built at all.
+
+`ble_uniqueness` asks for three clauses about `⟦Nat.ble⟧` **at schematic `x, y`
+ranging over `ω`** — `app(app(g,0),y) = ⟦Bool.true⟧` and two more. `Nat.ble`'s
+exported value in `init-prelude` is
+
+```text
+λ. λ. (Nat.brecOn (λ. ∀. Bool) #1 (λ.λ.λ. … Bool.true … Bool.false …) #0)
+```
+
+so producing them means running δ and ι **symbolically, under a universal
+quantifier**, through a `brecOn`/`below`/`PProd` nest. Every ι step the checker
+performs today is at a concrete `Expr` during a conversion check. This is the
+same wall recorded from the other side in "Origin 2 is not the bignum bridge" —
+*the producing side has no supply and cannot be bootstrapped inside a
+declaration* — and it is a tranche, not a link.
+
+**The carrier swap is a precondition for it that has now been paid**, and one
+piece of it got strictly easier: `Nat::iota_succ` is
+`⊢ ∀c ∀g ∀n. (n ∈ ω → natrec(c,g,succ n) = …)`, so instantiating at a *variable*
+is one `inst_all` with `x ∈ ω` as the binder's own assumption, where the W
+presentation additionally carried `HYP` on the minor premises at every site.
+
+### Method note
+
+Both perf figures are `perf stat -e instructions` on the same tree, the second
+with the tranche's diff **inverse-applied** and rebuilt — not against a
+remembered number. The brief carried 353 G for this baseline; the tree measures
+351.84 G today, and the 0.3 % is drift, not a result. One measurement in this
+tranche was thrown away: two `perf` runs returned 1.5 G while another seat held
+17.5 GB anon, and the binary produced no report at all. Recorded because the
+failure mode looks like a spectacular win.

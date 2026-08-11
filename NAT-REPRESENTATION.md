@@ -125,7 +125,18 @@ exist". Three pieces, all present:
 
 and at `A := C := ω`, `t(x) := succ x`, **its antecedent is exactly
 `Nat::succ_mem`** — `⊢ ∀n. (n ∈ ω → succ(n) ∈ ω)`, `derived/src/nat/apparatus.rs:174`.
-So the pair is one `LamStore::site`, one `inst_all`, one `mp`.
+So the pair is one `inst_all` and one `mp`.
+
+**Built, as `derived::nat::SuccFun`, and `LamStore::site` is not in it.** The
+table above routes the graph symbol through `checker/`, and it does not need
+to: `derived::funcs::lambda_n` mints `lam` and its axiom from any unary symbol,
+and `succ` is one. Nor does the function space need threading — `Nat` carries
+its own `Tower`, and `tower.sums.prod` / `tower.sums.fs` **are** the pair
+`derived::prelude::prelude()` hands the interpretation (`prelude.rs:192` reads
+them off the same tower), so the typing is about the `fs` that `⟦α → β⟧` uses by
+construction rather than by a caller's discipline. The whole construction is in
+`derived/src/nat/succ_fun.rs`, has no `checker/` dependency, and derives in
+0.06 s.
 
 This is the same route `mini` takes (`lam_nest` at `mini/src/direct.rs:544`,
 `:658`, β from `Interp::beta_spine`), which is why `mini` never needed a bespoke
@@ -166,7 +177,12 @@ exactly **two** consumers:
 `derived/`'s inductive machinery, and `derived/src/wnat*` becomes dead once both
 are moved.
 
-### The second half — the accelerator's certificate — is built and unwired
+### The second half — the accelerator's certificate — is built on the `derived/` side and has no `checker/` side
+
+*Heading corrected 2026-08-11: it read "built and unwired", and "unwired" is
+wrong. Everything in the table below exists and composes; what does **not**
+exist is the thing that produces `ble_uniqueness`'s three premises. See "Step 4
+is a tranche, not a link" above.*
 
 | what | concludes | where |
 |---|---|---|
@@ -187,20 +203,77 @@ decode a flat 15.
 `derived/tests/nat.rs`. On the checker side `Nat.ble` at literals is still
 `Admit::NatRed`.
 
-### The order this implies
+### The order this implies — and what happened when it was walked, 2026-08-11
 
-1. `⟦Nat.succ⟧` as a set function on ω, from `LamStore::site` + `lam_fs_thm` +
-   `beta_thm` discharged by `succ_mem` — assembly, not a new derivation.
-2. Swap `Inductives::nat` and `NatRec` to the ω apparatus; `NatMem` → `omega_mem`;
-   `fire_nat` to `iota_zero`/`iota_succ`. **`derived::wnat` stays in the tree
-   until `cumul/witness.rs` is moved too** — deleting it is a separate change.
-3. `⟦lit n⟧ = num(n)`, with `Eval::mem` as its typing. **Not before step 2** —
-   a literal in ω while `⟦Nat⟧` is a W-type is worse than today, because the two
-   would then be different objects *and* both non-opaque.
-4. Wire `Boolean` and `ble_transfer` at `Admit::NatRed`.
+*Steps 1, 2, 3 and the deletion **landed** (task #127, three commits). Step 4
+did not, and the paragraph after the table says why — it is not the wiring job
+this list makes it look like. Numbers are `init-prelude`, gaps / escapes /
+instructions.*
 
-**This is a chain: 3 alone regresses, and a chain is deleted as a chain.** Link
-3 of the previous attempt measured **+942 alone** against −2 597 in its pair.
+| step | what | result |
+|---|---|---|
+| 1 | `⟦Nat.succ⟧` as a set function on ω | `derived::nat::SuccFun`. Assembly exactly as predicted: `funcs::lambda_n` mints the graph, `ext::lam_in_funspace_n`'s antecedent at `A := C := ω` **is** `Nat::succ_mem`, `funcs::beta_conditional_n` is the β rule. Derives in 0.06 s. *(Not via `LamStore::site` — the graph symbol comes from `derived` and the product and function space are read off `nat.tower.sums`, which are the same pair `prelude()` hands the interpretation. Nothing had to be threaded from `checker/`.)* |
+| 2 | swap `Inductives::nat`, `NatRec`, `NatMem`, `fire_nat` | **11 825 / 2 629 / 351.46 G — byte-identical to the baseline's ledger.** |
+| 3 | `⟦lit n⟧ = num(n)` | **11 821 / 2 625 / 367.0 G.** |
+| — | delete `wnat`, `wnat_rec`, `cumul/witness` | 11 821 / 2 625 / 367.25 G. 3 019 lines. |
+| 4 | wire `Boolean` and `ble_transfer` | **not done.** See below. |
+
+**"3 alone regresses" did not happen, and neither did the chain pay off.** The
+previous attempt's link 3 measured +942 alone; this one measured **−4**. The
+warning was sound and cost nothing to heed — steps 2 and 3 landed in that order
+— but the intermediate state it predicted was not the one that occurred.
+
+What steps 2 and 3 actually bought is not in the gap total:
+
+* step 2 removes one `mem_obligation` per ι site (`HYP` is gone: ω's
+  `iota_zero` has no hypothesis and `iota_succ` only `n ∈ ω`) — obligations
+  asked 53 373 → 53 277, carried 45 682 → 45 586, both by exactly the 96 sites;
+* step 3 gives a literal a **typing** for the first time — `HtClause::Numeral`
+  fires 590 times and obligations discharged go 7 691 → 8 686, with `carried as
+  assumptions` down by the same 995;
+* and `Nat.rec` no longer forces `RecCore`, the largest derivation in `derived`.
+
+Step 3's +4.4 % is the representation's own price: `num(n)` is Θ(log n) nodes
+where a symbol is one, so every term mentioning a literal is larger to hash,
+compare and rewrite. Step 4 is what would buy it back.
+
+### Step 4 is a tranche, not a link — measured against the export
+
+This document's own §0.1 says the accelerator's half is "built and unwired".
+**The `derived/` half is; the `checker/` half is not built at all**, and calling
+the remainder "wiring" is the same error as the `wnat` dependency claim two
+sections up — a census of what exists rather than of what is asked for.
+
+`ble_uniqueness`'s premises are three clauses about `⟦Nat.ble⟧`, stated **at
+schematic `x, y` ranging over `ω`**:
+
+```text
+∀y ∈ ω.    app(app(g,0), y)            = ⟦Bool.true⟧
+∀x ∈ ω.    app(app(g, succ x), 0)      = ⟦Bool.false⟧
+∀x,y ∈ ω.  app(app(g, succ x), succ y) = app(app(g,x), y)
+```
+
+`ble_unique.rs`'s header says a checker "can derive the three clauses for that
+set by δ and ι". Against this corpus it cannot. `Nat.ble`'s exported value is
+
+```text
+λ. λ. (Nat.brecOn (λ. ∀. Bool) #1 (λ.λ.λ. … Bool.true … Bool.false … ) #0)
+```
+
+— a `brecOn`/`below`/`PProd` nest — so the three clauses need δ and ι run
+**symbolically, under a universal quantifier**, on a Lean definition at a
+variable. Every ι step the checker performs today is at a concrete `Expr` during
+a conversion check. That machinery is the work, and it is the wall
+`MEASUREMENTS.md` recorded from the other side as *"the producing side has no
+supply and cannot be bootstrapped inside a declaration"*.
+
+**One thing did get easier.** `Nat::iota_succ` is
+`⊢ ∀c ∀g ∀n. (n ∈ ω → natrec(c,g,succ n) = …)` — instantiating at a *variable*
+`x` costs one `inst_all` and the side condition `x ∈ ω` is the binder's own
+assumption. The W presentation's ι rules carried `HYP` on the minor premises as
+well, which a schematic derivation would have had to discharge at variables too.
+So the carrier swap is a precondition for step 4 that has now been paid, which
+is the honest statement of what this tranche is worth.
 
 ## 1. What `mini` does with `Nat` today — measured
 
