@@ -4176,19 +4176,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         TgCert::Admitted(reason, mask)
     }
 
-    /// [`Self::note_admit`] at a projection reduction, with the deletion
-    /// measurement in front of it. See [`origin_assume`]; nothing is admitted
-    /// when it fires — the equation becomes an antecedent the escape ledger
-    /// charges for.
-    fn proj_admit(
+    /// [`Self::note_admit_m`], with the deletion measurement in front of it.
+    ///
+    /// Every rule that reports a gap and has both interpreted endpoints in hand
+    /// funnels through here, so **any origin can be deleted by name** — which is
+    /// what makes the census completable rather than only the origins that
+    /// happened to get a hook. See [`origin_assume`]; nothing is admitted when
+    /// it fires, the equation becomes an antecedent the escape ledger charges
+    /// for.
+    fn admit_or_acquire(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         reason: &'static str,
+        premask: u32,
         ta: &Term,
         tb: &Term,
     ) -> TgCert {
         #[cfg(feature = "stepcount")]
-        if origin_assume(reason) {
+        if premask == 0 && origin_assume(reason) && ta != tb {
             let f = Formula::eq(ta.clone(), tb.clone());
             if let Some(c) = CondEq::new(derived::imp_refl(f.clone()), vec![f]) {
                 IOTA_ACQUIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4196,7 +4201,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
         }
         let _ = (ctx, ta, tb);
-        self.note_admit(reason)
+        self.note_admit_m(reason, premask)
     }
 
     /// A 0-ary "numeral" term standing for an index. These are opaque tags, not
@@ -16127,7 +16132,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit_m(why, premask)
+        self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
     /// Transitivity, **guarded**.
@@ -16159,7 +16164,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit_m(why, premask)
+        self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
     /// Congruence for application, **guarded**.
@@ -16215,7 +16220,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit_m(why, premask)
+        self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
     /// Congruence for `λ`, by **graph extensionality**, and guarded.
@@ -16277,7 +16282,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit_m(why, premask)
+        self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
     /// Congruence for `Π`, **guarded**.
@@ -16312,7 +16317,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit_m(why, premask)
+        self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
     /// One iota contraction, derived rather than admitted where the recursor
@@ -16324,23 +16329,8 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         match self.derive_iota(ctx, redex, reduct) {
             Ok(c) => self.cert(ctx, c),
             Err(why) => {
-                // **Acquire** the ι equation as an antecedent instead of
-                // reporting a gap — the measurement that validates the
-                // sub-tree column. See [`iota_assume`]; nothing is admitted.
-                #[cfg(feature = "stepcount")]
-                if origin_assume(why) {
-                    let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
-                    if l != r {
-                        let f = Formula::eq(l, r);
-                        if let Some(c) =
-                            CondEq::new(derived::imp_refl(f.clone()), vec![f])
-                        {
-                            IOTA_ACQUIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            return self.cert(ctx, c)
-                        }
-                    }
-                }
-                self.note_admit(why)
+                let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+                self.admit_or_acquire(ctx, why, 0, &l, &r)
             }
         }
     }
@@ -16355,7 +16345,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
         match self.derive_beta(ctx, redex, reduct) {
             Ok(t) => self.cert(ctx, t),
-            Err(reason) => self.note_admit(reason),
+            Err(reason) => {
+                let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+                self.admit_or_acquire(ctx, reason, 0, &l, &r)
+            }
         }
     }
 
@@ -16577,10 +16570,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let (a_prop, b_prop) = self.share_prop(ctx, a_ty, b_ty, a_prop, b_prop, teq.as_ref());
         let reason = crate::certify::Admit::ProofIrrel.name();
         let Some(ca) = self.point_of_proof_from(ctx, a, a_ty, &a_mem, &a_prop, Pop::ThreadIrrel) else {
-            return self.note_admit(reason)
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
         };
         let Some(cb) = self.point_of_proof_from(ctx, b, b_ty, &b_mem, &b_prop, Pop::ThreadIrrel) else {
-            return self.note_admit(reason)
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
         };
         let out = self
             .ceq_symm(&cb)
@@ -16588,7 +16581,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             .filter(|out| out.proves(&ta, &tb));
         match out {
             Some(out) => self.cert(ctx, out),
-            None => self.note_admit(reason),
+            None => self.admit_or_acquire(ctx, reason, 0, &ta, &tb),
         }
     }
 
@@ -16662,17 +16655,17 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let (Some(l), Some(r)) = (redex_proof, reduct_proof) else {
             #[cfg(feature = "stepcount")]
             note(0);
-            return self.proj_admit(ctx, reason, &ta, &tb)
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
         };
         let Some(ca) = self.point_of_proof_from(ctx, redex, l.ty, &l.mem, &l.prop, Pop::ThreadProjRed) else {
             #[cfg(feature = "stepcount")]
             note(1);
-            return self.proj_admit(ctx, reason, &ta, &tb)
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
         };
         let Some(cb) = self.point_of_proof_from(ctx, reduct, r.ty, &r.mem, &r.prop, Pop::ThreadProjRed) else {
             #[cfg(feature = "stepcount")]
             note(2);
-            return self.proj_admit(ctx, reason, &ta, &tb)
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
         };
         let out = self
             .ceq_symm(&cb)
@@ -16683,7 +16676,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             None => {
                 #[cfg(feature = "stepcount")]
                 note(3);
-                self.proj_admit(ctx, reason, &ta, &tb)
+                self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
             }
         }
     }
@@ -16727,7 +16720,17 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// took is recorded on `TypeChecker`'s `PropAt` — the rescue had been
     /// *right* about those steps for a reason the checker could not restate,
     /// because the backend reads universe levels under σ and inference does not.
-    fn admit(&mut self, _ctx: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, reason: &'static str) -> TgCert {
+    fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> TgCert {
+        // The endpoints are interpreted **only** when a deletion is armed: this
+        // is the checker's own "I cannot justify this", it is on the hot path,
+        // and interpreting two expressions to produce a gap would be a cost
+        // every shipped run pays for a measurement none of them takes.
+        #[cfg(feature = "stepcount")]
+        if origin_assume(reason) {
+            let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+            return self.admit_or_acquire(ctx, reason, 0, &ta, &tb)
+        }
+        let _ = (ctx, a, b);
         self.note_admit(reason)
     }
 
@@ -16972,7 +16975,12 @@ fn origin_assume(why: &str) -> bool {
             .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
             .unwrap_or_default()
     });
-    pats.iter().any(|p| why.contains(p.as_str()))
+    // `*` is every origin. It is safe as a blanket because the only caller
+    // that can acquire is [`TgBackend::admit_or_acquire`] with `premask == 0`,
+    // i.e. a rule that originated its gap — a relay is never deleted, whatever
+    // the pattern says. That is what makes "delete the whole census and see
+    // what is left" a single run.
+    pats.iter().any(|p| p == "*" || why.contains(p.as_str()))
 }
 
 /// Every exit of [`TgBackend::proj_red`] that is not a derivation: 0 the

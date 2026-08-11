@@ -8232,3 +8232,104 @@ The two constructions are complementary and their populations are known:
 Still unmeasured: `eq_cache` 849, `iota: a mutual block` 593, `iota: an indexed
 family` 60 — together a predicted 1 502, and by the calibration above nearer
 1 350 in fact.
+
+## The gap ledger is fully accounted — 2026-08-11
+
+*Every gap in `init-prelude` traced to an origin, every origin priced by
+deletion, nothing left in "other". No stage of this project has been able to say
+that. The table at the end is the artefact; everything above it is how it was
+checked.*
+
+### The closing run
+
+`NANODA_ASSUME=*` deletes **every origin** — safe as a blanket because the only
+site that can acquire is `admit_or_acquire` with `premask == 0`, i.e. a rule that
+*originated* its gap, so a relay is never deleted whatever the pattern says.
+With all sixteen gone, the gap table has exactly one row left:
+
+```text
+gap: undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary   4298
+TOTAL gaps                                                                      4298
+```
+
+**Nothing but escapes.** Not one relay survives, and not one originated gap.
+
+And the arithmetic closes on itself:
+
+| | |
+|---|---:|
+| baseline gaps | 15 734 |
+| …of which escaped assumptions | 2 232 |
+| **non-escape gaps** | **13 502** |
+| derived, baseline → all origins deleted | 159 803 → **173 305** |
+| **derived delta** | **13 502** |
+
+The two 13 502s are independent: one is a subtraction on the gap ledger, the
+other a count of real kernel theorems the run produced. **Every non-escape gap
+in the ledger is exactly one theorem the checker does not have**, and there is
+nothing else in the ledger at all.
+
+### The full table
+
+Predicted is the `SUBTREE` column; measured is that origin's own deletion, net
+of the escapes the acquisition costs.
+
+| # | origin | own | predicted | **measured** | over |
+|---|---|---:|---:|---:|---:|
+| 1 | iota: the major premise is not a constructor (`Nat.ble`) | 486 | 3 286 | **3 066** | 7 % |
+| 2 | iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 680 | **2 480** | 8 % |
+| 3 | iota: no interpretation — several constructors | 286 | 2 144 | **1 929** | 10 % |
+| 4 | `proj_reduce` | 659 | 2 467 | **1 618** | 34 % |
+| 5 | `eq_cache` | 287 | 849 | **578** | 32 % |
+| 6 | iota: no interpretation — a mutual block | 100 | 593 | **511** | 14 % |
+| 7 | iota: no interpretation — an indexed family | 6 | 60 | **54** | 10 % |
+| 8–16 | the nine-origin tail, deleted together | 167 | 638 | **528** | 17 % |
+| | **sum of individual deletions** | 2 391 | 12 717 | **10 764** | |
+| | **all sixteen at once** | | | **11 436** | |
+| | escapes (not a rule's gap) | — | — | 2 232 | |
+
+The nine-origin tail is `pi congruence: the body certificate is not about the
+binder bodies` (291 predicted), `nat_reduce` (111), `nat_eq` (66), `pi
+congruence: two Πs of undetermined sort` (55), `lam congruence: the body
+certificate is not the graphs' pointwise equation` (49), `eta_struct` (24),
+`beta: the lambda has no function-graph interpretation` (21), `proof_irrel`
+(17), `def_eq_proj` (4).
+
+### Both instrument caveats confirmed on the full set
+
+* **`SUBTREE` is a ceiling, never an estimate.** Sixteen origins, sixteen
+  over-predictions, none under. The split is the one `proj_reduce` exposed:
+  terminal origins 7–14 %, mid-chain origins 32–34 % (`proj_reduce` and
+  `eq_cache`, both of which sit inside a conversion that continues after them).
+* **Composition is a lower bound, and the bound is right.** Individual net falls
+  sum to 10 764; deleting all sixteen at once measures **11 436**, superadditive
+  by **672**. The rule says `sum ≤ joint ≤ sum + MULTI`, and `MULTI` is **785**.
+  672 ≤ 785 — the prediction holds with room to spare, and the excess is exactly
+  what it was said to be: relays naming two or more origins, which no single
+  deletion reaches.
+
+### What the census says about the work
+
+Three constructions cover 71 % of the non-escape ledger, and two of them are
+already assigned:
+
+| construction | origins served | measured |
+|---|---|---:|
+| numeral computation on literals | 1 | 3 066 |
+| degenerate recursor (one constructor) | 2 + 4 | 4 098 |
+| a `t_policy` needing no nullary constructor | 3 | 1 929 |
+| **the three together** | | **≈ 9 100 of 13 502** |
+
+The remainder is long and shallow: `eq_cache` 578, mutual 511, and a nine-origin
+tail worth 528 between them. **After these three, this ledger has no third act**
+— what is left is the escape row, which is not a rule's gap but an assumption
+that reached the boundary undischarged, and is measured elsewhere.
+
+### The one number that is not an origin
+
+The 2 232 escapes are not in the census and should not be read into it. A gap
+row is a *rule* saying it could not justify a step; an escape is a *derivation
+that succeeded* under an assumption nobody discharged. Deleting all sixteen
+origins raises escapes to 4 298, because the deletions themselves are
+acquisitions — that 2 066 is the measurement's own cost and no real construction
+pays it.
