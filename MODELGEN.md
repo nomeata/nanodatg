@@ -3584,6 +3584,16 @@ BadD (x+1)` — never reaches the arm at all: Lean gives that one a `Prop`
 motive, so it is small-eliminating and takes the strong-induction fold.
 Asked of the kernel, not reasoned about.
 
+**And this boundary is one end of an axis, not a fact about arm G** — §8.17,
+which is the correction to *this* paragraph. Arm F, the non-recursive
+subsingleton, declined at exactly the complementary shape: it took only index
+vectors that mention no field, where this arm takes only vectors that are
+*nothing but* fields. The two refusals are one refusal, an index position is a
+**pivot** (literally a data field, which the model substitutes) or is not (which
+the model equates), and both arms need both. §8.17 closes arm F's half and
+states arm G's construction; the guard here is unchanged and now prints the
+reason in those terms.
+
 ### Fixtures and mutations
 
 `modelgen/tests/prim_graph.lean` is the arm's positives — `G1` (no
@@ -3815,9 +3825,13 @@ small-eliminate and take the Church route, which carries field-dependent
 indices without complaint. Two fixtures pin the pair — `prim_shapes.lean`'s
 `Sv` (hidden telescope, constructor indices from parameters: **models**) and
 `prim_declines.lean`'s `SvIx` (hidden telescope, constructor indices are its
-own fields: unfolds, then declines at arm F's index-variable field, **at the
+own fields: unfolds, then declined at arm F's index-variable field, **at the
 right reason**). Two hidden indices rather than one in both, because with one a
-model that guessed a fixed count would still pass.
+model that guessed a fixed count would still pass. **`SvIx` is a model since
+§8.17** — the index-variable field was a missing case rather than a bound, and
+the arm now substitutes at such a position — so what the pair pins today is
+that the unfolding and the pivot analysis are two passes and `SvIx` is the only
+occupant that runs the second on the first's output.
 
 ### Sequencing, on the record
 
@@ -4455,7 +4469,7 @@ of estimating it.
 |---|---|---|---|
 | an indexed family at a never-zero sort | 68 | 42 | **25 yes / 43 no** |
 | branching or under-a-binder recursion | 37 | 0 | — (it *is* the erasure) |
-| basis / name taken / index-variable field | 5 | — | — |
+| basis (**exempt** — §8.17) / name taken / index-variable field | 5 | — | — |
 
 **So the carve arm on its own closes at most 25 of 110 — 23 %, not 91 %.**
 That is the number that was not known, and it is an *upper* bound: an erasure
@@ -4718,7 +4732,8 @@ construction is known here that avoids the classical route for it.
 So the honest ceiling for the whole thrust, as it stands:
 
 * declines would go **109 → 10** with the W arm built (99 closed, 4 remaining,
-  plus the 6 that are the basis exemption and two singletons);
+  plus the 6 that are the basis exemption and two singletons — of which 3 are
+  **exempt** rather than declined and 1 of the 2 singletons is closed, §8.17);
 * of the closed ones, **all 99 would be certifiable**;
 * the **4** are the irreducible uncertifiable remainder, and they are what
   #150 has to decide about — not a coverage question but a question about what
@@ -5117,7 +5132,7 @@ Classifying the 109 by the reason the tool itself prints, and by the
 | infinitary field, non-indexed | **1** | `Turing.PartrecToTM2.Λ'.read` — a recursive field under a binder |
 | indexed family, **branching erasure** | **52** | declines at the `.type` route guard, *before* arm C |
 | not tag-factored | **4** | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
-| basis exemption | **3** | `Eq`, `Nat`, `PSigma` |
+| basis exemption (**exempt**, not declined — §8.17) | **3** | `Eq`, `Nat`, `PSigma` |
 | other | **3** | `Lean.Syntax…tag` (name taken), `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
 99 + 4 + 6 = 109, so §8.16's arithmetic is confirmed. What it does **not** show
@@ -5162,7 +5177,7 @@ own seventeen inductives are modelled in turn beside them.
 | indexed family, **branching** erasure | **51** | declines at the `.type` route guard, before arm C |
 | indexed family, **infinitary** erasure | **2** | same guard, and a different second job |
 | not tag-factored, non-indexed | **3** | `WType`, `PSet`, `FirstOrder.Language.Term` |
-| basis exemption | **3** | `Eq`, `Nat`, `PSigma` |
+| basis exemption (**exempt**, not declined — §8.17) | **3** | `Eq`, `Nat`, `PSigma` |
 | other | **3** | `Lean.Syntax…tag` (name taken), `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
 **Two corrections to the table above, both from splitting `erasureLinear`'s
@@ -5457,7 +5472,7 @@ is the 11 there and not this table.
 |---|---|---|
 | indexed family, **infinitary** erasure | 3 | `Lean.Json…_model.aux`, `Lean.PrefixTreeNode…_model.aux`, `PFunctor.Approx.CofixA` |
 | **not tag-factored**, non-indexed | 3 | `WType`, `PSet`, `FirstOrder.Language.Term` |
-| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| basis exemption (**exempt**, not declined — §8.17) | 3 | `Eq`, `Nat`, `PSigma` |
 | name taken | 2 | `Lean.Syntax…_model.tag`, `Lean.Syntax…_model.aux` |
 | singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
@@ -5696,7 +5711,7 @@ Mathlib, every one classified:
 | what | count | which |
 |---|---|---|
 | **not tag-factored** — the true W-types | 4 | `WType`, `PSet`, `FirstOrder.Language.Term`, `PFunctor.Approx.CofixA` |
-| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| basis exemption (**exempt**, not declined — §8.17) | 3 | `Eq`, `Nat`, `PSigma` |
 | name taken | 2 | `Lean.Syntax…_model.tag`, `Lean.Syntax…_model.aux` |
 | singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
@@ -5716,7 +5731,9 @@ remainder:
   tagged construction instead. This is the one class where the *certifiability*
   column, not the coverage column, is what is holding.
 * **the 3 basis primitives** are the exemption that makes the construction
-  well-founded and must stay unmodelled.
+  well-founded and must stay unmodelled. They are **exempt and not declined**,
+  with their own row in the report since §8.17; where this list says "the 11"
+  it means 8 declines and 3 exempt.
 * **the 2 name-taken** are not a shape at all: `Lean.Syntax` is replayed at
   line 9,948 of the export and `PSigma` at line 95,424, so when the
   composition's third step reaches `Lean.Syntax._model.0._model.tag` the
@@ -5731,7 +5748,9 @@ remainder:
   designed and these two were never in its reach.
 * **the 2 singleton boundaries** are `Acc.below`'s index that is not one of its
   own data fields, and `IsHomLift`'s index expressions that mention its own
-  fields — both `MODELGEN.md` §8.7's and arm F's own limits, unchanged.
+  fields — both `MODELGEN.md` §8.7's and arm F's own limits. **They are one
+  limit and not two**, which §8.17 measures; arm F's half is closed there and
+  `IsHomLift` models.
 
 ### 8.16.5 The two name-taken — a primitive that is late, not a name that is lost
 
@@ -5851,14 +5870,15 @@ declines and the row below that names four is corrected to three:
 |---|---|---|
 | **not tag-factored** — the true W-types | 3 | `WType`, `PSet`, `FirstOrder.Language.Term` |
 | **infinitary and indexed** — arm C's erasure guard, not `tagFactored`'s | 1 | `PFunctor.Approx.CofixA` |
-| basis exemption | 3 | `Eq`, `Nat`, `PSigma` |
+| basis exemption (**exempt**, not declined — §8.17) | 3 | `Eq`, `Nat`, `PSigma` |
 | singleton boundaries | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
 
-Four classes, and **two of them are closed by definition**: the basis
-exemption is what makes the construction well-founded and must stay unmodelled,
-and the two singleton boundaries are arm G's and arm F's own limits — an index
-that is not one of the constructor's data fields, and index expressions that
-mention the constructor's own fields. So the *whole* remaining question about
+Four classes, and **one of them is closed by definition**: the basis exemption
+is what makes the construction well-founded and must stay unmodelled. The two
+singleton boundaries were filed beside it here and that was wrong — they are
+arm G's and arm F's own **limits**, an index that is not one of the
+constructor's data fields and index expressions that mention its own fields —
+and §8.17 shows the two are one limit and closes arm F's half. So the *whole* remaining question about
 this construction's reach on Mathlib is **two classes of four declarations
 between them**: three whose `B` needs to see the label's data, which is
 `WFromPaths.lean` and costs `Classical.choice` on every constant — §8.16 took
@@ -6139,9 +6159,9 @@ Nothing else in the report moved — the fragment still goes in once, at
 
 | what | count | which |
 |---|---|---|
-| basis exemption — closed by definition | 3 | `Eq`, `Nat`, `PSigma` |
-| singleton boundaries — closed by definition | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
-| **indexed and infinitary** — the one open class | 1 | `PFunctor.Approx.CofixA` — **closed by §8.16.8**, which leaves 5 |
+| basis exemption — **exempt**, not declined (§8.17) | 3 | `Eq`, `Nat`, `PSigma` |
+| singleton boundaries — **arm limits**, not closed by definition (§8.17) | 2 | `CategoryTheory.Functor.IsHomLift`, `Acc.below` |
+| **indexed and infinitary** — an open class | 1 | `PFunctor.Approx.CofixA` — **closed by §8.16.8**, which leaves 5 |
 
 Its decline now reads `B factors through the tag: no; through the label: yes;
 carrier is Type u: yes; why: infinitary: PFunctor.Approx.CofixA.intro has a
@@ -6387,17 +6407,21 @@ Nothing else in 6,885 verdicts moved. That is the control the bare case needed
 and the strongest single statement about the change: at `z⃗ = ε` the new code is
 the old code, on the whole corpus and not only on the fixtures.
 
-**The 5, in full — and every one of them is closed by definition:**
+**The 5, in full — and only three of them are closed by definition.** The
+sentence that stood here said *every one*, and §8.17 is the correction: the
+basis exemption is closed by definition and the two singleton rows are **arm
+limits**, which is a different thing and was overstated by this section.
 
 | what | count | which |
 |---|---|---|
-| basis exemption — the three the construction stands on | 3 | `Eq`, `Nat`, `PSigma` |
-| singleton boundaries — a named shape with a named reason | 2 | `CategoryTheory.Functor.IsHomLift` (index-variable field), `Acc.below` (a graph-arm data field that is not itself an index) |
+| **exempt**, not declined — the basis the construction stands on | 3 | `Eq`, `Nat`, `PSigma` |
+| singleton boundaries — **arm limits**, one per arm | 2 | `CategoryTheory.Functor.IsHomLift` (arm F: a pivot in the index vector), `Acc.below` (arm G: a non-pivot in it) |
 
-There is **no open class left**. The residue is three basis exemptions, which
-are what makes the construction well-founded rather than a gap, and two
-declarations whose refusal names a specific missing capability in an arm that
-otherwise models its whole class.
+So the honest headline at this commit is **2 declines and 3 exempt**, not 5.
+§8.17 shows that the two singleton rows are *one* limit seen from its two ends,
+closes arm F's half — `IsHomLift` models — and writes arm G's out. It also
+gives the exemption its own row in the report, so that a census does not have
+to walk its own number back in the next sentence.
 
 #### The two columns, and where `CofixA` lands
 
@@ -6445,3 +6469,270 @@ see — and this arm defers a splice, so it needs the replay for the reason
 Nothing was spliced that was not already there — the W core fragment goes in
 once, at `Lean.Syntax._model.0._model.aux._model.skel`, exactly as before, and
 `CofixA`'s one splice line names only its own skeleton.
+
+## 8.17 The index axis: **one** limit and not two — and the exemption leaves the decline count
+
+The census at the end of §8.16.8 read *5 declines, and every one of them is
+closed by definition*. **Three of that sentence was right and two of it was
+overstated**, and the correction is this section. Only the **basis exemption**
+is closed by definition: `Eq`, `Nat` and `PSigma` are what the construction is
+written in, and their absence from the models is what makes it well-founded.
+The other two — `CategoryTheory.Functor.IsHomLift` and `Acc.below` — are arm
+limits. They were reported as two, one per arm:
+
+| declaration | the reason on file |
+|---|---|
+| `Acc.below` | its index is **not one of the constructor's own data fields** — arm G's limit (§8.7) |
+| `IsHomLift` | its index expressions **mention the constructor's own fields** — arm F's limit |
+
+**They are one limit.** That is the claim this section was set to test first,
+and it survived: the two sentences above are the two ends of a single axis, and
+neither arm had the middle.
+
+### What the kernel actually admits, probed rather than reasoned about
+
+A one-constructor `Prop` gets a `Sort v` motive iff **every non-`Prop`
+constructor argument is literally one of the applied parameters or indices of
+the conclusion** — by *identity*, not by occurrence.
+`vendor/nanoda_lib-upstream/src/inductive.rs`'s `large_elim_test_aux` is the
+rule in code (`non_prop_ctor_telescope_elems.iter().all(|arg|
+ind_ty_params_and_indices.contains(arg))`) and Lean v4.29.1 agrees with it on
+every shape asked:
+
+| shape | large elim |
+|---|---|
+| `mk (x : N) : T x` | **yes** — but Lean's front end *promotes* `x` to a parameter, so it arrives with `ni = 0` |
+| `mk (x : N) : T (N.s x)` | **no** — `x` occurs in the index and is not the index |
+| `mk (x : N) : T (N.s x) x` | **yes** — the second position *is* `x`; promotion is blocked by the first |
+| `mk (x y : N) : T x (N.s y)` | **no** — `y` occurs and is not an index |
+| `mk (a b : N) : T (f a) a (g a b)` | **no** — `b` occurs only inside `g a b` |
+| `mk (h : q) : T (k h)` | **yes** — `h` is a proof, so the rule does not reach it |
+
+That rule is not a technicality; it is the thing that makes a model possible.
+**A model of a `Prop` can extract proof fields by small elimination and has no
+way whatever to extract data**, so the index vector is the only place data can
+come back from, and the kernel's rule is exactly the guarantee that it is
+there.
+
+### The split, and what each arm actually had
+
+Each index position is therefore one of two things:
+
+* a **pivot** — literally one of the constructor's data fields. The model
+  **substitutes** the recursor's own index argument for that field.
+* anything else — an arbitrary term over the parameters, the data fields and
+  the *proof* fields. Nothing is recoverable from it, so it is discharged by a
+  **Henry-Ford equation at the non-pivot subsequence**.
+
+Written that way:
+
+| | arm F, non-recursive | arm G, recursive |
+|---|---|---|
+| **before** | every position a non-pivot | every position a pivot |
+| **now** | any mixture | every position a pivot |
+
+Arm F declined at the first pivot and arm G at the first non-pivot; between
+them sat `MixI`, `SvIx`, `IsHomLift`, `Acc.below`, `Inf.below` and every
+`.below` Lean mints beside a recursive `Prop`. **The two reasons on file were
+the same reason, stated from opposite sides**, and neither arm's header said
+so because neither had looked at the other's.
+
+### Arm F, generalised — and the derivation was already on disk
+
+The carrier becomes
+
+```text
+T' p⃗ ι⃗ := ∀ r : Prop, (∀ h⃗[d⃗ := ι⃗|piv], Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → r) → r
+```
+
+— the proof fields quantified *at the pivots already supplied*, and one `Eq`
+at the **non-pivot** subsequence only, packed by [`Modelgen.packTyAt`]. The
+recursor reads each data field off its pivot position, extracts the proof
+fields and the equation by small elimination as before, and discharges the
+non-pivot positions with one `Eq.rec` whose motive rebuilds a carrier proof at
+each packed point.
+
+Two properties make it additive rather than a rewrite:
+
+* **at zero pivots it is the old arm, term for term.** The subsequence is the
+  whole telescope, `h⃗` is every field, and nothing changes for the six
+  thousand declarations already modelled.
+* **at zero non-pivots there is no equation at all.** The carrier is a bare
+  Church conjunction, no `PSigma` is packed and no `Eq.rec` is built; the
+  recursor is the minor applied to the recovered fields, and `T._model.ctor_0`
+  is the caller's `t` by proof irrelevance. `tests/prim_idx.lean`'s `Fall3` is
+  that path.
+
+**This construction was compiled in this repository before it was generated.**
+`scripts/inductive-basis/PropArms.lean`'s *target 5* is it: `Mix2`, three
+parameters, three indices, an index-variable field and a `Prop` field
+depending on it, with `Mix2'` substituting the index for the field and packing
+only the two positions that are not it — `Eq.rec`, `CAnd.left`, ι by `rfl`, no
+axioms. Its verdict block says in as many words that "`modelgen` reads the
+stored declaration, so it will see case (b) rarely; **it must still handle
+it**". It did not. The gap was known, derived and unimplemented, which is the
+most useful thing to record here: *the corpus was not what discovered it, and
+the corpus was not what would have.*
+
+### The one place the two halves do not compose
+
+**A pivot's own type may not mention a non-pivot index.** The model reads a
+data field off the recursor's index argument, and at position `j` that
+argument has index `j`'s declared type at the caller's earlier indices; where
+those are pivots the substitution has already made them the field's own, and
+where one is a non-pivot the caller's index is an arbitrary term that only the
+equation says is the constructor's — so the field would have to be transported
+before it could be used. `tests/prim_idx.lean`'s `Fmid` is the occupant:
+
+```lean
+inductive Fmid : (α : Type) → α → α → Prop where
+  | mk (x : N) : Fmid N x N.z
+```
+
+whose pivot `x : N` sits at an index whose declared type is the ground index
+before it. It declines with that reason. **Neither corpus target is on the
+wrong side of it** — `IsHomLift`'s `φ : a ⟶ b` names only pivots and
+`Acc.below`'s `a : α` only a parameter — and no Mathlib declaration is.
+
+### The grid, and the four cells that were built and dropped
+
+`modelgen/tests/prim_idx.lean` is the axis as a grid rather than as the shapes
+the corpus happens to hold, and its header carries the full table. The
+mutations, each red where it says and nowhere else:
+
+| mutation | red |
+|---|---|
+| the data fields' pivot assignments rotated among themselves | `Fall3` (and `prim_graph`'s `G5`) |
+| *every* occurrence of a data field marked a pivot, not just the chosen one | `Fdup` |
+| the packed type not instantiated at the caller's index vector | `Fdep` |
+| the unpacked components written back at the identity positions | `Fdep` |
+| the non-pivot positions taken as a prefix rather than as the complement | `Fdep` |
+| the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
+| the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
+| the non-pivot subsequence reversed | nothing new — `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
+
+**Four cells were built and dropped**, and one of the four is a finding rather
+than an economy. `Fxd` (a non-pivot expression over a data field beside its
+pivot), `Fall` (two pivots rather than three) and `Fperm` — `IsHomLift`'s own
+six-index pattern, three data fields on a 3-cycle interleaved with three
+expressions — are each red only under mutations that a survivor is also red
+under, so by the rule this arc has been held to they measured nothing and they
+are gone. `IsHomLift` itself is not lost with them: it is a **corpus** row, and
+it moves there.
+
+`Fp` — an index that is **literally a proof field** — was dropped for the
+sharper reason. The mutation built for it was the pivot test written as "is a
+*variable*" rather than "is *data*", which marks such a position a pivot and
+drops it from the equation. It is **green**, at every occupant; and so is every
+mutation at `Fxh`, whose index is an expression over a proof field. One fact
+explains both: a pivot and an extraction at a proof position are two proofs of
+one proposition, so the kernel cannot tell them apart and **no threading bug on
+the proof half of this axis can produce a term that fails to typecheck**. The
+proof column of the grid is free. `Fxh` stays as the witness that it is
+inhabited; `Fp` would have been a second witness of the same nothing.
+
+**Two negative fixtures became models and were replaced in the same commit.**
+`prim_declines.lean`'s `MixI` and `SvIx` are models now, and the decline path
+they occupied — arm F's "index-variable field" — **no longer exists**: it was
+not a bound but a missing case. Their paragraphs in that file's header were
+corrected where a reader meets them. `Inf.below` is what is left of that file's
+subsingleton refusals, and `prim_idx.lean` carries the rest of the grid.
+
+### Arm G's half, written out and not built
+
+The same generalisation on the graph route is a larger change and is **not**
+made here. What it is, so that it is a plan and not a remainder:
+`GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗`, whose right-hand side lands at
+the constructor's own index expressions. With a non-pivot among them the two
+sides sit at different indices, so the equation has to be stated at a transport
+of `step f⃗ g⃗` along the very packed equation arm F now carries — an `Eq.rec`
+at `Sort v` over the non-pivot subsequence, whose motive needs a carrier
+inhabitant at each packed point and gets one by a second `Eq.rec` into `Prop`
+from `T._model.ctor_0 f⃗`. Three consequences make it tractable rather than
+open-ended:
+
+* the two inversions `graph_unique` composes are transports along **the same**
+  `heq` — two proofs of one `Eq`, hence one term — so the congruence gains one
+  layer and not a case split;
+* at the constructor `heq` is `Eq.refl` and the transport reduces away, so
+  `Graph.inv`'s and `graph_exists`' witnesses are unchanged;
+* `T._model.ind`, the `Prop`-motive fold, is the Church route's own and already
+  carries arbitrary indices, so nothing before the graph moves.
+
+`tests/prim_idx.lean`'s `Rxh` and `Rvx` are `Inf.below` and `Acc.below`
+transcribed and are what go green when it is built, together with the five
+`.below` rows the fixtures already carry by accident.
+
+### Exempt is not declined
+
+**The basis exemption now has its own row and is out of the decline count.**
+Every census in §8 has had to report a number and walk it back in the next
+sentence — "N declines, of which three are closed by definition" — and that is
+a reporting defect, not a nuance. [`Modelgen.Decline.basisExempt`] is its own
+constructor, [`Modelgen.Report.exempt`] its own field, and `modelgen`'s report
+prints
+
+```text
+Eq: exempt — prim model: a basis primitive (the exemption that makes the construction well-founded)
+```
+
+on a line that says `exempt` and not `declined`. `Test.lean` asserts the two
+lists together — so every row that named `Eq` still pins it — and adds one
+claim per row that **nothing but a basis primitive ever reaches the exempt
+row**. The tables in §8.16.3, §8.16.5, §8.16.7 and §8.16.8 are corrected in
+place to split the two.
+
+### Measured, on the full Mathlib export
+
+*5.6 GB export, `--prim-models --check-recursors`, under a 33 GB `ulimit -v`.
+Exit 0, **3.397 T instructions** (363.4 s wall on a contended box).*
+
+| | §8.16.8 | **and with the index axis split** |
+|---|---|---|
+| models | 6,880 | **6,881** |
+| **declines** | 5 | **1** |
+| **exempt** — the basis, on its own row | — (inside the 5) | **3** |
+| statements compared / differing | 18,507 / 0 | **18,509 / 0** |
+| recursors checked against Lean's own / differing | 6,796 / 0 | 6,796 / 0 |
+| planner level comparisons / escapes | 203 / 0 | 203 / 0 |
+| instructions | 3.388 T | **3.397 T** |
+
+**One decline on Mathlib, and it is `Acc.below`.**
+
+```text
+Acc.below: declined — prim model shape: Acc.below.intro's index 1 is not one of
+its own data fields, so the graph route's inversion cannot be stated at an
+arbitrary index (the packed non-pivot equation arm F carries is not threaded
+through the graph)
+```
+
+6,881 / 6,882 non-exempt is **99.99 %**; against the whole 6,885 verdicts,
+**99.94 %**. The instruction count moved +0.3 % for one more model and is not
+claimed as anything; the working set is 24 GB and the two runs are within the
+noise this box has already shown.
+
+**The change is a no-op on everything that modelled before.** `IsHomLift` is a
+**4-declaration** model — `self`, `ctor_0`, `rec_0`, `iota_0_0`, the ordinary
+arm-F shape, no splice of its own — and the emitted file grew by exactly
+**32,627 bytes** (5,851,511,275 → 5,851,543,902). That is the whole diff: one
+model added, one decline removed, and the three exempt rows relabelled. The
+seven `--prim-models` fixtures are the other half of the same control — every
+model list in `prim_shapes`, `prim_graph`, `prim_graph_pre`, `prim_carve`,
+`prim_w` and `w_core` is unchanged to the declaration, which is what "at zero
+pivots it is the old arm term for term" means when it is measured rather than
+argued.
+
+**Replayed from bytes, with the kernel on: 692,955 declarations accepted, 0
+rejected** — `envprobe target/mgidx-mathlib.out.ndjson C`, from an empty
+environment over the whole 5,851,543,902-byte file. **+4 against §8.16.8's
+692,951, and it is `IsHomLift`'s four declarations and nothing else** — the check `addChecked` cannot do, because it
+sees only the environment the run itself built and not the position a model
+lands at in the file.
+
+### What is left, exactly
+
+* **3 exempt.** `Eq`, `Nat`, `PSigma` — the basis, unmodelled by definition.
+* **1 decline.** `Acc.below`, at arm G's half of the axis above. The
+  construction that closes it is written out in this section; it is a day's
+  work on `graphArm` and it is not started.
+* **0 open classes.** Every other shape in Mathlib models.

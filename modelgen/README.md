@@ -292,15 +292,26 @@ itself* rejects, recorded with the error Lean gives. `--prim-models` is
 narrower by design — `MODELGEN.md` §8.2's table is the census, and its refusal
 paths have fixtures too (`tests/prim_declines.lean`, `tests/prim_graph.lean`).
 What it declines today:
-a constructor field whose **index expressions mention its own fields**, a
+a
 recursive occurrence whose binders mention an earlier **recursive** field (the
 label carries no children for the branch type to read one from), indices or
 recursion at a maybe-zero sort, one level-arithmetic gap, a linearly recursive
 declaration with **no base constructor** (its spine has no zero fibre), an
 index erasure whose recursive occurrence is only visible through βζ — or hidden
-behind it — and, on the graph arm, a constructor whose data fields are not
-*literally* the conclusion's indices, since inversion at an arbitrary index
-would then need the index's injectivity.
+behind it — and, on the graph arm, a constructor **index that is not literally
+one of its own data fields**, since inversion at an arbitrary index would then
+have to be stated at a transport.
+**On the non-recursive subsingleton that last one is closed** and its
+complement with it: an index position may be a *pivot* — literally a data
+field, which the model substitutes the recursor's own index argument for — or
+any term at all over the parameters, the data fields and the proof fields,
+which the model equates. `MODELGEN.md` §8.17 is the derivation and
+`tests/prim_idx.lean` the grid. The one shape that is still refused there is a
+pivot whose *own type* mentions a non-pivot index, which no Mathlib declaration
+has. The **basis exemption** is not on this list at all: `Eq`, `Nat`, `PSigma`
+and `PULiftP` are what the construction is written in, they are reported
+`exempt` rather than `declined`, and their absence from the models is what
+makes it well-founded.
 The *recursive subsingleton* is no longer among them: it is the graph arm,
 and `tests/prim_graph.lean` holds six occupants including `Acc`'s own shape.
 An **indexed family at a never-zero sort** is no longer among them either: arm
