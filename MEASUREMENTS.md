@@ -7720,3 +7720,109 @@ recursors at four firings each**. The tail is the untested hypothesis worth
 taking next: if one shape covers it, it is a large fraction of 5 014 for a
 single construction. Unlike origin 2 it is a genuine construction question and
 not a representation one.
+
+## Origin 1's tail is one shape: 100 structure recursors, 2 480 gaps — 2026-08-11
+
+*The tail-is-uniform hypothesis, tested. It holds, and more tightly than
+proposed: the shape is exactly half the origin, every member of it fires exactly
+four times, and all 400 decline at the same line for the same reason.*
+
+### The origin is now four origins
+
+`iota: this recursor has no curried interpretation` was one row. It is split by
+the gates `gen_rec_bottom` actually applies, and because the origin mask mints a
+bit per *reason*, that yields **four sub-trees from one side-effect-free run**:
+
+| origin | own | relayed | sub-tree |
+|---|---:|---:|---:|
+| iota: no interpretation — **a ONE-CONSTRUCTOR STRUCTURE** | **400** | 2 280 | **2 680** |
+| iota: no interpretation — several constructors | 286 | 1 858 | 2 144 |
+| iota: no interpretation — a mutual block | 100 | 493 | 593 |
+| iota: no interpretation — an indexed family | 6 | 54 | 60 |
+
+The split is not cosmetic and it is the point of having put the mask on the
+certificate: a construction that covers one shape now has its payoff priced
+before it is written. Ledger byte-identical with the split in: 15 734 / 2 232 /
+159 803.
+
+### The shape, and how uniform it is
+
+**400 firings, 100 distinct recursors, exactly four firings each.** No indices,
+no mutual block, no nesting, no hand-written recogniser, `np` 0 or 1. The list
+is what it looks like:
+
+```
+ctors=1 np=0   ByteArray  Char  String  String.Pos.Raw  Substring.Raw
+               UInt8 UInt16 UInt32 UInt64 USize
+               Lean.Macro.Context  Lean.Macro.Methods  Lean.Macro.State  …
+ctors=1 np=1   Add  AndOp  AndThen  Append  Applicative  Array  BEq  Bind
+               BitVec  Complement  Div  Dvd  Fin  Functor  Hashable
+               HomogeneousPow  Inhabited  …
+```
+
+These are **type classes and wrapper structures**. That matters for §*Beyond
+this corpus* below.
+
+### Why they decline: 400 of 400 at one line
+
+`t_policy` (`tg.rs:8219`) sites the motive's canonical point at a **nullary**
+constructor — `ctors.iter().position(nullary)?` — and returns `None` when there
+is none. That is policy 3. Measured, rather than inferred:
+
+| | |
+|---|---:|
+| structures whose single constructor is **nullary** | 0 |
+| structures whose single constructor **takes fields** — policy 3 | **400** |
+
+(The census's six nullary rows are `Eq.rec`, which is counted in the *indexed*
+bucket.) So all 400 decline at the same line, for the same reason, and the
+reason is a property of the shape rather than of any individual declaration.
+
+### The deletion, and what it is worth
+
+| | gaps | fall | predicted |
+|---|---:|---:|---:|
+| baseline | 15 734 | — | — |
+| the structures alone deleted | **13 254** | **2 480** | 2 680 |
+| all four ι-interpretation causes deleted | 10 720 | 5 014 | 5 517 |
+
+**2 480 gaps — 15.8 % of the whole ledger — for one shape**, and within 7.5 % of
+the prediction, which is the fourth time the provenance column has landed inside
+9 %. The structures are 2 480 of 5 014, i.e. 49.5 % of origin 1, matching their
+50.5 % share of its firings almost exactly: the sub-tree per firing is flat
+across the origin, which is another way of saying the population is uniform.
+
+### What the construction is, and where it belongs
+
+A one-constructor inductive **has no case analysis**. Its ι rule is
+
+```text
+S.rec C f (S.mk a⃗)  ≡  f a⃗
+```
+
+— a single rule, nothing to branch on, and no choice of target to make. The
+entire apparatus `t_policy` exists to serve — a canonical closed point at which
+to site the motive so the W-type's branching has a target — is needed only
+because the general construction branches over constructors. **At one
+constructor there is nothing to branch over, so there is nothing for the policy
+to decide.** The eliminator is simply the inverse of the constructor.
+
+This also repairs a reading that would otherwise bury the population.
+`gen_rec_bottom`'s header records that "widening the gate to admit [policy 3]
+was measured and closes zero gaps, because `t_policy` then refuses inside
+`rec_nest` instead". That is true and it is not a verdict on this shape: it
+measured *widening the gate*, which lets the same policy fail one level later.
+What these 400 want is not a wider gate but **no policy at all**.
+
+**This is a `derived/` construction, not a `checker/` one** — a degenerate
+recursor in `derived::inductive`, beside `GenRecursor` rather than inside it. Per
+standing instruction it is named here rather than built.
+
+### Beyond this corpus
+
+`init-prelude`'s counts are `init-prelude`'s. The shape this construction covers
+is *type classes and wrapper structures* — `Add`, `Functor`, `BEq`, `Inhabited`,
+`Fin`, `Array`, the `UInt` family — and a corpus like Mathlib is built out of
+them at a density this file cannot represent. The 2 480 is a floor for what the
+construction is worth and almost certainly a low one; that cannot be measured
+here, and is recorded so the number is not read as a ceiling.

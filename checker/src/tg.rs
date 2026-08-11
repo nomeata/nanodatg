@@ -12102,17 +12102,70 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the recursor is not applied to its major premise")
         }
         let Some(nest) = self.rec_nest(ctx, name, levels) else {
-            // **The largest origin in the gap ledger** (792 own, 5 517 with the
-            // sub-tree it feeds). Which recursors, and how many distinct ones:
-            // a bounded list is a reachable tranche and an unbounded one is
-            // not. It is 109 on `init-prelude`. See [`origin_report`].
+            // **The largest origin in the gap ledger**, split by the gates
+            // [`Self::gen_rec_bottom`] actually applies rather than reported as
+            // one row.
+            //
+            // Splitting it is not cosmetic. The origin mask mints a bit per
+            // *reason*, so four reasons are four sub-trees measured in one run,
+            // and a construction that covers one shape has its payoff priced
+            // before it is written. On `init-prelude` the split is 400 / 286 /
+            // 100 / 6 of 792, and the first of those — a one-constructor
+            // structure, no indices, no mutual block, no hand-written
+            // recogniser — is **half the origin for one shape**.
+            let ind = r.all_inductives.first().copied();
+            let idat = ind.and_then(|i| self.decls.get_inductive(&i));
+            let nctors = idat.as_ref().map(|i| i.all_ctor_names.len());
+            let why = if r.num_indices != 0 {
+                "iota: no interpretation — an indexed family"
+            } else if r.num_motives != 1 || r.all_inductives.len() != 1 {
+                "iota: no interpretation — a mutual block"
+            } else if r.is_k {
+                "iota: no interpretation — a K-like eliminator"
+            } else if ind.is_some_and(|i| self.recognised_ind(ctx, &i)) {
+                "iota: no interpretation — a hand-written recogniser owns it"
+            } else if idat.as_ref().is_some_and(|i| i.is_nested) {
+                "iota: no interpretation — a nested inductive"
+            } else {
+                match nctors {
+                    Some(0) => "iota: no interpretation — no constructors",
+                    Some(1) => "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE",
+                    Some(_) => "iota: no interpretation — several constructors",
+                    None => "iota: no interpretation — the inductive is not in scope yet",
+                }
+            };
             #[cfg(feature = "stepcount")]
             {
+                // Does the single constructor take fields? `t_policy` needs a
+                // **nullary** constructor to site the motive's canonical point,
+                // so a structure whose one constructor has fields is policy 3
+                // and declines there. This counts the two apart rather than
+                // inferring it.
+                if nctors == Some(1) {
+                    let f = idat
+                        .as_ref()
+                        .and_then(|i| i.all_ctor_names.first().copied())
+                        .and_then(|c| match self.decls.get_declar(&c) {
+                            Some(Declar::Constructor(cd)) => Some(cd.num_fields),
+                            _ => None,
+                        });
+                    STRUCT_FIELDS[match f {
+                        Some(0) => 0usize,
+                        Some(_) => 1,
+                        None => 2,
+                    }]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 let sp = self.spell(ctx, name);
+                let np = r.num_params;
                 let mut g = NO_NEST.lock().expect("no_nest poisoned");
-                *g.entry(sp.to_string()).or_insert(0u64) += 1;
+                *g.entry(format!(
+                    "ctors={:<3} np={np:<2} {sp}",
+                    nctors.map_or("?".to_string(), |n| n.to_string())
+                ))
+                .or_insert(0u64) += 1;
             }
-            return Err("iota: this recursor has no curried interpretation")
+            return Err(why)
         };
 
         // ── Split off the trailing arguments, on both sides ──────────────────
@@ -16840,12 +16893,22 @@ fn iota_assume(why: &str) -> bool {
         None => false,
         // Name one origin to delete it alone — the sub-tree column is per
         // origin, so a combined run cannot check a single prediction.
-        Some("nonest") => why == "iota: this recursor has no curried interpretation",
+        // A prefix, so a single shape can be deleted on its own: `struct`
+        // names only the one-constructor structures, `nonest` all of them.
+        Some("nonest") => why.starts_with("iota: no interpretation"),
+        Some("struct") => why == "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE",
         Some("notctor") => why == "iota: the major premise is not a constructor",
         Some(_) => true,
     }
 }
 
+/// For the one-constructor structures: does the single constructor take fields?
+/// Zero fields is a nullary constructor and `t_policy` has its canonical point;
+/// one or more is policy 3, which declines. Indices 0 / 1 / 2 = none / some /
+/// the constructor is not in scope.
+#[cfg(feature = "stepcount")]
+static STRUCT_FIELDS: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
 /// The recursors with no curried interpretation, by spelling — the top origin's
 /// own census, and the thing that says whether closing it is bounded work.
 static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
@@ -16957,8 +17020,24 @@ pub fn origin_report() -> String {
                 v.len(),
                 v.iter().map(|(_, n)| **n).sum::<u64>()
             ));
-            for (r, n) in v.iter().take(20) {
-                s.push_str(&format!("    {r:<76}  {n:>8}\n"));
+            for (r, n) in v.iter().take(40) {
+                s.push_str(&format!("    {r:<96}  {n:>8}\n"));
+            }
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    if STRUCT_FIELDS.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+        for (i, l) in [
+            "…of the structures, the constructor is NULLARY (t_policy has its point)",
+            "…of the structures, the constructor TAKES FIELDS (t_policy 3, declines)",
+            "…of the structures, the constructor is not in scope",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let n = STRUCT_FIELDS[i].load(Relaxed);
+            if n > 0 {
+                s.push_str(&format!("    {l:<96}  {n:>8}\n"));
             }
         }
     }
