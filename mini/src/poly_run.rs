@@ -1464,6 +1464,55 @@ mod tests {
         );
     }
 
+    /// **`Eq.rec` builds when both its declaration level and its motive level
+    /// are symbolic.** This is the cross-checker case a parametric
+    /// [`crate::interp::ConstKey`] cannot represent by itself: the keyed
+    /// `⟦Eq.{u}⟧` contains the ω-variable minted while `Eq` was checked, while
+    /// `Eq.rec.{v,u}` is checked later with fresh variables for both positions.
+    ///
+    /// The generic point renames `u` positionally at the use, and the Eq route
+    /// keeps both level lists symbolic. Without either half, the recursor is
+    /// the sole missing constant: `zoneBOk = 2/3`.
+    #[test]
+    fn eq_rec_builds_at_symbolic_declaration_and_motive_levels() {
+        let (eq, refl) = (n("Eq"), Name::str(&n("Eq"), "refl"));
+        let u = Level::param(n("u"));
+        let us = [u].into();
+        let ty = forall(sort(u), forall(bvar(0), forall(bvar(1), sort(Level::zero()))));
+        let at = |f: E, x: E, y: E, z: E| app(app(app(f, x), y), z);
+        let cty = forall(
+            sort(u),
+            forall(bvar(0), at(konst(eq, us), bvar(1), bvar(0), bvar(0))),
+        );
+        let d = Declaration::Inductive {
+            name: eq,
+            lparams: vec![n("u")],
+            num_params: 2,
+            ty,
+            ctors: vec![(refl, cty)],
+        };
+        let mut env = Environment::empty();
+        crate::kernel::add(&mut env, &d).expect("Eq is accepted");
+        let mut ip = Interp::new();
+        let led = run(&env, std::slice::from_ref(&d), &mut ip);
+
+        assert_eq!((led.zone_b_ok, led.zone_b_consts), (3, 3), "{:?}", led.rows());
+        assert!(led.is_clean(), "{:?}", led.rows());
+        assert!(ip.get_poly_const(&eq).is_some(), "Eq needs a positional generic point");
+        let rec = Name::str(&eq, "rec");
+        let own: Vec<Level> = env
+            .get(&rec)
+            .expect("Eq.rec is generated")
+            .lparams()
+            .iter()
+            .map(|u| Level::param(*u))
+            .collect();
+        assert!(
+            ip.get_const(&(rec, crate::ground::key_levels(&own))).is_some(),
+            "⟦Eq.rec.{{v,u}}⟧ is stored at both symbolic levels"
+        );
+    }
+
     /// **An inductive constant gets a generic point too** — [`generic_points`],
     /// and the thing four eliminators were missing.
     ///
@@ -1481,10 +1530,12 @@ mod tests {
     ///
     /// **The keyed entry is still there and still says what it said.** The
     /// generic point does not replace it and must not: `const_evidence` prefers
-    /// a keyed entry *with a certificate*, because the reduction route's ι
-    /// rules are registered for that term and not for the generic point's
-    /// instantiation of it. Pinning both here is what keeps the next tranche
-    /// from "simplifying" one of them away.
+    /// a **ground** keyed entry with a certificate, because the reduction
+    /// route's ι rules are registered for that term and not for the generic
+    /// point's instantiation of it. At a symbolic use the generic point wins,
+    /// because only it renames a previous checker's ω-variable positionally.
+    /// Pinning both here is what keeps the next tranche from "simplifying" one
+    /// of them away.
     ///
     /// Non-vacuity and no more: the conclusion shape is the content of a
     /// kernel-certified `Thm`, and `generic_points`' own steps are pinned by
@@ -2373,4 +2424,3 @@ mod tests {
         }
     }
 }
-

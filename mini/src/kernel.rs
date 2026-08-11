@@ -3934,9 +3934,8 @@ impl<'e, 'i> Checker<'e, 'i> {
         // arm **syntactic** — calling `Interp::level_term` here would build the
         // level apparatus on the σ-scheduled path, which is a build point
         // `Checker::poly` owns and which Gate A's counts would not catch.
-        if self.level_vars().is_empty()
-            && ls.iter().any(|l| crate::ground::as_numeral(l).is_none())
-        {
+        let open = ls.iter().any(|l| crate::ground::as_numeral(l).is_none());
+        if self.level_vars().is_empty() && open {
             return (None, Ev::missing(Gap::SymbolicLevel))
         }
         // `store_key_levels` keeps the closed spelling exactly, so nothing a
@@ -3952,15 +3951,28 @@ impl<'e, 'i> Checker<'e, 'i> {
             };
             (Some(c.term.clone()), ev)
         });
-        // A keyed entry **with a certificate** wins outright; that is the
-        // reduction route's own term and the one its rules were built for.
-        if let Some((tm, Ev::Proved(t))) = stored.clone() {
-            return (tm, Ev::Proved(t))
+        // A **ground** keyed entry with a certificate wins outright; that is
+        // the reduction route's own term and the one its rules were built for.
+        // At an open key, the entry contains the ω-variable minted by the
+        // checker that built it, which is not the positional level argument
+        // of this checker. The generic point is the only entry that can rename
+        // that variable at a later use.
+        if !open {
+            if let Some((tm, Ev::Proved(t))) = stored.clone() {
+                return (tm, Ev::Proved(t))
+            }
         }
-        // Otherwise the generic point, which is what a symbolic use has and a
-        // keyed entry whose typing never survived `Sealed` does not.
+        // At a symbolic use this comes before the keyed entry, for the
+        // positional-renaming reason above; at ground it remains the fallback
+        // for a keyed entry whose certificate did not survive `Sealed`.
         if let Some(hit) = self.poly_const_evidence(name, ls) {
             return hit
+        }
+        // A symbolic entry with no generic point may have been built inside
+        // this very checker and is still useful there. It cannot be preferred
+        // across checkers, but there is no positional replacement to use.
+        if let Some((tm, Ev::Proved(t))) = stored.clone() {
+            return (tm, Ev::Proved(t))
         }
         if let Some(g) = miss {
             return (None, Ev::missing(g))

@@ -148,23 +148,24 @@ pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 /// builds it first and returns before reaching here if it could not — so the
 /// route below is a statement about `T`, never a retry of the carrier.
 ///
-/// # `rec_inst` is `&[Level]` and `ind_inst` is not, which is the clause
+/// # The two level lists, and the one route that consumes both symbolically
 ///
 /// The recursor's own list is its declaration's with the **motive's level
 /// prepended**, and that prefix is polymorphic even where the declaration has
 /// no parameters at all: `Bool.rec.{u}` carries it whatever `Bool` does.
-/// `LEVELPOLY.md` §5.3 measures 51 of the 111 blocked eliminators at exactly
-/// that shape — a lone motive level over a parameter-free declaration — which
-/// is why the type of *this* parameter is where the de-grounding starts and
-/// not at `ind_inst`.
+/// `LEVELPOLY.md` §5.3 first measured 51 of the 111 blocked eliminators at a
+/// symbolic motive prefix. `Eq.rec` then exposed the other half: its declaration
+/// level is symbolic too, and its direct type former already supports that
+/// level. Both lists therefore remain [`Level`]s until the chosen route says it
+/// genuinely needs numerals.
 ///
-/// **Two routes are off the numeral list and the rest are not.**
-/// [`empty_rec`] never reads `u₁` at all, and [`crate::rec_dep`] now takes
-/// `&[Level]` too: its `Site::u1` is a level expression, `cx_of` runs at a
-/// variable rung, and what it stops at is §6.2's own `u₁ = 0` split rather than
-/// this boundary. `numerals` is the predicate for the rest; a route reaching it
-/// with a symbolic motive level answers [`Gap::SymbolicLevel`], which is a
-/// reason and not a silence.
+/// **Three routes are off the recursor numeral list, and one is off both.**
+/// [`empty_rec`] never reads `u₁` at all, and [`crate::rec_dep`] takes
+/// `&[Level]`: its `Site::u1` is a level expression. `Eq`'s direct clause takes
+/// both `ind_inst` and `rec_inst` as levels. Every other route crosses the
+/// declaration's [`crate::zoneb::walk_numerals`] boundary here, and routes not
+/// named above cross `numerals` for the recursor list too. A symbolic level at
+/// either predicate is a reason, not a silence.
 ///
 /// They come off this list one at a time as their `u₁` is derived. What each
 /// still owes is the split, and [`crate::rec_dep::motive_level_of`]'s header is
@@ -178,7 +179,7 @@ pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 pub(crate) fn ensure(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
-    ind_inst: &[u32],
+    ind_inst: &[Level],
     rec_name: &Name,
     rec_inst: &[Level],
 ) -> Result<(), Gap> {
@@ -188,7 +189,7 @@ pub(crate) fn ensure(
         rec_inst.iter().map(ground::as_numeral).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)
     };
     match crate::direct::clause_for(ind_name) {
-        Some(Clause::Eq) => return eq_rec(c, ind_name, ind_inst, rec_name, &numerals()?),
+        Some(Clause::Eq) => return eq_rec(c, ind_name, ind_inst, rec_name, rec_inst),
         // **`Acc.rec` is [`crate::rec_acc`], and it is two rules.** The route
         // is named here rather than left to fall through, because every test
         // below is a *store read* on a table `Acc` is in none of — the
@@ -199,7 +200,8 @@ pub(crate) fn ensure(
         // is how `Acc` sat misfiled as `indexed-family` for the life of the
         // project.
         Some(Clause::Acc) => {
-            return crate::rec_acc::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
+            let ind_inst = crate::zoneb::walk_numerals(ind_inst)?;
+            return crate::rec_acc::ensure(c, ind_name, &ind_inst, rec_name, &numerals()?)
         }
         // **`Nat.rec` is [`crate::rec_nat`].** Named here for the reason `Acc`
         // is: every test below is a *store read* on a table `Nat` is in none
@@ -208,10 +210,13 @@ pub(crate) fn ensure(
         // `crate::rec_dep`, which would report that a family it never
         // translated has no carrier.
         Some(Clause::Nat) => {
-            return crate::rec_nat::ensure(c, ind_name, ind_inst, rec_name, &numerals()?)
+            let ind_inst = crate::zoneb::walk_numerals(ind_inst)?;
+            return crate::rec_nat::ensure(c, ind_name, &ind_inst, rec_name, &numerals()?)
         }
         None => {}
     }
+    let ind_inst = crate::zoneb::walk_numerals(ind_inst)?;
+    let ind_inst = &ind_inst[..];
     // A class-(S) declaration is the one the *carrier* route already
     // identified: `crate::class_s::of` is a store read on the key this call
     // was handed, not a second classification, so the two cannot disagree.
@@ -455,9 +460,9 @@ fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
 fn eq_rec(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
-    ind_inst: &[u32],
+    ind_inst: &[Level],
     rec_name: &Name,
-    rec_inst: &[u32],
+    rec_inst: &[Level],
 ) -> Result<(), Gap> {
     let bad = |w: &'static str| Gap::Recursor(*ind_name, w, Cause::Threading);
     let env = c.environment();
@@ -472,13 +477,13 @@ fn eq_rec(
     if rec_inst.len() != lparams.len() {
         return Err(Gap::NoInterpretation(*rec_name))
     }
-    let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+    let rec_ty = ground::subst_levels(ty, lparams, rec_inst);
     let codomain =
         crate::zoneb::peel(&rec_ty, EQ_DEPTH).ok_or_else(|| bad("Eq.rec: recursor arity"))?;
     let site = EqSite { ind: *ind_name, inst: ind_inst.to_vec(), codomain };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(eq_bottom(c, &site)) };
     let t = c.lam_nest(&rec_ty, EQ_DEPTH, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    crate::zoneb::store(c, rec_name, rec_inst, t)
+    crate::zoneb::store_at(c, rec_name, rec_inst, t)
 }
 
 /// `α, a, C, r, b, t` — `num_params + 1 + num_minors + num_indices + 1` at
@@ -489,7 +494,7 @@ const EQ_DEPTH: usize = 6;
 /// off its type.
 struct EqSite {
     ind: Name,
-    inst: Vec<u32>,
+    inst: Vec<Level>,
     codomain: E,
 }
 
@@ -517,7 +522,9 @@ fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
     let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
     let Some(goal) = cod.tm.clone() else { return gap(cod.ev.reason(Gap::NoEndpoint)) };
     let Some((xs, mems)) = c.binders(EQ_DEPTH) else { return gap(Gap::NoEndpoint) };
-    let Some(former) = c.stored_term(&site.ind, &site.inst) else { return gap(Gap::NoEndpoint) };
+    let former_expr = crate::expr::konst(site.ind, site.inst.clone().into());
+    let Ok(former_ty) = c.infer_type(&former_expr) else { return gap(Gap::Classifier) };
+    let Some(former) = former_ty.tm else { return gap(former_ty.ev.reason(Gap::NoEndpoint)) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
     let sums = ip.prelude.tower.sums.clone();
@@ -791,4 +798,3 @@ mod tests {
         assert_eq!(set, want, "…in ⟦∀ C t. C t⟧");
     }
 }
-

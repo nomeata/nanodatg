@@ -1953,15 +1953,15 @@ non-forcingly before it does anything else, which is *stronger* than the
 #### 5.3.0 Where the strand stands — read this first after a restart
 
 **Branch `explore/level-poly-target`, deliberately diverged from master; do not
-rebase (the obstacle is semantic, `ConstKey`).** Thirteen tranches. The verdict
-number has gone **18 → 32 of 89** and **nothing in thirteen tranches has needed
+rebase (the obstacle is semantic, `ConstKey`).** Fourteen tranches. The verdict
+number has gone **18 → 34 of 89** and **nothing in fourteen tranches has needed
 something the ω-vocabulary cannot state.** There is no fundamental blocker.
 
-    exits      32 × 0 / 57 × 4 / 2 × 2 of 89     (the 2 are frontend declines)
-    typeEv     92        typesOk 115      valuesOk 117    valueEv 71
-    zoneBOk    208/362   stored 116       constEv 42
-    open = 0 asserted on all 89           mini/src tests 233
-    perf       --poly +0.17 %,  ground −0.004 %
+    exits      34 × 0 / 55 × 4 / 2 × 2 of 89     (the 2 are frontend declines)
+    typeEv     92        typesOk 115      valuesOk 118    valueEv 72
+    zoneBOk    236/362   stored 118       constEv 42
+    open = 0 asserted on all 89           mini/src tests 234
+    last perf  --poly +8.21 %,  ground +0.003 %   (the poly walk does more work)
 
 **Gate A** is 91 exports' `ledger`/`evidence`/`untranslated` rows — 358 lines,
 89 `ledger` rows — byte-identical against a build of the parent **in this
@@ -2032,12 +2032,18 @@ named gate, `zoneb::walk_numerals`, and that gate is a **door, not a step** —
 behind it is the ground interior of the class walk
 (`LEVEL-POLYMORPHIC-INDUCTIVES.md`), a multi-tranche piece.
 
-**The narrowest opening, and the recommended next probe**: `Eq.rec` at a
-symbolic motive level, blocked in six of the fifteen files. `Eq` already has a
-*direct* clause, so its type former and constructor certify at a symbolic
-instantiation while its recursor does not — `direct::build` is ungated and
-`recursor::ensure` is gated by `walk_numerals`. One declaration, clause already
-de-scheduled, only the eliminator's route still insisting on numerals.
+**The narrowest opening is now closed (§5.3.4)**: `Eq.rec` at symbolic
+declaration and motive levels. It was blocked in six of the fifteen files, but
+occurred **28 times across the full corpus**; all 28 now certify and two files
+exit. The probe found the semantic `ConstKey` obstacle this restart note warns
+about, rather than mathematics: a symbolic keyed term contains the ω-variable
+of the checker that built it and cannot be consumed by a later checker. `Eq`'s
+positional generic point is the bridge.
+
+**Next:** refresh the site census before choosing another small tranche. The
+remaining `walk_numerals` occupants are the ground interior of the class walk,
+not another Eq-sized dispatch change; `015_levelParams` remains the only file
+owing `typeEv` alone.
 
 **The one thing to get wrong**: reading a wide reason off the histogram instead
 of the site census. `symbolic-level` said all twelve `zoneB`-only files stop at
@@ -2305,6 +2311,82 @@ constant comes back unattributed. Two of the 38 did. Converting those to
 `gap!` is mechanical and should be done by whoever next needs one of them
 named, rather than pre-emptively across a file this seat is not otherwise
 touching.
+
+#### 5.3.4 `Eq.rec` at two symbolic levels — 28 constants, two exits, and the semantic key bites
+
+**The recommended probe closes.** `Eq.rec` now builds with both the
+declaration's level and the motive's prepended level left symbolic. Across all
+89 files that is **28** recursor constants, every one moved from
+`symbolic-level` to certified:
+
+    exits      32 × 0 / 57 × 4 / 2 × 2  →  34 × 0 / 55 × 4 / 2 × 2
+    zoneBOk    208/362                   →  236/362
+    valuesOk   117/146                   →  118/146
+    valueEv    71                        →  72
+    stored     116                       →  118
+    typesOk 115, typeEv 92, constEv 42, open 0, all denominators unchanged
+
+The two new exits are `040_eqType` and `094_ruleK`. The earlier census's
+**six** was not wrong: it counted `Eq.rec` only inside the fifteen files owing
+`zoneB` alone. `Eq` is also present in the dependency environments of another
+22 corpus exports. This is the fourteenth reminder on this branch that the
+population named by a site census must not be silently promoted to a corpus
+population.
+
+**The first patch only moved the refusal and found the real obstacle.** Taking
+the Eq dispatch ahead of `walk_numerals`, changing `eq_rec` to substitute
+`&[Level]`, and storing at the symbolic key moved every instance to
+`Eq.rec: type former spine`. The stored `⟦Eq.{u}⟧` was a lambda nest whose
+domain mentioned the ω-variable minted by the checker that built `Eq`; the
+later checker for `Eq.rec.{v,u}` minted a fresh variable for the same universe
+position. `beta_spine` correctly refused the first premise: the two terms were
+not equal and there is no theorem equating two unrelated kernel variables.
+
+That is the semantic `ConstKey` warning from §5.3.0 in its smallest live form.
+The key `(Eq,[param u])` can name an entry, but cannot make a term containing
+one checker's free variable parametric. **The positional generic point is the
+bridge, not an equation between the variables.** Three pieces make that true:
+
+1. `Eq` parks its typing for generic-point construction even though that
+   typing is already hypothesis-free and `Sealed` accepts it. The previous
+   parking criterion found only open typings; `Eq` is the measured closed
+   occupant.
+2. At an open use, `const_evidence` prefers the generic point over a certified
+   keyed entry. At a ground use the keyed entry still wins, because the ι
+   machinery is registered for that exact term. A symbolic keyed entry with no
+   generic point remains a last fallback for a consumer inside the checker
+   that just built it.
+3. `eq_bottom` obtains the former through ordinary inference, so it consumes
+   the same positionally instantiated interpretation as the recursor type's
+   major binder. Reading `stored_term_at` directly would bypass the bridge.
+
+No new `derived` mathematics. The recursor derivation itself is unchanged;
+only its level substitution and the identity of the type-former term it walks
+changed. `Eq` is the only already-sealed zone-B constant parked by this
+tranche: broadening that policy without another measured cross-checker
+consumer would turn a finding into a guess.
+
+**Gates.** Gate A is byte-identical against a build of `5d4fd8c` in this
+worktree — the scheduled `ledger`/`evidence`/`untranslated` rows did not move.
+Gate B has 60 changed serialised rows in 28 files: every file's `polyledger`
+and `polyzoneb`, plus four downstream reason rows in `040` and `066`. All 28
+`zoneBOk` entries rise; the two definition-side rises listed above occur in two
+of those files. The new generic points in those two definitions both stop at
+`not-decomposable`, so `constEv` remains 42. Every denominator is unchanged and
+`open = 0` on all 89.
+Tests 234/24/12/6/1/12/2/20/16, with one new non-vacuity test constructing
+Lean's `Eq` and requiring all three of `Eq`, `Eq.refl`, and `Eq.rec` at their
+own symbolic levels. It goes red at `zoneBOk = 2/3` under either of the two
+independent mutations: letting a certified symbolic keyed entry shadow the
+generic point, or omitting the generic point because `Eq`'s typing was already
+sealed.
+
+`perf stat -e instructions`, two repetitions over all 91 exports, parent and
+new binaries built side by side: ground `--no-modelgen` **+0.0033 %**
+(394,939,997,717 → 394,952,990,732); `--poly --no-modelgen` **+8.21 %**
+(395,547,414,545 → 428,034,247,482). The latter is work, not dispatch
+overhead: 28 recursor nests now run to completion where the parent stopped at
+one numeral predicate.
 
 ### 5.4 The deletion, rehearsed and measured — and what still blocks it
 

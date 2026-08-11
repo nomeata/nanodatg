@@ -454,11 +454,7 @@ pub(crate) fn stored_or_reason_after(
         // and the constant occurrences that have to report why it is missing
         // come later and only *read* the store. Before that they re-entered
         // here and `recursor::ensure` recomputed the reason at every use.
-        // **The eliminator route still reads the declaration's numerals**, and
-        // says so here rather than inside. `walk_numerals` is the same named
-        // refusal [`build`] uses; moving it is the eliminator half of this
-        // frontier and is not what the direct clause bought.
-        let r = walk_numerals(inst).and_then(|i| crate::recursor::ensure(c, ind_name, &i, name, own));
+        let r = crate::recursor::ensure(c, ind_name, inst, name, own);
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
                 app.rec_untranslated.insert((*name, crate::ground::key_levels(own)), g.clone());
@@ -3972,26 +3968,40 @@ pub(crate) fn store_at(
     let (tm, ev) = (t.tm, t.ev);
     let Some(term) = tm else { return Err(ev.reason(Gap::NoEndpoint)) };
     let typing = match ev {
-        Ev::Proved(th) => match Sealed::new(th.clone()) {
-            Ok(s) => Ok(s),
-            Err(_) => {
-                // **Not dropped — parked.** A typing proved under `u⃗ ∈ ω` is
-                // exactly what `Sealed` must refuse *here*, because this key is
-                // the ground store and an open theorem has no business in it.
-                // But the theorem is true, and on the de-scheduled route it is
-                // the only certificate the constant will ever have: it is the
-                // declaration-exit discharge that is missing, and
-                // `Checker::discharge_levels` drains its tokens, so it cannot
-                // be done from inside a build.
-                //
-                // `crate::poly_run` drains this before the `Checker` dies and
-                // turns it into a generic point. On the σ-scheduled route
-                // `park_poly_typing` is a no-op — no level variables — so this
-                // arm reports exactly what it always did.
-                c.park_poly_typing(name, levels, &th);
-                Err(Gap::IndSpec(*name, "hypothesis escaped the nest"))
+        Ev::Proved(th) => {
+            // `Eq.rec` is built by a later checker than `Eq` itself. At an
+            // open key the stored former contains this checker's ω-variable,
+            // so even an already-sealed typing needs a positional generic
+            // point before that later checker can use it. Other clauses stay
+            // on the existing parked-only-when-open route until they have a
+            // measured cross-checker consumer.
+            match Sealed::new(th.clone()) {
+                Ok(s) => {
+                    if matches!(crate::direct::clause_for(name), Some(crate::direct::Clause::Eq)) {
+                        c.park_poly_typing(name, levels, &th);
+                    }
+                    Ok(s)
+                }
+                Err(_) => {
+                    // **Not dropped — parked.** A typing proved under `u⃗ ∈ ω`
+                    // is exactly what `Sealed` must refuse *here*, because this
+                    // key is the ground store and an open theorem has no
+                    // business in it. But the theorem is true, and on the
+                    // de-scheduled route it is the only certificate the
+                    // constant will ever have: it is the declaration-exit
+                    // discharge that is missing, and `Checker::discharge_levels`
+                    // drains its tokens, so it cannot be done from inside a
+                    // build.
+                    //
+                    // `crate::poly_run` drains this before the `Checker` dies
+                    // and turns it into a generic point. On the σ-scheduled
+                    // route `park_poly_typing` is a no-op — no level variables
+                    // — so this arm reports exactly what it always did.
+                    c.park_poly_typing(name, levels, &th);
+                    Err(Gap::IndSpec(*name, "hypothesis escaped the nest"))
+                }
             }
-        },
+        }
         Ev::Gap(g) => Err(g),
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
