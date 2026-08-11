@@ -44,24 +44,29 @@
 #      redundant. `dep_insts`' 1 % was not evidence against this: it memoised
 #      one `inst_all`, which is a small share of a site, not the derivation.
 #   3. **Scope is worth 17 points.** The 222 sites span 54 declarations, so a
-#      per-backend memo (`TgBackend`, where `dep_insts` lives) saves 48 % where
-#      a per-thread one (`Shared`) saves 65 %. That is why the memo landed on
-#      `Shared`, behind the `Sealed` funnel.
+#      per-backend memo (`TgBackend`, where `dep_insts` lived) saves 48 % where
+#      a per-thread one (`Shared`) saves 65 %. That is why both `Shared::dep_minors`
+#      and the rescoped `Shared::dep_insts` landed there, behind the `Sealed` funnel.
+#
+# STILL RE-RUNNABLE, AND THAT IS THE POINT. The notes are taken in `fire_dep`
+# before the minor-premise loop, so they count the **demand** — 2 303 — and not
+# what the memo left to do. Re-run it against the live report's `dependent minor
+# premises derived` row: the row should equal this file's distinct count (797),
+# and a corpus where it does not is one where the key has stopped being enough.
 #
 diff --git a/checker/src/tg.rs b/checker/src/tg.rs
-index 64ae939..98e94e9 100644
+index 94c5c53..52ebacb 100644
 --- a/checker/src/tg.rs
 +++ b/checker/src/tg.rs
-@@ -3797,7 +3797,43 @@ static DEP_IOTAS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
- /// reason of its own.
- static DEP_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+@@ -3882,6 +3882,43 @@ static DEP_MINOR_KEY_CLASH: std::sync::atomic::AtomicU64 = std::sync::atomic::At
+ static DEP_MINOR_SEAL_REFUSED: std::sync::atomic::AtomicU64 =
+     std::sync::atomic::AtomicU64::new(0);
  
 +// ── PROBE (task #126 hoist census, worktree only) ────────────────────────────
 +//
-+// **Does `PRE`'s key repeat across ι sites?** The hoist the last tranche named
-+// is only worth building if it *hits*, and `dep_insts` — memoised on the very
-+// same `p⃗,C,S⃗,T` — bought 1 %, which is evidence that it does not. Counts
-+// distinct keys at four granularities against the number of derivations paid.
++// **Does `PRE`'s key repeat across ι sites?** Counts distinct keys at four
++// granularities, and at both possible scopes, against the number of derivations
++// paid. See the header of `scripts/dep-key-census.diff` for the answer.
 +#[cfg(feature = "stepcount")]
 +static DEP_KEYS: std::sync::Mutex<Option<std::collections::BTreeMap<&'static str, (u64, std::collections::HashSet<u64>)>>> =
 +    std::sync::Mutex::new(None);
@@ -74,10 +79,10 @@ index 64ae939..98e94e9 100644
 +    e.0 += 1;
 +    e.1.insert(h);
 +}
- 
++
 +#[cfg(feature = "stepcount")]
 +fn dep_key_hash<T: std::hash::Hash>(x: &T) -> u64 {
-+    use std::hash::{Hash, Hasher};
++    use std::hash::Hasher;
 +    let mut h = std::collections::hash_map::DefaultHasher::new();
 +    x.hash(&mut h);
 +    h.finish()
@@ -93,19 +98,20 @@ index 64ae939..98e94e9 100644
 +    }
 +    s
 +}
- 
++
  fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
  
-@@ -3841,6 +3877,8 @@ fn gen_report() -> String {
-     row(&mut s, "cached dependent recursors declined: not over this carrier", DEP_REC_GUARD_MISS.load(Relaxed));
-     row(&mut s, "ι sites the DEPENDENT rule computed", DEP_IOTAS.load(Relaxed));
-     row(&mut s, "…DEPENDENT ι sites the arm was asked at", DEP_ASKED.load(Relaxed));
+ /// What the general inductive path did, or the empty string if it was never
+@@ -3928,6 +3965,8 @@ fn gen_report() -> String {
+     row(&mut s, "…answered from the per-thread store instead", DEP_MINOR_HITS.load(Relaxed));
+     row(&mut s, "…store key matched, assumption list did not", DEP_MINOR_KEY_CLASH.load(Relaxed));
+     row(&mut s, "…results the Sealed funnel declined", DEP_MINOR_SEAL_REFUSED.load(Relaxed));
 +    #[cfg(feature = "stepcount")]
 +    s.push_str(&dep_key_report());
      for d in Decline::ALL {
          let n = DECLINES[d as usize].load(Relaxed);
          if n > 0 {
-@@ -14572,6 +14610,47 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+@@ -14734,6 +14773,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
              return Err("iota: discharging the target policy failed")
          };
  
@@ -132,9 +138,8 @@ index 64ae939..98e94e9 100644
 +            dep_key_note("COD  (ind p⃗, C) + the motive's hyps", dep_key_hash(&(&ind_body_t, &c, &m_h)));
 +            dep_key_note("     the motive's hyps alone", dep_key_hash(&m_h));
 +            dep_key_note("     the motive C alone", dep_key_hash(&c));
-+            // **Scope.** `dep_insts` lives on `TgBackend`, which is per
-+            // declaration, so a memo built there can only hit within one. These
-+            // two say what that costs against a per-thread one.
++            // **Scope.** These two say what a memo on `TgBackend` — which is per
++            // declaration — costs against one on `Shared`.
 +            dep_key_note("PER-BACKEND  PRE  (seq, ind p⃗, C, S⃗)", dep_key_hash(&(self.seq, &ind_body_t, &c, &minors)));
 +            dep_key_note("PER-BACKEND  which backend", dep_key_hash(&self.seq));
 +            for i in 0..n {

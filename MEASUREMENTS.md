@@ -9601,3 +9601,89 @@ corpus has no instance, so the decline row is absent rather than zero and
 `asked == fired` is asserted in its place — the stronger claim. `RTree`'s
 `node : (Bool → RTree) → RTree` and `Acc.intro` are the shapes that would
 populate it.
+
+## What the dependent arm costs, and where — 2026-08-11
+
+*Tasks #126 / #148. Baseline `origin/master` at `0df2944`; `release`, `--features
+tg,stepcount`, `good/init-prelude.ndjson`, `num_threads: 1`; `perf stat -e
+instructions` throughout. **The ledger is byte-identical at every step below** —
+11 825 / 2 629 / 164 109, 222 ι sites, arena 152/0/2. This is cost only.*
+
+### The arc
+
+| | instructions | Δ |
+|---|---:|---:|
+| `0df2944` | 388 464 350 950 | — |
+| `Shared::dep_minors` — the minor premise memoised | 368 953 353 085 | **−5.02 %** |
+| `DepBottom::cod_gen` — `COD` derived once per declaration | 366 450 914 755 | −0.68 % |
+| `Shared::dep_insts` — the instantiation store rescoped | **353 445 565 000** | **−3.55 %** |
+| | | **−9.02 %** |
+
+### The census that chose the design, and refuted the brief it came from
+
+The named fix was "hoist `PRE`; the memo key is the ambient assumption list".
+A memo is worth building only if it *hits*, and the recorded evidence pointed the
+other way — `dep_insts`, on the very same `p⃗,C,S⃗,T`, had bought 1 %. So the key
+census came first (`scripts/dep-key-census.diff`). Paid / distinct:
+
+| key | paid / distinct |
+|---|---:|
+| `DEPᵢ (ind p⃗, C, Sᵢ, i)` | 2 303 / **797** |
+| …+ every obligation's hyps | 2 303 / **797** |
+| `PRE (ind p⃗, C, S⃗)` | 222 / 99 |
+| …+ every obligation's hyps | 222 / 99 |
+| per-backend `DEPᵢ` | 2 303 / 1 195 |
+| per-backend `PRE` | 222 / 130 |
+| distinct backends | 222 / 54 |
+
+* **The assumption list is not part of the key.** Adding every obligation's
+  hypotheses moves the distinct count by *exactly zero*, at every granularity.
+  The list is a function of the interpreted terms. The design that was said to
+  need its own design does not need one.
+* **It hits — 65 % of the minor-premise derivations are repeats.** The 1 % was
+  not evidence against this: `dep_insts` memoised one `inst_all`, a small share
+  of a site rather than the derivation.
+* **Scope was the larger half of the miss.** 54 declarations reduce the same
+  seven recursors at the same motives, so a `HashMap` on `TgBackend` is thrown
+  away between every pair. Per-thread saves 65 % where per-backend saves 48 %.
+
+The measured claim is **checked at every hit, not trusted**: `out_hyps` is
+`merge_hyps` over the caller's obligations and is final before anything is
+derived, so the site recomputes it for nothing and a stored entry must equal it.
+Counted at runtime, `store key matched, assumption list did not` = **0**.
+
+Rescoping `dep_insts` came in at **−3.55 %, five times what its distinct-key
+counts predicted** — the census counted keys at ι sites, and `dep_subst` is also
+reached through `dep_rec_at`.
+
+### Where the cost actually is — and it is not `fire_dep`
+
+`NANODA_NO_DEP_ARM`, returning the arm's own decline at the top of `fire_dep`,
+puts the ledger back at **13 254 / 2 432 / 162 483** — exactly its pre-arm value
+— and costs **256 021 481 571** instructions on this code.
+
+So **`fire_dep`'s body is +110 G**, and `perf record` puts `fire_dep`
+*inclusive* at **8.5 %**, about 31 G of it.
+
+**The other ~79 G is downstream.** `trace_cert` 15 %, `certify_reduct` 15 %,
+`ceq_trans` and `ceq_congr` 4.8 % each, composing over certificates that are now
+real and conditional: the assumption ceiling went **26 → 36** when the arm
+landed, and every congruence and transitivity step over such a leg pays for the
+merged list. That cost is shared with the general and degenerate arms; it is a
+property of conditional-certificate composition, not of this rule.
+
+Inside `fire_dep`'s remaining 8.5 %: `dep_subst` **3.9 %**, `dep_minor_typed`
+**0.70 %** — 2 303 derivations before this arc. The flat profile is unchanged in
+shape from the last tranche's: `Term::new` 20.7 % self, `Term::open` 13.3 %,
+`Rc<TermData>::drop_slow` 9.7 %, allocator ~19 %, `Term::eq` 7.5 %.
+
+**`fire_dep` is 28 % of the arm's price and it is now largely spent.** The next
+seat should not look here. The lever is the composition machinery, or fewer
+antecedents reaching it.
+
+### Note on wall time
+
+The three runs above took 28.9 s, 32.5 s and 33.1 s in the order the
+instructions *fell*. Two other seats were live. This is the 2.1×-on-load
+machine the header warns about, and it is recorded here as one more instance
+rather than as a result.
