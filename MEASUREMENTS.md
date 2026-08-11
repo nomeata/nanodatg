@@ -9801,3 +9801,132 @@ remembered number. The brief carried 353 G for this baseline; the tree measures
 tranche was thrown away: two `perf` runs returned 1.5 G while another seat held
 17.5 GB anon, and the binary produced no report at all. Recorded because the
 failure mode looks like a spectacular win.
+
+## The concrete route to link 3 is refuted inside the rule — 2026-08-11
+
+*Task #127, the census the brief asked for before anything was built. Release,
+`--features tg,stepcount`, `good/init-prelude.ndjson`, `num_threads: 1`, at
+`feb3514`. Baseline **11 821 gaps / 2 625 escapes / 164 109 derived**, 89 710
+reduction steps. `scripts/ble-census.diff`; with it applied and no environment
+variable set the ledger is byte-identical. **Four runs, and the answer is no.***
+
+### The hypothesis
+
+`ble_uniqueness` asks for three clauses about `⟦Nat.ble⟧` at **schematic**
+`x, y ∈ ω`, which needs δ and ι run symbolically under a quantifier — machinery
+that does not exist (previous section). The proposal was to route around it:
+the corpus holds only a few dozen `Nat.ble` instances, every operand ≤ 12, so
+there is no schematic transfer to do — only a handful of **concrete** facts
+`⟦Nat.ble lit_a lit_b⟧ = ⟦Bool.true⟧`, each provable by concrete δ and ι, which
+the checker already does at every conversion check. If so, link 3 is assembly
+on machinery that is already there.
+
+### The census, at the site where the answer matters
+
+`reduce_rec`, at the major premise of the ι redex. Three things per distinct
+`(op, a, b)`: where `whnf` left the major, which rules the recorded reduction
+used, and **what `certify_reduct` on that reduction actually comes out as**.
+
+The population is **51 distinct instances and 600 firings**, all `Nat.ble`,
+every operand in 0–12. *That is not the 55/466 of the earlier census and both
+are right*: 466 counts `derive_iota_core`'s declines and 55 the distinct
+instances behind them, while 600 counts every reach of `reduce_rec` with a
+`Nat` comparison as the major — the population a construction would have to
+serve. **Neither is the `nat_reduce` gap row**, which is 32 and, per the
+`Admit::NatRed` census carried alongside, is *entirely* `Nat.beq`/`ble`/`pow`/
+`succ` at **non**-numeral arguments. The 600 never reach `admit` at all: the
+gate declines, `reduce_rec` drops the major's trace, and the admission is never
+asked for.
+
+### Every one reduces. Not one certifies.
+
+With the accelerator withheld below 13, all 51 reduce concretely to `Bool.true`
+or `Bool.false` — 13 steps for `ble 0 0`, 206 for `ble 12 11`, by β, δ, ι and
+projection alone, no admission in the *reduction*. **The reduction is not the
+obstacle.** All 51 then come out
+
+```
+ADMITTED: trans over an admitted premise
+```
+
+and none is `reduct::fully_ruled`, so link 3's gate could not have opened on
+them either.
+
+### Which step fails — 30 400 refusing steps, 12 rows
+
+Re-asking the backend about every single step of the 600 traces:
+
+| step | verdict | firings |
+|---|---|---:|
+| `ProjRed` at a `<proj>` | **`ADMITTED: proj_reduce`** | 2 624 |
+| `Iota` at `Nat.rec` | **`ADMITTED: iota: the major premise is not a constructor`** | 2 352 |
+| `Beta` → `<λ>` | conditional on 3 premises | 4 976 |
+| `Beta` → `Nat.rec` | conditional on 3 | 4 976 |
+| `Beta` → `<λ>` | conditional on 1 | 4 376 |
+| `Beta` → `Nat.ble.match_1` | conditional on 1 | 2 624 |
+| `Beta` → `Nat.casesOn` | conditional on 4 | 2 624 |
+| `Iota` at `Nat.rec` | conditional on 3 | 2 624 |
+| `Beta` → `<proj>` | conditional on 1 / on 2 | 2 024 / 600 |
+| `Beta` → `Bool.false` / `Bool.true` | conditional on 1 | 328 / 272 |
+
+Two of them are hard admissions and they are what the `trans` is over.
+
+**The ι admission is origin 2 reproduced one level down, inside its own
+workaround.** Those 2 352 majors are **nat literals**: the run's
+`a nat literal` counter goes 10 → 4 714, exactly `10 + 2 × 2 352` for the two
+passes that ask. `reduce_rec` rescues a literal major with `nat_lit_to_constructor`,
+which is *untraced*, so the backend is never told `lit n = Nat.succ (lit (n−1))`
+and `derive_iota_core` reads a `NatLit` off `args[major]` and declines. Unfolding
+`Nat.ble` structurally does not escape origin 2; it multiplies it.
+
+**The projection admission is a second origin entirely.** `Nat.below` is a
+`PProd` nest and `brecOn` reads it with structure projections; `proj_reduce` is
+already 659 gaps in the baseline on its own account.
+
+**And the 25 424 conditionals are the escape ratchet.** Every β contraction in
+the nest is `⊢ conj(hᵢ) → …` on 1–4 undischarged `⟦arg⟧ ∈ ⟦binder domain⟧`
+premises. Asking for all of them costs 79 169 gaps and **28 063 escapes**
+against 2 625 — a 10× move on a counter that is ratcheted.
+
+### The ledger, and the two numbers that did not move
+
+| | gaps | escapes | derived | reduction steps |
+|---|---:|---:|---:|---:|
+| baseline | 11 821 | 2 625 | 164 109 | 89 710 |
+| `NANODA_NAT_CMP_MIN=13` | **11 969** | 2 639 | 172 561 | 165 003 |
+
+**+148 gaps, +14 escapes, +8 452 derived, 1.84× the reduction steps.** Both
+figures reproduce task #129's *to the digit* — and #129 measured them on the
+**W-type** `Nat`, before links 1, 2 and 4. So the carrier swap, which was a real
+precondition for the schematic route, buys the concrete route nothing at all.
+
+Two counters the brief asked to be re-taken rather than inherited, re-taken:
+
+* `Nat.ble` as origin 2's head constant is **466, unmoved** by withholding —
+  `reduce_rec` still presents the unreduced major;
+* ι asks arriving with **a nat literal** as the major premise are **10**, the
+  same 10 #129 measured. The ω carrier did not move it.
+
+### The verdict, and the scope it leaves
+
+The concrete route is **not** assembly on existing machinery. Making it work
+needs three things that do not exist, and the first two are each their own
+tranche: a certifiable `lit n = Nat.succ (lit (n−1))` step (#129 priced the
+per-literal equation at 10 of 466 *at the top level*; inside the unfolding it is
+worth 2 352, so that refutation does not carry over — but it is still one of
+three), `proj_reduce` over `PProd`, and a discharge for ~25 000 β-domain
+obligations. With all three, the outer wall is *still* untouched: link 3's gate
+excludes ι and projection, and admitting them was measured at +512 / +660.
+
+So the schematic tranche is the honest answer. **`⟦Nat.ble⟧`'s three clauses
+have to be derived at `x, y ∈ ω`, not at 51 literals**, and the machinery for
+that — δ and ι under a quantifier — is the work.
+
+### Method note
+
+`perf stat -e instructions` was **not** taken, deliberately: there is nothing to
+land, and the cost side of withholding is already settled at +0.55 % (#129) with
+this run's 1.84× step ratio reproducing it independently. Cost was never what
+refutes this. Every report in this section was checked to exist and to be
+471–542 lines before any number was read off it, per the failure mode recorded
+two sections up.

@@ -1,0 +1,544 @@
+# MEASUREMENT PROBE — the census INSIDE the ι rule: do the 51 concrete
+# `Nat.ble lit lit` reductions certify? Worktree-only, never to be landed.
+#
+# `git apply --3way scripts/ble-census.diff` onto a scratch worktree, then
+#
+#   cargo build --release --features tg,stepcount --bin nanoda_bin
+#   ./target/release/nanoda_bin cfg.json                        # inert
+#   NANODA_BLE_CENSUS=1 …                                       # census, accelerator on
+#   NANODA_NAT_CMP_MIN=13 …                                     # accelerator withheld < 13
+#   NANODA_NAT_CMP_MIN=13 NANODA_BLE_CENSUS=1 …                 # the census that decides
+#
+# `cfg.json` is `good/init-prelude.ndjson`, `nat_extension` and
+# `string_extension` on, `num_threads: 1`, `unsafe_permit_all_axioms`.
+#
+# WHAT IT ANSWERS. The brief for task #127 link 3 was that `⟦Nat.ble a b⟧ =
+# ⟦Bool.true⟧` need not be transferred schematically at `x, y ∈ ω`, because the
+# corpus holds only 55 concrete instances at operands ≤ 12, each provable by
+# concrete δ and ι "which the checker already does at every conversion check".
+# This asks that at the one site where the answer matters — `reduce_rec`, at the
+# major premise of the ι redex — rather than building it.
+#
+# Three things per distinct `(op, a, b)`: where `whnf` left the major, which
+# rules the recorded reduction used and whether it is `reduct::fully_ruled`, and
+# **what `certify_reduct` on that reduction actually comes out as** (the `TgCert`
+# variant). When the composite is not `Proved` with no kernel hypotheses, a
+# second walk re-asks the backend about every single step and reports the ones
+# that refuse — `NANODA_BLE_CENSUS`'s blame census.
+#
+# THE ANSWER, on `init-prelude` at `feb3514` (2026-08-11), is NO.
+#
+#   * 51 distinct instances, 600 firings, all `Nat.ble`, every operand ≤ 12.
+#   * With the accelerator withheld, ALL 51 reduce concretely to `Bool.true` or
+#     `Bool.false` — 13 steps for `ble 0 0`, 206 for `ble 12 11`, by β, δ, ι and
+#     projection alone. The reduction is not the obstacle.
+#   * NOT ONE certifies. All 51 come out `trans over an admitted premise`.
+#   * The blame, 30 400 refusing steps over 12 rows: `ProjRed` on the `below`
+#     nest's `PProd` is `ADMITTED: proj_reduce` (2 624); `Iota` at `Nat.rec` is
+#     `ADMITTED: iota: the major premise is not a constructor` at a NAT LITERAL
+#     major (2 352) — origin 2 reproduced one level down inside its own
+#     workaround; and every one of the 25 424 β contractions is CONDITIONAL on
+#     1–4 `⟦arg⟧ ∈ ⟦binder domain⟧ ` premises nothing discharges.
+#
+# Ledger, `NANODA_NAT_CMP_MIN=13` alone: 11 969 / 2 639 / 172 561 against a
+# baseline of 11 821 / 2 625 / 164 109 — **+148 gaps**, and 165 003 reduction
+# steps against 89 710 (1.84×). Both figures reproduce task #129's to the digit
+# on the *other* Nat carrier, so the ω swap moved nothing here. `a nat literal`
+# as an ι major premise is still **10**, exactly as #129 measured it.
+#
+# Ledger byte-identical with the probe applied and no variable set (the
+# unconditional `nat_reduce` census of `scripts/nat-red-census.diff` is carried
+# along and prints five extra lines; the totals do not move).
+diff --git a/checker/src/reduct.rs b/checker/src/reduct.rs
+index 1756434..bc106ea 100644
+--- a/checker/src/reduct.rs
++++ b/checker/src/reduct.rs
+@@ -163,6 +163,13 @@ fn nat_ruled() -> bool {
+     *ON.get_or_init(|| std::env::var_os("NANODA_NAT_RULED").is_some())
+ }
+ 
++/// PROBE (task #129, worktree only): let `Iota` count as fully ruled.
++#[cfg(feature = "stepcount")]
++fn iota_ruled() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("NANODA_IOTA_RULED").is_some())
++}
++
+ /// Whether every step of a reduction is one of the four rules that essentially
+ /// always certify — `Beta`, `Zeta`, `Delta`, `Sort`.
+ ///
+@@ -188,6 +195,13 @@ pub(crate) fn fully_ruled<'t, C>(t: &TracePtr<'t, C>) -> bool {
+             // that has not happened. Measurement only, and gated twice.
+             #[cfg(feature = "stepcount")]
+             Node::One(Rule::Admitted(Admit::NatRed)) if nat_ruled() => true,
++            // PROBE (task #129, worktree only): admit `Iota` into the
++            // "will almost certainly certify" set. With the GMP comparison
++            // withheld, `Nat.ble 3 5`'s major reduces by δ+ι rather than by a
++            // numeral admission, and the question this answers is whether link
++            // 3's split can fire on such a trace at all.
++            #[cfg(feature = "stepcount")]
++            Node::One(Rule::Iota) if iota_ruled() => true,
+             Node::One(_) => false,
+             Node::Seq(l, r) => {
+                 fully_ruled(&Some(l.clone())) && fully_ruled(&Some(r.clone()))
+diff --git a/checker/src/tc.rs b/checker/src/tc.rs
+index 38615a0..90c1af9 100644
+--- a/checker/src/tc.rs
++++ b/checker/src/tc.rs
+@@ -662,8 +662,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+             XOr => self.ctx.mk_nat_lit_quick(nat_xor(&arg1, &arg2)),
+             Shl => self.ctx.mk_nat_lit_quick(nat_shl(arg1, arg2)),
+             Shr => self.ctx.mk_nat_lit_quick(nat_shr(arg1, arg2)),
+-            Beq => self.ctx.bool_to_expr(arg1 == arg2),
+-            Ble => self.ctx.bool_to_expr(arg1 <= arg2),
++            // PROBE (task #129, worktree only): withhold the GMP acceleration
++            // at SMALL operands, so the comparison unfolds structurally and the
++            // δ+ι route is entered at all. `NANODA_NAT_CMP_MIN=n` accelerates
++            // only when max(a,b) >= n.
++            Beq | Ble => {
++                static MIN: std::sync::OnceLock<Option<num_bigint::BigUint>> =
++                    std::sync::OnceLock::new();
++                let m = MIN.get_or_init(|| {
++                    std::env::var("NANODA_NAT_CMP_MIN")
++                        .ok()
++                        .and_then(|s| s.parse::<u64>().ok())
++                        .map(num_bigint::BigUint::from)
++                });
++                if let Some(m) = m {
++                    if &arg1 < m && &arg2 < m {
++                        return None
++                    }
++                }
++                if matches!(op, Beq) {
++                    self.ctx.bool_to_expr(arg1 == arg2)
++                } else {
++                    self.ctx.bool_to_expr(arg1 <= arg2)
++                }
++            }
+         }
+     }
+     
+@@ -2236,8 +2258,76 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+     /// Convenience: admit an equality the checker believes but cannot yet
+     /// justify. Each call site names itself via one of `certify::admits`, so
+     /// the remaining holes are enumerable. See `certify.rs`.
++    #[allow(clippy::type_complexity)]
+     pub(crate) fn admit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, site: Admit) -> DefEq<'t, 'p> {
+         crate::certify::bump_admit(site);
++        // ── PROBE (task #128 census, worktree only) ──────────────────────────
++        // Every `Admit::NatRed` the checker is asked about, split by the head
++        // constant and by whether both operands are already numeral literals.
++        // `derived::nat::ble_transfer` serves exactly `Nat.ble` at two numerals,
++        // so this says what fraction of the population the construction reaches
++        // before it is wired.
++        #[cfg(feature = "stepcount")]
++        if matches!(site, Admit::NatRed) {
++            let (f, args) = self.ctx.unfold_apps(x);
++            let head = match self.ctx.read_expr(f) {
++                Const { name, .. } => {
++                    fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: crate::util::NamePtr<'t>, out: &mut String) {
++                        match ctx.read_name(n) {
++                            crate::name::Name::Anon => {}
++                            crate::name::Name::Str(pre, sfx, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(ctx.read_string(sfx).as_ref());
++                            }
++                            crate::name::Name::Num(pre, i, _) => {
++                                go(ctx, pre, out);
++                                if !out.is_empty() {
++                                    out.push('.');
++                                }
++                                out.push_str(&i.to_string());
++                            }
++                        }
++                    }
++                    let mut buf = String::new();
++                    go(self.ctx, name, &mut buf);
++                    buf
++                }
++                _ => "<not a constant>".to_string(),
++            };
++            let lit = |e: crate::util::ExprPtr<'t>| -> Option<u64> {
++                match self.ctx.read_expr(e) {
++                    crate::expr::Expr::NatLit { ptr, .. } => {
++                        self.ctx.read_bignum(ptr).and_then(|b| u64::try_from(b).ok())
++                    }
++                    _ => None,
++                }
++            };
++            let shape = match args.as_slice() {
++                [a] => match lit(*a) {
++                    Some(_) => "1 numeral",
++                    None => "1 NON-numeral",
++                },
++                [a, b] => match (lit(*a), lit(*b)) {
++                    (Some(_), Some(_)) => "2 numerals",
++                    _ => "2 args, NOT both numerals",
++                },
++                _ => "other arity",
++            };
++            let big = args
++                .iter()
++                .filter_map(|a| lit(*a))
++                .max()
++                .map_or("-".to_string(), |m| match m {
++                    0..=12 => "max<=12".to_string(),
++                    13..=255 => "max<=255".to_string(),
++                    _ => "max>255".to_string(),
++                });
++            let mut g = crate::tc::NAT_RED_CENSUS.lock().expect("nat census poisoned");
++            *g.entry(format!("{head:<24} {shape:<26} {big}")).or_insert(0u64) += 1;
++        }
+         Some(self.certifier.admit(self.ctx, x, y, site.name()))
+     }
+ 
+@@ -2539,6 +2629,15 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+             (r, if major == major0 { tr } else { None })
+         };
+         let after_whnf = major;
++        // ── PROBE (task #127 census inside the rule, worktree only) ──────────
++        // For every ι site whose major premise is an accelerated `Nat`
++        // comparison at two numeral literals: did the major's own reduction
++        // *complete concretely*, and does it yield a certificate the ι rule
++        // could consume? `NANODA_BLE_CENSUS=1`; off, nothing here runs.
++        #[cfg(all(feature = "stepcount", feature = "tg"))]
++        if ble_census() {
++            self.ble_census_probe(major0, after_whnf, &whnf_trace);
++        }
+         let major = match self.ctx.read_expr(major) {
+             NatLit { ptr, .. } => self.ctx.nat_lit_to_constructor(ptr).unwrap_or(major),
+             StringLit { ptr, .. } => self.str_lit_to_ctor_reducing(ptr).unwrap_or(major),
+@@ -2604,6 +2703,193 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         Some((reduct, step))
+     }
+ 
++    /// PROBE (task #127, worktree only): the census **inside the rule**.
++    ///
++    /// The claim under test is that the 55 distinct `Nat.ble lit lit`
++    /// instances are 55 *concrete* facts the checker can already derive by δ
++    /// and ι, so that link 3 is assembly rather than a schematic tranche. This
++    /// asks that question directly, at the one site where the answer matters:
++    /// the major premise of the ι redex.
++    ///
++    /// Three things per instance, keyed by `(op, a, b)`:
++    ///   * where `whnf` left the major — `Bool.true`/`Bool.false` means the
++    ///     reduction *completed concretely*;
++    ///   * which rules the recorded reduction used, and whether it is
++    ///     `reduct::fully_ruled` (link 3's gate);
++    ///   * **what a certificate for it actually comes out as** — `certify_reduct`
++    ///     is run and the `TgCert` variant reported. `Proved` with no kernel
++    ///     hypotheses is the only answer that makes the ι rule's congruence leg
++    ///     consumable.
++    #[cfg(all(feature = "stepcount", feature = "tg"))]
++    fn ble_census_probe(
++        &mut self,
++        major0: ExprPtr<'t>,
++        after_whnf: ExprPtr<'t>,
++        trace: &TracePtr<'t, Cert<'t, 'p>>,
++    ) {
++        let (f, args) = self.ctx.unfold_apps(major0);
++        let Const { name, .. } = self.ctx.read_expr(f) else { return };
++        let nc = &self.ctx.export_file.name_cache;
++        let op = if Some(name) == nc.nat_ble {
++            "Nat.ble"
++        } else if Some(name) == nc.nat_beq {
++            "Nat.beq"
++        } else {
++            return
++        };
++        let [a, b] = args[..] else { return };
++        let lit = |ctx: &TcCtx<'t, 'p>, e: ExprPtr<'t>| -> Option<String> {
++            match ctx.read_expr(e) {
++                NatLit { ptr, .. } => ctx.read_bignum(ptr).map(|v| v.to_string()),
++                _ => None,
++            }
++        };
++        let (Some(av), Some(bv)) = (lit(self.ctx, a), lit(self.ctx, b)) else { return };
++
++        let end = match self.ctx.read_expr(after_whnf) {
++            Const { name, .. } => {
++                let mut buf = String::new();
++                fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>, out: &mut String) {
++                    match ctx.read_name(n) {
++                        crate::name::Name::Anon => {}
++                        crate::name::Name::Str(pre, sfx, _) => {
++                            go(ctx, pre, out);
++                            if !out.is_empty() {
++                                out.push('.');
++                            }
++                            out.push_str(ctx.read_string(sfx).as_ref());
++                        }
++                        crate::name::Name::Num(pre, i, _) => {
++                            go(ctx, pre, out);
++                            if !out.is_empty() {
++                                out.push('.');
++                            }
++                            out.push_str(&i.to_string());
++                        }
++                    }
++                }
++                go(self.ctx, name, &mut buf);
++                buf
++            }
++            NatLit { .. } => "<a numeral>".to_string(),
++            App { .. } => "<an application>".to_string(),
++            _ => "<not a constant>".to_string(),
++        };
++        let mut rules = std::collections::BTreeSet::new();
++        trace_rules(trace, &mut rules);
++        let ruled = if reduct::fully_ruled(trace) { "fully_ruled" } else { "NOT ruled" };
++        let steps = trace_len(trace);
++        let cert = self.certify_reduct(major0, after_whnf, trace);
++        let verdict = match &cert {
++            None => "no step recorded".to_string(),
++            Some(crate::tg::TgCert::Proved(t)) => {
++                if t.hyps().is_empty() {
++                    "PROVED (no Γ)".to_string()
++                } else {
++                    format!("proved under {} kernel hyp(s)", t.hyps().len())
++                }
++            }
++            Some(crate::tg::TgCert::Conditional { hyps, .. }) => {
++                format!("CONDITIONAL on {} premise(s)", hyps.len())
++            }
++            Some(crate::tg::TgCert::Admitted(r, _)) => format!("ADMITTED: {r}"),
++        };
++        let key = format!(
++            "{op} {av} {bv} ⟶ {end} | {steps} steps {:?} {ruled} | {verdict}",
++            rules.iter().cloned().collect::<Vec<_>>()
++        );
++        {
++            let mut g = BLE_CENSUS.lock().expect("ble census poisoned");
++            *g.entry(key).or_insert(0u64) += 1;
++        }
++        // …and **which step** is the one that does not certify. Only asked when
++        // the composite came out an admission, which is the whole question.
++        if !matches!(&cert, Some(crate::tg::TgCert::Proved(t)) if t.hyps().is_empty()) {
++            let mut blame = Vec::new();
++            self.ble_blame(trace, &mut blame);
++            let mut g = BLE_BLAME.lock().expect("ble blame poisoned");
++            if blame.is_empty() {
++                *g.entry("(no single step is admitted — the composition is)".to_string())
++                    .or_insert(0u64) += 1;
++            }
++            for b in blame {
++                *g.entry(b).or_insert(0u64) += 1;
++            }
++        }
++    }
++
++    /// PROBE (task #127): the single steps of a trace that do **not** come out
++    /// `Proved` with no kernel hypotheses — the blame for a composite that ends
++    /// in `trans over an admitted premise`.
++    #[cfg(all(feature = "stepcount", feature = "tg"))]
++    fn ble_blame(&mut self, t: &TracePtr<'t, Cert<'t, 'p>>, acc: &mut Vec<String>) {
++        let Some(t) = t.clone() else { return };
++        match &t.node {
++            Node::One(rule) => {
++                let c = self.step_cert(*rule, t.from, t.to);
++                let why = match &c {
++                    Some(crate::tg::TgCert::Proved(th)) if th.hyps().is_empty() => return,
++                    None => "no certificate at all".to_string(),
++                    Some(crate::tg::TgCert::Proved(th)) => {
++                        format!("proved under {} kernel hyp(s)", th.hyps().len())
++                    }
++                    Some(crate::tg::TgCert::Conditional { hyps, .. }) => {
++                        format!("CONDITIONAL on {} premise(s)", hyps.len())
++                    }
++                    Some(crate::tg::TgCert::Admitted(r, _)) => format!("ADMITTED: {r}"),
++                };
++                let from = self.head_spell(t.from);
++                let to = self.head_spell(t.to);
++                acc.push(format!("{rule:?} {from} ⟶ {to} — {why}"));
++            }
++            Node::Seq(l, r) => {
++                self.ble_blame(&Some(l.clone()), acc);
++                self.ble_blame(&Some(r.clone()), acc);
++            }
++            Node::Cong(s) => self.ble_blame(&Some(s.clone()), acc),
++        }
++    }
++
++    /// PROBE (task #127): the head of an expression, spelled.
++    #[cfg(all(feature = "stepcount", feature = "tg"))]
++    fn head_spell(&mut self, e: ExprPtr<'t>) -> String {
++        let f = self.ctx.unfold_apps_fun(e);
++        match self.ctx.read_expr(f) {
++            Const { name, .. } => {
++                let mut buf = String::new();
++                fn go<'t, 'p>(ctx: &TcCtx<'t, 'p>, n: NamePtr<'t>, out: &mut String) {
++                    match ctx.read_name(n) {
++                        crate::name::Name::Anon => {}
++                        crate::name::Name::Str(pre, sfx, _) => {
++                            go(ctx, pre, out);
++                            if !out.is_empty() {
++                                out.push('.');
++                            }
++                            out.push_str(ctx.read_string(sfx).as_ref());
++                        }
++                        crate::name::Name::Num(pre, i, _) => {
++                            go(ctx, pre, out);
++                            if !out.is_empty() {
++                                out.push('.');
++                            }
++                            out.push_str(&i.to_string());
++                        }
++                    }
++                }
++                go(self.ctx, name, &mut buf);
++                buf
++            }
++            NatLit { .. } => "<numeral>".to_string(),
++            Lambda { .. } => "<λ>".to_string(),
++            Pi { .. } => "<Π>".to_string(),
++            Sort { .. } => "<Sort>".to_string(),
++            Local { .. } => "<local>".to_string(),
++            Proj { .. } => "<proj>".to_string(),
++            Let { .. } => "<let>".to_string(),
++            _ => "<other>".to_string(),
++        }
++    }
++
+     pub fn reduce_quot(&mut self, c_name: NamePtr<'t>, args: &[ExprPtr<'t>]) -> Option<ExprPtr<'t>> {
+         if !matches!(self.env.get_declar(&c_name), Some(Declar::Quot {..})) {
+             return None
+@@ -3077,3 +3363,119 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
+         None
+     }
+ }
++
++// ── PROBE (task #128 census, worktree only) ──────────────────────────────────
++/// Every `Admit::NatRed` the checker asks about, keyed by head constant and
++/// operand shape. Printed by `nat_red_census`, called from the report.
++#[cfg(feature = "stepcount")]
++pub(crate) static NAT_RED_CENSUS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++/// The census, rendered.
++#[cfg(feature = "stepcount")]
++pub fn nat_red_census() -> String {
++    let g = NAT_RED_CENSUS.lock().expect("nat census poisoned");
++    if g.is_empty() {
++        return String::new()
++    }
++    let total: u64 = g.values().sum();
++    let mut s = format!("PROBE nat_reduce census — {} rows, {total} firings\n", g.len());
++    for (k, n) in g.iter() {
++        s.push_str(&format!("  {k:<70} {n:>8}\n"));
++    }
++    s
++}
++
++// ── PROBE (task #127 census inside the rule, worktree only) ──────────────────
++/// `NANODA_BLE_CENSUS=1` — run the per-instance census in `reduce_rec`.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++fn ble_census() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("NANODA_BLE_CENSUS").is_some())
++}
++
++/// One row per distinct `(op, a, b)`: how the major reduced, and what a
++/// certificate for that reduction actually came out as.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++pub(crate) static BLE_CENSUS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++/// PROBE (task #127): which single steps refuse, across all instances.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++pub(crate) static BLE_BLAME: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
++    std::sync::Mutex::new(std::collections::BTreeMap::new());
++
++/// The rules that appear anywhere in a recorded trace, as a sorted set.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++fn trace_rules<'t, C>(t: &TracePtr<'t, C>, out: &mut std::collections::BTreeSet<String>) {
++    let Some(t) = t else { return };
++    match &t.node {
++        Node::One(r) => {
++            out.insert(match r {
++                Rule::Beta => "β".to_string(),
++                Rule::Zeta => "ζ".to_string(),
++                Rule::Delta => "δ".to_string(),
++                Rule::Sort => "sort".to_string(),
++                Rule::Iota => "ι".to_string(),
++                Rule::ProjRed => "proj".to_string(),
++                Rule::Admitted(a) => format!("ADMIT:{}", a.name()),
++            });
++        }
++        Node::Seq(l, r) => {
++            trace_rules(&Some(l.clone()), out);
++            trace_rules(&Some(r.clone()), out);
++        }
++        Node::Cong(s) => {
++            out.insert("cong".to_string());
++            trace_rules(&Some(s.clone()), out);
++        }
++    }
++}
++
++/// How many single steps a trace records.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++fn trace_len<'t, C>(t: &TracePtr<'t, C>) -> u64 {
++    match t {
++        None => 0,
++        Some(t) => match &t.node {
++            Node::One(_) => 1,
++            Node::Seq(l, r) => trace_len(&Some(l.clone())) + trace_len(&Some(r.clone())),
++            Node::Cong(s) => trace_len(&Some(s.clone())),
++        },
++    }
++}
++
++/// The census, rendered.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++pub fn ble_census_report() -> String {
++    let g = BLE_CENSUS.lock().expect("ble census poisoned");
++    if g.is_empty() {
++        return String::new()
++    }
++    let total: u64 = g.values().sum();
++    let mut s = format!("PROBE ble census inside the rule — {} rows, {total} firings\n", g.len());
++    let mut v: Vec<(&String, &u64)> = g.iter().collect();
++    v.sort_by(|a, b| b.1.cmp(a.1));
++    for (k, n) in v {
++        s.push_str(&format!("  {k:<110} {n:>8}\n"));
++    }
++    s
++}
++
++/// The blame census, rendered.
++#[cfg(all(feature = "stepcount", feature = "tg"))]
++pub fn ble_blame_report() -> String {
++    let g = BLE_BLAME.lock().expect("ble blame poisoned");
++    if g.is_empty() {
++        return String::new()
++    }
++    let total: u64 = g.values().sum();
++    let mut s =
++        format!("PROBE ble blame — the steps that refuse: {} rows, {total} firings\n", g.len());
++    let mut v: Vec<(&String, &u64)> = g.iter().collect();
++    v.sort_by(|a, b| b.1.cmp(a.1));
++    for (k, n) in v.iter().take(60) {
++        s.push_str(&format!("  {k:<110} {n:>8}\n"));
++    }
++    s
++}
+diff --git a/checker/src/tg.rs b/checker/src/tg.rs
+index f0fe2aa..8ba9ba9 100644
+--- a/checker/src/tg.rs
++++ b/checker/src/tg.rs
+@@ -22209,6 +22209,12 @@ pub fn global_report() -> String {
+     s.push_str(&nat_report());
+     s.push_str(&gen_report());
+     s.push_str(&inst_report());
++    #[cfg(feature = "stepcount")]
++    s.push_str(&crate::tc::nat_red_census());
++    #[cfg(feature = "stepcount")]
++    s.push_str(&crate::tc::ble_census_report());
++    #[cfg(feature = "stepcount")]
++    s.push_str(&crate::tc::ble_blame_report());
+     s.push_str(&translated_report());
+     s.push_str(&provenance);
+     if total == 0 && proved > 0 {
