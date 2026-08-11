@@ -4538,8 +4538,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.note_admit_m(reason, premask)
     }
 
-    /// A 0-ary "numeral" term standing for an index. These are opaque tags, not
-    /// the primitive `ℕ` of milestone 4.
+    /// A 0-ary "numeral" term standing for an index. These are opaque tags, and
+    /// they stay opaque: there is no primitive `ℕ` to promote them to, and a
+    /// *level* index is not a natural number the interpretation reasons about.
+    /// Contrast `Expr::NatLit`, whose opacity is a gap — see
+    /// [`Self::interp`]'s literal arm and `DECISIONS.md`, 2026-08-11.
     fn idx_term(&mut self, i: u64) -> Term {
         if let Some(t) = self.idxs.get(&i) {
             return t.clone()
@@ -9240,9 +9243,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 self.mk(self.syms.proj, vec![i, s])
             }
             // Literals get one opaque nullary symbol each, **per thread and per
-            // value** — see [`Shared::lit_syms`]. Milestone 4 replaces these
-            // with the kernel's primitive `ℕ` and its native bignum rule
-            // schemas.
+            // value** — see [`Shared::lit_syms`].
+            //
+            // **This is the third carrier, and it is the one with no content.**
+            // The comment here used to promise "Milestone 4 replaces these with
+            // the kernel's primitive `ℕ` and its native bignum rule schemas".
+            // That option is refused — `kernel::term::TermData` admits function
+            // symbols only through conservative definitional extension, so the
+            // primitive signature stays `{∈, =}` and a primitive sort would be
+            // a change to the closed TCB. The decision is **von Neumann `ω`**:
+            // `⟦Nat⟧` is `derived::nat`'s ω and `⟦lit n⟧` is its binary numeral
+            // `num(n)`. See `DECISIONS.md`, 2026-08-11.
+            //
+            // Until that lands, a literal is a symbol carrying no axioms, so it
+            // is related to neither `⟦Nat⟧` (today the W-type,
+            // `Inductives::nat`) nor to `num(n)`. That is why `Nat.ble` at two
+            // literals cannot fire ι — the major premise is a constant, not a
+            // constructor application — and why it is 466 of the 503
+            // `Admit::NatRed` asks.
             Expr::NatLit { .. } | Expr::StringLit { .. } => {
                 let lit = match ctx.read_expr(e) {
                     Expr::NatLit { ptr, .. } => ctx.read_bignum(ptr).cloned().map(Lit::Nat),

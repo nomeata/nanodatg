@@ -3437,3 +3437,85 @@ the best argument available that the mutation step is not optional.
 `ci/test-boundary.sh` has demonstrated the same discipline for CI *rules* since
 2026-08-09 and caught two real bugs in its own rule. These four extend it to the
 suites.
+
+## 2026-08-11 — `⟦Nat⟧` is von Neumann `ω`, and the literal is `num(n)`
+
+*The choice `NAT-REPRESENTATION.md` §0 records as unmade. It is the owner's, and
+it closes a question `QUESTIONS.md` had deferred since before any milestone-4
+code was written.*
+
+> *"of course it should be omega! there is no kernel primitive ℕ, and we build
+> the derived fast binary nat operations for precisely this purpose. But this
+> falls out of the unification of the interpretation between what used to be two
+> checkers. And where the nanoda code uses a bignum library, we have to justify
+> that claim using our derived operations on binary numbers."*
+
+### There were three carriers, and that is why three tranches failed
+
+| where | what `Nat` is |
+|---|---|
+| `checker/src/tg.rs:1645`, `:1830` | `derived::wnat::Nat` — the **W-type**, zero `⟨inl •, ∅⟩` |
+| `derived/src/nat/` | von Neumann **`ω`**, zero `∅`, binary numerals `num(n)` |
+| `checker/src/tg.rs`'s `Expr::NatLit` arm | **one opaque nullary symbol per value**, carrying no axioms |
+
+The third is the one usually left out of the telling, and it is the reason no
+bridge could be written: `⟦lit 3⟧` is `env.declare(0)` and is related to
+*neither* of the other two. `derived::nat::ble_transfer` concludes about
+`num(3)` over `ω`; `tg.rs` holds a constant. They were never going to meet.
+
+### Why not a primitive `ℕ` — the kernel already answers this
+
+`kernel/README.md`'s milestone-4 note reserves `ℕ` as a primitive sort with
+native bignum rule schemas. **That option is refused**, and not on taste:
+`kernel::term::TermData` (`kernel/src/term.rs:83`) has exactly three variants,
+and its own comment says function symbols "enter only through conservative
+definitional extension, so the primitive signature stays `{∈, =}`". A primitive
+sort is a change to the TCB, and `kernel/` is closed. The milestone-4 note
+predates that boundary; it is left in place because `kernel/` is not this
+seat's, and it is contradicted here rather than silently.
+
+Three comments in `checker/` promised the primitive-`ℕ` future and are corrected
+in place: `certify::Admit::NatRed`, `TgBackend::idx_term`, and `interp`'s
+literal arm.
+
+### The population, re-measured rather than inherited
+
+Counted directly off `vendor/arena-tests/good/init-prelude.ndjson` (35 `natVal`
+records):
+
+* **35 distinct values, and all 35 occur once.**
+* **Thirteen are ≤ 12** — and they are exactly `0…12`, contiguous.
+* The largest is **2⁶⁴** (`18446744073709551616`); the rest run
+  `16, 17, 32, 64, 127, 128, 192, 224, 240, 256, 512, 1723, 2047, 4096, 55296,
+  57343, 65535, 65536, 262144, 1114112, 2³²`.
+
+`scripts/nat-red-census.diff` records the other half: of the 503 `Admit::NatRed`
+asks, **466 are `Nat.ble`, all at operands ≤ 12**, and the remaining 37 are
+`Nat.beq`, `Nat.pow` and `Nat.succ` at non-numeral arguments. So the whole
+accelerated `Nat.ble` population lies inside the thirteen, and **2⁶⁴ never
+reaches the accelerator** — the bignum justification is owed exactly where the
+accelerator fires, and it fires small.
+
+### What this commits to
+
+1. `⟦Nat⟧` in `tg.rs` becomes `derived::nat`'s `ω` — the object `mini` already
+   uses — and `⟦lit n⟧` becomes `num(n)`. `derived::wnat` **stays**: it is the
+   internal W-type of the general inductive translation (`carrier.rs`,
+   `recursor.rs`, `cumul/*`, `wlist*`, `isum`) and that role is untouched. What
+   changes is only *which object `⟦Nat⟧` names*.
+2. Every `Admit::NatRed` becomes a certificate built from `derived::nat`'s
+   binary operations. "Where the nanoda code uses a bignum library, we have to
+   justify that claim using our derived operations on binary numbers."
+
+### The measurement that says cost is not the obstacle
+
+`scripts/nat-accel-withhold.diff`: withholding the accelerator below 13 costs
+**+0.55 % instructions** against 1.84× the reduction steps. At the operands this
+corpus actually has, the certified route is affordable. Keep 2⁶⁴ opaque.
+
+### Worth
+
+**3 066 gaps** — origin 2, `iota: the major premise is not a constructor`, the
+largest single origin left on a ledger of 11 825. The mechanism is now stated
+rather than assumed: `Nat.ble lit₃ lit₅` cannot fire ι because its major premise
+is an opaque constant, not a constructor application of anything.

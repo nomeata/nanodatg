@@ -1040,8 +1040,16 @@ pub enum Admit {
     Iota,
     /// Quotient computation: `Quot.lift`/`Quot.ind` applied to a `Quot.mk`.
     Quot,
-    /// Native arithmetic on literals (`Nat.add`, `Nat.succ`, …). Milestone 4
-    /// replaces this with the kernel's primitive `ℕ` and its rule schemas.
+    /// Native arithmetic on literals (`Nat.add`, `Nat.succ`, …).
+    ///
+    /// **Not a primitive `ℕ`.** This said "Milestone 4 replaces this with the
+    /// kernel's primitive `ℕ` and its rule schemas", and that option is
+    /// refused: `kernel::term::TermData` has three variants and function
+    /// symbols enter only through conservative definitional extension, so the
+    /// primitive signature stays `{∈, =}` — a primitive sort would be a change
+    /// to the closed TCB. What replaces this is a **certificate built from
+    /// `derived::nat`'s binary operations over von Neumann `ω`**; see
+    /// `DECISIONS.md`, 2026-08-11.
     NatRed,
     /// Equality of two natural-number literals held in different
     /// representations (`Nat.zero` versus `0`, `Nat.succ n` versus `n+1`).

@@ -21,7 +21,11 @@ a named source file. Where I could not settle something I say so, in §10.
 
 ---
 
-## 0. The corpus population, and the decision nobody has recorded — 2026-08-11
+## 0. The corpus population, and the decision — 2026-08-11
+
+*The decision this section called unrecorded **is recorded**: `ω`. See §0.1 just
+below, and `DECISIONS.md`, 2026-08-11. The rest of this section is the
+measurement that constrained it and is unchanged.*
 
 *Measured, tasks #128–#129; the accounts are in `MEASUREMENTS.md` and
 `NAT-BRIDGE-FEASIBILITY.md` §4.7. Read this before §1: two constructions have
@@ -33,13 +37,14 @@ the 503 `Admit::NatRed` asks, 92.6 % — lies inside the thirteen. This rules ou
 a unary representation *globally* and permits one at exactly the operands that
 matter, and it is the number any recommendation below has to be checked against.
 
-**Three candidate carriers are in play and no choice is recorded.**
+**Three candidate carriers were in play. The choice is `ω` — the middle row —
+and §0.1 inventories what already exists for it.**
 
 | where | what `Nat` is | who uses it |
 |---|---|---|
 | `checker/src/tg.rs` | `derived::wnat::Nat::ty`, the W-type, zero `⟨inl •, ∅⟩` | the interpretation, today |
 | `derived/src/nat/` | von Neumann `ω`, zero `∅`, binary numerals `num(n)` | `ble_uniqueness`, `Eval::ble_bool` |
-| `interp`'s own comment | *"Milestone 4 replaces these with the kernel's primitive `ℕ`"* | nothing yet |
+| ~~`interp`'s own comment~~ | ~~*"Milestone 4 replaces these with the kernel's primitive `ℕ`"*~~ — **struck**: `TermData` admits symbols only by definitional extension, so the signature stays `{∈, =}`, and `kernel/` is closed | nothing, ever |
 
 Nothing joins the first two: `derived/src/nat/` never mentions `wnat`, and
 `wnat.rs` says the ω-tower is not needed. The numeral bridge's links 1 and 2 were
@@ -57,6 +62,128 @@ bignum bridge is over the wrong carrier for operands the corpus does not have.
 Structural unfolding is affordable (+0.55 % instructions) and worthless (+148
 gaps, and every variant worse); a defining equation per small literal would
 serve 10 sites of 466.
+
+## 0.1 The choice is made — `ω` — and here is what already exists for it — 2026-08-11
+
+*Task #126/#148 follow-on. §0 above says "three candidate carriers are in play
+and no choice is recorded". **The choice is recorded now**: `DECISIONS.md`,
+2026-08-11. `⟦Nat⟧` is von Neumann `ω` and `⟦lit n⟧` is `num(n)`. The
+primitive-`ℕ` column is struck: `kernel::term::TermData` admits function symbols
+only by conservative definitional extension, so the primitive signature stays
+`{∈, =}`, and `kernel/` is closed.*
+
+This section is the **inventory that has to precede the port** — everything
+looked up by *the statement it concludes*, because on this project the thing
+believed missing has twice been present under another name (`dprod_app` was
+`app_in_fibre`; the `terms_at` rebuilder was theorem instantiation).
+
+### The ω side is not a green field. It is nearly complete
+
+| what the checker needs from `⟦Nat⟧` | on the ω side | where |
+|---|---|---|
+| the carrier | `OmegaCore::set()`, a nullary symbol | `derived/src/recursion/naturals.rs:430`, `nat/apparatus.rs:148` |
+| `Nat : Type 0` | **free** — `Rung::omega_mem`, `⊢ ω ∈ Uₙ` at every `n ≥ 1` | `derived/src/tower/rungs.rs:449`; re-exported `nat/apparatus.rs:184` |
+| `⟦Nat.zero⟧` and its typing | `∅` literally, with `zero_mem` | `nat/apparatus.rs:145`, `:171` |
+| `⟦Nat.succ⟧` typing, pointwise | `succ_mem`, `succ_mem_at` | `nat/apparatus.rs:174`, `:187` |
+| the recursor | `natrec`, `natrec_ax`, `invariant` | `nat/apparatus.rs:130`–`:135` |
+| ι at zero | **`⊢ ∀c ∀g. natrec(c,g,0) = c`** | `nat/apparatus.rs:137` |
+| ι at succ | **`⊢ ∀c ∀g ∀n. (n ∈ ω → natrec(c,g,succ n) = app(app(g,n), natrec(c,g,n)))`** | `nat/apparatus.rs:140` |
+| the recursor's typing | `natrec_mem`, **dependent motive**, curried step | `derived/src/nat/typing.rs:86` |
+| induction | `induct`, `induct_step` | `derived/src/nat/glue.rs:155`, `:175` |
+| the numeral | `Binary::numeral(n)`, canonical, `num(2⁶⁴)` = 66 nodes | `derived/src/nat/binary.rs:155` |
+| `⊢ num(n) ∈ ω` | `Eval::mem`, **memoised on the value** | `derived/src/nat/eval.rs:262` |
+| `⊢ succ(num n) = num(n+1)` | `Eval::succ` — 2 inferences on an even numeral | `derived/src/nat/eval.rs:284` |
+
+**The ω ι rules are strictly cheaper than the W ones.** `wnat_rec`'s two both
+carry `HYP := z ∈ T ∧ s ∈ fs(N, fs(T,T))` (`derived/src/wnat_rec.rs:105`);
+ω's `iota_zero` carries **no hypothesis at all** and `iota_succ` carries only
+`n ∈ ω`. The port removes a premise rather than acquiring one.
+
+### The one genuine gap: `succ` as an *element of a function space*
+
+`derived::nat` has no `succ_fun`, no `succ_in_funspace`, no `succ_beta`; there
+is no `fs` anywhere under `derived/src/nat/`. `succ` is a **term-former**, and
+`tg.rs:7519` wants `⟦Nat.succ⟧ ∈ fs(⟦Nat⟧,⟦Nat⟧)` because a constructor is
+interpreted as a *set function*.
+
+`mini` does not have this problem and the reason is instructive: it builds
+`⟦Nat.succ⟧` with the **generic λ-nest** (`mini/src/direct.rs:544`, `:658`,
+whose bottom is `succ x` typed by `succ_mem_at`), and gets the β-equation from
+`Interp::beta_spine` (`mini/src/interp.rs:2034`) rather than from a bespoke
+`succ_beta`. So the missing piece is either that λ-nest or a small
+`succ_fun`/`succ_beta` pair on the ω side — **it is the only construction this
+port needs that does not already exist**, and it should be looked for under the
+statement it concludes before being written.
+
+### What `wnat` is actually load-bearing for — the brief on this is wrong
+
+The handoff for this tranche said `derived::wnat` is used "throughout
+`derived/`'s general inductive machinery — `carrier.rs`, `recursor.rs`,
+`cumul/*`, `wlist*`, `isum` — as the internal W-type of the translation".
+**Measured, that is prose and not a code dependency.** `use crate::wnat` appears
+in exactly nine places in `derived/src/`:
+
+* seven are inside `wnat_rec/*` itself;
+* one is `derived/src/cumul/witness.rs:70`;
+* and that is all. **`derived/src/inductive/*`, `derived/src/isum/*` and
+  `derived/src/wlist*` contain not one `use crate::wnat`** — every mention in
+  them is a doc comment citing `wnat.rs` as the hand-written precedent the
+  generic machinery generalises.
+
+What those files really use is **`r.omega()` — ω itself** — as the index of the
+cumulative hierarchy and the bound on fibre size. That is **Role A**, and it is
+untouched by anything here.
+
+**Role B** — a W-type standing for *the interpretation of Lean's `Nat`* — has
+exactly **two** consumers:
+
+1. `derived/src/cumul/witness.rs` (`NatUniverse`, `NatMem::over`), whose whole
+   job is `⊢ ⟦N⟧ ∈ U₁` for the W-type — and which the ω side gets for free from
+   `Rung::omega_mem`. *Caveat:* its `NatMem::tags_in_u1` is reused by
+   `cumul/enums.rs:17` for `Bool`'s `(1+1) ∈ U₁`; that piece is Role A and must
+   survive or move.
+2. `checker/src/tg.rs` — `inds.nat` (`:1645`), `inds.nr` (`:1752`), built at
+   `:1830`/`:5913`, consumed at `:7519`–`:7520`, `:13396`, `:13445`, witnessed
+   at `:5731`.
+
+`mini` uses **zero** of Role B. So the port is contained to two files, not to
+`derived/`'s inductive machinery, and `derived/src/wnat*` becomes dead once both
+are moved.
+
+### The second half — the accelerator's certificate — is built and unwired
+
+| what | concludes | where |
+|---|---|---|
+| `Eval::ble/blt/beq` | `⊢ ble(num a, num b) = num(1 \| 0)` | `derived/src/nat/eval.rs:454`–`:464` |
+| `Eval::ble_bool` | `⊢ bleb(t,f,num a,num b) = t \| f` | `derived/src/nat/eval.rs:485` |
+| `boolify_zero` / `boolify_one` | `⊢ ∀t ∀f. boolify(t,f,0) = f`, `… (t,f,succ 0) = t` — **unconditional, no induction, 15 inferences flat** | `derived/src/nat/boolean.rs:134`, `:136` |
+| **the export bridge** | `⊢ ∀g ∀t ∀f. (clause₁ → clause₂ → clause₃ → ∀x,y ∈ ω. app(app(g,x),y) = bleb(t,f,x,y))` | `derived/src/nat/ble_unique.rs:149` |
+| firing it | `ble_transfer`, cost **independent of the size of `a` and `b`** | `derived/src/nat/ble_unique.rs:291` |
+
+The bridge's premises are **exactly the three ι clauses of `Nat.ble` and nothing
+else** — no typing on `g`, none on `t`/`f`, both clause premises stated only on
+ω (`ble_unique.rs:71`). Costs: `ble` is `12·bits + 10` (55 at 4 bits), the
+decode a flat 15.
+
+**None of it is wired.** `mini/src/nat_clause.rs:57` builds
+`{nat, add, bin, mul, sub, cmp}` and **no `Boolean`**; `Boolean::new`,
+`ble_uniqueness`, `ble_transfer` and `uniqueness`/`transfer` appear only in
+`derived/tests/nat.rs`. On the checker side `Nat.ble` at literals is still
+`Admit::NatRed`.
+
+### The order this implies
+
+1. `succ` as a set function on ω — the only missing construction.
+2. Swap `Inductives::nat` and `NatRec` to the ω apparatus; `NatMem` → `omega_mem`;
+   `fire_nat` to `iota_zero`/`iota_succ`. **`derived::wnat` stays in the tree
+   until `cumul/witness.rs` is moved too** — deleting it is a separate change.
+3. `⟦lit n⟧ = num(n)`, with `Eval::mem` as its typing. **Not before step 2** —
+   a literal in ω while `⟦Nat⟧` is a W-type is worse than today, because the two
+   would then be different objects *and* both non-opaque.
+4. Wire `Boolean` and `ble_transfer` at `Admit::NatRed`.
+
+**This is a chain: 3 alone regresses, and a chain is deleted as a chain.** Link
+3 of the previous attempt measured **+942 alone** against −2 597 in its pair.
 
 ## 1. What `mini` does with `Nat` today — measured
 
