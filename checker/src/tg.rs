@@ -4176,6 +4176,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         TgCert::Admitted(reason, mask)
     }
 
+    /// [`Self::note_admit`] at a projection reduction, with the deletion
+    /// measurement in front of it. See [`origin_assume`]; nothing is admitted
+    /// when it fires — the equation becomes an antecedent the escape ledger
+    /// charges for.
+    fn proj_admit(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        reason: &'static str,
+        ta: &Term,
+        tb: &Term,
+    ) -> TgCert {
+        #[cfg(feature = "stepcount")]
+        if origin_assume(reason) {
+            let f = Formula::eq(ta.clone(), tb.clone());
+            if let Some(c) = CondEq::new(derived::imp_refl(f.clone()), vec![f]) {
+                IOTA_ACQUIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return self.cert(ctx, c)
+            }
+        }
+        let _ = (ctx, ta, tb);
+        self.note_admit(reason)
+    }
+
     /// A 0-ary "numeral" term standing for an index. These are opaque tags, not
     /// the primitive `ℕ` of milestone 4.
     fn idx_term(&mut self, i: u64) -> Term {
@@ -16288,7 +16311,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
                 // reporting a gap — the measurement that validates the
                 // sub-tree column. See [`iota_assume`]; nothing is admitted.
                 #[cfg(feature = "stepcount")]
-                if iota_assume(why) {
+                if origin_assume(why) {
                     let (l, r) = (self.interp(ctx, redex), self.interp(ctx, reduct));
                     if l != r {
                         let f = Formula::eq(l, r);
@@ -16593,19 +16616,46 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     ) -> TgCert {
         let reason = crate::certify::Admit::ProjRed.name();
         let (ta, tb) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+        // Which structure is being projected, and does the checker hold the two
+        // proof premises this rule's only derivation needs? The first says
+        // whether this origin and the ι structure origin are the same missing
+        // construction; the second splits the origin by cause, as at ι.
+        #[cfg(feature = "stepcount")]
+        let note = |k: usize| PROJ_RED[k].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Both sides took one of §6.2's split clauses, or the interpretation
         // happens to compute: reflexivity is the claim, with no premise at all.
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
+        #[cfg(feature = "stepcount")]
+        {
+            // The projected structure, by name — the row that decides whether
+            // closing this origin and closing the ι structure origin are one
+            // construction or two.
+            if let Expr::Proj { ty_name, .. } = ctx.read_expr(redex) {
+                let n = self.decls.get_inductive(&ty_name).map(|i| i.all_ctor_names.len());
+                let sp = self.spell(ctx, ty_name);
+                *PROJ_STRUCTS
+                    .lock()
+                    .expect("proj_structs poisoned")
+                    .entry(format!("ctors={} {sp}", n.map_or("?".into(), |n| n.to_string())))
+                    .or_insert(0u64) += 1;
+            }
+        }
         let (Some(l), Some(r)) = (redex_proof, reduct_proof) else {
-            return self.note_admit(reason)
+            #[cfg(feature = "stepcount")]
+            note(0);
+            return self.proj_admit(ctx, reason, &ta, &tb)
         };
         let Some(ca) = self.point_of_proof_from(ctx, redex, l.ty, &l.mem, &l.prop, Pop::ThreadProjRed) else {
-            return self.note_admit(reason)
+            #[cfg(feature = "stepcount")]
+            note(1);
+            return self.proj_admit(ctx, reason, &ta, &tb)
         };
         let Some(cb) = self.point_of_proof_from(ctx, reduct, r.ty, &r.mem, &r.prop, Pop::ThreadProjRed) else {
-            return self.note_admit(reason)
+            #[cfg(feature = "stepcount")]
+            note(2);
+            return self.proj_admit(ctx, reason, &ta, &tb)
         };
         let out = self
             .ceq_symm(&cb)
@@ -16613,7 +16663,11 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             .filter(|out| out.proves(&ta, &tb));
         match out {
             Some(out) => self.cert(ctx, out),
-            None => self.note_admit(reason),
+            None => {
+                #[cfg(feature = "stepcount")]
+                note(3);
+                self.proj_admit(ctx, reason, &ta, &tb)
+            }
         }
     }
 
@@ -16864,44 +16918,57 @@ fn note_binder_var(reused: bool) {
 // closing `o` removes from the ledger, and `SUBTREE_MULTI` is the part no single
 // closure reaches.
 
-/// ι equations acquired as antecedents rather than reported as gaps — the
-/// deletion measurement, not a rule. See [`iota_assume`].
+/// Equations acquired as antecedents rather than reported as gaps — the
+/// deletion measurement, not a rule. See [`origin_assume`].
 #[cfg(feature = "stepcount")]
 static IOTA_ACQUIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Whether the ι acquisition runs: `NANODA_IOTA_ASSUME`, and only in a
-/// `stepcount` build.
+/// Whether an origin's gap is **acquired** instead of reported:
+/// `NANODA_ASSUME`, a comma-separated list of substrings matched against the
+/// gap's reason, and only in a `stepcount` build.
 ///
 /// **The deletion measurement, kept in the tree because the method is worth
 /// more than any one of its answers.** A decline population is judged by
-/// removing it and reading the *whole* ledger, not by its own size: that test
-/// has twice turned this stage's "largest row" into a worth-nothing (beta's
-/// domain premise, 0; the reduct's typing, 15) and once predicted a real 8 080.
-/// What it does here is **acquire** rather than admit — the theorem is
-/// `⊢ (⟦r⟧ = ⟦r'⟧) → (⟦r⟧ = ⟦r'⟧)`, a real [`derived::imp_refl`], and the
+/// removing it and reading the *whole* ledger, not by its own size. That test
+/// has turned two of this stage's "largest rows" into worth-nothings (beta's
+/// domain premise, 0 gaps; the reduct's typing, 15) and has predicted five real
+/// falls to within 9 % of the sub-tree column.
+///
+/// What it does is **acquire** rather than admit — the theorem is
+/// `⊢ (⟦a⟧ = ⟦b⟧) → (⟦a⟧ = ⟦b⟧)`, a real [`derived::imp_refl`], and the
 /// antecedent goes into the certificate where the escape ledger charges for it,
-/// so the run stays honest and the cost is visible (escapes 2 232 → 2 952).
+/// so the run stays honest and the cost is visible as escapes rather than
+/// hidden as a green tick.
+///
+/// Substring matching so that a whole family or one member of it can be named:
+/// `NANODA_ASSUME='iota: no interpretation'` deletes all four ι-interpretation
+/// causes, `NANODA_ASSUME='ONE-CONSTRUCTOR'` deletes only the structures, and
+/// `NANODA_ASSUME=proj_reduce` deletes the projection origin.
 ///
 /// Never on in any shipped configuration: `stepcount` is a measurement feature
 /// and this needs an environment variable on top of it.
 #[cfg(feature = "stepcount")]
-fn iota_assume(why: &str) -> bool {
-    static ON: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let v = ON.get_or_init(|| {
-        std::env::var("NANODA_IOTA_ASSUME").ok().map(|s| s.to_ascii_lowercase())
+fn origin_assume(why: &str) -> bool {
+    static ON: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let pats = ON.get_or_init(|| {
+        std::env::var("NANODA_ASSUME")
+            .ok()
+            .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default()
     });
-    match v.as_deref() {
-        None => false,
-        // Name one origin to delete it alone — the sub-tree column is per
-        // origin, so a combined run cannot check a single prediction.
-        // A prefix, so a single shape can be deleted on its own: `struct`
-        // names only the one-constructor structures, `nonest` all of them.
-        Some("nonest") => why.starts_with("iota: no interpretation"),
-        Some("struct") => why == "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE",
-        Some("notctor") => why == "iota: the major premise is not a constructor",
-        Some(_) => true,
-    }
+    pats.iter().any(|p| why.contains(p.as_str()))
 }
 
+/// Every exit of [`TgBackend::proj_red`] that is not a derivation: 0 the
+/// checker handed over no proof pair, 1 and 2 an endpoint is not a proof, 3 the
+/// two `•` equations did not compose to the claim.
+#[cfg(feature = "stepcount")]
+static PROJ_RED: [std::sync::atomic::AtomicU64; 4] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+/// The structures whose projections reduce without a certificate, by name and
+/// constructor count.
+#[cfg(feature = "stepcount")]
+static PROJ_STRUCTS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 /// For the one-constructor structures: does the single constructor take fields?
 /// Zero fields is a nullary constructor and `t_policy` has its canonical point;
 /// one or more is policy 3, which declines. Indices 0 / 1 / 2 = none / some /
@@ -16959,6 +17026,31 @@ fn origin_mask(cs: &[&TgCert]) -> u32 {
 /// The ranking: every origin, its own gaps, the relays it alone accounts for,
 /// and their sum. Ordered by the sum, which is the number the choice of a
 /// tranche should be made on.
+///
+/// # `SUBTREE` is an upper bound, and it is tight only for a terminal origin
+///
+/// *Calibrated against six deletions (`NANODA_ASSUME`). Five landed within 9 %
+/// of this column; the sixth missed by 34 % and the difference is structural,
+/// not noise.*
+///
+/// The column assumes a relay disappears when its sole origin closes. That
+/// holds when the origin is **terminal** — the derivation stops there and
+/// nothing past it is attempted — which is what the ι rows are: a recursor with
+/// no curried interpretation blocks the whole reduction, so the relays above it
+/// have no second gap to find. Predicted/measured for those: 3 286/3 066,
+/// 5 517/5 014, 2 680/2 480.
+///
+/// It overstates when the origin is **mid-chain**. `proj_reduce` predicted
+/// 2 467 and measured **1 618**, because certifying a projection does not end
+/// the conversion it sits in — it lets the derivation run on into the *next*
+/// wall. The re-attribution is visible row by row: deleting it moved `nat_eq`
+/// 66 → 391 and `nat_reduce` 111 → 190, i.e. a third of its predicted sub-tree
+/// was relays that promptly re-originated at literal arithmetic.
+///
+/// So: read `SUBTREE` as a ceiling, and confirm any origin worth building
+/// against by deleting it. **Measured deletions do compose** — the structures
+/// (2 480) and `proj_reduce` (1 618) together measure 4 098, to the digit — so
+/// the confirmation is needed once per origin and not once per combination.
 pub fn origin_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let v = ORIGINS.lock().expect("tg origins poisoned").clone();
@@ -17006,7 +17098,7 @@ pub fn origin_report() -> String {
         let n = IOTA_ACQUIRED.load(Relaxed);
         if n > 0 {
             s.push_str(&format!(
-                "  ι equations ACQUIRED rather than reported (a measurement, see `iota_assume`)  {n:>8}\n"
+                "  equations ACQUIRED rather than reported (a measurement, see `origin_assume`)  {n:>8}\n"
             ));
         }
     }
@@ -17023,6 +17115,35 @@ pub fn origin_report() -> String {
             for (r, n) in v.iter().take(40) {
                 s.push_str(&format!("    {r:<96}  {n:>8}\n"));
             }
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    if PROJ_RED.iter().map(|c| c.load(Relaxed)).sum::<u64>() > 0 {
+        s.push_str("  the third origin, `proj_reduce`, by exit\n");
+        for (i, l) in [
+            "the checker handed over no proof pair — the endpoints are not proofs",
+            "the redex is not a proof",
+            "the reduct is not a proof",
+            "both are proofs; the two • equations did not compose to the claim",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let n = PROJ_RED[i].load(Relaxed);
+            if n > 0 {
+                s.push_str(&format!("    {l:<96}  {n:>8}\n"));
+            }
+        }
+        let g = PROJ_STRUCTS.lock().expect("proj_structs poisoned");
+        let mut v: Vec<(&String, &u64)> = g.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        s.push_str(&format!(
+            "  …the structures projected — {} distinct, {} firings\n",
+            v.len(),
+            v.iter().map(|(_, n)| **n).sum::<u64>()
+        ));
+        for (r, n) in v.iter().take(25) {
+            s.push_str(&format!("    {r:<96}  {n:>8}\n"));
         }
     }
     #[cfg(feature = "stepcount")]

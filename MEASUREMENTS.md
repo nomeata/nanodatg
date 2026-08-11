@@ -7826,3 +7826,123 @@ is *type classes and wrapper structures* — `Add`, `Functor`, `BEq`, `Inhabited
 them at a density this file cannot represent. The 2 480 is a floor for what the
 construction is worth and almost certainly a low one; that cannot be measured
 here, and is recorded so the number is not read as a ceiling.
+
+## Origin 3, `proj_reduce`: 1 618 not 2 467, and it is origin 1's construction — 2026-08-11
+
+*The third of the three that carry 71.6 %. Two results: the sub-tree column
+missed for the first time, and the miss is structural and worth more than the
+origin; and the origin turns out not to be a tranche at all, because what it
+needs is the construction origin 1's structures already sent to `derived/`.*
+
+### The history, read and not re-derived
+
+`#102` proposed that the ι tower reaches `whnf_conv`'s doubled `Proj` arm and
+was **disproved** at `f5dab4d` — `nested_model.ndjson` contains no `proj` node at
+all. `#105` found a real parameter hole in `index_congr` that was **not
+exploitable**, both mutations dying at the consumer. Both looked at the
+projection path, one for cost and one for soundness; **neither asked what it
+originates**, which is why the row survived two passes.
+
+### What it originates, by exit
+
+| exit | |
+|---|---:|
+| the checker handed over no proof pair — the endpoints are not proofs | **652** |
+| the redex is not a proof | 7 |
+| the reduct is not a proof / the two `•` equations did not compose | 0 |
+
+659 exactly. **99 % is one cause**, and it is the one `proj_red`'s own header
+states: the rule's only derivation is Carneiro 6.7 — both endpoints are proofs,
+so both interpret to `•` — and where they are not proofs there is no rule at
+all, because *"this backend has no interpretation of structures, so it has no
+axiom about `mk`, none about `proj` beyond its being a function symbol"*.
+
+### The deletion: 1 618, against a predicted 2 467
+
+| | gaps | fall | predicted |
+|---|---:|---:|---:|
+| baseline | 15 734 | — | — |
+| `proj_reduce` deleted | **14 116** | **1 618** | 2 467 |
+
+**A 34 % over-prediction — the first outside 9 % in six deletions**, and the
+cause is visible row by row in the after-ranking rather than being noise:
+
+| row | before | after |
+|---|---:|---:|
+| nat_eq | 66 | **391** |
+| nat_reduce | 111 | 190 |
+| iota: several constructors | 2 144 | 2 340 |
+| iota: the major premise is not a constructor | 3 286 | 3 329 |
+| eq_cache | 849 | 890 |
+| relays naming two or more origins | 785 | **78** |
+
+The relays did not disappear; **they re-originated**. A third of the predicted
+sub-tree moved to literal arithmetic, `nat_eq` going up nearly sixfold.
+
+### The calibration this buys, which is the durable part
+
+`SUBTREE` assumes a relay vanishes when its sole origin closes. That is true for
+a **terminal** origin — one where the derivation stops and nothing past it is
+attempted — and every ι row is terminal, because a recursor with no curried
+interpretation blocks the whole reduction. Predicted/measured for those:
+3 286/3 066, 5 517/5 014, 2 680/2 480.
+
+It is false for a **mid-chain** origin. Certifying a projection does not end the
+conversion the projection sits in; it lets the derivation run on to the next
+wall, and the next wall bills someone else.
+
+So the column is a **ceiling**, and any origin worth building against should be
+confirmed by deleting it. That is cheap, because **measured deletions compose**:
+
+| deleted | gaps | fall |
+|---|---:|---:|
+| one-constructor structures | 13 254 | 2 480 |
+| `proj_reduce` | 14 116 | 1 618 |
+| **both** | **11 636** | **4 098** |
+
+2 480 + 1 618 = 4 098, to the digit. Additivity survives even where the
+prediction does not, so confirmation is needed once per origin, never once per
+combination.
+
+### And origin 3 is not a tranche — it is origin 1's construction, again
+
+Every structure whose projection reduces without a certificate is
+**one-constructor**, and there are only eight of them:
+
+| structure | firings |
+|---|---:|
+| `PProd` | 114 |
+| `OfNat` | 37 |
+| `PULift` | 8 |
+| `Fin` | 7 |
+| `Char` | 6 |
+| `Array`, `PLift`, `ULift` | 2 each |
+
+`(mk a⃗).i ⟶ aᵢ` and `S.rec C f (S.mk a⃗) ⟶ f a⃗` are the same eliminator of the
+same one-constructor inductive. A degenerate recursor in `derived::inductive`
+supplies both: the projection rule is that recursor at the projection motive.
+
+**So the construction already assigned for origin 1's structures is worth
+4 098 gaps — 26.0 % of the ledger — not 2 480**, provided it is built to serve
+the projection rule as well as the ι rule. That is a design constraint on that
+task, and it is the reason this tranche ends in a note to another seat rather
+than in a construction of its own.
+
+(Only 178 of the 659 declines have a literal `Expr::Proj` at the redex's head;
+the rest carry the projection deeper in a spine, so the eight names are the
+distinct structures seen at the head and not a partition of the 659.)
+
+### What is left on the board
+
+| origin | own | predicted sub-tree | measured |
+|---|---:|---:|---:|
+| iota: the major premise is not a constructor (`Nat.ble`) | 486 | 3 286 | 3 066 — *assigned* |
+| iota: a ONE-CONSTRUCTOR STRUCTURE | 400 | 2 680 | 2 480 — *assigned* |
+| `proj_reduce` | 659 | 2 467 | **1 618** — *same construction as above* |
+| iota: several constructors | 286 | 2 144 | unmeasured |
+| eq_cache | 287 | 849 | unmeasured |
+| iota: a mutual block | 100 | 593 | unmeasured |
+| iota: an indexed family | 6 | 60 | unmeasured |
+
+`several constructors` is the largest unassigned item; it is terminal, so its
+2 144 should hold to within 9 %.
