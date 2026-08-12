@@ -1539,21 +1539,59 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// The certificate for a [`Node::Cong`]: `app_cong` folded over the spine,
     /// reflexivity at every argument the inner reduction did not touch.
     ///
-    /// The endpoints are **checked** before anything is built — same head, same
-    /// arity, and every position where they differ is exactly the inner
-    /// reduction's own pair. That check is what lets the node be built without
-    /// one: a `Cong` whose endpoints are not one spine differing at `sub` is a
-    /// bug in the recording and is reported as `Admit::Whnf`, the same way a
-    /// `Seq` whose halves do not meet is.
+    /// The endpoints are **checked** before anything is built: either the head
+    /// is exactly the inner reduction and every argument is unchanged, or the
+    /// head is unchanged and every differing argument is exactly the inner
+    /// pair. A `Cong` of any other shape is a recording bug and is reported as
+    /// `Admit::Whnf`, like a `Seq` whose halves do not meet.
     fn cong_cert(
         &mut self,
         from: ExprPtr<'t>,
         to: ExprPtr<'t>,
         sub: &Rc<Trace<'t, Cert<'t, 'p>>>,
     ) -> DefEq<'t, 'p> {
+        // Head reduction under an unchanged suffix. Do not use
+        // `unfold_apps`: `sub.to` may itself be an application (the projected
+        // field in `proj_reduced_carrier` is a partially-applied lambda), and
+        // flattening would absorb part of the inner endpoint into the suffix.
+        let (mut hf, mut ht) = (from, to);
+        let mut suffix = Vec::new();
+        while (hf, ht) != (sub.from, sub.to) {
+            let (
+                Expr::App { fun: ff, arg: fa, .. },
+                Expr::App { fun: tf, arg: ta, .. },
+            ) = (self.ctx.read_expr(hf), self.ctx.read_expr(ht))
+            else {
+                break
+            };
+            if fa != ta {
+                break
+            }
+            suffix.push(fa);
+            hf = ff;
+            ht = tf;
+        }
+        if (hf, ht) == (sub.from, sub.to) && !suffix.is_empty() {
+            let Some(mut c) = self.trace_cert(sub) else {
+                return if from == to { None } else { self.admit(from, to, Admit::Whnf) }
+            };
+            let (mut lhs, mut rhs) = (hf, ht);
+            for a in suffix.into_iter().rev() {
+                lhs = self.ctx.mk_app(lhs, a);
+                rhs = self.ctx.mk_app(rhs, a);
+                crate::certify::bump_certified();
+                let ac = self.certifier.refl(self.ctx, a);
+                c = self.certifier.app_cong(self.ctx, lhs, rhs, c, ac);
+            }
+            return Some(c)
+        }
+
         let (f1, args1) = self.ctx.unfold_apps(from);
         let (f2, args2) = self.ctx.unfold_apps(to);
-        if f1 != f2 || args1.len() != args2.len() || args1.is_empty() {
+        if args1.len() != args2.len() || args1.is_empty() {
+            return self.admit(from, to, Admit::Whnf)
+        }
+        if f1 != f2 {
             return self.admit(from, to, Admit::Whnf)
         }
         let mut touched = false;
@@ -1918,13 +1956,18 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     // reduct and nothing else and inferring both endpoints would
                     // be work no conclusion rests on.
                     // TG's computation package concludes the projection
-                    // itself. A projection subsequently applied to arguments
-                    // needs an additional application-congruence leg; until
-                    // that leg is recorded, keep the old whole-step rule.
-                    let step = if carry_subject && proj.subject.is_some() {
-                        reduct::proj_red(e, e1, proj.subject)
-                    } else {
-                        reduct::one(Rule::ProjRed, e, e1)
+                    // itself. When that projection is subsequently applied,
+                    // record the projection at `e_fun`, then lift it through
+                    // the unchanged application suffix. Flattening the pair
+                    // into one `ProjRed(e,e1)` loses the rule's redex shape and
+                    // was exactly the last three gaps in
+                    // `proj_reduced_carrier`.
+                    let step = match proj.subject {
+                        Some(subject) => {
+                            let direct = reduct::proj_red(e_fun, proj.field, Some(subject));
+                            if carry_subject { direct } else { reduct::cong(e, e1, direct) }
+                        }
+                        None => reduct::one(Rule::ProjRed, e, e1),
                     };
                     let (r, rest) = self.whnf_no_unfolding_reduce(e1, cheap_proj);
                     (true, r, reduct::then(step, rest))

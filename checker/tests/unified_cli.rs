@@ -189,15 +189,18 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     // evidence; TG composes those certificates without consulting its private
     // constructor bridge or running another reduction. Before the handoff this
     // was 139 gaps, including seven missing carrier equations and six missing
-    // constructor equations. All 17 ready iota sites now compute and the
-    // remaining three projection reductions are outside this readiness gate.
+    // constructor equations. The initial carrier handoff computed 17 ready
+    // iota sites and left three applied projections. Recording each as an
+    // inner projection plus application congruence closes those origins and
+    // exposes three further ready iota sites, so all 20 now compute.
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 48, "the recursive-subject ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 17, "N.rec did not consume Mini's dependent evidence:\n{stdout}");
-    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 3, "a projection family outside the readiness gate moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 30, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 20, "N.rec did not consume Mini's dependent evidence:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
+    assert!(!stdout.contains("gap: proj_reduce"), "an applied projection lost its inner computation evidence:\n{stdout}");
+    assert!(!stdout.contains("gap: whnf"), "application congruence was not recorded faithfully:\n{stdout}");
 
     let u0 = run_on("field_in_u0_by_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&u0.stdout);

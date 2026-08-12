@@ -123,10 +123,11 @@ pub(crate) enum Node<'t, C> {
     /// Two reductions in sequence. The left one's `to` is the right one's
     /// `from`; [`then`] is the only constructor and establishes that.
     Seq(Rc<Trace<'t, C>>, Rc<Trace<'t, C>>),
-    /// A reduction **inside an application spine**: the two endpoints are the
-    /// same head applied to the same arguments except at the positions the
-    /// inner reduction is about, and the certificate is a fold of `app_cong`
-    /// with reflexivity everywhere else.
+    /// A reduction **inside an application spine**: either the head is the
+    /// inner reduction with every argument unchanged, or the two endpoints
+    /// have the same head and differ at the positions the inner reduction is
+    /// about. The certificate is a fold of `app_cong` with reflexivity
+    /// everywhere else.
     ///
     /// This exists for one reason. `reduce_rec` weak-head-normalises the major
     /// premise *inside itself* and then reports a single `Iota` step from the
