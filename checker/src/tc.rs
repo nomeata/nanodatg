@@ -761,7 +761,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // in it is non-increasing for the active backend.
         let subject = if reduced == after_whnf
             && self.certifier.wants_proj_red_subject(self.ctx, ty_name, reduced)
-            && self.projection_subject_ready(&trace)
+            && self.authoritative_reduction_ready(&trace)
         {
             trace
         } else {
@@ -770,16 +770,15 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         Some(ProjectionStep { field, subject })
     }
 
-    /// Whether exposing this trace to projection certification can avoid
-    /// asking an independently unsupported rule.
+    /// Whether replaying this reduction trace can avoid asking an independently
+    /// unsupported rule.
     ///
     /// Delta/beta/zeta/sort are the established reduction rules. A nested
     /// projection is admitted only when *its own* structure has authoritative
-    /// mini evidence. Iota stays behind the gate: exposing the unsupported
-    /// structural-recursion trace in `proj_reduced_carrier` adds 28 gaps before
-    /// the outer projection can decline. Once that iota family certifies, this
-    /// is the single gate to widen.
-    fn projection_subject_ready(&mut self, trace: &TracePtr<'t, Cert<'t, 'p>>) -> bool {
+    /// Mini evidence, and the same is true of iota. This is shared by projection
+    /// subjects and exact equality-cache trace recall so neither path can widen
+    /// support independently of the other.
+    fn authoritative_reduction_ready(&mut self, trace: &TracePtr<'t, Cert<'t, 'p>>) -> bool {
         let Some(trace) = trace else { return true };
         match &trace.node {
             Node::One(Rule::Beta | Rule::Zeta | Rule::Delta | Rule::Sort) => true,
@@ -795,17 +794,17 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             }
             Node::One(Rule::Admitted(_)) => false,
             Node::Seq(l, r) => {
-                self.projection_subject_ready(&Some(l.clone()))
-                    && self.projection_subject_ready(&Some(r.clone()))
+                self.authoritative_reduction_ready(&Some(l.clone()))
+                    && self.authoritative_reduction_ready(&Some(r.clone()))
             }
-            Node::Cong(sub) => self.projection_subject_ready(&Some(sub.clone())),
+            Node::Cong(sub) => self.authoritative_reduction_ready(&Some(sub.clone())),
             Node::ProjRed(sub) => {
                 let (head, _) = self.ctx.unfold_apps(trace.from);
                 let Expr::Proj { ty_name, .. } = self.ctx.read_expr(head) else {
                     return false
                 };
                 self.certifier.wants_proj_red_subject(self.ctx, ty_name, sub.to)
-                    && self.projection_subject_ready(&Some(sub.clone()))
+                    && self.authoritative_reduction_ready(&Some(sub.clone()))
             }
         }
     }
@@ -2796,13 +2795,15 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// (the backend has a defining equation for the head constant and folds
     /// congruence over the argument spine), composed with whatever the cheap
     /// reduction of the result needed.
-    fn delta(&mut self, e: ExprPtr<'t>) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
+    fn delta(&mut self, e: ExprPtr<'t>) -> (ExprPtr<'t>, DefEq<'t, 'p>, TracePtr<'t, Cert<'t, 'p>>) {
         let unfolded = self.unfold_def(e).unwrap();
         crate::certify::bump_certified();
         let step = Some(self.certifier.delta(self.ctx, e, unfolded));
-        let (r, rest) = self.whnf_no_unfolding_aux_with_cert(unfolded, true);
+        let (r, rest_trace) = self.whnf_no_unfolding_reduce(unfolded, true);
+        let rest = self.certify_reduct(unfolded, r, &rest_trace);
         let cert = self.seq(e, r, step, rest);
-        (r, cert)
+        let trace = reduct::then(reduct::one(Rule::Delta, e, unfolded), rest_trace);
+        (r, cert, trace)
     }
 
     /// Try to unfold the base `Const` and re-fold applications, but don't
@@ -2879,6 +2880,9 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// answer this whole method exists to stop giving — rather than a claim.
     fn recall_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         let Some(hops) = self.tc_cache.eq_cache.explain(x, y) else {
+            if let Some(cert) = self.recall_reduction_eq(x, y) {
+                return cert
+            }
             return self.admit(x, y, Admit::Cache)
         };
         let mut acc: DefEq<'t, 'p> = None;
@@ -2901,6 +2905,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return self.admit(x, y, Admit::Cache)
         }
         acc
+    }
+
+    /// Recover an equality-cache decision from the exact reduction evidence
+    /// that established it, when the union edge itself could not retain that
+    /// evidence.
+    ///
+    /// Conditional certificates are deliberately not copied into the global
+    /// proof forest: its key is only an expression pair and cannot account for
+    /// their local premises. The lazy-delta recipe table is different. It
+    /// retains the reduction trace, not a theorem, and that trace names both
+    /// endpoints. Replaying it here is therefore licensed only when its key is
+    /// the requested pair, the trace names exactly those endpoints, and
+    /// every non-structural step is behind the backend's authoritative Mini
+    /// readiness gate. No reduction or equality check is repeated, and an
+    /// unexplained union path still fails closed as `eq_cache`.
+    fn recall_reduction_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
+        let trace = self.tc_cache.eq_reduct_cache.get(&(x, y))?.clone();
+        if !trace.as_ref().is_some_and(|t| t.from == x && t.to == y) {
+            return None
+        }
+        if !self.authoritative_reduction_ready(&trace) {
+            return None
+        }
+        Some(self.certify_reduct(x, y, &trace))
     }
 
     fn failure_cache_contains(&self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
@@ -2988,11 +3016,15 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
-    fn try_unfold_proj_app(&mut self, e: ExprPtr<'t>) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>)> {
+    fn try_unfold_proj_app(
+        &mut self,
+        e: ExprPtr<'t>,
+    ) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>, TracePtr<'t, Cert<'t, 'p>>)> {
         if let Proj { .. } = self.ctx.read_expr(self.ctx.unfold_apps_fun(e)) {
-            let (eprime, cert) = self.whnf_no_unfolding_aux_with_cert(e, false);
+            let (eprime, trace) = self.whnf_no_unfolding_reduce(e, false);
             if eprime != e {
-                return Some((eprime, cert))
+                let cert = self.certify_reduct(e, eprime, &trace);
+                return Some((eprime, cert, trace))
             }
         }
         None
@@ -3047,6 +3079,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // unfolding proceeds, so they cannot stand in for it.
         let (x0, y0) = (x, y);
         let (mut x_leg, mut y_leg): (DefEq<'t, 'p>, DefEq<'t, 'p>) = (None, None);
+        let (mut x_trace, mut y_trace): (TracePtr<'t, Cert<'t, 'p>>, TracePtr<'t, Cert<'t, 'p>>) =
+            (None, None);
         loop {
             if let Some(mid) = self.delta_try_nat(x, y) {
                 return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
@@ -3055,47 +3089,65 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             match (r1, r2) {
                 (None, None) => return Exhausted { x, y, x_leg, y_leg },
                 (Some(..), None) =>
-                    if let Some((yprime, step)) = self.try_unfold_proj_app(y) {
+                    if let Some((yprime, step, trace)) = self.try_unfold_proj_app(y) {
                         y_leg = self.seq(y0, yprime, y_leg, step);
+                        y_trace = reduct::then(y_trace, trace);
                         y = yprime;
                     } else {
-                        let (xprime, step) = self.delta(x);
+                        let (xprime, step, trace) = self.delta(x);
                         x_leg = self.seq(x0, xprime, x_leg, step);
+                        x_trace = reduct::then(x_trace, trace);
                         x = xprime;
                     },
                 (None, Some(..)) =>
-                    if let Some((xprime, step)) = self.try_unfold_proj_app(x) {
+                    if let Some((xprime, step, trace)) = self.try_unfold_proj_app(x) {
                         x_leg = self.seq(x0, xprime, x_leg, step);
+                        x_trace = reduct::then(x_trace, trace);
                         x = xprime;
                     } else {
-                        let (yprime, step) = self.delta(y);
+                        let (yprime, step, trace) = self.delta(y);
                         y_leg = self.seq(y0, yprime, y_leg, step);
+                        y_trace = reduct::then(y_trace, trace);
                         y = yprime;
                     },
                 (Some((_, l_hint)), Some((_, r_hint))) if l_hint.is_lt(&r_hint) => {
-                    let (yprime, step) = self.delta(y);
+                    let (yprime, step, trace) = self.delta(y);
                     y_leg = self.seq(y0, yprime, y_leg, step);
+                    y_trace = reduct::then(y_trace, trace);
                     y = yprime;
                 }
                 (Some((_, l_hint)), Some((_, r_hint))) if r_hint.is_lt(&l_hint) => {
-                    let (xprime, step) = self.delta(x);
+                    let (xprime, step, trace) = self.delta(x);
                     x_leg = self.seq(x0, xprime, x_leg, step);
+                    x_trace = reduct::then(x_trace, trace);
                     x = xprime;
                 }
                 (Some((x_name, l_hint)), Some((y_name, r_hint))) => {
                     if let Some(mid) = self.try_eq_const_app(x, x_name, l_hint, y, y_name, r_hint) {
                         return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
                     } else {
-                        let (xprime, x_step) = self.delta(x);
-                        let (yprime, y_step) = self.delta(y);
+                        let (xprime, x_step, x_step_trace) = self.delta(x);
+                        let (yprime, y_step, y_step_trace) = self.delta(y);
                         x_leg = self.seq(x0, xprime, x_leg, x_step);
                         y_leg = self.seq(y0, yprime, y_leg, y_step);
+                        x_trace = reduct::then(x_trace, x_step_trace);
+                        y_trace = reduct::then(y_trace, y_step_trace);
                         x = xprime;
                         y = yprime;
                     }
                 }
             }
             if let Some(quick_result) = self.def_eq_quick_check(x, y) {
+                // Pointer equality after reducing only one side is an exact
+                // reduction explanation for the original pair. Retain the
+                // trace recipe, not the conditional certificate produced from
+                // it, so a later union-find hit can ask the authoritative rules
+                // again without importing or parking local assumptions.
+                if x == y && y == y0 && y_trace.is_none() && x_trace.is_some() {
+                    self.tc_cache.eq_reduct_cache.insert((x0, y0), x_trace.clone());
+                } else if x == y && x == x0 && x_trace.is_none() && y_trace.is_some() {
+                    self.tc_cache.eq_reduct_cache.insert((y0, x0), y_trace.clone());
+                }
                 return FoundEqResult(self.compose_legs(x0, y, y0, quick_result, x_leg, y_leg))
             }
         }

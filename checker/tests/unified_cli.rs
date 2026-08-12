@@ -192,12 +192,17 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     // constructor equations. The initial carrier handoff computed 17 ready
     // iota sites and left three applied projections. Recording each as an
     // inner projection plus application congruence closes those origins and
-    // exposes three further ready iota sites, so all 20 now compute.
+    // exposes three further ready iota sites, so all 20 now compute. The first
+    // exact lazy-delta recipe also lets the equality cache replay
+    // `N.below motive N.z ≡ PUnit` without retaining its conditional theorem;
+    // one recursive-constructor equality still has a conditional structural
+    // tail and stays explicitly gated.
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 30, "the recursive-subject ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 20, "N.rec did not consume Mini's dependent evidence:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 28, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "gap: eq_cache"), 1, "the exact reduction recipe did not close precisely one cache root:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 21, "the cache replay did not consume Mini's dependent evidence:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "an applied projection lost its inner computation evidence:\n{stdout}");
     assert!(!stdout.contains("gap: whnf"), "application congruence was not recorded faithfully:\n{stdout}");

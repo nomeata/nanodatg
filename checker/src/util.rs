@@ -4,7 +4,7 @@ use crate::level::Level;
 use crate::name::Name;
 use crate::pretty_printer::{PpOptions, PrettyPrinter};
 use crate::tc::TypeChecker;
-use crate::reduct::Reduct;
+use crate::reduct::{Reduct, TracePtr};
 use crate::union_find::UnionFind;
 use crate::unique_hasher::UniqueHasher;
 use indexmap::{IndexMap, IndexSet};
@@ -933,6 +933,9 @@ pub(crate) struct TcCache<'t, C, Y> {
     /// answered by composing the certificates along the explain path rather
     /// than by admitting `Admit::Cache`. See [`crate::union_find`].
     pub(crate) eq_cache: UnionFind<ExprPtr<'t>, C>,
+    /// Exact reduction recipes exposed while lazy delta established an
+    /// equality. Unlike a union edge, these retain no copied certificate.
+    pub(crate) eq_reduct_cache: FxHashMap<(ExprPtr<'t>, ExprPtr<'t>), TracePtr<'t, C>>,
     /// A cache of congruence failures during the lazy delta step procedure.
     pub(crate) failure_cache: FxHashSet<(ExprPtr<'t>, ExprPtr<'t>)>,
     /// Strong reduction is not used during type-checking, this is more of a library/inspection feature.
@@ -947,6 +950,7 @@ impl<'t, C, Y> TcCache<'t, C, Y> {
             whnf_cache: new_unique_hash_map(),
             whnf_no_unfolding_cache: new_unique_hash_map(),
             eq_cache: UnionFind::new(),
+            eq_reduct_cache: FxHashMap::default(),
             failure_cache: new_fx_hash_set(),
             strong_cache: new_unique_hash_map(),
         }
@@ -958,6 +962,7 @@ impl<'t, C, Y> TcCache<'t, C, Y> {
         self.whnf_cache.clear();
         self.whnf_no_unfolding_cache.clear();
         self.eq_cache.clear();
+        self.eq_reduct_cache.clear();
         self.failure_cache.clear();
         self.strong_cache.clear();
     }
@@ -1125,4 +1130,3 @@ struct ExitStatus {
     tc_err: Option<String>,
     pp_err: Option<String>
 }
-
