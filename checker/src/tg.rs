@@ -8777,11 +8777,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             note_decline(Decline::Build);
             return None
         }
-        // Mini is the sole declaration checker. For the fieldless,
-        // parameterless family, adopt its exact carrier instead of building a
-        // parallel enum carrier.
-        if np == 0 && spec.ctors.iter().all(|c| c.args.is_empty() && c.recs == 0) {
-            if let Some(translated) = self.mini_fieldless_translation_at(ctx, ind_name, levels) {
+        // Mini is the sole declaration checker. For the parameterless family
+        // whose only fields are at most one plain recursive occurrence, adopt
+        // its exact carrier instead of building a parallel enum/Peano carrier.
+        if np == 0
+            && spec
+                .ctors
+                .iter()
+                .all(|c| c.args.is_empty() && c.recs <= 1 && c.rec_dom(0).is_empty())
+        {
+            if let Some(translated) =
+                self.mini_plain_recursive_translation_at(ctx, ind_name, levels)
+            {
                 let same = translated.ind.spec.ctors.len() == spec.ctors.len()
                     && translated
                         .ind
@@ -8933,12 +8940,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             note_dt(Dt::NestDrift);
         }
-        // Mini already owns the Lean-facing name for an adopted fieldless
-        // declaration. At zero parameters its defining equation is the entire
-        // type-former bridge.
+        // Mini already owns the Lean-facing name for an adopted parameterless
+        // declaration. Its defining equation is the entire type-former bridge.
         if gi.param_vars.is_empty()
             && self
-                .mini_fieldless_translation_at(ctx, ind_name, levels)
+                .mini_plain_recursive_translation_at(ctx, ind_name, levels)
                 .is_some_and(|tr| Rc::ptr_eq(&tr.ind, &gi.ind))
         {
             let head = self.mini_const(ctx, ind_name, levels)?;
@@ -9671,8 +9677,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.core.projection_translation(&key)
     }
 
-    /// Mini's fieldless, parameterless class-(T) translation at an exact key.
-    fn mini_fieldless_translation_at(
+    /// Mini's exact parameterless translation for the smallest recursive
+    /// constructor family TG can consume without a grain crossing: no plain
+    /// fields, and at most one plain recursive field per constructor. This
+    /// includes the fieldless family and the `N.s : N -> N` shape; a
+    /// function-typed recursive field remains outside the gate.
+    fn mini_plain_recursive_translation_at(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         ty_name: NamePtr<'t>,
@@ -9681,12 +9691,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let translated = self.mini_translation_at(ctx, ty_name, levels)?;
         (translated.ind.spec.params == 0
             && !translated.ind.spec.ctors.is_empty()
-            && translated
-                .ind
-                .spec
-                .ctors
-                .iter()
-                .all(|c| c.args.is_empty() && c.recs == 0))
+            && translated.ind.spec.ctors.iter().all(|c| {
+                c.args.is_empty() && c.recs <= 1 && c.rec_dom(0).is_empty()
+            }))
         .then_some(translated)
     }
 
@@ -10958,8 +10965,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         None
     }
 
-    /// Mini's exact dependent recursor, initially for the parameterless,
-    /// fieldless family needed by the reduced projection subject `Two.rec`.
+    /// Mini's exact dependent recursor for the parameterless fieldless family
+    /// and its narrow plain-recursive extension (`N.z` / `N.s n`).
     fn mini_dep_rec_bottom(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -10973,7 +10980,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let ind_name = r.all_inductives[0];
         let given = ctx.read_levels(levels).to_vec();
         let ind_levels = ctx.alloc_levels_slice(given.get(1..)?);
-        let translated = self.mini_fieldless_translation_at(ctx, ind_name, ind_levels)?;
+        let translated =
+            self.mini_plain_recursive_translation_at(ctx, ind_name, ind_levels)?;
         let rec_key = self.const_key(ctx, *name, levels)?;
         let (dep, elim) = self.core.dep_elim(&rec_key)?;
         let gi = self.gen_ind(ctx, ind_name, ind_levels)?;
@@ -13731,7 +13739,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
-    ) -> Result<(CondEq, Vec<Term>, Term), &'static str> {
+    ) -> Result<
+        (CondEq, Vec<Term>, Term, Vec<(Thm, Vec<Formula>)>),
+        &'static str,
+    > {
         let (head, args) = ctx.unfold_apps(e);
         let Expr::Const { .. } = ctx.read_expr(head) else {
             return Err("projection: the structure head is not a constant")
@@ -13742,6 +13753,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut cur = self.interp(ctx, head);
         let mut acc = CondEq::refl(cur.clone());
         let mut terms = Vec::with_capacity(args.len());
+        let mut obligations = Vec::with_capacity(args.len());
         for arg in args {
             let pi = self
                 .expose_pi(ctx, ty)
@@ -13762,10 +13774,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 .ceq_trans(&lifted, &step)
                 .ok_or("projection: chaining the constructor contraction failed")?;
             terms.push(ta);
+            obligations.push((mem, hyps));
             cur = next;
             ty = ctx.inst(body, &[arg]);
         }
-        Ok((acc, terms, cur))
+        Ok((acc, terms, cur, obligations))
     }
 
     /// Consume mini's constructor projection computation rule, optionally
@@ -13806,7 +13819,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (translated, dp) = self
             .mini_projection_at(ctx, ty_name, levels)
             .ok_or("projection: mini published no class-(T) package")?;
-        let (spine, terms, bottom) = self.adopted_const_spine(ctx, structure)?;
+        let (spine, terms, bottom, _) = self.adopted_const_spine(ctx, structure)?;
         let ctor_i = usize::from(ctor.ctor_idx);
         let abbrev = translated
             .ctor_abbrev
@@ -15578,14 +15591,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Expr::Const { name: cname, levels: clevels, .. } = ctx.read_expr(chead) else {
             return Err("iota: a dependent minor's codomain is not the motive at a constructor")
         };
-        let _ = self.interp(ctx, chead);
-        let clv = self.interp_levels(ctx, clevels);
-        let Some(br) = self.gen_ctor_bridges.get(&(cname, clv)).cloned() else {
-            return Err("iota: the constructor has no bridge to the carrier's term")
-        };
-        if br.vars.len() != np + k + m || br.np != np || br.order.as_slice() != order {
-            return Err("iota: the constructor's bridge is about another constructor")
-        }
         // The spine's arguments are the parameters and then the fields **in
         // declared order** — the mask, not the two groups — which is the same
         // interleaving `rung` walked and so the same list `declared` typed.
@@ -15603,12 +15608,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
             }
         }
-        let Some(spine_inst) = derived::inst_all(&br.spine, &tf) else {
-            return Err("iota: instantiating the constructor's bridge failed")
-        };
-        let Some((ante, spine_eq)) = spine_inst.concl().as_imp() else {
-            return Err("iota: the constructor's bridge is not conditional")
-        };
         let ctor_term = {
             let m = mach.borrow();
             match ind.ctor_term(&m, i, &ys, &ts) {
@@ -15616,47 +15615,102 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 None => return Err("iota: the constructor term could not be built"),
             }
         };
-        if spine_eq.as_eq() != Some((spine.clone(), ctor_term.clone())) {
-            return Err("iota: the constructor's bridge is not about this spine")
-        }
-        // The shared antecedent is **every** argument of the Lean spine at the
-        // nest's domains: the `np` parameters, then the fields. The fields are
-        // what the walk above proved on the way down, atom for atom; the
-        // parameters come from `nest_chain`.
-        //
-        // **`derived::conj_of`, not this file's.** [`GenCtorBridge`]'s
-        // antecedent is right-nested and this file's assumption lists are
-        // left-nested — the same trap `gen_minor_typed` records, at a
-        // constructor instead of a minor premise, and invisible below three
-        // atoms.
-        let mut all_f: Vec<Formula> = Vec::with_capacity(np + k + m);
-        for (j, (thm, _)) in pobs.iter().enumerate() {
-            let Some(f) = u_concl(thm, conj_of(&obligations[j].1).as_ref()) else {
-                return Err("iota: a parameter's typing has no conclusion")
-            };
-            if f.as_mem().map(|(s, _)| s) != Some(ps[j].clone()) {
-                return Err("iota: a parameter's typing is about another term")
+        let head_t = self.interp(ctx, chead);
+        let bridged = if let Some(axs) = dp.ctor_abbrev.as_ref() {
+            // The adopted carrier has no TG-private `GenCtorBridge`: Mini's
+            // retained lambda certificates and `ctor_abbrev` are that bridge.
+            // Every premise here is already under the walk's `h_all`, so no
+            // typing search or second check is performed.
+            let mut mems: Vec<Thm> = param_thms.clone();
+            mems.extend(declared.iter().cloned());
+            if mems.len() != tf.len() {
+                return Err("iota: mini's constructor premises have another arity")
             }
-            all_f.push(f);
-        }
-        all_f.extend(declared_f.iter().cloned());
-        if derived::conj_of(&all_f) != Some(ante.clone()) {
-            return Err("iota: the constructor's antecedent is not the walk's own domains")
-        }
-        let mut rest: Vec<Thm> = param_thms.clone();
-        rest.extend(declared.iter().cloned());
-        let mut assembled = rest.pop().expect("np + k + m >= 1");
-        while let Some(p) = rest.pop() {
-            let Some(both) = u_and_intro(&p, &assembled, ha) else {
-                return Err("iota: assembling the constructor's premises failed")
+            let h_one = vec![h_all.clone()];
+            let mut cur = head_t;
+            let mut beta = CondEq::refl(cur.clone());
+            for (term, mem) in tf.iter().zip(&mems) {
+                let Some((subj, dom)) = u_concl(mem, ha).and_then(|f| f.as_mem()) else {
+                    return Err("iota: mini's constructor premise is not a membership")
+                };
+                if subj != *term {
+                    return Err("iota: mini's constructor premise is about another term")
+                }
+                let lifted = self
+                    .ceq_congr(ap.app, &[beta.clone(), CondEq::refl(term.clone())])
+                    .ok_or("iota: congruence over mini's constructor spine refused")?;
+                let (step, next) =
+                    self.adopted_lam_step(&cur, term, &dom, mem, &h_one)?;
+                beta = self
+                    .ceq_trans(&lifted, &step)
+                    .ok_or("iota: chaining mini's constructor spine failed")?;
+                cur = next;
+            }
+            let cax = axs
+                .get(i)
+                .and_then(|ax| derived::inst_all(ax, &tf))
+                .and_then(CondEq::plain)
+                .ok_or("iota: mini published no constructor abbreviation")?;
+            if cax.as_eq().map(|(l, _)| l) != Some(cur) {
+                return Err("iota: mini's constructor abbreviation has another bottom")
+            }
+            let ceq = self
+                .ceq_trans(&beta, &cax)
+                .ok_or("iota: chaining mini's constructor abbreviation failed")?;
+            if ceq.as_eq() != Some((spine.clone(), ctor_term.clone()))
+                || ceq.hyps != h_one
+            {
+                return Err("iota: mini's constructor bridge is about another spine")
+            }
+            ceq.thm
+        } else {
+            let clv = self.interp_levels(ctx, clevels);
+            let Some(br) = self.gen_ctor_bridges.get(&(cname, clv)).cloned() else {
+                return Err("iota: the constructor has no bridge to the carrier's term")
             };
-            assembled = both;
-        }
-        if u_concl(&assembled, ha) != Some(ante) {
-            return Err("iota: the constructor's assembled premise is not the one it asks for")
-        }
-        let Some(bridged) = u_syl(&assembled, &spine_inst, ha) else {
-            return Err("iota: discharging the constructor's bridge failed")
+            if br.vars.len() != np + k + m || br.np != np || br.order.as_slice() != order {
+                return Err("iota: the constructor's bridge is about another constructor")
+            }
+            let Some(spine_inst) = derived::inst_all(&br.spine, &tf) else {
+                return Err("iota: instantiating the constructor's bridge failed")
+            };
+            let Some((ante, spine_eq)) = spine_inst.concl().as_imp() else {
+                return Err("iota: the constructor's bridge is not conditional")
+            };
+            if spine_eq.as_eq() != Some((spine.clone(), ctor_term.clone())) {
+                return Err("iota: the constructor's bridge is not about this spine")
+            }
+            // The shared antecedent is every argument at the nest's domains.
+            // `derived::conj_of` is right-nested; TG's ambient assumptions are
+            // left-nested, so the premise is assembled explicitly.
+            let mut all_f: Vec<Formula> = Vec::with_capacity(np + k + m);
+            for (j, (thm, _)) in pobs.iter().enumerate() {
+                let Some(f) = u_concl(thm, conj_of(&obligations[j].1).as_ref()) else {
+                    return Err("iota: a parameter's typing has no conclusion")
+                };
+                if f.as_mem().map(|(s, _)| s) != Some(ps[j].clone()) {
+                    return Err("iota: a parameter's typing is about another term")
+                }
+                all_f.push(f);
+            }
+            all_f.extend(declared_f.iter().cloned());
+            if derived::conj_of(&all_f) != Some(ante.clone()) {
+                return Err("iota: the constructor's antecedent is not the walk's own domains")
+            }
+            let mut rest: Vec<Thm> = param_thms.clone();
+            rest.extend(declared.iter().cloned());
+            let mut assembled = rest.pop().expect("np + k + m >= 1");
+            while let Some(p) = rest.pop() {
+                let Some(both) = u_and_intro(&p, &assembled, ha) else {
+                    return Err("iota: assembling the constructor's premises failed")
+                };
+                assembled = both;
+            }
+            if u_concl(&assembled, ha) != Some(ante) {
+                return Err("iota: the constructor's assembled premise is not the one it asks for")
+            }
+            u_syl(&assembled, &spine_inst, ha)
+                .ok_or("iota: discharging the constructor's bridge failed")?
         };
         let Some(at_motive) = ({
             let mut env = self.env_mut();
@@ -15995,6 +16049,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let eq = CondEq::plain(ax)
                 .ok_or("iota: mini's constructor abbreviation is not an equation")?;
             (eq, None, Vec::new(), Vec::new(), Vec::new())
+        } else if dp.elim.is_some() {
+            self.mini_ctor_spine_bridge(
+                ctx,
+                dp,
+                args[major],
+                fields,
+                &ta[major],
+                &ty_ax,
+                &ty_hyps,
+                idx,
+                &order,
+            )?
         } else {
             self.ctor_spine_bridge(ctx, cfun, cparams, fields, &ta[major], &ps, &order)?
         };
@@ -16221,7 +16287,23 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 rec_args.push(fields[f]);
                 let mut rec_ta: Vec<Term> = ta[..major].to_vec();
                 rec_ta.push(ts_c[ri].clone());
-                let (call, _) = self.nest_chain(ctx, nest, &rec_args, &rec_ta, doms)?;
+                let (mut call, _) = self.nest_chain(ctx, nest, &rec_args, &rec_ta, doms)?;
+                // The adopted nest stops at Mini's stable name for
+                // `app(drec,t_j)`, just as the outer nest does in
+                // `derive_iota`. Consume the same retained equation here
+                // before reversing the recursive-call contraction.
+                if nest.adopted {
+                    let elim = dp
+                        .elim
+                        .as_ref()
+                        .ok_or("iota: adopted dependent nest has no bottom evidence")?;
+                    let unfold = derived::inst_all(&elim.ax, &rec_ta)
+                        .and_then(CondEq::plain)
+                        .ok_or("iota: mini's recursive-call bottom did not instantiate")?;
+                    call = self
+                        .ceq_trans(&call, &unfold)
+                        .ok_or("iota: chaining mini's recursive-call bottom failed")?;
+                }
                 let Some(back) = self.ceq_symm(&call) else {
                     return Err("iota: reversing a recursive call's contraction failed")
                 };
@@ -16238,6 +16320,107 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         DEP_IOTAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(acc)
+    }
+
+    /// Mini's constructor nest at a use site's actual fields, composed with
+    /// the constructor abbreviation retained by the authoritative
+    /// translation. The narrow adopted family has no parameters or plain
+    /// fields and at most one plain recursive field, so each field obligation
+    /// moves along the already-derived type-former bridge and supplies exactly
+    /// the `H_i` the dependent rule asks for.
+    #[allow(clippy::too_many_arguments)]
+    fn mini_ctor_spine_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        dp: &DepBottom,
+        major: ExprPtr<'t>,
+        fields: &[ExprPtr<'t>],
+        spine: &Term,
+        ty_ax: &Thm,
+        ty_hyps: &[Formula],
+        idx: usize,
+        order: &[Slot],
+    ) -> Result<CtorBridgeAt, &'static str> {
+        if !dp.gi.param_vars.is_empty()
+            || order.iter().any(|slot| !matches!(slot, Slot::Rec))
+            || fields.len() > 1
+        {
+            return Err("iota: mini's constructor bridge is outside the adopted shape")
+        }
+        let (beta, terms, bottom, obligations) = self.adopted_const_spine(ctx, major)?;
+        if terms.len() != fields.len() || obligations.len() != terms.len() {
+            return Err("iota: mini's constructor spine has another arity")
+        }
+        let cax = dp
+            .ctor_abbrev
+            .as_ref()
+            .and_then(|axs| axs.get(idx))
+            .and_then(|ax| derived::inst_all(ax, &terms))
+            .and_then(CondEq::plain)
+            .ok_or("iota: mini published no constructor abbreviation")?;
+        if cax.as_eq().map(|(l, _)| l) != Some(bottom) {
+            return Err("iota: mini's constructor abbreviation has another bottom")
+        }
+        let ctor_eq = self
+            .ceq_trans(&beta, &cax)
+            .ok_or("iota: chaining mini's constructor abbreviation failed")?;
+
+        let mut moved: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(terms.len());
+        for ((mem, hs), term) in obligations.iter().zip(&terms) {
+            let h = conj_of(hs);
+            let Some((subj, _)) = u_concl(mem, h.as_ref()).and_then(|f| f.as_mem()) else {
+                return Err("iota: mini's constructor field has no typing conclusion")
+            };
+            if subj != *term {
+                return Err("iota: mini's constructor field typing is about another term")
+            }
+            let tm = term.clone();
+            let Some(at_ind) = self.mem_along_c(mem, hs, ty_ax, ty_hyps, move |w| {
+                Formula::mem(tm.clone(), w)
+            }) else {
+                return Err("iota: moving mini's recursive field onto the carrier failed")
+            };
+            moved.push(at_ind);
+        }
+
+        let mut ctor_hyps = ctor_eq.hyps.clone();
+        for (_, hs) in &moved {
+            ctor_hyps = merge_hyps(&ctor_hyps, hs);
+        }
+        let ctor_h = if moved.is_empty() {
+            None
+        } else {
+            let h = conj_of(&ctor_hyps);
+            let mut parts = Vec::with_capacity(moved.len());
+            for (thm, hs) in &moved {
+                let Some(restated) = reassume(thm, hs, &ctor_hyps) else {
+                    return Err("iota: restating mini's constructor field typing failed")
+                };
+                parts.push(restated);
+            }
+            let mut acc = parts.pop().expect("a fieldful constructor has an obligation");
+            while let Some(part) = parts.pop() {
+                let Some(both) = u_and_intro(&part, &acc, h.as_ref()) else {
+                    return Err("iota: assembling mini's constructor field typings failed")
+                };
+                acc = both;
+            }
+            Some(acc)
+        };
+
+        let ts = terms;
+        let ctor_term = {
+            let mach = self.machine().ok_or("iota: the general apparatus is unavailable")?;
+            let m = mach.borrow();
+            dp.gi
+                .ind
+                .ctor_term(&m, idx, &[], &ts)
+                .ok_or("iota: mini's constructor term could not be built")?
+        };
+        if ctor_eq.as_eq() != Some((spine.clone(), ctor_term)) {
+            return Err("iota: mini's constructor bridge is about another spine")
+        }
+        Ok((ctor_eq, ctor_h, ctor_hyps, Vec::new(), ts))
     }
 
     /// **The Lean spine of a constructor with fields, brought to the carrier's
@@ -20046,7 +20229,8 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let given = ctx.read_levels(levels).to_vec();
         let Some(ind_given) = given.get(1..) else { return false };
         let ind_levels = ctx.alloc_levels_slice(ind_given);
-        self.mini_fieldless_translation_at(ctx, r.all_inductives[0], ind_levels).is_some()
+        self.mini_plain_recursive_translation_at(ctx, r.all_inductives[0], ind_levels)
+            .is_some()
             && self
                 .const_key(ctx, name, levels)
                 .is_some_and(|key| self.core.has_dep_elim(&key))

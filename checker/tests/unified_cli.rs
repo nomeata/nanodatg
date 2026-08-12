@@ -149,10 +149,11 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
 /// projection congruence through the same tuple projection, and consumes the
 /// retained constructor computation rule for direct redexes. The projection
 /// trace now also retains a subject's already-computed whnf certificate and
-/// hands it to TG: delta-only, the mini-published fieldless dependent-iota
-/// family, and nested projection subjects compose without a second reduction.
-/// Other iota traces remain behind the readiness gate, so exposing an
-/// independently unsupported rule cannot increase the ledger.
+/// hands it to TG: delta-only, Mini's parameterless fieldless and unary
+/// plain-recursive dependent-iota families, and nested projection subjects
+/// compose without a second reduction. Other iota traces remain behind the
+/// readiness gate, so exposing an independently unsupported rule cannot
+/// increase the ledger.
 #[test]
 fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let direct = run_on("proj_reduced_subject.ndjson", &["--no-modelgen", "--verbose"]);
@@ -182,13 +183,21 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
         "projection congruence used the retired opaque spelling:\n{stdout}",
     );
 
-    // This subject reaches PProd only through a still-unsupported iota family.
-    // Asking for that trace used to add 28 gaps; the readiness gate must leave
-    // the exact pre-tranche control untouched.
+    // The structural-recursion compiler's projection subjects reduce through
+    // `N.rec` at both `N.z` and the applied recursive constructor `N.s n`.
+    // Mini owns the carrier, dependent recursor, constructor nest and iota
+    // evidence; TG composes those certificates without consulting its private
+    // constructor bridge or running another reduction. Before the handoff this
+    // was 139 gaps, including seven missing carrier equations and six missing
+    // constructor equations. All 17 ready iota sites now compute and the
+    // remaining three projection reductions are outside this readiness gate.
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
-    assert_eq!(carrier.status.code(), Some(4), "the carrier control's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 139, "an unsupported iota trace was exposed:\n{stdout}");
+    assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 48, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 17, "N.rec did not consume Mini's dependent evidence:\n{stdout}");
+    assert_eq!(report_count(&stdout, "gap: proj_reduce"), 3, "a projection family outside the readiness gate moved:\n{stdout}");
+    assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
 
     let u0 = run_on("field_in_u0_by_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&u0.stdout);
