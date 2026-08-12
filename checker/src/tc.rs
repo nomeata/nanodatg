@@ -81,7 +81,7 @@ pub(crate) enum DeltaResult<'t, C> {
     /// Equality settled during unfolding. The certificate justifies the pair
     /// `lazy_delta_step` was *called* with, not the unfolded one; `None` means
     /// the two were shown unequal.
-    FoundEqResult(Option<C>),
+    FoundEqResult { cert: Option<C>, trace: TracePtr<'t, C> },
     /// Nothing left to unfold. `x`/`y` are the unfolded pair, and `x_leg`/
     /// `y_leg` justify `x₀ ≡ x` and `y₀ ≡ y` for the original arguments.
     Exhausted { x: ExprPtr<'t>, y: ExprPtr<'t>, x_leg: Option<C>, y_leg: Option<C> },
@@ -2508,13 +2508,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return self.compose_whnf_legs(x, y, y_n, easy, x_leg, y_leg)
         }
 
-        let result = if let Some(c) = self.proof_irrel_eq(x_n, y_n) {
-            Some(c)
+        let (result, eq_reduct) = if let Some(c) = self.proof_irrel_eq(x_n, y_n) {
+            (Some(c), None)
         } else {
             match self.lazy_delta_step(x_n, y_n) {
                 // Already stated about `x_n ≡ y_n`: `lazy_delta_step` composed
                 // its own unfolding legs back on.
-                FoundEqResult(c) => c,
+                FoundEqResult { cert, trace } => (cert, trace),
                 Exhausted { x: xd, y: yd, x_leg: dx_leg, y_leg: dy_leg } => {
                     let mid = self
                         .def_eq_const(xd, yd)
@@ -2544,7 +2544,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     // `dx_leg : x_n ≡ xd`, `mid : xd ≡ yd`, `dy_leg : y_n ≡ yd`;
                     // the whole thing is about the weak-head-normalised pair,
                     // which the block below then lifts to `x ≡ y`.
-                    self.compose_legs(x_n, yd, y_n, mid, dx_leg, dy_leg)
+                    (self.compose_legs(x_n, yd, y_n, mid, dx_leg, dy_leg), None)
                 }
             }
         };
@@ -2568,6 +2568,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             // way — what the checker decides must not come to depend on what the
             // backend could prove.
             let keep = crate::certify::is_unconditional(c).then(|| c.clone());
+            if keep.is_none()
+                && x == x_n
+                && y == y_n
+                && eq_reduct.as_ref().is_some_and(|t| t.from == x && t.to == y)
+            {
+                self.tc_cache.eq_reduct_cache.insert((x, y), eq_reduct.clone());
+            }
             self.tc_cache.eq_cache.union(x, y, keep);
         }
         result
@@ -3083,7 +3090,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             (None, None);
         loop {
             if let Some(mid) = self.delta_try_nat(x, y) {
-                return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
+                return FoundEqResult {
+                    cert: self.compose_legs(x0, y, y0, mid, x_leg, y_leg),
+                    trace: None,
+                }
             }
             let (r1, r2) = (self.get_applied_def(x), self.get_applied_def(y));
             match (r1, r2) {
@@ -3124,7 +3134,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 }
                 (Some((x_name, l_hint)), Some((y_name, r_hint))) => {
                     if let Some(mid) = self.try_eq_const_app(x, x_name, l_hint, y, y_name, r_hint) {
-                        return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
+                        return FoundEqResult {
+                            cert: self.compose_legs(x0, y, y0, mid, x_leg, y_leg),
+                            trace: None,
+                        }
                     } else {
                         let (xprime, x_step, x_step_trace) = self.delta(x);
                         let (yprime, y_step, y_step_trace) = self.delta(y);
@@ -3143,12 +3156,17 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 // trace recipe, not the conditional certificate produced from
                 // it, so a later union-find hit can ask the authoritative rules
                 // again without importing or parking local assumptions.
-                if x == y && y == y0 && y_trace.is_none() && x_trace.is_some() {
-                    self.tc_cache.eq_reduct_cache.insert((x0, y0), x_trace.clone());
-                } else if x == y && x == x0 && x_trace.is_none() && y_trace.is_some() {
-                    self.tc_cache.eq_reduct_cache.insert((y0, x0), y_trace.clone());
+                let trace = if x == y && y == y0 && y_trace.is_none() {
+                    x_trace
+                } else if x == y && x == x0 && x_trace.is_none() {
+                    y_trace
+                } else {
+                    None
+                };
+                return FoundEqResult {
+                    cert: self.compose_legs(x0, y, y0, quick_result, x_leg, y_leg),
+                    trace,
                 }
-                return FoundEqResult(self.compose_legs(x0, y, y0, quick_result, x_leg, y_leg))
             }
         }
     }

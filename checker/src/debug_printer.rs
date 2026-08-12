@@ -216,8 +216,12 @@ impl<'x, 't, 'p> std::fmt::Debug for DebugPrinter<'x, 't, 'p, crate::tc::DeltaRe
             // The certificate itself is not printed: it is opaque to the
             // checker, and rendering derivations is exactly what the design
             // forbids. Whether one exists is the informative part.
-            crate::tc::DeltaResult::FoundEqResult(c) =>
-                write!(f, "DeltaResult::FoundEqResult({})", c.is_some()),
+            crate::tc::DeltaResult::FoundEqResult { cert, trace } => write!(
+                f,
+                "DeltaResult::FoundEqResult(cert={}, trace={})",
+                cert.is_some(),
+                trace.is_some(),
+            ),
             crate::tc::DeltaResult::Exhausted { x, y, .. } => f
                 .debug_struct("DeltaResult::Exhausted")
                 .field("lhs", &self.ctx.debug_print(*x))
