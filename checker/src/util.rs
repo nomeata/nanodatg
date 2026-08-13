@@ -4,7 +4,7 @@ use crate::level::Level;
 use crate::name::Name;
 use crate::pretty_printer::{PpOptions, PrettyPrinter};
 use crate::tc::TypeChecker;
-use crate::reduct::{Reduct, TracePtr};
+use crate::reduct::{EqRecipe, Reduct, TracePtr};
 use crate::union_find::UnionFind;
 use crate::unique_hasher::UniqueHasher;
 use indexmap::{IndexMap, IndexSet};
@@ -934,8 +934,14 @@ pub(crate) struct TcCache<'t, C, Y> {
     /// than by admitting `Admit::Cache`. See [`crate::union_find`].
     pub(crate) eq_cache: UnionFind<ExprPtr<'t>, C>,
     /// Exact reduction recipes exposed while lazy delta established an
-    /// equality. Unlike a union edge, these retain no copied certificate.
+    /// equality. Unlike a union edge, these are recursively certificate-free
+    /// trace copies; replay also uses a fresh copy, so their memo slots remain
+    /// empty and cannot retain a conditional theorem.
     pub(crate) eq_reduct_cache: FxHashMap<(ExprPtr<'t>, ExprPtr<'t>), TracePtr<'t, C>>,
+    /// Structural recipes for equality results whose certificate cannot be
+    /// retained. Recipes contain no theorem, only exact endpoints and rule
+    /// structure, so replay cannot import the original call's assumptions.
+    pub(crate) eq_recipe_cache: FxHashMap<(ExprPtr<'t>, ExprPtr<'t>), std::rc::Rc<EqRecipe<'t, C>>>,
     /// A cache of congruence failures during the lazy delta step procedure.
     pub(crate) failure_cache: FxHashSet<(ExprPtr<'t>, ExprPtr<'t>)>,
     /// Strong reduction is not used during type-checking, this is more of a library/inspection feature.
@@ -951,6 +957,7 @@ impl<'t, C, Y> TcCache<'t, C, Y> {
             whnf_no_unfolding_cache: new_unique_hash_map(),
             eq_cache: UnionFind::new(),
             eq_reduct_cache: FxHashMap::default(),
+            eq_recipe_cache: FxHashMap::default(),
             failure_cache: new_fx_hash_set(),
             strong_cache: new_unique_hash_map(),
         }
@@ -963,6 +970,7 @@ impl<'t, C, Y> TcCache<'t, C, Y> {
         self.whnf_no_unfolding_cache.clear();
         self.eq_cache.clear();
         self.eq_reduct_cache.clear();
+        self.eq_recipe_cache.clear();
         self.failure_cache.clear();
         self.strong_cache.clear();
     }

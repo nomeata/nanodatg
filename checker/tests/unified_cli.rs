@@ -195,14 +195,16 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     // exposes three further ready iota sites, so all 20 now compute. The first
     // exact lazy-delta recipe also lets the equality cache replay
     // `N.below motive N.z ≡ PUnit` without retaining its conditional theorem;
-    // one recursive-constructor equality still has a conditional structural
-    // tail and stays explicitly gated.
+    // The recursive-constructor equality ends in a structurally equal PProd
+    // application. Its retained recipe composes the successor reduction with
+    // application congruence, whose differing argument is the exact earlier
+    // `N.below` reduction in reverse; no conditional theorem is retained.
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 28, "the recursive-subject ratchet moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "gap: eq_cache"), 1, "the exact reduction recipe did not close precisely one cache root:\n{stdout}");
-    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 21, "the cache replay did not consume Mini's dependent evidence:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 24, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 22, "the structural cache replay did not consume Mini's dependent evidence:\n{stdout}");
+    assert!(!stdout.contains("gap: eq_cache"), "a cache hit still lacks an exact structural recipe:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "an applied projection lost its inner computation evidence:\n{stdout}");
     assert!(!stdout.contains("gap: whnf"), "application congruence was not recorded faithfully:\n{stdout}");

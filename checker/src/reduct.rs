@@ -163,6 +163,64 @@ pub(crate) enum Node<'t, C> {
 /// — a reduction is always justified.
 pub(crate) type TracePtr<'t, C> = Option<Rc<Trace<'t, C>>>;
 
+/// A replayable structural equality recipe.
+///
+/// Unlike a certificate, this contains no theorem and therefore imports no
+/// assumptions when retained in a declaration-wide cache. Reduction nodes hold
+/// certificate-free copies of their traces, and replay certifies a fresh copy,
+/// so even the trace's memo slot cannot park a conditional theorem here. Every
+/// node names its exact endpoints; replay checks those names and the
+/// corresponding expression shapes before asking a backend rule.
+#[derive(Debug)]
+pub(crate) enum EqRecipe<'t, C> {
+    Refl(ExprPtr<'t>),
+    /// Replay an already-recorded reduction, in its original direction or by
+    /// symmetry. The trace itself always reads `trace.from ⟶ trace.to`.
+    Reduction {
+        from: ExprPtr<'t>,
+        to: ExprPtr<'t>,
+        trace: Rc<Trace<'t, C>>,
+        reversed: bool,
+    },
+    App {
+        from: ExprPtr<'t>,
+        to: ExprPtr<'t>,
+        fun: Rc<EqRecipe<'t, C>>,
+        arg: Rc<EqRecipe<'t, C>>,
+    },
+    Seq {
+        from: ExprPtr<'t>,
+        middle: ExprPtr<'t>,
+        to: ExprPtr<'t>,
+        left: Rc<EqRecipe<'t, C>>,
+        right: Rc<EqRecipe<'t, C>>,
+    },
+}
+
+/// Copy a reduction trace as recipe structure, discarding every cached
+/// certificate in the tree.
+///
+/// A [`Trace`] normally memoises its certificate in place. That is correct for
+/// a reduct memo, whose certificate lives only as long as the declaration that
+/// produced it, but not for a declaration-wide equality recipe: a conditional
+/// certificate would carry the original call's local assumptions into a later
+/// call. Recipes therefore retain these clean copies and certify another clean
+/// copy on each replay.
+pub(crate) fn recipe_trace<'t, C>(trace: &Rc<Trace<'t, C>>) -> Rc<Trace<'t, C>> {
+    let node = match &trace.node {
+        Node::One(rule) => Node::One(*rule),
+        Node::Seq(left, right) => Node::Seq(recipe_trace(left), recipe_trace(right)),
+        Node::Cong(sub) => Node::Cong(recipe_trace(sub)),
+        Node::ProjRed(sub) => Node::ProjRed(recipe_trace(sub)),
+    };
+    Rc::new(Trace {
+        from: trace.from,
+        to: trace.to,
+        node,
+        cert: RefCell::new(None),
+    })
+}
+
 /// The one-step reduction `from ⟶ to` by `rule`.
 pub(crate) fn one<'t, C>(rule: Rule, from: ExprPtr<'t>, to: ExprPtr<'t>) -> TracePtr<'t, C> {
     Some(Rc::new(Trace { from, to, node: Node::One(rule), cert: RefCell::new(None) }))
@@ -266,4 +324,51 @@ pub(crate) fn then<'t, C>(a: TracePtr<'t, C>, b: TracePtr<'t, C>) -> TracePtr<'t
 pub(crate) struct Reduct<'t, C> {
     pub(crate) reduct: ExprPtr<'t>,
     pub(crate) trace: TracePtr<'t, C>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::DagMarker;
+
+    fn expr(n: usize) -> ExprPtr<'static> { ExprPtr::from(DagMarker::ExportFile, n) }
+
+    fn fill(trace: &Rc<Trace<'static, u8>>) {
+        trace.cert.replace(Some(7));
+        match &trace.node {
+            Node::One(_) => {}
+            Node::Seq(left, right) => {
+                fill(left);
+                fill(right);
+            }
+            Node::Cong(sub) | Node::ProjRed(sub) => fill(sub),
+        }
+    }
+
+    fn assert_empty(trace: &Rc<Trace<'static, u8>>) {
+        assert!(trace.cert.borrow().is_none());
+        match &trace.node {
+            Node::One(_) => {}
+            Node::Seq(left, right) => {
+                assert_empty(left);
+                assert_empty(right);
+            }
+            Node::Cong(sub) | Node::ProjRed(sub) => assert_empty(sub),
+        }
+    }
+
+    #[test]
+    fn recipe_trace_recursively_discards_certificates() {
+        let inner = one(Rule::Delta, expr(1), expr(2));
+        let congr = cong(expr(3), expr(4), inner);
+        let subject = one(Rule::Iota, expr(5), expr(6));
+        let projection = proj_red(expr(7), expr(8), subject);
+        let original = then(congr, projection).expect("two non-empty traces compose");
+        fill(&original);
+
+        let clean = recipe_trace(&original);
+        assert_eq!((clean.from, clean.to), (original.from, original.to));
+        assert_empty(&clean);
+        assert_eq!(*original.cert.borrow(), Some(7), "copying must not mutate the source memo");
+    }
 }

@@ -10,7 +10,7 @@ use crate::util::{
 use crate::certify::{
     typing_is_gap, Admit, Backend, Cert, Certifier, DefEq, Dropped, TyGap, Typing,
 };
-use crate::reduct::{self, Node, Reduct, Rule, Trace, TracePtr};
+use crate::reduct::{self, EqRecipe, Node, Reduct, Rule, Trace, TracePtr};
 use std::rc::Rc;
 use std::error::Error;
 use num_traits::pow::Pow;
@@ -80,11 +80,20 @@ use InferFlag::*;
 pub(crate) enum DeltaResult<'t, C> {
     /// Equality settled during unfolding. The certificate justifies the pair
     /// `lazy_delta_step` was *called* with, not the unfolded one; `None` means
-    /// the two were shown unequal.
+    /// the two were shown unequal. When present, `trace` is the exact one-sided
+    /// reduction exposed by that equality. Its own endpoints determine its
+    /// direction, which need not be the caller's equality direction.
     FoundEqResult { cert: Option<C>, trace: TracePtr<'t, C> },
     /// Nothing left to unfold. `x`/`y` are the unfolded pair, and `x_leg`/
     /// `y_leg` justify `x₀ ≡ x` and `y₀ ≡ y` for the original arguments.
-    Exhausted { x: ExprPtr<'t>, y: ExprPtr<'t>, x_leg: Option<C>, y_leg: Option<C> },
+    Exhausted {
+        x: ExprPtr<'t>,
+        y: ExprPtr<'t>,
+        x_leg: Option<C>,
+        y_leg: Option<C>,
+        x_trace: TracePtr<'t, C>,
+        y_trace: TracePtr<'t, C>,
+    },
 }
 
 /// What [`TypeChecker::infer`] returns: the inferred type **and** the evidence
@@ -2508,14 +2517,21 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return self.compose_whnf_legs(x, y, y_n, easy, x_leg, y_leg)
         }
 
-        let (result, eq_reduct) = if let Some(c) = self.proof_irrel_eq(x_n, y_n) {
-            (Some(c), None)
+        let (result, eq_reduct, eq_recipe) = if let Some(c) = self.proof_irrel_eq(x_n, y_n) {
+            (Some(c), None, None)
         } else {
             match self.lazy_delta_step(x_n, y_n) {
                 // Already stated about `x_n ≡ y_n`: `lazy_delta_step` composed
                 // its own unfolding legs back on.
-                FoundEqResult { cert, trace } => (cert, trace),
-                Exhausted { x: xd, y: yd, x_leg: dx_leg, y_leg: dy_leg } => {
+                FoundEqResult { cert, trace } => (cert, trace, None),
+                Exhausted {
+                    x: xd,
+                    y: yd,
+                    x_leg: dx_leg,
+                    y_leg: dy_leg,
+                    x_trace: dx_trace,
+                    y_trace: dy_trace,
+                } => {
                     let mid = self
                         .def_eq_const(xd, yd)
                         .or_else(|| self.def_eq_local(xd, yd))
@@ -2541,10 +2557,33 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                                     .or_else(|| self.def_eq_unit(x_n, y_n))
                             }
                         });
+                    let recipe = if dy_trace.is_none() {
+                        dx_trace.as_ref().and_then(|trace| {
+                            if trace.from != x_n || trace.to != xd {
+                                return None
+                            }
+                            let left = Rc::new(EqRecipe::Reduction {
+                                from: x_n,
+                                to: xd,
+                                trace: reduct::recipe_trace(trace),
+                                reversed: false,
+                            });
+                            let right = self.structural_eq_recipe(xd, yd)?;
+                            Some(Rc::new(EqRecipe::Seq {
+                                from: x_n,
+                                middle: xd,
+                                to: yd,
+                                left,
+                                right,
+                            }))
+                        })
+                    } else {
+                        None
+                    };
                     // `dx_leg : x_n ≡ xd`, `mid : xd ≡ yd`, `dy_leg : y_n ≡ yd`;
                     // the whole thing is about the weak-head-normalised pair,
                     // which the block below then lifts to `x ≡ y`.
-                    (self.compose_legs(x_n, yd, y_n, mid, dx_leg, dy_leg), None)
+                    (self.compose_legs(x_n, yd, y_n, mid, dx_leg, dy_leg), None, recipe)
                 }
             }
         };
@@ -2568,12 +2607,16 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             // way — what the checker decides must not come to depend on what the
             // backend could prove.
             let keep = crate::certify::is_unconditional(c).then(|| c.clone());
+            if let Some(trace) = eq_reduct.as_ref() {
+                let trace = reduct::recipe_trace(trace);
+                self.tc_cache.eq_reduct_cache.insert((trace.from, trace.to), Some(trace));
+            }
             if keep.is_none()
                 && x == x_n
                 && y == y_n
-                && eq_reduct.as_ref().is_some_and(|t| t.from == x && t.to == y)
+                && eq_recipe.as_ref().is_some_and(|r| Self::recipe_endpoints(r) == (x, y))
             {
-                self.tc_cache.eq_reduct_cache.insert((x, y), eq_reduct.clone());
+                self.tc_cache.eq_recipe_cache.insert((x, y), eq_recipe.clone().unwrap());
             }
             self.tc_cache.eq_cache.union(x, y, keep);
         }
@@ -2887,6 +2930,14 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// answer this whole method exists to stop giving — rather than a claim.
     fn recall_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         let Some(hops) = self.tc_cache.eq_cache.explain(x, y) else {
+            if let Some(recipe) = self.tc_cache.eq_recipe_cache.get(&(x, y)).cloned() {
+                if Self::recipe_endpoints(&recipe) == (x, y) {
+                    let replay = self.replay_eq_recipe(&recipe);
+                    if let Ok(cert) = replay {
+                        return Some(cert)
+                    }
+                }
+            }
             if let Some(cert) = self.recall_reduction_eq(x, y) {
                 return cert
             }
@@ -2914,6 +2965,136 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         acc
     }
 
+    fn recipe_endpoints(recipe: &EqRecipe<'t, Cert<'t, 'p>>) -> (ExprPtr<'t>, ExprPtr<'t>) {
+        match recipe {
+            EqRecipe::Refl(e) => (*e, *e),
+            EqRecipe::Reduction { from, to, .. }
+            | EqRecipe::App { from, to, .. }
+            | EqRecipe::Seq { from, to, .. } => (*from, *to),
+        }
+    }
+
+    /// Describe a structural equality without retaining its certificate.
+    ///
+    /// This is called only after `def_eq` has already established the pair. It
+    /// performs no equality check: it decomposes identical application shapes
+    /// and cites exact reduction/structural recipes already produced by child
+    /// calls. A leaf with no such recipe makes the whole construction fail.
+    fn structural_eq_recipe(
+        &mut self,
+        x: ExprPtr<'t>,
+        y: ExprPtr<'t>,
+    ) -> Option<Rc<EqRecipe<'t, Cert<'t, 'p>>>> {
+        if x == y {
+            return Some(Rc::new(EqRecipe::Refl(x)))
+        }
+        if let Some(recipe) = self.tc_cache.eq_recipe_cache.get(&(x, y)).cloned() {
+            if Self::recipe_endpoints(&recipe) == (x, y) {
+                return Some(recipe)
+            }
+        }
+        if let Some(trace) = self
+            .tc_cache
+            .eq_reduct_cache
+            .get(&(x, y))
+            .and_then(|trace| trace.as_ref())
+            .cloned()
+        {
+            if trace.from == x && trace.to == y {
+                return Some(Rc::new(EqRecipe::Reduction {
+                    from: x,
+                    to: y,
+                    trace,
+                    reversed: false,
+                }))
+            }
+        }
+        if let Some(trace) = self
+            .tc_cache
+            .eq_reduct_cache
+            .get(&(y, x))
+            .and_then(|trace| trace.as_ref())
+            .cloned()
+        {
+            if trace.from == y && trace.to == x {
+                return Some(Rc::new(EqRecipe::Reduction {
+                    from: x,
+                    to: y,
+                    trace,
+                    reversed: true,
+                }))
+            }
+        }
+        let (Expr::App { fun: xf, arg: xa, .. }, Expr::App { fun: yf, arg: ya, .. }) =
+            self.ctx.read_expr_pair(x, y)
+        else {
+            return None
+        };
+        let fun = self.structural_eq_recipe(xf, yf)?;
+        let arg = self.structural_eq_recipe(xa, ya)?;
+        Some(Rc::new(EqRecipe::App { from: x, to: y, fun, arg }))
+    }
+
+    /// Replay a recipe against its exact expression endpoints.
+    ///
+    /// Every shape and child endpoint is checked before a rule is asked. A
+    /// reduction additionally passes the same Mini-authoritative readiness gate
+    /// used by projection subjects. Any drift fails closed and leaves the
+    /// caller's `eq_cache` gap in place.
+    fn replay_eq_recipe(&mut self, recipe: &Rc<EqRecipe<'t, Cert<'t, 'p>>>) -> Result<Cert<'t, 'p>, ()> {
+        match recipe.as_ref() {
+            EqRecipe::Refl(e) => {
+                crate::certify::bump_certified();
+                Ok(self.certifier.refl(self.ctx, *e))
+            }
+            EqRecipe::Reduction { from, to, trace, reversed } => {
+                let expected = if *reversed { (*to, *from) } else { (*from, *to) };
+                if (trace.from, trace.to) != expected
+                    || !self.authoritative_reduction_ready(&Some(trace.clone()))
+                {
+                    return Err(())
+                }
+                // `certify_reduct` memoises into its trace. Certify a clean
+                // throwaway copy so the declaration-wide recipe itself never
+                // acquires (and can never later trust) a conditional theorem.
+                let replay_trace = reduct::recipe_trace(trace);
+                let cert = self
+                    .certify_reduct(replay_trace.from, replay_trace.to, &Some(replay_trace))
+                    .ok_or(())?;
+                if *reversed {
+                    self.symm_leg(*from, *to, Some(cert)).ok_or(())
+                } else {
+                    Ok(cert)
+                }
+            }
+            EqRecipe::App { from, to, fun, arg } => {
+                let (Expr::App { fun: xf, arg: xa, .. }, Expr::App { fun: yf, arg: ya, .. }) =
+                    self.ctx.read_expr_pair(*from, *to)
+                else {
+                    return Err(())
+                };
+                if Self::recipe_endpoints(fun) != (xf, yf)
+                    || Self::recipe_endpoints(arg) != (xa, ya)
+                {
+                    return Err(())
+                }
+                let (fun, arg) = (self.replay_eq_recipe(fun)?, self.replay_eq_recipe(arg)?);
+                crate::certify::bump_certified();
+                Ok(self.certifier.app_cong(self.ctx, *from, *to, fun, arg))
+            }
+            EqRecipe::Seq { from, middle, to, left, right } => {
+                if Self::recipe_endpoints(left) != (*from, *middle)
+                    || Self::recipe_endpoints(right) != (*middle, *to)
+                {
+                    return Err(())
+                }
+                let left = self.replay_eq_recipe(left)?;
+                let right = self.replay_eq_recipe(right)?;
+                self.seq(*from, *to, Some(left), Some(right)).ok_or(())
+            }
+        }
+    }
+
     /// Recover an equality-cache decision from the exact reduction evidence
     /// that established it, when the union edge itself could not retain that
     /// evidence.
@@ -2935,7 +3116,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         if !self.authoritative_reduction_ready(&trace) {
             return None
         }
-        Some(self.certify_reduct(x, y, &trace))
+        // As with structural recipes, never fill the declaration-wide trace's
+        // certificate slot: a later equality may not share today's premises.
+        let replay_trace = trace.as_ref().map(reduct::recipe_trace);
+        Some(self.certify_reduct(x, y, &replay_trace))
     }
 
     fn failure_cache_contains(&self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
@@ -3097,7 +3281,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             }
             let (r1, r2) = (self.get_applied_def(x), self.get_applied_def(y));
             match (r1, r2) {
-                (None, None) => return Exhausted { x, y, x_leg, y_leg },
+                (None, None) => return Exhausted { x, y, x_leg, y_leg, x_trace, y_trace },
                 (Some(..), None) =>
                     if let Some((yprime, step, trace)) = self.try_unfold_proj_app(y) {
                         y_leg = self.seq(y0, yprime, y_leg, step);
