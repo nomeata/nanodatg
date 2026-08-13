@@ -138,7 +138,11 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
     assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
-    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:164")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:152")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(
+        stdout.contains("conditional derivations: 590 made (0 of them copies), 570 accounted for by a rule, 20 escaped"),
+        "the full fixture retained conditional trace evidence:\n{stdout}",
+    );
     assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
@@ -163,7 +167,11 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
         stdout.contains("route\tmode=Split\ttoMini=3\ttoChecker=10\tunclaimed=0"),
         "the projection fixture was not handled by the one dispatch loop:\n{stdout}",
     );
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 7, "the reduced-subject projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 2, "the reduced-subject projection ratchet moved:\n{stdout}");
+    assert!(
+        stdout.contains("conditional derivations: 71 made (0 of them copies), 69 accounted for by a rule, 2 escaped"),
+        "a direct-subject reduction parked conditional evidence:\n{stdout}",
+    );
     assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 1, "Two.rec did not consume mini's dependent recursor evidence:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "the ready Two.rec subject trace was not certified:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "the certified iota subject did not compose with projection computation:\n{stdout}");
@@ -176,7 +184,11 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let congr = run_on("proj_stuck_subject.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&congr.stdout);
     assert_eq!(congr.status.code(), Some(4), "the fixture's remaining TG debt moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 9, "the nested projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 6, "the nested projection ratchet moved:\n{stdout}");
+    assert!(
+        stdout.contains("conditional derivations: 132 made (0 of them copies), 126 accounted for by a rule, 6 escaped"),
+        "a nested-subject reduction parked conditional evidence:\n{stdout}",
+    );
     assert!(!stdout.contains("gap: proj_reduce"), "a nested subject trace was not consumed:\n{stdout}");
     assert!(
         !stdout.contains("def_eq_proj: derived equation does not match the claim"),
@@ -202,8 +214,12 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 24, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 16, "the recursive-subject ratchet moved:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 22, "the structural cache replay did not consume Mini's dependent evidence:\n{stdout}");
+    assert!(
+        stdout.contains("conditional derivations: 433 made (0 of them copies), 417 accounted for by a rule, 16 escaped"),
+        "a conditional reduction certificate was retained or the escape family moved:\n{stdout}",
+    );
     assert!(!stdout.contains("gap: eq_cache"), "a cache hit still lacks an exact structural recipe:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "an applied projection lost its inner computation evidence:\n{stdout}");

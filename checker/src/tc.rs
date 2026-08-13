@@ -1709,18 +1709,19 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // in a node that is about to be dropped costs one escape apiece: 843
         // escapes became 5037 on `init-prelude` before this test was here.
         //
-        // **And never a certificate that stands under kernel hypotheses.** This
-        // is the third of the `Thm` stores `certify::is_unconditional` discusses,
-        // and the one that had no guard at all: the reduct memos are keyed on the
-        // input `ExprPtr` alone and live for a whole declaration, so a `Γ ⊢ a = b`
-        // parked here would be handed to a later caller under a context that need
-        // not satisfy `Γ`. A *conditional* certificate is still stored — its
-        // assumptions are antecedents inside the formula, so it imports nothing
-        // and the escape ledger already counts it — but a hypothetical one is
-        // not. See `certify::hypothesis_free`.
+        // **And only an unconditional certificate.** The reduct memos are keyed
+        // on the input `ExprPtr` alone and live for a whole declaration. A
+        // hypothetical `Γ ⊢ a = b` would silently import `Γ` at a later caller;
+        // a conditional `⊢ H → a = b` imports nothing, but the parked copy
+        // crosses no binder and therefore has nowhere to discharge `H`. The
+        // escape ledger correctly charges that copy as boundary debt. Keep
+        // neither: a conditional reduction can be re-derived from the trace,
+        // while an unconditional theorem is safe to recall verbatim.
         if let Some(c) = cert.as_ref() {
             if !crate::certify::hypothesis_free(c) {
                 crate::certify::bump_trace_cert(crate::certify::TraceCert::Hypothetical);
+            } else if !crate::certify::is_unconditional(c) {
+                crate::certify::bump_trace_cert(crate::certify::TraceCert::Conditional);
             } else {
                 let memoised = self
                     .tc_cache

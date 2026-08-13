@@ -922,10 +922,12 @@ pub(crate) struct TcCache<'t, C, Y> {
     /// The two reduct memos. Their value type carries the **evidence** as well
     /// as the answer (see [`crate::reduct`]): a reduct memoised by a call that
     /// wanted no certificate still records the steps that produced it, and the
-    /// first call that does want one builds it from those steps and stores it
-    /// in the same entry. There is no arrangement under which a hit hands back
-    /// a reduct with nothing to justify it, and none under which a hit costs
-    /// the reduction again.
+    /// first call that does want one builds it from those steps. An
+    /// unconditional result is stored in the same entry; a conditional one is
+    /// re-derived from the retained steps so that a memo copy cannot strand its
+    /// antecedents. There is no arrangement under which a hit hands back a
+    /// reduct with nothing to justify it, and none under which a hit costs the
+    /// reduction again.
     pub(crate) whnf_cache: UniqueHashMap<ExprPtr<'t>, Reduct<'t, C>>,
     pub(crate) whnf_no_unfolding_cache: UniqueHashMap<ExprPtr<'t>, Reduct<'t, C>>,
     /// The definitional-equality cache, as a **proof-producing** union-find:

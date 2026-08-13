@@ -918,7 +918,7 @@ pub fn typing_is_gap(_t: &Typing<'_, '_>) -> bool { true }
 /// constructor checks `hyps().is_empty()`. This predicate and [`hypothesis_free`]
 /// remain the `Cert`-level form, for the stores that hold a certificate in flight
 /// rather than a theorem: [`crate::reduct::Trace::cert`], guarded at its one
-/// write site in `TypeChecker::certify_reduct` by [`hypothesis_free`]; the
+/// write site in `TypeChecker::certify_reduct` by [`is_unconditional`]; the
 /// union-find's edges; and `TcCache::infer_cache_*`, which deliberately admits
 /// *conditional* typings and is discussed at its insertion point. Sealing
 /// `TgCert` itself was considered and rejected — see [`crate::sealed`].
@@ -934,8 +934,9 @@ pub fn is_unconditional(c: &Cert<'_, '_>) -> bool { c.thm().is_some_and(|t| t.hy
 /// imports nothing into a later context — it is an accounting question, which
 /// the escape ledger answers. Kernel hypotheses are the opposite: they sit
 /// outside the formula, and a store keyed on anything that does not mention them
-/// re-asserts them silently. So a memo that is willing to hold a conditional
-/// certificate still must not hold a hypothetical one.
+/// re-asserts them silently. This remains the predicate for stores whose key
+/// also accounts for a conditional formula; the checker's reduction memos do
+/// not, and therefore use [`is_unconditional`] instead.
 #[cfg(feature = "tg")]
 pub fn hypothesis_free(c: &Cert<'_, '_>) -> bool { c.hyps().is_empty() }
 
@@ -1446,6 +1447,10 @@ pub enum TraceCert {
     /// entries, and `whnf_no_unfolding_cheap_proj` builds a trace it never
     /// memoises. Parking in the latter is what cost 843 → 5037 escapes.
     NotAMemoRoot,
+    /// …or because it still carries antecedents. Parking such a certificate is
+    /// sound as a closed implication, but the parked copy crosses no binder and
+    /// can never discharge them, so it is real boundary debt.
+    Conditional,
     /// …or because the certificate stands under kernel hypotheses, which a
     /// memo keyed on the input `ExprPtr` alone must never import
     /// ([`hypothesis_free`]).
@@ -1456,11 +1461,12 @@ pub enum TraceCert {
 }
 
 impl TraceCert {
-    pub const ALL: [TraceCert; 6] = [
+    pub const ALL: [TraceCert; 7] = [
         TraceCert::Recalled,
         TraceCert::Derived,
         TraceCert::Parked,
         TraceCert::NotAMemoRoot,
+        TraceCert::Conditional,
         TraceCert::Hypothetical,
         TraceCert::WhnfRoot,
     ];
@@ -1470,6 +1476,7 @@ impl TraceCert {
             TraceCert::Derived => "derived (slot empty)",
             TraceCert::Parked => "parked back into the memo entry",
             TraceCert::NotAMemoRoot => "not parked: not a live memo entry's root",
+            TraceCert::Conditional => "not parked: still has antecedents",
             TraceCert::Hypothetical => "not parked: stands under kernel hypotheses",
             TraceCert::WhnfRoot => "  …of those, the full-whnf memo's own root",
         }
@@ -1477,7 +1484,7 @@ impl TraceCert {
 }
 
 #[cfg(feature = "stepcount")]
-const N_TRACE_CERT: usize = 6;
+const N_TRACE_CERT: usize = 7;
 #[cfg(feature = "stepcount")]
 static TRACE_CERT: [std::sync::atomic::AtomicU64; N_TRACE_CERT] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_TRACE_CERT];

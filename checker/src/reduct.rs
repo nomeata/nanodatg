@@ -35,10 +35,12 @@
 //!
 //! So the reduction always records what it did, at trace prices, and the first
 //! caller that actually wants a certificate turns the trace into one **without
-//! redoing the reduction**. The certificate is then written into [`Trace::cert`]
-//! — the trace *is* the memo's value, so this is the memoised result carrying
-//! its own justification — and every later hit clones it. Each reduct is
-//! reduced once and derived at most once.
+//! redoing the reduction**. An unconditional certificate is then written into
+//! [`Trace::cert`] — the trace *is* the memo's value, so this is the memoised
+//! result carrying its own justification — and every later hit clones it. A
+//! conditional certificate is deliberately re-derived: a copy parked in a
+//! declaration-wide memo crosses no binder and can never discharge its
+//! antecedents. The reduction itself is still performed exactly once.
 //!
 //! A trace is also strictly more faithful than a re-run. It is *the* chain of
 //! steps that produced the memoised reduct, so the certificate it yields is
