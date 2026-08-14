@@ -10227,9 +10227,16 @@ Three things this reframes:
   `076_listRecReduction` and `077_RBTree.id_spec` alone are 112 of the 217.
 * **`nat_eq` is 4 here**, matching the fixture corpus's 5. The `Nat` bridge is a
   small tranche on both populations, wherever it is measured.
-* **`eta` and `eta_struct` (4 between them) name a lemma we do not have** —
-  function extensionality — rather than a gap in threading. They are the only
-  rows in either census that state an unbuilt `derived/` construction outright.
+* **`eta` and `eta_struct` (4 between them) are a threading gap like the rest.**
+  The row `eta (needs a function-extensionality lemma)` reads like an unbuilt
+  construction and is not one: function extensionality is built, as
+  `derived::ext::fun_ext` (`derived/src/ext.rs:65`, re-exported at `:91` as
+  `funspace_ext`/`pointwise`), it is consumed by `derived/src/ext/eta.rs`, and
+  `derived/src/sigma/push.rs` and `derived/src/inductive/machine.rs:182` each
+  take it as a premise and check it with `establishes`. So no row in either
+  census names a `derived/` construction that does not exist. Checked by the
+  statement rather than by the reason string, which is the only way this kind of
+  row can be read.
 
 ### Method note
 
