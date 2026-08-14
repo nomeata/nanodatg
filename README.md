@@ -190,7 +190,9 @@ commits after the ones they replace; re-measure before quoting them.
 
 **All 27 inductive-free exports check with zero gaps and zero escapes**, and
 `Bool`, `N` and `List` are interpreted as W-types with their recursors' ι rules
-discharged — `073_boolRecEqns` is at zero and zero.
+discharged — `N` here is the corpus's own inductive (`041_natDef`), not Lean's
+`Nat`, whose carrier is von Neumann `ω` and not a W-type
+(`derived/src/inductive.rs:8`) — `073_boolRecEqns` is at zero and zero.
 
 That fragment count went 27 → 25 → 27. The two that left it and came back — the
 Church numerals `028_peano2` and `029_peano3` — are the clearest statement of
@@ -249,7 +251,7 @@ That last one is an open question, not a fix.
 
 1. **Interpret the remaining inductives.** ***Done on `mini`***, and well past
    this item: the general translation is `derived/src/inductive/` with
-   `mini/src/zoneb.rs` above it, and no export on the tutorial corpus stops.
+   `checker/src/mini/zoneb.rs` above it, and no export on the tutorial corpus stops.
    The item as written — "the cheap next step is a constructor with two or more
    plain recursive arguments, which changes only the fibre" — is
    `derived/tests/genrec.rs` and `checker/tests/fixtures/prop_recursive_interleaved.lean`.
@@ -271,7 +273,7 @@ That last one is an open question, not a fix.
    `CtorSpec::with_rec_doms` — and `115`–`118` certify on `mini`.)*
 2. **Indexed families** — §5.2's `spec` judgment and its `good` predicate.
    ***Done on `mini`***: `derived/src/inductive/family/` and
-   `mini/src/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep,rec_ix_prop,rec_s_ix,minor_ix,iota_ix_dep}.rs`;
+   `checker/src/mini/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep,rec_ix_prop,rec_s_ix,minor_ix,iota_ix_dep}.rs`;
    `042`/`068`/`077` all certify. Not taken in `checker/src/tg.rs`, where
    `gen_scope` still returns `Decline::Indices`. The reasoning below is why the
    route was available at all, and is kept for that.
@@ -298,7 +300,7 @@ That last one is an open question, not a fix.
 4. Decide whether a top-level certificate asserts a **context-relative** claim,
    and if so make the ambient context visible so the entitlement can be checked
    rather than assumed. *(The machinery exists on `mini` and is unused on
-   `checker`: `mini/src/scope.rs`'s `Scopes::open` acquires `w ∈ dom` as a real
+   `checker`: `checker/src/mini/scope.rs`'s `Scopes::open` acquires `w ∈ dom` as a real
    kernel hypothesis and `Closed::discharge` generalises it away, with
    `checker/src/sealed.rs` the funnel that refuses a stored theorem whose
    `hyps()` is non-empty. The *decision* this item asks for has still not been
