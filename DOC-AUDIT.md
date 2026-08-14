@@ -23,8 +23,11 @@ Severity legend: **FALSE** = contradicted by the code or corpus as it stands;
 > ~101,600 and 873), which is this audit's own thesis happening to this audit.
 > What is worth keeping is **§6, "Checked and found correct"** — a
 > do-not-re-verify list of corpus counts, thesis line numbers and `ax_tarski`'s
-> clauses — and the record that the sweep was run at all. Nothing in `kernel/`,
-> `derived/`, `mini/`, `checker/` or any other document cites this file.
+> clauses — and the record that the sweep was run at all. *(Two corrections,
+> 2026-08-14: this file **is** cited — `QUESTIONS.md:10` cites "`DOC-AUDIT.md`
+> §3.1". And `mini/` is no longer a directory; the code it named is
+> `checker/src/mini/`. See §8 for the re-verification of §6's "checked clean"
+> lines, three of which no longer hold.)*
 
 **The five findings to act on first:**
 
@@ -506,15 +509,25 @@ module; it is 1298 (the other two figures in that sentence are exact).
 **Confirmed, no further occurrences:** the `116` claim exists in exactly one
 `derived/src` file (`wlist_rec.rs:213–216`), and the wrong `RBTree.red`
 signature in exactly one (`inductive/spec.rs:77`; plus the test pointer in
-`inductive/premise.rs:142`).
+`inductive/premise.rs:142`). *(Both closed since: `derived/src/inductive/
+spec.rs:118` now opens "This comment used to cite `RBTree.red` as…", and
+`RBTree.red` appears in four further `derived/src` files as a legitimate
+indexed-family example — `inductive/family/{prop_rec.rs:63, carrier.rs:82,
+carrier.rs:123, index.rs:32}`. The "exactly one" count is a record of the sweep,
+not a live invariant.)*
 
 **Checked clean in `derived/src`:** every CSB/`is_universe(U(x))` mention in
 `funspace*`, `ext*`, `universe*`, `tower.rs`, `cantor*` now correctly says it
 is not needed (modulo the ordinal drift above); `hyp.rs` and all four
-submodules open with SUPERSEDED; `wnat.rs`/`wlist.rs`/`enums.rs`/`w*_rec.rs`
-headers accurate (including `wnat.rs`'s ω-tower-not-needed note); no stale
-`ax_empty`/`MAX_*` references; the "eight axioms" figure matches `thm.rs`;
-all checked cross-references into `checker/src/tg.rs` resolve; every
+submodules open with SUPERSEDED; `wlist.rs`/`enums.rs`/`wlist_rec.rs` headers
+accurate *(the entry also covered `wnat.rs` and `wnat_rec.rs`, including
+`wnat.rs`'s ω-tower-not-needed note; **both files were deleted on 2026-08-11**
+and that half of the line is void — see §8)*; no stale
+`ax_empty`/`MAX_*` references; the "eight axioms" figure matches `thm.rs`
+*(the phrase no longer occurs in `derived/src`, so the site this checked is
+gone — §8)*;
+~~all checked cross-references into `checker/src/tg.rs` resolve~~ — **false
+today, §8**; every
 `tests/<name>.rs` named in a header exists; `inductive/carrier.rs`'s "eight
 declarations" matches `derived/tests/inductive.rs`.
 
@@ -527,7 +540,10 @@ Worth recording so the next reader does not re-verify:
 * **Corpus counts**: 102 `good` / 55 `bad` arena files, 91 tutorial files, two
   declined arena files — as stated in README and DECISIONS.
 * **kernel/README.md's numbers and mechanisms**: 662 non-comment lines against
-  the 700 budget (recounted with the CI script's own method); `lib.rs` "six
+  the 700 budget (recounted with the CI script's own method) — *the count is
+  **697** on 2026-08-14, recounted the same way; the 700 budget still holds,
+  with three lines of slack, but this figure is now the number to watch and not
+  a do-not-re-verify one;* `lib.rs` "six
   lines" is right under the non-comment convention (6 code lines);
   `ci/check-boundary.sh` really enforces the `Thm::assume`/`implies_intr`
   grep, the budget, and the dependency table; `kernel/tests/{tarski,
@@ -542,8 +558,14 @@ Worth recording so the next reader does not re-verify:
   declarations / 13 rounds, 2366 → 12 and 336 → 36, 446-of-449 and 136-of-137,
   5718/660 Π sites at 41%/51%, 1.14×/1.16× cost, audit row zero with a test —
   all match MEASUREMENTS' recorded tables exactly.
-* **`TgBackend::iota` tries `proof_eq` first** (`tg.rs:12096`) — 
-  RECURSOR-DESIGN §5.1's `[read]` cite is accurate.
+* **`TgBackend::iota` tries `proof_eq` first** — RECURSOR-DESIGN §5.1's
+  `[read]` cite is accurate in substance. **The line number given here,
+  `tg.rs:12096`, was wrong on the day it was written**: at this audit's own
+  commit `cb2d188`, `tg.rs:12096` is a doc comment about `derive_pi_cong` and
+  `fn iota` was at `:12123`. The body is right — `proof_eq` is the first thing
+  tried — but a citation that was never read is exactly what this file exists
+  to catch. Today it is `checker/src/tg.rs:19894–19896`, still `proof_eq`
+  first, and `Certifier::iota` is `checker/src/certify.rs:174`.
 * **LIBRARY-BACKLOG's citations**: the `MEASUREMENTS.md:` line numbers
   (343–345, 366, 809, 1013, 1175, 1224, 1524–1529, 1536–1540) all say what
   they are cited for; the thesis line numbers used across LIBRARY-BACKLOG,
@@ -578,3 +600,163 @@ Worth recording so the next reader does not re-verify:
   the schedule membership of `(PUnit, [0])` as unmeasured).
 * Whether `077`'s remaining gap composition still matches MEASUREMENTS' last
   probe (53/31) — needs a run.
+
+---
+
+## 8. Second sweep — 2026-08-14, against the unified checker
+
+*Audit of the root-level `*.md` against the tree at `b91433b`, on the owner's
+instruction, after the mini/checker merge landed. Same method as §1–§7: every
+correction below was established by reading code, and each names the
+`file:line` it rests on. Where a claim could not be settled cheaply it is
+marked unverified here rather than deleted or blessed. Corrections were made
+**in place** in the documents; this section is the index, not the correction.*
+
+### 8.0 The ground truth these corrections are measured against
+
+Established first, by reading, and cited throughout:
+
+* The workspace is `members = ["kernel", "derived", "checker"]` (`Cargo.toml:3`).
+  There is no `mini` crate and no mini binary. The surviving mini
+  implementation is modules under `checker/src/mini/` (`checker/src/mini.rs:63–122`),
+  its tests are `checker/tests/mini_*.rs`, and the workspace's two binaries are
+  `checker` (`checker/src/bin/checker.rs`) and upstream nanoda's `nanoda_bin`
+  (`checker/src/main.rs`).
+* One checker: one parse, one `Instantiations::compute` (`checker/src/mini/convert.rs:336`,
+  whose published `Arc` is the schedule `RoutedChecker::new` receives at
+  `route.rs:311`), one loop over declaration groups, one dispatch on kind.
+  `Mode` has the single variant `Split` (`route.rs:70–74`) and it is the default
+  (`bin/checker.rs:125`): inductives, mutual blocks and quotients → the mini
+  implementation; definitions, theorems, opaques **and axioms** → nanoda
+  (`route.rs:114–124`). Nanoda emits TG evidence in the same call as
+  acceptance, so the driver's evidence step for a checker-routed group is empty
+  by design (`route.rs:334–350`).
+* **No fallback, no repair sweep, no second validation pass.** `route.rs:38` is
+  the header saying so; a nanoda rejection or missing export group returns
+  `Err` (`route.rs:374–414`); unclaimed anchors are observed and never checked
+  (`route.rs:416–431`, `routed.rs:215–217`). The route counters are
+  `toMini`/`toChecker`/`unclaimed` only.
+* A nanoda-accepted ordinary declaration is mirrored **unchecked** into mini's
+  syntactic environment: `install_checked_noninductive`, `checker/src/mini/kernel.rs:4867–4898`.
+* `--naive` selects `Driver::Plain`, the historical whole-file mini checker, and
+  is the only way to run that policy. `--route=…` **has been removed** and exits
+  2 (`bin/checker.rs:115–118`).
+* TG gaps are certification debt: exit 4, alongside `uncertified` and
+  `untranslated` (`bin/checker.rs:250–254`); `--acceptance-only` suppresses the
+  exit code only, not the columns.
+* `⟦Nat⟧` is von Neumann `ω`, not a W-type (`checker/src/tg.rs:1638–1642`,
+  `derived/src/inductive.rs:8`). `derived/src/wnat.rs`, `derived/src/wnat_rec.rs`
+  and `derived/src/cumul/witness.rs` — with `NatUniverse`, `NatMem` and the
+  `nat_shape` recogniser — are deleted; no definition of any of them survives.
+  The general W-type machinery is untouched, and the `N` of the tutorial corpus
+  (`041_natDef`) is a fixture's own inductive, not Lean's `Nat` — checked before
+  any "W-type" sentence was edited.
+
+### 8.1 Corrections, worst blast radius first
+
+| # | document | what it said | what is true | how established |
+|---|---|---|---|---|
+| 1 | ENV-UNIFY.md, track D | a `--route` flag on a separate `mini` binary, three modes (`Split`/`ForceMini`/`ForceChecker`), axioms routed to mini, a counted fallback in **both** directions (`fellBack:name=reason`), and a post-loop sweep that **checks** unclaimed groups (`strays`) | all six are gone; §8.0 has the replacements one by one | read `route.rs`, `routed.rs`, `bin/checker.rs` |
+| 2 | CHURCH-BASIS.md :42, :68 | "`em` and `Classical.choice` are **not** carried — `clause_for` has one arm" | `clause_for` has three arms including `Classical.choice`; `Clause::Choice` is built over `derived::choice::Epsilon` + `checker/src/mini/choice_clause.rs`, with tests | `checker/src/mini/axiom.rs:295–307`, `:220–223`, `:1100–1228` |
+| 3 | LIBRARY-BACKLOG.md :501 | "`Classical.choice` is not [built], and it is not a library item — `ε` cannot be a term of the kernel's language" | built; the header now records the gain (`constEv` 3→7, library-gap 4→0, waiting rows 4→0) | `checker/src/mini/axiom.rs:220–223` |
+| 4 | MINI-DESIGN.md §1 | a workspace member `mini/` with its own `Cargo.toml` and `mini/src/main.rs`; and "mini does not enable or touch the `tg`/`stepcount` features and never calls into `tc.rs` or `tg.rs`" | no such crate; and mini **does** reach both — `route.rs` drives `routed.rs` into `ExportFile::check_declar_scheduled`, `run.rs` calls `tg::global_gap_count`, and a non-`--naive` run *requires* `--features tg` | `Cargo.toml:3`, `bin/checker.rs:119–124` |
+| 5 | MINI-HANDOFF.md :1128 | "the bare run is now an instrument … `mini <export>` runs to the end and exits 4" | a bare `checker <export>` is the **split** checker, not the whole-file mini one; that is `--naive` | `checker/tests/unified_cli.rs:54–68` |
+| 6 | MINI-HANDOFF.md :295 | a worktree recipe building `-p mini` and running `target/release/mini` | neither exists; `-p nanoda_lib --bin checker`, then `checker --naive` | `checker/Cargo.toml:49–57` |
+| 7 | NAT-REPRESENTATION.md :49 | links 1–2 were built over ω "while the checker uses the first" (the W-type), "which is why link 4 cannot be written" | the checker uses ω; there is one carrier | `checker/src/tg.rs:1638–1642`, `:1721`, `:1746`, `checker/src/mini/nat_clause.rs:57–81` |
+| 8 | NAT-REPRESENTATION.md §6.1, §7.2 | "must `⟦Nat⟧` be `ω`? No, and it isn't"; "the general route's `⟦Nat⟧` is a W-type carrier that no binary numeral can be a term of" | the project answered yes and built it; §7.3 of the same file says "Built." eleven lines later | as above |
+| 9 | INDUCTIVES.md :518 | "primitive `Nat`/`String` literals, already shelved *(still shelved.)*" | the `Nat` half is not shelved — a `NatLit` converts to a real literal, the `> 10` decline is gone; the `String` half is still true | `checker/src/mini/convert.rs:715–732`, `census.rs:280–289`, `ledger.rs:1755` |
+| 10 | MATCHER-WALL.md §1, §2.6 | mimalloc as `#[global_allocator]` is worth −28 % and is "sitting unclaimed in the sibling binary" (the mini binary) | that binary is gone and the two lines did not move: `#[global_allocator]` occurs once in the workspace, `checker/src/main.rs:37–38`, which builds `nanoda_bin`. `checker/src/bin/checker.rs` — the binary every routed run and test spawns — has none, so the production checker runs on glibc and the win is still unclaimed | grep over the workspace |
+| 11 | DECISIONS.md :3581 | the "one checker pipeline" decision, written as a forward plan and the log's last entry | landed in full at `4e86d46` and `8815abb` | `Cargo.toml:3`, `checker/src/mini.rs:63–122` |
+| 12 | PIVOT.md §5 | "Today, in parallel": lift mini's indexed-family coverage **into** `tg.rs` | the opposite of the rule now in force — mini-owned inductive objects are authoritative and TG consumes them | owner's standing instruction; §6's crate-edge argument is also moot |
+| 13 | ENV-UNIFY.md §3.8 | "mini today generates but never compares (`parseRecInfo` stub)" | half wrong: no full mint-and-compare, but a load-time **shape** comparison exists and is reported | `checker/src/mini/convert.rs:67`, `:621`, `bin/checker.rs:198–203` |
+| 14 | ENV-UNIFY.md B6–B8 | gap totals quoted as standing controls — "remains 172", "`proj_reduced_carrier` stays 139" | true at their 2026-08-11 landings; four have since moved. Current committed ratchet: `nat_char_equations` **152**, `proj_reduced_subject` **2**, `proj_stuck_subject` **6**, `proj_reduced_carrier` **16**, `field_in_u0_by_carrier` **0** | `checker/tests/unified_cli.rs`; corroborated by MEASUREMENTS' 2026-08-14 census |
+| 15 | ENV-UNIFY.md track A1 | the read adapter "`mini/src/genv.rs`" | never built; no such file | `ls` |
+| 16 | ENV-UNIFY.md, "comprehensive merge, in progress" | in progress, wholesale | the structural half landed; outstanding are the cond mint (no `cond_store.rs`; `prop_infos`/`cond_by_sym` both live) and the entry collapse (`adopt_shared`, `divergent`, `alias` all still present) | grep over `checker/src` |
+| 17 | README.md :192 | "`Bool`, `N` and `List` are interpreted as W-types" — next to this project's Nat work, reads as a claim about Lean's `Nat` | true of the corpus's own `N` (`041_natDef`); Lean's `Nat` is `ω` | `derived/src/inductive.rs:8` |
+| 18 | SCOPING.md :2358, :2752; DECISIONS.md :2452; W-FROM-LFP.md :453; INDUCTIVES.md :41, :594; RECURSOR-DESIGN.md; WIRING-DESIGN.md :642; DERIVED-AUDIT.md F2 | `wnat` / `NatUniverse` / `NatMem` / `cumul/witness.rs` named as live | all deleted 2026-08-11. In each case the surrounding **finding** survives on its other consumers and was kept, not cut | `derived/src/cumul.rs:51–52`, absence of the files |
+
+**Stale paths, repaired in bulk**: ~200 `mini/src/x.rs` → `checker/src/mini/x.rs`
+and `mini/tests/y.rs` → `checker/tests/mini_y.rs` across 28 documents. Every
+target was checked to exist before rewriting. Three do **not** resolve —
+`mini/src/main.rs`, `mini/src/probe.rs`, `mini/src/termstats.rs` — because those
+files were deleted rather than moved; they were left alone, since a rewritten
+path would be a worse lie than a stale one. Two rewritten citations are known to
+carry **drifted line numbers** as well (e.g. old `mini/src/kernel.rs:1836` is
+`checker/src/mini/kernel.rs:2695`); the paths are fixed, the line numbers are not
+re-derived and should not be trusted.
+
+### 8.2 Re-verification of §6's "checked clean" lines
+
+Prompted by the standing rule that a wrong "checked clean" is worse than no
+audit. **One was false on the day it was written**: §6's
+`TgBackend::iota` entry cited `tg.rs:12096`, but at this audit's own commit
+`cb2d188` that line is a doc comment about `derive_pi_cong` and `fn iota` was at
+`:12123`. The substance was right — `proof_eq` is tried first, then and now
+(`checker/src/tg.rs:19894–19896`) — but the line was evidently not read.
+Corrected in place at §6.
+
+False **today** (each corrected in place above): the `wnat.rs`/`wnat_rec.rs`
+header entry at §5 (two of its four files are deleted); "all checked
+cross-references into `checker/src/tg.rs` resolve" (the one surviving explicit
+cite, `derived/src/ext/dprod_universe_n.rs:31` → `tg.rs:6642`, now lands on an
+inductive-shape guard, not the `Pi` clause decline it claims); the "eight axioms"
+entry (the phrase no longer occurs in `derived/src`, so the site it checked is
+gone); "662 non-comment lines" (**697** today, recounted with the CI script's
+method — the 700 budget still holds, with three lines of slack); the "exactly
+one `RBTree.red`" count (closed in place at `inductive/spec.rs:118`, and the
+name now appears in four further files as a legitimate indexed-family example);
+and the status header's "Nothing … cites this file" (`QUESTIONS.md:10` does).
+
+Verified **true today**, and worth keeping as do-not-re-verify: `Certifier::iota`
+is still exactly `checker/src/certify.rs:174`; `DEFAULT_LEVELS = &[0, 1]` is
+still `checker/src/instantiations.rs:117`; the `MAX_TYPE_DEPTH`/`MAX_HOLES`/
+`MAX_HYPS` references are all past-tense; `ctor_rules`' `(name, levels)` key
+matches its docs (`tg.rs:3275`); `hyp.rs` and all four submodules open with
+SUPERSEDED; every `tests/<name>.rs` named in a `derived/src` header exists; the
+eviction note reads as withdrawn (`tg.rs:1563`); the cache guards are as
+described (`tc.rs:2610` `is_unconditional`, `tc.rs:1721` `hypothesis_free`);
+`HAS_GAPS = ["075_nRecReduction", "076_listRecReduction"]` (`tg_tutorial.rs:178`).
+Several of these carry drifted line numbers, noted where they matter.
+
+**Marked unverified rather than blessed or cut**, with the reason: everything
+resting on the `.ndjson` corpus (the 102/55 arena counts, the 91 tutorial files,
+the `042`/`068`/`077` RBTree agreement, and the exhaustive `Lean.ParserDescr`
+scan — `vendor/` is absent from this worktree, so §1.1's headline finding is not
+re-checkable here); `ax_tarski`'s "all five clauses and the countermodels";
+README's instantiation-pre-pass numbers against MEASUREMENTS' tables;
+LIBRARY-BACKLOG's ~30 `MEASUREMENTS.md:` line cites, all presumptively drifted
+since MEASUREMENTS has grown; the CSB/`is_universe(U(x))` sweep across ~20
+`derived/` files; and `inductive/carrier.rs`'s "eight declarations".
+
+**One structural warning about §6 itself.** Its heading "Checked clean in
+`checker/src`" was written on 2026-08-01, when `checker/src` was about fifteen
+files. `checker/src` now also contains `checker/src/mini/` — sixty files that
+were a separate crate then and were **never in that sweep's scope**. The heading
+now reads as covering them and does not.
+
+### 8.3 Reported, not fixed — for the seats that own them
+
+* **`derived/src/cumul.rs` refers to `crate::wnat` in the present tense** at
+  `:158`, `:164`, `:172`, `:231`, `:253`, `:395`, `:429` — a reader greps for the
+  module and finds nothing. The surrounding mathematics (a W-type over `1+1` as
+  the worked example of the general bound) is sound and is not about Lean's
+  `Nat`; only the module references are dead. Left to the `derived/` owner: this
+  was a documentation pass and the file is a shared boundary.
+* **`NAT-BRIDGE-FEASIBILITY.md` was deliberately not edited.** The seat on
+  `joachim/natchar-census` had already touched it at `e3544dc`. Its defects, for
+  that seat: `:575` and `:731–733` state `⟦Nat⟧` is `derived::wnat`'s W-type and
+  cite `derived::wnat::Nat::ty` and `wnat.rs`; `:752` says ι fires "on the W-nat
+  the interpretation actually uses"; `:698` says "`checker/src/tg.rs` does not
+  reach `derived::nat` at all", which is false (19 references, live calls at
+  `tg.rs:1721` and `:1746`) and is contradicted by the file's own `:777`; and
+  `:241`, `:264`, `:669` invoke `./target/debug/mini` and `cargo test -p mini`.
+  The file already carries a correct correction at `:775–778` — the defects are
+  the un-marked paragraphs above it.
+* **`LEVEL-POLYMORPHIC-INDUCTIVES.md`, `MODELGEN.md`, `modelgen/` and everything
+  under `kernel/` were out of scope** and are untouched.
+* **`MEASUREMENTS.md` was deliberately not rewritten** — it is an append-only
+  log whose dated entries are correct records. It was checked for standing
+  architecture claims (`grep` for the two-crate, fallback, force-mode and
+  stray-sweep vocabulary): **zero hits**, so nothing needed correcting. Its
+  newest section (2026-08-14, the corpus-wide gap census) independently
+  corroborates finding 14 above.
