@@ -240,6 +240,30 @@ fn report_from(c: &Census) -> String {
         }
     }
 
+    // **The prize a cross-declaration typing store could reach.** A certificate
+    // closes only when every atom goes, so what matters is not how many atoms
+    // are already-concluded facts but how many certificates carry *nothing but*
+    // such atoms. Locals are excluded: they are the other seat's category and a
+    // store cannot supply them.
+    let reachable = |h: &Formula| -> bool {
+        match c.prov.get(h).map(|p| p.core().clone()) {
+            Some(Prov::RawBeta { reach, .. }) => reach.starts_with("pair concluded"),
+            _ => false,
+        }
+    };
+    let closes: u64 = escaping.iter().filter(|(h, _, _)| h.iter().all(|f| reachable(f))).map(|(_, n, _)| *n).sum();
+    let raw_only: u64 = escaping
+        .iter()
+        .filter(|(h, _, _)| h.iter().all(|f| matches!(c.prov.get(f).map(|p| p.core().clone()), Some(Prov::RawBeta { .. }))))
+        .map(|(_, n, _)| *n)
+        .sum();
+    s.push_str(&format!(
+        "  certificates carrying ONLY raw beta atoms: {raw_only} (the whole tranche's prize)\n"
+    ));
+    s.push_str(&format!(
+        "  …of those, carrying only atoms already concluded elsewhere in the run: {closes}\n"
+    ));
+
     s.push_str("  by atom shape (atoms, and the certificates the shape appears in):\n");
     let mut gs: Vec<_> = groups.into_iter().collect();
     gs.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));

@@ -10449,7 +10449,105 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         // And last of all: the target may *beta-reduce*. The type-level analogue
         // of the clause above — see [`Self::has_type_target_beta`].
-        self.has_type_target_beta(ctx, e, ty, assms, depth)
+        if let Some(r) = self.has_type_target_beta(ctx, e, ty, assms, depth) {
+            return Some(r)
+        }
+        // …and the *subject* may. See [`Self::has_type_subject_beta`]: the two
+        // reductions are mirror images, and only one of them existed.
+        self.has_type_subject_beta(ctx, e, ty, assms, depth)
+    }
+
+    /// `⟦e⟧ ∈ ty` where the **subject** is a redex: the mirror of
+    /// [`Self::has_type_target_beta`].
+    ///
+    /// Lean's own conversion rule types a term at whatever its reduct types at,
+    /// and this backend had only half of that. `HtClause::TypeDelta` unfolds the
+    /// *target* along a defining equation and `HtClause::TargetBeta` contracts
+    /// the *target*; both carry the membership back by Leibniz. Nothing did the
+    /// same on the other side of the `∈`, so an obligation about `(λx. b) a`
+    /// had no clause — not because the fact is hard, but because the rule was
+    /// missing.
+    ///
+    /// # Why this is the innermost decline and not a marginal one
+    ///
+    /// Measured on `proj_reduced_carrier` before it existed: the lambda typing
+    /// rule declined 209 times, 145 of them because *the body has no typing*,
+    /// and the bodies that are not themselves lambdas are overwhelmingly
+    /// applications of a lambda (43) — i.e. redexes. The rule recurses through
+    /// its own binders and stops here. So this clause sits underneath the
+    /// lambda rule's recursion rather than beside it.
+    ///
+    /// # Nothing is assumed and nothing is re-derived
+    ///
+    /// The equation comes from [`Self::beta_step`] — the backend's own beta
+    /// rule, the same one the reduction uses — so this is the settled
+    /// "thread evidence, never search" discipline rather than a second
+    /// reduction engine. Its domain premise `⟦a⟧ ∈ dom` is settled exactly as
+    /// it is everywhere else: derived, or *acquired* as an antecedent that
+    /// travels out in the returned assumption list and is discharged at a
+    /// binder or counted by the escape ledger. There is no path here that takes
+    /// it on trust.
+    ///
+    /// Two guards, both refusals rather than repairs. The step's left-hand side
+    /// is compared against `⟦e⟧` itself, so a beta lemma about some *other*
+    /// redex cannot be pressed into service; and the whole result goes back
+    /// through [`Self::has_type_a`]'s claim check like every other clause.
+    fn has_type_subject_beta(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: &Term,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<(Thm, HtClause, Vec<Formula>)> {
+        let Expr::App { fun, arg, .. } = ctx.read_expr(e) else { return None };
+        let Expr::Lambda { body, .. } = ctx.read_expr(fun) else { return None };
+        note_sb(SubjBeta::Reached);
+        // **The cost guard, before any derivation.** Contracting the redex is
+        // pure syntax (`ctx.inst`), while `beta_step` is a derivation *and*
+        // settles a domain obligation; and this clause runs last, so every
+        // attempt that fails has already been paid for by every other clause.
+        // Screening the reduct with the same `typeable_shape` the beta rule
+        // uses turns 224 of 246 wasted derivations on `proj_reduced_carrier`
+        // into a syntactic test. It is a cost guard, not a soundness one: a
+        // reduct it rejects is one `has_type_a` would have declined anyway.
+        let peek = ctx.inst(body, &[arg]);
+        if !self.typeable_shape(ctx, peek, &mut Vec::new()) {
+            note_sb(SubjBeta::Unshaped);
+            return None
+        }
+        let te = self.interp(ctx, e);
+        let Ok((step, next)) = self.beta_step(ctx, fun, body, arg) else {
+            note_sb(SubjBeta::NoStep);
+            return None
+        };
+        // **The step must be about this very subject.** `beta_step` derives an
+        // equation about `app(lam(…), ⟦a⟧)`; that is `⟦e⟧` only if the
+        // interpretation of the function slot really is that lambda graph.
+        // Comparing rather than assuming is what stops a rule from handing up a
+        // derivation about a neighbouring term — the failure mode this file has
+        // caught five times.
+        let (lhs, rhs) = step.as_eq()?;
+        if lhs != te {
+            note_sb(SubjBeta::OtherSubject);
+            return None
+        }
+        let used0 = merge_hyps(assms, &step.hyps);
+        let eq0 = reassume(&step.thm, &step.hyps, &used0)?;
+        let Some((inner, used)) = self.has_type_a(ctx, next, ty, &used0, depth + 1) else {
+            note_sb(SubjBeta::Reduct);
+            return None
+        };
+        let hyp = conj_of(&used);
+        // `⊢ H → ⟦reduct⟧ = ⟦e⟧`, restated under whatever the recursion acquired.
+        let eq = reassume(&eq0, &used0, &used)?;
+        let back = u_eq_symm(&mut self.env_mut(), &eq, hyp.as_ref())?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(rhs, te.clone(), w, Formula::mem(Term::var(w), ty.clone()));
+        let carry = u_mp(&u_a1i(&leib, hyp.as_ref()), &back, hyp.as_ref())?;
+        let out = u_mp(&carry, &inner, hyp.as_ref())?;
+        note_sb(SubjBeta::Derived);
+        Some((out, HtClause::SubjectBeta, used))
     }
 
     /// `⟦e⟧ ∈ ty` where the target `ty` **beta-reduces**: the type-level
@@ -21096,9 +21194,16 @@ enum HtClause {
     /// counterpart of `Ctor` one level up: `Ctor` puts an *element* in the type,
     /// this puts the *type* in a sort.
     IndTy,
+    /// The *subject* beta-reduced: the mirror of [`Self::TargetBeta`].
+    ///
+    /// `TypeDelta` and `TargetBeta` reduce the type an obligation is stated at;
+    /// nothing reduced the term it is stated about, so a subject that was
+    /// itself a redex had no clause at all. Measured on `proj_reduced_carrier`,
+    /// that was the innermost decline of the lambda rule's recursion.
+    SubjectBeta,
 }
 
-const N_HT_CLAUSES: usize = 18;
+const N_HT_CLAUSES: usize = 19;
 
 impl HtClause {
     const fn name(self) -> &'static str {
@@ -21121,6 +21226,7 @@ impl HtClause {
             HtClause::Numeral => "Numeral: a Nat literal lies in ω  (⊢ num(n) ∈ ω)",
             HtClause::CtorApp => "CtorApp: an applied constructor, by its conditional rule",
             HtClause::IndTy => "IndTy: an inductive type lies in its universe (⟦T⟧ ∈ ⟦Type 0⟧)",
+            HtClause::SubjectBeta => "the subject beta-reduced",
         }
     }
     const ALL: [HtClause; N_HT_CLAUSES] = [
@@ -21142,6 +21248,7 @@ impl HtClause {
         HtClause::Ctor,
         HtClause::CtorApp,
         HtClause::IndTy,
+        HtClause::SubjectBeta,
     ];
 }
 
@@ -21322,6 +21429,41 @@ const N_TB: usize = 6;
 static TB: [std::sync::atomic::AtomicU64; N_TB] = [const { std::sync::atomic::AtomicU64::new(0) }; N_TB];
 
 fn note_tb(m: TbMiss) { TB[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Every exit of [`TgBackend::has_type_subject_beta`], the mirror of
+/// [`TbMiss`].
+///
+/// The same discipline and for the same reason: a clause that reaches its
+/// subject and then declines is a different finding from one that never fires,
+/// and only the split says which. `Reached` is the denominator.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum SubjBeta {
+    /// The subject is `(λ…) a` — a redex this clause is about.
+    Reached,
+    /// …but the backend's own beta rule could not build the step.
+    NoStep,
+    /// …the step came back about a different term than `⟦e⟧`. Expected 0: a
+    /// nonzero here means the function slot's interpretation is not the lambda
+    /// graph the step was taken at, which is a bug report and not a miss.
+    OtherSubject,
+    /// …the subject contracted, but the obligation at the reduct is not
+    /// derivable. The honest residue: the reduction worked and the typing is
+    /// still missing.
+    Reduct,
+    /// …and the membership came out.
+    Derived,
+    /// The cost guard: the contractum is of a shape no typing clause reaches,
+    /// so the derivation was not attempted. Screened syntactically, before
+    /// `beta_step`.
+    Unshaped,
+}
+
+const N_SB: usize = 6;
+
+static SB: [std::sync::atomic::AtomicU64; N_SB] = [const { std::sync::atomic::AtomicU64::new(0) }; N_SB];
+
+fn note_sb(m: SubjBeta) { SB[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
 /// Every exit of [`TgBackend::target_head_step`], the one head reduction of a
 /// *type*. The decline census for the target-beta clause, in the shape that
@@ -23197,6 +23339,23 @@ fn ht_report() -> String {
             s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  {}", d.name())));
         }
     }
+    let sb_reached = SB[SubjBeta::Reached as usize].load(Relaxed);
+    if sb_reached > 0 {
+        s.push_str(&format!(
+            "    {:<width$}  {sb_reached:>10}\n",
+            "subject beta: redex subjects reached, of which"
+        ));
+        for (l, m) in [
+            ("the membership came out", SubjBeta::Derived),
+            ("the beta step could not be built", SubjBeta::NoStep),
+            ("the step was about another term (expected 0)", SubjBeta::OtherSubject),
+            ("contracted, reduct still not typeable", SubjBeta::Reduct),
+            ("declined by the shape screen, before any derivation", SubjBeta::Unshaped),
+        ] {
+            let n = SB[m as usize].load(Relaxed);
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("  …{l}")));
+        }
+    }
     let reached = TB[TbMiss::Reached as usize].load(Relaxed);
     if reached > 0 {
         s.push_str(&format!(
@@ -23534,6 +23693,112 @@ mod tests {
 
     /// A fresh constant, usable to instantiate a quantifier at.
     fn constant(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
+
+    /// **A redex in *subject* position is typed at its contractum, and the
+    /// beta step's own premise is paid for rather than assumed.**
+    ///
+    /// [`TgBackend::has_type_subject_beta`]'s contract, pinned at the rule.
+    /// `(λx : A. x) w` for a context local `w : A` is `⟦w⟧` after one
+    /// contraction, so the membership is derivable — but only *conditionally*,
+    /// because beta's premise `⟦w⟧ ∈ ⟦A⟧` is exactly the local's own typing,
+    /// which this backend acquires as an antecedent rather than proving.
+    ///
+    /// Three assertions, and each is a different way the rule could cheat:
+    ///
+    /// * the clause answers at all, so the test is exercising the rule and not
+    ///   its absence;
+    /// * what comes back **establishes** `conj(used) → ⟦e⟧ ∈ ⟦A⟧` — the
+    ///   kernel's own check, hypothesis-freeness included, so a theorem about
+    ///   the contractum handed up unchanged (`⟦w⟧ ∈ ⟦A⟧`, a *different*
+    ///   subject) fails here;
+    /// * `used` **mentions the premise**. This is the anti-silence assertion:
+    ///   the whole hazard of a reduction rule is that it discharges its own
+    ///   side condition by forgetting it, and a clause returning `assms`
+    ///   instead of the acquired list would still satisfy the first two.
+    ///
+    /// Falsified three ways, each producing a red:
+    ///
+    /// * deleting the `has_type_subject_beta` call from `has_type_uncached`'s
+    ///   tail — the first assertion fails (`None`), which is what says the
+    ///   clause is what answers this and no pre-existing clause does;
+    /// * returning `(inner, HtClause::SubjectBeta, used)` — handing up the
+    ///   contractum's own typing instead of carrying it back over the
+    ///   equation — fails the `establishes` assertion, because `inner`
+    ///   concludes `⟦w⟧ ∈ ⟦A⟧` and the claim is about `⟦(λx. x) w⟧`;
+    /// * returning `assms.to_vec()` in place of `used` fails the third
+    ///   assertion, and would be the unsound direction: a certificate stated
+    ///   as unconditional while resting on an undischarged membership.
+    ///
+    /// # The fourth assertion, and why it is weaker than it looks
+    ///
+    /// The same redex asked at a type its contractum misses must decline. That
+    /// is the property worth having — contracting successfully is not by itself
+    /// a membership — but it is **not this test that enforces it**, and saying
+    /// otherwise would be the "green tick over nothing" this project keeps
+    /// paying for. It was attempted against three mutations: handing up
+    /// `inner`; re-aiming the recursion at the contractum's own declared type;
+    /// and both of those again with [`Self::has_type_a`]'s claim filter
+    /// disabled. It stayed green through all three, because `Thm::mp` refuses
+    /// to compose a Leibniz step stated at the claimed target with a premise
+    /// concluded at another one — the kernel declines before any guard in this
+    /// crate is consulted. The assertion is kept as a recorded outcome, and its
+    /// honest status is: enforced one layer below, unfalsifiable from here.
+    #[test]
+    fn a_redex_subject_is_typed_at_its_contractum_and_owes_betas_premise() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+                let style = crate::expr::BinderStyle::Default;
+
+                let x = ctx.str1("x");
+                let zero = ctx.zero();
+                // `A : Sort 1`, a type this backend interprets as a set, and a
+                // context local `w : A` — the shape every binder produces.
+                let ty_a = ctx.mk_sort(zero);
+                let w = ctx.mk_unique(x, style, ty_a);
+                // `(λ x : A. x) w`, the identity redex.
+                let body = ctx.mk_var(0);
+                let lam = ctx.mk_lambda(x, style, ty_a, body);
+                let redex = ctx.mk_app(lam, w);
+
+                let a = be.interp(ctx, ty_a);
+                let te = be.interp(ctx, redex);
+                let tw = be.interp(ctx, w);
+
+                let out = be.has_type_a(ctx, redex, &a, &[], 0);
+                let (thm, used) = out.expect(
+                    "the subject-beta clause must type a redex at its contractum's type",
+                );
+                // The kernel's own check of the exact claim, under exactly the
+                // assumptions advertised.
+                let want = imp_of(conj_of(&used), &Formula::mem(te.clone(), a.clone()));
+                assert!(
+                    derived::establishes(&thm, &want),
+                    "the clause must establish the membership it advertises, about the redex itself"
+                );
+                // Nothing silently assumed: beta's premise is owed, in the
+                // open, in the returned list.
+                assert!(
+                    used.contains(&Formula::mem(tw, a.clone())),
+                    "beta's own premise must travel out as an assumption, not be discharged by omission"
+                );
+
+                // Contracting is not enough: at a target the contractum misses
+                // the clause must decline. See the note above on what enforces
+                // this — it is the kernel, not this line.
+                let one = ctx.succ(zero);
+                let ty_b = ctx.mk_sort(one);
+                let b = be.interp(ctx, ty_b);
+                assert_ne!(a, b, "the two sorts must interpret apart for the next assertion to mean anything");
+                assert!(
+                    be.has_type_a(ctx, redex, &b, &[], 0).is_none(),
+                    "a contracted subject must not be handed a membership at a target it misses"
+                );
+            })
+        })
+        .unwrap()
+    }
 
     /// **A de Bruijn-level local is one kernel variable per (level, declared
     /// type) — the level alone does not identify it, and neither does the type
