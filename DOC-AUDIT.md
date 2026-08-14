@@ -675,8 +675,10 @@ Established first, by reading, and cited throughout:
 | 17 | README.md :192 | "`Bool`, `N` and `List` are interpreted as W-types" — next to this project's Nat work, reads as a claim about Lean's `Nat` | true of the corpus's own `N` (`041_natDef`); Lean's `Nat` is `ω` | `derived/src/inductive.rs:8` |
 | 18 | SCOPING.md :2358, :2752; DECISIONS.md :2452; W-FROM-LFP.md :453; INDUCTIVES.md :41, :594; RECURSOR-DESIGN.md; WIRING-DESIGN.md :642; DERIVED-AUDIT.md F2 | `wnat` / `NatUniverse` / `NatMem` / `cumul/witness.rs` named as live | all deleted 2026-08-11. In each case the surrounding **finding** survives on its other consumers and was kept, not cut | `derived/src/cumul.rs:51–52`, absence of the files |
 
-**Stale paths, repaired in bulk**: ~200 `mini/src/x.rs` → `checker/src/mini/x.rs`
-and `mini/tests/y.rs` → `checker/tests/mini_y.rs` across 28 documents. Every
+**Stale paths, repaired in bulk**: 310 rewritten lines carrying
+`mini/src/x.rs` → `checker/src/mini/x.rs` or `mini/tests/y.rs` →
+`checker/tests/mini_y.rs`, across 29 of the 30 documents this sweep changed
+(counted from the diff, not estimated). Every
 target was checked to exist before rewriting. Three do **not** resolve —
 `mini/src/main.rs`, `mini/src/probe.rs`, `mini/src/termstats.rs` — because those
 files were deleted rather than moved; they were left alone, since a rewritten
