@@ -565,6 +565,8 @@ impl Clone for TgCert {
             TgCert::Proved(t) => TgCert::Proved(t.clone()),
             TgCert::Conditional { thm, hyps } => {
                 note_conditional();
+                #[cfg(feature = "stepcount")]
+                crate::escapes::made(hyps, 0);
                 CONDITIONAL_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 TgCert::Conditional { thm: thm.clone(), hyps: hyps.clone() }
             }
@@ -4499,6 +4501,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         note_proved();
         note_conditional();
+        // The escape census's `made` side, bumped in lock-step with the
+        // ledger's counter so that the two cannot drift. See `crate::escapes`.
+        #[cfg(feature = "stepcount")]
+        crate::escapes::made(&c.hyps, self.seq);
         MAX_ASSUMED.fetch_max(c.hyps.len() as u64, std::sync::atomic::Ordering::Relaxed);
         TgCert::Conditional { thm: c.thm, hyps: c.hyps }
     }
@@ -4515,6 +4521,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             TgCert::Proved(t) => CondEq::plain(t.clone()),
             TgCert::Conditional { thm, hyps } => {
                 note_consumed();
+                #[cfg(feature = "stepcount")]
+                crate::escapes::taken(hyps);
                 CondEq::new(thm.clone(), hyps.clone())
             }
             TgCert::Admitted(..) => None,
@@ -11060,6 +11068,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ) -> Option<(Thm, HtClause, Vec<Formula>)> {
         let a = self.interp(ctx, binder_type);
         let f = Formula::mem(te.clone(), a);
+        #[cfg(feature = "stepcount")]
+        {
+            let name = format!("local : {}", self.lean_sketch(ctx, binder_type));
+            crate::escapes::prov(&f, crate::escapes::Prov::LocalOwn { name });
+        }
         // `assumed` has already been tried at `assms`, so if the typing is
         // already in force this clause has nothing to add — and must not add a
         // duplicate conjunct, which would break the discharge at the binder.
@@ -11116,6 +11129,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let field = self.syn_type_proj(ctx, idx, structure)?;
         let a = self.interp(ctx, field);
         let f = Formula::mem(te.clone(), a);
+        #[cfg(feature = "stepcount")]
+        crate::escapes::prov(&f, crate::escapes::Prov::ProjField);
         // Already in force: `assumed` has had its chance at `assms`, and a
         // duplicate conjunct would break the discharge at the binder.
         if assms.contains(&f) {
@@ -12990,6 +13005,56 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// A one-line Lean sketch of an expression, for the escape census.
+    ///
+    /// Deliberately shallow and truncated: the census groups obligations, and a
+    /// full term dump would make two instances of one shape look like two
+    /// shapes. Applications print as `head a₁ … aₙ` with the arguments
+    /// sketched one level down.
+    #[cfg(feature = "stepcount")]
+    fn lean_sketch(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> String {
+        let d = std::env::var("NANODATG_SKETCH_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+        self.lean_sketch_at(ctx, e, d)
+    }
+
+    #[cfg(feature = "stepcount")]
+    fn lean_sketch_at(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, depth: u32) -> String {
+        if depth == 0 {
+            return "_".to_string()
+        }
+        match ctx.read_expr(e) {
+            Expr::Local { binder_name, .. } => format!("{:?}", ctx.debug_print(binder_name)),
+            Expr::Const { name, .. } => format!("{:?}", ctx.debug_print(name)),
+            Expr::Sort { .. } => "Sort _".to_string(),
+            Expr::Var { dbj_idx, .. } => format!("#{dbj_idx}"),
+            Expr::Lambda { binder_type, body, .. } => format!(
+                "fun (_ : {}) => {}",
+                self.lean_sketch_at(ctx, binder_type, depth - 1),
+                self.lean_sketch_at(ctx, body, depth - 1)
+            ),
+            Expr::Pi { binder_type, body, .. } => format!(
+                "(_ : {}) -> {}",
+                self.lean_sketch_at(ctx, binder_type, depth - 1),
+                self.lean_sketch_at(ctx, body, depth - 1)
+            ),
+            Expr::Let { body, .. } => format!("let _ := _; {}", self.lean_sketch_at(ctx, body, depth - 1)),
+            Expr::Proj { ty_name, idx, structure, .. } => format!(
+                "({}).{}[{:?}]",
+                self.lean_sketch_at(ctx, structure, depth - 1),
+                idx,
+                ctx.debug_print(ty_name)
+            ),
+            Expr::App { .. } => {
+                let (h, args) = ctx.unfold_apps(e);
+                let head = self.lean_sketch_at(ctx, h, depth);
+                let parts: Vec<String> =
+                    args.iter().map(|a| self.lean_sketch_at(ctx, *a, depth - 1)).collect();
+                format!("({head} {})", parts.join(" "))
+            }
+            _ => "<lit>".to_string(),
+        }
+    }
+
     fn ht_shape(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> HtMiss {
         let head = |b: &mut Self, ctx: &mut TcCtx<'t, 'p>, h: ExprPtr<'t>| match ctx.read_expr(h) {
             Expr::Const { name, .. } => {
@@ -13160,7 +13225,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             .filter_map(|l| {
                 let Expr::Local { binder_type, .. } = ctx.read_expr(l) else { return None };
                 let (w, a) = (self.interp(ctx, l), self.interp(ctx, binder_type));
-                Some(Formula::mem(w, a))
+                let f = Formula::mem(w, a);
+                #[cfg(feature = "stepcount")]
+                {
+                    let name = self.lean_sketch(ctx, l);
+                    crate::escapes::prov(&f, crate::escapes::Prov::LocalOwn { name });
+                }
+                Some(f)
             })
             .collect()
     }
@@ -13403,6 +13474,52 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let t = self.ht_target(dom);
                 note_ht_raw_target(t);
                 hyps = vec![Formula::mem(ta.clone(), dom.clone())];
+                // The census's first minting site. Recorded with the subject as
+                // Lean syntax, so that "raw beta obligation" in the report is a
+                // term one can look up rather than a label.
+                #[cfg(feature = "stepcount")]
+                {
+                    let shape = self.ht_shape(ctx, arg).name();
+                    let dom_expr = self.exprs_rev.get(dom).copied();
+                    let subject = self.lean_sketch(ctx, arg);
+                    let dstr = match dom_expr {
+                        Some(d) => self.lean_sketch(ctx, d),
+                        None => "<no Lean node>".to_string(),
+                    };
+                    // **The threading question, asked per escaping atom.** The
+                    // aggregate `raw hoists by cause` row answers it over every
+                    // raw hoist of the run; what decides whether this tranche is
+                    // plumbing or derivation is the answer over the atoms that
+                    // actually reach a boundary, which is a much smaller set.
+                    let here = self.seq;
+                    let sh = self.shared.borrow();
+                    let reach = match sh.typed_at.get(&(ta.clone(), dom.clone())).copied() {
+                        Some((s, true)) if s < here => "pair concluded earlier, unconditionally",
+                        Some((_, true)) => "pair concluded here, unconditionally",
+                        Some((s, false)) if s < here => "pair concluded earlier, conditionally",
+                        Some(_) => "pair concluded here, conditionally",
+                        None =>
+                            if sh.typed_subj.contains_key(&ta) {
+                                "subject typed at some OTHER target"
+                            } else if sh.typed_skel.contains_key(&mem_skeleton(&ta, dom)) {
+                                "only the GENERALISED membership was concluded"
+                            } else {
+                                "never concluded anywhere"
+                            },
+                    };
+                    drop(sh);
+                    crate::escapes::prov(
+                        &hyps[0],
+                        crate::escapes::Prov::RawBeta {
+                            shape,
+                            target: t.name(),
+                            cause: arg_mem_name(cause),
+                            reach,
+                            subject,
+                            dom: dstr,
+                        },
+                    );
+                }
             }
         }
         (mem_inst, hyps)
@@ -17852,6 +17969,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // discharge the closure later at the same variable. The record
                 // is a hint; see the field's own documentation.
                 self.hoisted.entry(closure.clone()).or_insert((w, dom.clone(), f.clone()));
+                // The census's wrapper: a family's provenance is the provenance
+                // of what was hoisted into it, one layer down. An unregistered
+                // inner formula stays unregistered, so a family over an atom no
+                // minting site recorded shows up as UNKNOWN rather than being
+                // silently attributed.
+                #[cfg(feature = "stepcount")]
+                if let Some(inner) = crate::escapes::prov_of(f) {
+                    crate::escapes::prov(&closure, crate::escapes::Prov::Family(Box::new(inner)));
+                }
                 (closure, true)
             } else {
                 (f.clone(), false)
@@ -20372,6 +20498,14 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         val: ExprPtr<'t>,
         typing: TgTyping,
     ) {
+        // Name this backend's sequence number for the escape census: a
+        // `TgBackend` is created per declaration, so `seq` identifies the
+        // declaration and this is the one call that knows what it is called.
+        #[cfg(feature = "stepcount")]
+        {
+            let sp = self.spell(ctx, name);
+            crate::escapes::decl(self.seq, &sp);
+        }
         self.store_declar_typing(ctx, name, uparams, ty, val, typing);
     }
 }
@@ -21619,6 +21753,20 @@ enum ArgMem {
     /// *down the reduction* reaches it.
     RawNeverChecked,
 }
+/// [`ArgMem`]'s row name, for the escape census.
+#[cfg(feature = "stepcount")]
+const fn arg_mem_name(k: ArgMem) -> &'static str {
+    match k {
+        ArgMem::Stored => "stored",
+        ArgMem::Outright => "answered outright",
+        ArgMem::UnderAntecedents => "answered under antecedents",
+        ArgMem::Mismatch => "recall mismatched the claim",
+        ArgMem::RawStoredElsewhere => "handed off at another domain",
+        ArgMem::RawGapAtCheck => "a hole at its own check",
+        ArgMem::RawNeverChecked => "never checked at an application",
+    }
+}
+
 const N_ARG_MEM: usize = 7;
 static ARG_MEM: [std::sync::atomic::AtomicU64; N_ARG_MEM] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_ARG_MEM];
@@ -23310,6 +23458,13 @@ pub fn global_report() -> String {
             escapes,
             MAX_ASSUMED.load(Relaxed),
         ));
+        // The census decomposes exactly that `escaped()` figure; see
+        // `crate::escapes`. Printed next to the ledger line so the two can be
+        // read against each other.
+        #[cfg(feature = "stepcount")]
+        if escapes > 0 {
+            s.push_str(&crate::escapes::report());
+        }
     }
     let unmatched: Vec<(&str, u64)> = [("app_cong", Rule::AppCong), ("trans", Rule::Trans), ("symm", Rule::Symm)]
         .into_iter()

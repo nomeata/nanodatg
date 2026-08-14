@@ -9,6 +9,9 @@ pub mod certify;
 pub mod const_store;
 pub mod debug_printer;
 pub mod env;
+/// The escape census; a measurement probe, compiled out without `stepcount`.
+#[cfg(feature = "stepcount")]
+pub mod escapes;
 pub mod expr;
 pub mod inductive;
 pub mod instantiations;
