@@ -487,10 +487,30 @@ fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm)
     // (`SCOPING.md` §8, construction 3) is the one this is for — see
     // `MINI-HANDOFF.md` §8 for why that row's remaining obstacle is
     // `minor_ix::transport` and *not* this.
-    if let Some(app) = ip.ind_apparatus() {
+    // **Published, not only stored.** The insert below is mini's own index;
+    // the publication is the only channel `crate::tg`'s `EnvCore` reads, and
+    // its absence here — while the non-indexed sibling `crate::mini::rec_dep`
+    // performed it three lines from the identical insert — was the seam defect
+    // `ORIGIN-RANKING.md` rank 1 priced at 89 gaps. The evidence was complete
+    // and mini consumed it; TG had nothing to receive it on.
+    //
+    // The package is assembled here rather than in `Interp` because this is
+    // where all three parts are simultaneously in hand and checked: `dr` has
+    // just had its premise discharged at this site's own minors, `tr` is the
+    // translation `dr` was built over, and `wrec` is the memoised one both
+    // stand on.
+    let tr = site.fam.class_t().cloned();
+    if let Some((mut kenv, app, _)) = ip.ind_parts() {
         let key = (site.rec, site.rec_inst.clone());
-        app.dep_elims
-            .insert(key, Rc::new(crate::mini::interp::DepElim { sym, ax, target: target.clone() }));
+        let elim = Rc::new(crate::mini::interp::DepElim { sym, ax, target: target.clone() });
+        let wrec = app.wrec(&mut kenv);
+        if let (Some(wrec), Some(tr)) = (wrec, tr) {
+            let pkg = Rc::new(crate::mini::interp::IxDepRec { dr: dr.clone(), tr, wrec });
+            if !app.publish_ix_dep_elim(key.clone(), pkg, elim.clone()) {
+                return Err(bad("indexed value recursor: divergent shared elimination evidence"))
+            }
+        }
+        app.dep_elims.insert(key, elim);
     }
     Ok((term, out))
 }

@@ -2053,6 +2053,31 @@ struct ProjectionStore {
         crate::const_store::ConstKey,
         (Rc<crate::mini::interp::DepRec>, Rc<crate::mini::interp::DepElim>),
     >,
+    /// Mini's authoritative **indexed** class-(T) translation, keyed by the
+    /// declaration. The indexed sibling of [`Self::translated`], and it is
+    /// separate for the reason `IndexedTranslation` is a separate type from
+    /// `Translated`: a constructor of an indexed family is stated at
+    /// `ind(p⃗, d⃗(p⃗,y⃗))` — its own index vector — where the plain one is
+    /// stated at `ind(p⃗)`, so the two carry different abbreviations and
+    /// nothing may read one as the other.
+    ix_translated:
+        HashMap<crate::const_store::ConstKey, Rc<crate::mini::zoneb::IndexedTranslation>>,
+    /// The same as [`Self::dep_elims`], for an indexed family: mini's exact
+    /// [`crate::mini::interp::IxDepRec`] and the same nest-bottom
+    /// abbreviation type, keyed by the recursor.
+    ///
+    /// **`DepElim` is shared between the two rows on purpose** — its `ax` is
+    /// `∀p⃗ C S⃗ [x⃗] t. sym(…) = app(drec, t)` with the index binders present
+    /// at an indexed family and absent otherwise, so one type states both and
+    /// a consumer instantiates it at the same list the nest was. Its `target`
+    /// is *not* shared in meaning: `rec_dep`'s value clause takes `⟦Sort u₁⟧`
+    /// while `rec_ix_dep` takes the rung the motive's own type inhabits, which
+    /// is why that field is stored rather than recomputed and why a consumer
+    /// must not check it against the motive's sort on this row.
+    ix_dep_elims: HashMap<
+        crate::const_store::ConstKey,
+        (Rc<crate::mini::interp::IxDepRec>, Rc<crate::mini::interp::DepElim>),
+    >,
 }
 
 /// The one-per-run semantic objects both engines must share for their
@@ -2211,6 +2236,70 @@ impl EnvCore {
 
     fn has_dep_elim(&self, key: &crate::const_store::ConstKey) -> bool {
         self.projections.borrow().dep_elims.contains_key(key)
+    }
+
+    /// Publish mini's indexed class-(T) translation. Idempotence is tested on
+    /// the **carrier**, exactly as [`Self::publish_projection_translation`]
+    /// tests it: two publications naming one carrier are one translation, and
+    /// a divergent one never overwrites evidence already at the key.
+    pub(crate) fn publish_indexed_translation(
+        &self,
+        key: crate::const_store::ConstKey,
+        tr: Rc<crate::mini::zoneb::IndexedTranslation>,
+    ) -> bool {
+        let mut store = self.projections.borrow_mut();
+        if let Some(old) = store.ix_translated.get(&key) {
+            // The type symbol, not the applied term: `IndexedCarrier::ty` is
+            // minted once per build, so equal symbols is exactly "the same
+            // carrier" and no weaker test would be.
+            return old.ii.carrier.ty == tr.ii.carrier.ty
+        }
+        store.ix_translated.insert(key, tr);
+        IX_PUBLISHED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    /// Mini's authoritative indexed translation at one exact joint key. The
+    /// indexed sibling of [`Self::projection_translation`], and like it, this
+    /// constructs nothing.
+    fn indexed_translation(
+        &self,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<Rc<crate::mini::zoneb::IndexedTranslation>> {
+        self.projections.borrow().ix_translated.get(key).cloned()
+    }
+
+    /// Publish the indexed dependent computation evidence. The idempotence
+    /// test is [`Self::publish_dep_elim`]'s: pointer identity on the package,
+    /// because a second `IndexedDepRecursor::over_family` mints a second
+    /// `w_rect` Separation and produces theorems about a construction no other
+    /// consumer holds.
+    pub(crate) fn publish_ix_dep_elim(
+        &self,
+        key: crate::const_store::ConstKey,
+        dep: Rc<crate::mini::interp::IxDepRec>,
+        elim: Rc<crate::mini::interp::DepElim>,
+    ) -> bool {
+        let mut store = self.projections.borrow_mut();
+        if let Some((old_dep, old_elim)) = store.ix_dep_elims.get(&key) {
+            return Rc::ptr_eq(old_dep, &dep)
+                && old_elim.sym == elim.sym
+                && old_elim.target == elim.target
+        }
+        store.ix_dep_elims.insert(key, (dep, elim));
+        IX_PUBLISHED[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    fn ix_dep_elim(
+        &self,
+        key: &crate::const_store::ConstKey,
+    ) -> Option<(Rc<crate::mini::interp::IxDepRec>, Rc<crate::mini::interp::DepElim>)> {
+        self.projections.borrow().ix_dep_elims.get(key).cloned()
+    }
+
+    fn has_ix_dep_elim(&self, key: &crate::const_store::ConstKey) -> bool {
+        self.projections.borrow().ix_dep_elims.contains_key(key)
     }
 
     /// Whether mini published a translation at this exact joint key. Unlike
@@ -20786,6 +20875,19 @@ static STRUCT_FIELDS: [std::sync::atomic::AtomicU64; 3] =
 /// own census, and the thing that says whether closing it is bounded work.
 static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// **How much indexed class-(T) evidence crossed the `EnvCore` seam** — index
+/// 0 translations, index 1 dependent-eliminator packages.
+///
+/// Not a performance counter and not behind `stepcount`: it is the readiness
+/// signal for the indexed ι route, and it exists because the defect it watches
+/// for is *silence*. `crate::mini::rec_ix_dep` built complete evidence,
+/// consumed it inside mini, and published none of it; nothing anywhere
+/// reported a number that would have looked wrong. A publication channel whose
+/// failure mode is "the consumer simply never fires" needs a count on the
+/// producing side, or the next seat measures a working consumer against an
+/// empty store and concludes the consumer is broken.
+static IX_PUBLISHED: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 /// **The label a declaration got, against every other label its shape also
 /// satisfies** — the standing guard against the defect [`iota_decline_label`]
 /// has now shipped twice.
@@ -20949,6 +21051,19 @@ pub fn origin_report() -> String {
             for (r, n) in v.iter().take(40) {
                 s.push_str(&format!("    {r:<96}  {n:>8}\n"));
             }
+        }
+    }
+    {
+        // The seam readiness row. Printed whenever mini published anything
+        // indexed, so that "the indexed consumer never fired" and "mini never
+        // handed it anything" are two distinguishable observations rather than
+        // one silence. See [`IX_PUBLISHED`].
+        let (t, e) = (IX_PUBLISHED[0].load(Relaxed), IX_PUBLISHED[1].load(Relaxed));
+        if t > 0 || e > 0 {
+            s.push_str(&format!(
+                "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
+                 translations {t}, eliminators {e}\n"
+            ));
         }
     }
     #[cfg(feature = "stepcount")]
