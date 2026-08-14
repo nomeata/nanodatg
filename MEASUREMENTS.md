@@ -10138,22 +10138,62 @@ exhaust a budget (`mini_mutual.rs:796` says so), and its 2102 gaps are one per
 
 ### The shape of the 383
 
-Summed across the corpus, by what the row says about itself:
+Summed across the corpus, read off the **origin bitmask** (`origin_report`), not
+the reason strings:
 
 | | count |
 | --- | ---: |
-| relays — `trans` / `congruence` / `pi congruence` / `symm` **over an admitted premise** | 208 |
-| origin: `undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary` | 134 |
-| origin: `proj_reduce` (all of it on `nat_char_equations`) | 14 |
-| origin: `iota: no interpretation — an indexed family` | 7 |
-| origin: `pi congruence: one Π of undetermined sort and one decided` | 7 |
-| origin: `nat_eq` / `nat_reduce` / `eq_cache` / `quot` / `unit_like` | 5 / 2 / 2 / 2 / 2 |
+| escapes — `undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary` | 134 |
+| relays solely attributed to one admit-origin | 199 |
+| relays naming two or more admit-origins | 13 |
+| admit-origins (`Admitted`, `premask == 0`) | 37 |
+| **total** | **383** |
 
-**One origin is 134 of the 383, and the 208 relays sit predominantly on top of
-it** — every fixture whose relay count is large also has a large beta row, and
-the four relay rows name their premise as *admitted* rather than as their own
-failure. The beta argument-typing obligation is therefore not one of several
-comparable tranches; on this corpus it is the master key.
+The per-fixture partition, every row summing to its `TOTAL gaps`:
+
+| fixture | own | relayed | multi | escaped | total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `nat_char_equations` | 23 | 96 | 13 | 20 | 152 |
+| `mutual_aux_encoding` | 3 | 47 | 0 | 46 | 96 |
+| `ctor_abbrev_major` | 2 | 23 | 0 | 21 | 46 |
+| `proj_reduced_carrier` | 0 | 0 | 0 | 16 | 16 |
+| `quot_lift_reduction` | 2 | 10 | 0 | 0 | 12 |
+| `delta_inside_a_proof` | 1 | 8 | 0 | 2 | 11 |
+| `nested_roundtrip` | 3 | 4 | 0 | 4 | 11 |
+| `transport_through_eq_rec` | 1 | 5 | 0 | 5 | 11 |
+| `proj_stuck_subject` | 0 | 0 | 0 | 6 | 6 |
+| `whnf_of_a_proof` | 0 | 0 | 0 | 6 | 6 |
+| `ground_unit_subsingleton` | 1 | 3 | 0 | 0 | 4 |
+| `mono_prefix` | 1 | 3 | 0 | 0 | 4 |
+| `stuck_recursor_major` | 0 | 0 | 0 | 4 | 4 |
+| `proj_reduced_subject` | 0 | 0 | 0 | 2 | 2 |
+| `reducible_ctor_binders` | 0 | 0 | 0 | 2 | 2 |
+| **total** | **37** | **199** | **13** | **134** | **383** |
+
+**The reason-string split above this was 208 relays / 41 origins; the bitmask
+says 212 / 37.** The four-gap difference is entirely inside `nested_roundtrip`'s
+`pi congruence: one Π of undetermined sort and one decided` row: it is 7 gaps by
+string, and by mask **3 own + 4 relayed**. That row is self-naming — a relay
+whose sole origin carries the same reason string is indistinguishable from its
+own origin by string alone. This is the same failure mode that once reclassified
+68 gaps, caught here at a much smaller scale, and it is why the split is now
+taken from the mask.
+
+**The beta/escape row is the largest single group at 134 of 383, but it is not a
+master key — its sub-tree is empty by construction.** An escaped conditional is
+not a `TgCert::Admitted`; it carries no origin bit, so it can never appear in any
+relay's `premask`. Closing it therefore removes **exactly 134** and unlocks
+nothing beyond itself. The natural experiment is in the table: the six fixtures
+whose gaps are *only* escapes — `proj_reduced_carrier`, `proj_stuck_subject`,
+`whnf_of_a_proof`, `stuck_recursor_major`, `proj_reduced_subject`,
+`reducible_ctor_binders`, 36 escapes between them — have **zero** relays;
+`quot_lift_reduction` has zero escapes and ten relays. Relay population tracks
+admit-origins, not the beta row.
+
+The leverage is the other way round: **37 admit-origins carry 212 relays**, so
+they account for 249 of the 383. The earlier paragraph read the correlation
+backwards — large relay counts co-occur with large beta rows because both scale
+with fixture size, not because one feeds the other.
 
 Two consequences worth stating before anyone plans around the handoff's list:
 
@@ -10173,12 +10213,11 @@ Two consequences worth stating before anyone plans around the handoff's list:
 ### Method note
 
 Every number is one `--no-modelgen --verbose` run per fixture against the same
-binary, `grep`ed for the `gap:` rows and `TOTAL gaps`. The origin/relay split
-here is read off the **reason strings**, which is exactly the thing an earlier
-census got wrong — 68 gaps once had strings that read like an origin and were
-relays. So the split above is a hypothesis to be confirmed against the origin
-bitmask, not a result. What is *not* hypothetical is the per-fixture `TOTAL
-gaps` column and the fact that fifteen fixtures carry gaps rather than five.
+binary, `grep`ed for the `gap:` rows and `TOTAL gaps`. The per-fixture `TOTAL
+gaps` column was taken at `f2a2af0` from the reason-string rows; the origin /
+relay / escape partition was taken at `b91433b` from `origin_report`'s own
+columns (`own`, `relayed`, the `TWO OR MORE` line) plus the escape ledger, and
+it supersedes the string split. Both agree on every `TOTAL gaps`.
 
 Gates at this commit, all green, so later reds are attributable: `unified_cli`
 5/5, `mini_designed` 32/32, `cargo check --no-default-features --all-targets`

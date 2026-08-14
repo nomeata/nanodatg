@@ -623,9 +623,14 @@ replaces said they were.** §2.5 does measure `natBleZ`, `natBleSZ` and
 `natBleSS` — exactly these three clauses — as certified from `Nat.ble`'s own
 `brecOn` nest, and that much is true and re-verified (task #127; the dumped
 certificates are in `MEASUREMENTS.md`, *"The Lean-`Eq`-to-set-equation bridge
-already exists"*). But they are certified **by `mini`, on the hand-written
-fixture `mini/tests/fixtures/nat_char_equations.ndjson`** — not by the checker,
-and not from `init-prelude`. Measured on the export itself:
+already exists"*). But they are certified **on the hand-written fixture
+`checker/tests/fixtures/nat_char_equations.ndjson`, by the mini-owned route** —
+not by the TG path, and not from `init-prelude`. There is no longer a separate
+`mini` program to contrast with: `checker/tests/mini_nat_equations.rs` spawns
+`CARGO_BIN_EXE_checker` with `--naive --no-modelgen`, so it is the *same binary*
+on the naive route. The load-bearing half is untouched — the input is a
+hand-written fixture rather than the export, and the `tg` route is unmeasured.
+Measured on the export itself:
 
 ```sh
 grep -c '"thm"' vendor/arena-tests/good/init-prelude.ndjson          # 156

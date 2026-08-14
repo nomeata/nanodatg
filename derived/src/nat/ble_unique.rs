@@ -24,7 +24,7 @@
 //! for two revisions, and the wrong reason set the wrong scope. It is **not**
 //! that deriving the clauses needs δ and ι run *under a universal quantifier*
 //! through the `brecOn` nest. A Lean proof of a clause is converted into the
-//! set-level equation by `mini/src/eq_cash.rs`, which never
+//! set-level equation by `checker/src/mini/eq_cash.rs`, which never
 //! reduces the operation at all: it reads the proof's **typing**, moves the
 //! subject to `•` by proof irrelevance, β-descends `⟦Eq.{v}⟧`'s stored nest and
 //! applies `derived::prop::cond_elim`. `mini` already certifies `natBleZ`,
@@ -32,8 +32,19 @@
 //! that certification *is* the schematic work, done by ordinary typing
 //! inference. What is actually missing is upstream and downstream of it: the
 //! three clauses are **not in `init-prelude`** (Lean core proves none of them
-//! under any name, §3), so they must be synthesised; and `eq_cash` lives in
-//! `mini`, which *depends on* `checker`, so `tg.rs` cannot call it.
+//! under any name, §3), so they must be synthesised; and `tg.rs` still cannot
+//! call `eq_cash`, though **no longer for the reason this line used to give**.
+//! There is no `mini` crate any more: `eq_cash` is `checker/src/mini/eq_cash.rs`,
+//! `checker/src/lib.rs` declares `pub mod mini`, `checker/src/mini.rs` declares
+//! `pub mod eq_cash`, and `cash` is `pub` — so `crate::mini::eq_cash::cash`
+//! *resolves* from `tg.rs`, which already reaches into `crate::mini::` for
+//! `NatClause`, `Translated`/`DepRec`/`DepElim` and `proj_data::build`. The
+//! blocker moved rather than closed: `cash` demands a live
+//! `mini::kernel::Checker`, built from a `mini::env::Environment` and a
+//! `&mut mini::interp::Interp`, and `TgBackend` holds neither at any site
+//! (`Environment` does not occur in `tg.rs` at all; every `Interp` mention is a
+//! comment). Everything mini publishes to tg arrives as finished data through
+//! the shared const store, not as a checker one can resume.
 //! `MEASUREMENTS.md`, *"The Lean-`Eq`-to-set-equation bridge already exists, and
 //! it is not in the checker"*, is the measurement. The obvious way round — the
 //! corpus holds only 51 distinct
@@ -46,10 +57,12 @@
 //! workaround was meant to escape — and 25 424 β contractions are conditional
 //! on domain premises nothing discharges.
 //!
-//! So this bridge is waiting on a **synthesised declaration and a crate
-//! boundary**, not on wiring and not on a schematic ι. Three documents once
-//! said "wiring", including an earlier version of this header; the revision
-//! after that said "schematic ι", and that was wrong too.
+//! So this bridge is waiting on a **synthesised declaration and a live mini
+//! checker handle inside `TgBackend`**, not on wiring, not on a schematic ι,
+//! and no longer on a crate boundary. Three documents once said "wiring",
+//! including an earlier version of this header; the revision after that said
+//! "schematic ι", and that was wrong too; the revision after *that* said "crate
+//! boundary", which was true when the crates were separate and is now stale.
 //!
 //! # Why `t` and `f` are quantified, and not `succ 0` and `0`
 //!
