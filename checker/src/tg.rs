@@ -4070,13 +4070,23 @@ struct DepBottom {
 ///
 /// The first four are read straight off `InductiveData`. They are not
 /// defensive boilerplate: [`Decline::Indices`] is the whole of the scope
-/// enforcement for indexed families, because indices are *unrepresentable* in
-/// [`derived::inductive::DeclSpec`] and there is therefore no derived-side
-/// backstop. `RBTree` (`042`/`068`/`077`, `numIndices: 2`) declines here.
+/// enforcement for indexed families **on this backend's own construction
+/// path**. `RBTree` (`042`/`068`/`077`, `numIndices: 2`) declines here.
+///
+/// *(This said indices are "unrepresentable in `DeclSpec`, so there is **no
+/// derived-side backstop**". True of `DeclSpec` and false as a statement about
+/// `derived`: `derived/src/inductive/family/spec.rs`'s `IndexedDeclSpec` wraps
+/// `DeclSpec` precisely to represent them, and the derived side of the indexed
+/// family — carrier, constructors, and both eliminators — is complete and is
+/// what mini runs on. What is absent is a consumer in **this file**, not a
+/// construction in `derived`. Corrected 2026-08-14; `INDEXED-DESIGN.md` §8.2
+/// records what the consumer costs.)*
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Decline {
-    /// An indexed family. `DeclSpec` has no field for indices and adding one
-    /// would be a different construction — it needs the equality type first.
+    /// An indexed family. `DeclSpec` has no field for indices, so *this*
+    /// backend's general path cannot state the declaration — the indexed
+    /// construction lives in `derived::inductive::family` behind
+    /// `IndexedDeclSpec` and is reached only through mini today.
     Indices,
     /// A `mutual … end` block.
     Mutual,
