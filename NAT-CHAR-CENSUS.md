@@ -264,31 +264,64 @@ checker handed over no proof pair, the endpoints are not proofs — against one
 structure, `ctors=1 PProd`, 2 firings. That is a single named site, not a
 family.
 
+**The "2 firings against 14 exits" discrepancy above is the whole story, and I
+read past it.** `PROJ_STRUCTS` only counts when the redex is a bare
+`Expr::Proj`; 12 of the 14 have an *application* as their redex, so they never
+reached that census line at all. A census one level deeper —
+`derive_projection_computation`'s own decline string, now permanent as
+`PROJ_DECLINE` — shows all 14 exiting at the **first** line of the computation:
+12 at "the redex is not a projection", 2 at "the structure head is not a
+constructor". The projection composition is never consulted. See §5.
+
 ## 5. The exact next construction, sized
 
-**Not the `Nat` bridge. The `PProd`-projection leg of `proj_red`.**
+**Not the `Nat` bridge. Not the `PProd`-projection leg either — the ι readiness
+gate underneath it.** (Heading kept; the diagnosis below is corrected in place.)
 
 * **Prize, stated separately from the population.** Population touched: 85 gaps
   by `SUBTREE`. **Reachable prize, measured: 74 of 152 on this fixture (49 %),
-  and 74 of 383 corpus-wide (19 %)** — the single largest closure available
-  anywhere in the tree from one construction. Caveat (a) applies: −74 is the
-  price of the equations being *true*; escapes rose 20 → 31 under the deletion,
-  so a real derivation must also discharge what it introduces or the net is
-  smaller.
-* **What is wanted.** All 14 sites want the same thing: `proj_red` on a
-  one-constructor structure `PProd`, where the checker did not hand over a proof
-  pair. The certificate needed is the ordinary projection-reduction equation
-  `(mk a₁ … aₙ).i ⟶ aᵢ` at `PProd`, composed under the application suffix the
-  `brecOn` nest wraps it in — which is exactly what `9b691cb` already built for
-  the carrier fixture ("retains an inner projection proof and composes it under
-  an application suffix").
-* **Size.** This is an *extension of an existing derivation to one more site*,
-  not a new construction. The mechanism is present and green; what is missing is
-  reaching it when the endpoints are not proofs. I would scope it as **one
-  tranche**, and I would have the seat first refute the claim that `9b691cb`'s
-  composition applies unchanged — that is the load-bearing assumption and it is
-  cheap to test by pointing the existing path at the `PProd` site and reading
-  the exit code census.
+  and 74 of 383 across the *fixture* corpus (19 %).** Caveat (a) applies: −74 is
+  the price of the equations being *true*; escapes rose 20 → 31 under the
+  deletion, so a real derivation must also discharge what it introduces or the
+  net is smaller.
+  * **Corrected scope.** This section originally called it "the single largest
+    closure available anywhere in the tree from one construction". That was a
+    statement about the fixture population only, and I did not have the census
+    that could tell the two apart. `ORIGIN-RANKING.md` has since measured both:
+    **`proj_reduce` is worth zero on Lean's 91 exports** — it exists on exactly
+    one file in the tree, this fixture — which puts it at rank 2 behind
+    `iota: no interpretation — an indexed family` at −117. The tranche is still
+    worth taking, because driving this fixture to zero is a goal in its own
+    right and nothing else on it comes close; it is not the corpus-wide win the
+    sentence claimed. Confirmed after landing: both large exports are unmoved
+    (076 at 59, 077 at 53).
+* **What is wanted — corrected, and this is where the section was wrong.** The
+  sites do *not* want a wider projection composition. `reduce_proj` carries a
+  subject's whnf trace only when `authoritative_reduction_ready` accepts every
+  rule in it, and on this fixture **every one of its 30 refusals is a `Nat.rec`
+  ι step**, declined by `wants_proj_red_iota` for "mini published no translation
+  at these levels". `Nat` is a **direct clause**: `mini::direct::clause_for`
+  routes it to the native `NatClause` before `zoneb::build` runs, so
+  `publish_projection_translation` is never called for it and
+  `mini_plain_recursive_translation_at` is permanently `None`. The gate's only
+  question predicts `iota`'s `RecBottom::Dep` arm; `iota`'s own `usable` accepts
+  a second arm, `RecBottom::Nat`, that the question can never reach. So the
+  subject trace was dropped at all 14 `PProd` sites and `proj_red` was handed an
+  *unreduced* subject. The fix is one added disjunct in the ι readiness gate
+  (`TgBackend::iota_nat_clause_ready`), not a line of projection work.
+* **Size — confirmed as one tranche, for the wrong reason.** The estimate was
+  right and the mechanism was not. Landed at `3eab691`: **152 → 65, a fall of
+  87**, which *beats* the −74 the deletion priced. Limitation (a) of §2 runs the
+  other way here: `NANODA_ASSUME` acquires the equation as an antecedent and
+  charges the escape ledger for it, while a real derivation discharges most of
+  what it introduces (escapes 20 → 26, not 20 → 31). `gap: proj_reduce` 14 → 0
+  and `gap: eq_cache` 2 → 0. The ι-site counts rise, 10 → 17 at `Nat.zero` and
+  13 → 22 at `Nat.succ`, which is what says the gate certifies rather than
+  merely going quiet.
+* **The advice to "first refute the claim that `9b691cb`'s composition applies
+  unchanged" was the right advice.** It does apply unchanged, and it was never
+  reached. The load-bearing error in this section was locating the wall at the
+  projection rule because that is the rule whose *name* is on the gap.
 * **Ordering.** It must be re-measured after, not before, whichever seat is on
   the 16 carrier gaps lands, because both terminate in the escape ledger and the
   ledger is the shared floor.
