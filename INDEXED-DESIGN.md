@@ -1287,11 +1287,31 @@ because §8.1 is where a seat will look.
   resumable checker" — resurfacing at a second site. It is a *premise-discharge*
   problem, not a wiring problem, and no amount of publication reaches it.
 
-**The route that does reach it, and it has a precedent in the same file.**
-Do not port `minor_ix` into `tg.rs`: it is 900 lines of the most intricate code
-in the tree, it would duplicate a module mini owns, and duplicating it is what
-the semantic-ownership rule exists to forbid. Publish the *discharged premise*
-instead:
+**Two routes reach it. Do not transliterate `minor_ix` into `tg.rs`** — that is
+900 lines of the most intricate code in the tree and it would be a second copy
+of a module mini owns. But note carefully what the semantic-ownership rule does
+and does not forbid here, because the obvious reading of it is wrong:
+
+> TG must consume mini's exact carriers, recursors and certificates. It is
+> **not** forbidden from discharging a premise about them. `tg.rs` already
+> discharges the *non-indexed* `DEP` itself, in `dep_minor_typed`, walking the
+> minor's own Lean binder type — and `dep_minor_typed` is TG-native, not a port
+> of mini's `minor` module.
+
+So the two candidates are:
+
+**(A) Write `ix_dep_minor_typed` in `tg.rs`, beside `dep_minor_typed`.** The
+established precedent, and the closer one: TG already holds what it needs —
+`dom_exprs[np+1+i]` is the minor's declared binder type and `derive_iota_core`
+already walks binder telescopes over `ExprPtr`. What is new against
+`dep_minor_typed` is that a recursive slot's induction hypothesis sits at the
+child's own index vector `d⃗ᵢⱼ`, read off the constructor's binder type, so the
+walk needs `ind_spine_at`'s equivalent over `ExprPtr` (~40 mechanical lines) and
+the per-child index memberships. Bigger in `tg.rs`, ~400–600 lines, and it keeps
+the premise discharge on the side that has the use site.
+
+**(B) Publish the *discharged premise* from mini.** Less `tg.rs` code, and it
+has this going for it:
 
 * `rec_ix_dep::rec_bottom` already derives `PRE` at the checker's **telescope
   binders** — `c.binders(depth)` / `c.scope_vars(depth)`, i.e. kernel free
@@ -1302,11 +1322,25 @@ instead:
   `⊢ ∀p⃗ ∀C ∀S⃗ ∀T. (typings → PRE)`, and `tg.rs` instantiates it at the use
   site's own terms and discharges `typings` from the `obligations` it already
   computes in `derive_iota_core`.
-* **The precedent is `DepBottom::cod_gen`**, which does exactly this for the
+* **The shape to copy is `DepBottom::cod_gen`**, which does exactly this for the
   `COD` half of the non-indexed `PRE`: derived once per declaration with
   `cod_at_funspace`, closed with `derived::gen_all`, and consumed in `fire_dep`
   by two `inst_all`s and a `u_mp`. The indexed row wants the same move applied
   to the whole premise rather than to one conjunct.
+* **Its weakness, and it is the reason (A) is listed first.** `cod_gen` is
+  derived by `tg.rs` from a `derived` function that takes only `ind`; nothing in
+  the tree currently publishes a *discharged, generalised* premise across the
+  seam, so (B) needs mini-side generalisation machinery that does not exist —
+  `PRE` is proved under the scope's memberships, and closing it means turning
+  those into antecedents in the order `tg.rs` can supply them from
+  `obligations`. Verify that `Closed::discharge` gives that shape on the nose
+  before committing to (B); if it does not, (A) is the cheaper of the two.
+
+**Whichever is taken, settle it before writing rather than during.** The
+measurement that prices it is not `NANODA_ASSUME`'s: the deletion makes the
+origin *acquire* `PRE` as an antecedent, so it prices a world in which the
+premise holds and says nothing about whether either route can establish it.
+That is the whole distinction this section exists to record.
 
 What remains after that is TG-native and is the honest ~800–1000 lines the
 ranking predicted: `RecBottom::IxDep`, a `mini_ix_dep_rec_bottom` that reads the
