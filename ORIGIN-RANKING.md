@@ -33,7 +33,7 @@ total gaps when that origin alone is deleted with `NANODA_ASSUME`.
 
 | # | origin cause | own | relay | SUBTREE | Δ measured | over | acquired | fixtures Δ | exports Δ |
 | --: | --- | --: | --: | --: | --: | --: | :-: | --: | --: |
-| 1 | `iota: no interpretation — an indexed family` | 12 | 117 | 129 | **−117** | 9 % | 12/12 | −83 | −34 |
+| 1 | `iota: no interpretation — an indexed family` † | 12 | 117 | 129 | **−117** | 9 % | 12/12 | −83 | −34 |
 | 2 | `proj_reduce` | 14 | 71 | 85 | **−74** | 13 % | 14/14 | −74 | **0** |
 | 3 | `iota: the major premise's domain is not this inductive at this parameter` | 5 | 32 | 37 | **−35** | 5 % | 5/5 | 0 | −35 |
 | 4 | `nat_eq` | 9 | 16 | 25 | −7 ⚠ | — | **5/9** | −6 | −1 |
@@ -50,6 +50,8 @@ total gaps when that origin alone is deleted with `NANODA_ASSUME`.
 
 ⚠ = the deletion is **partial**, so `Δ` is a lower bound (see below).
 ✗ = the origin has **no deletion hook at all**, so `Δ` is not a measurement.
+† = **this label covers three different causes**; only **−89** of its −117 is an
+indexed-family problem. See "rank 1 is three causes wearing one label".
 
 ### `SUBTREE` is a ceiling in every measurable row — confirmed, and the band is wider
 
@@ -217,6 +219,31 @@ Where the iota origins live:
 The leverage ratio is the highest in the tree: `mutual_aux_encoding` carries
 **50 gaps on 3 origins**, ~17 gaps per origin.
 
+### …but rank 1 is three causes wearing one label
+
+`tg.rs:14075` tests `r.num_indices != 0` **first**, ahead of `all_inductives`,
+`is_k`, `recognised_ind` and `is_nested`. So every indexed declaration gets this
+label whatever its real blocker is. Splitting the −117 per file by the recursor
+the row names:
+
+| recursor | files | Δ | the real cause |
+| --- | --- | --: | --- |
+| `Aux.rec`, `Ix.rec`, `RBTree.rec` | `mutual_aux_encoding` −47, `ctor_abbrev_major` −23, `077_RBTree.id_spec` −19 | **−89** | genuinely `IndexedDepRecursor` |
+| `Eq.rec` | `delta_inside_a_proof` −8, `094_ruleK` −7, `transport_through_eq_rec` −5 | **−20** | **K-like eliminator** — `Eq` has `num_indices = 1` *and* `is_k` |
+| `Acc.rec` | `118_accRecReduction` | **−8** | `derived::rec_acc`'s `pack_iota`, a different engine |
+
+**This is task #153 repeating verbatim.** The comment immediately above line
+14075 records that a clause called "a mutual block" once carried 100 gaps of
+which none was a mutual block, and concludes "*Split so that each clause tests
+the thing it is named for*". The same defect is live one line below it: 28 of the
+117 gaps under "an indexed family" are not an indexed-family problem, and one of
+the three files is literally named `094_ruleK`.
+
+Reordering the chain to test `is_k` before `num_indices` is a one-line change in
+`checker/` and therefore out of scope for this measurement tranche — but until it
+is made, **rank 1's true size is −89, not −117**, and there is an unlisted
+`iota: K-like eliminator` cause worth −20 hiding inside it.
+
 The whole iota population sits on **six distinct recursors**, 13 firings —
 `Aux.rec` 3, `RBTree.rec` 3, `Eq.rec` 3, `Ix.rec` 2, `RTree.rec` 1, `Acc.rec` 1.
 That is a bounded, enumerable target, not an open family.
@@ -248,7 +275,7 @@ number.
 
 | origin | expect a construction to reach `Δ`? |
 | --- | --- |
-| `indexed family` (−117) | **See the sized note below** — the derivation may largely exist. |
+| `indexed family` (−89 true) | **Yes — and no new derivation is needed.** See below. |
 | `proj_reduce` (−74) | Likely yes on its own fixture; already in flight. |
 | `major premise's domain` (−35) | Probably. Terminal, 5 % overshoot, one file, one recursor shape. |
 | `constructor's bridge` / `several ctors` (−9 / −7) | Probably; both terminal, single-file, single-recursor. |
@@ -262,6 +289,74 @@ these numbers is additionally subject to the escape ledger taking back part of
 the win. That is the one respect in which all thirteen rows are alike, and it is
 why the escape programme is not optional.
 
+## The next tranche, sized: publish the indexed ι across the engine seam
+
+**The construction exists, is complete, and is already firing in this same
+binary. TG cannot see it because the evidence never crosses the `EnvCore` seam.**
+This is a wiring tranche, not a derivation tranche.
+
+* **What concludes the target.** `derived/src/inductive/family/dep_rec.rs:255-258`,
+  `IndexedDepRecursor::iota`:
+  `⊢ ∀p⃗ ∀m ∀S⃗ ∀T. (PRE → ∀y⃗ ∀t⃗. (Hᵢ → app(irec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗)))`
+  per constructor — the ι rule at Lean's own minor, index vector eliminated.
+  Built by `over_family` (`:279`). The sibling family modules are *not*
+  competitors: `prop_rec.rs` and `trunc_rec_ix.rs` have no `iota` field at all
+  (Prop/truncated — ι is proof irrelevance), and `le_rec.rs` / `le_prop_rec.rs`
+  are the class-(S) `Acc`-shaped eliminator over a different carrier.
+* **Mini already builds and consumes it.** `Interp::indexed_dep_recursor`
+  (`checker/src/mini/interp.rs:1457`) caches it per declaration;
+  `checker/src/mini/iota_ix_dep.rs` fires it at use sites, routed live from the
+  `*num_indices != 0` arm of `kernel.rs:1325-1331`.
+* **TG consumes none of it.** `IndexedDepRecursor`, `IndexedInductive`,
+  `IndexedCarrier`, `IndexedDeclSpec`, `over_family`, `family::` — **zero**
+  occurrences in `tg.rs`. `rec_bottom` refuses indexed recursors at five separate
+  gates (`tg.rs:7015, 7111, 7257, 8437, 10977`), so `derive_iota` falls through
+  to the label at `14075`, which builds nothing.
+* **The seam defect, exactly.** `checker/src/mini/rec_ix_dep.rs:487-491` does
+  `app.dep_elims.insert(key, DepElim{…})` and **omits the `publish_dep_elim`**
+  that its non-indexed sibling `rec_dep.rs:1186-1189` performs. `publish_dep_elim`
+  is the only channel into the shared store that `tg.rs:2205 dep_elim()` — and
+  hence `mini_dep_rec_bottom` — reads. `IndexedTranslation` likewise has no
+  analogue of `publish_projection_translation`.
+* **Size: ~800–1000 lines, two tranches**, against three measured precedents that
+  did exactly this job for other evidence: `b4127ac` (+497 in `tg.rs`),
+  `fb1692c` (+338), `02ab90f` (+293). Itemised: publication across the seam
+  ~80–120; `RecBottom::IxDep` + adoption gate + `mini_ix_dep_rec_bottom`
+  ~150–200; `fire_ix_dep` ~500–650 (the analogue of `fire_dep`, `tg.rs:15859-16331`,
+  473 lines).
+* **Settle before writing, not during:** `iota_ix_dep.rs:238` reads each child's
+  index expressions via mini's `zoneb::ind_spine_at` over mini's own `E`, and
+  `tg.rs` has no equivalent over `ExprPtr<'t>`. Either port it (~40 lines,
+  mechanical) or — consistent with the ownership rule that TG must consume mini's
+  exact objects — publish the index expressions and their memberships alongside
+  the constructor abbreviations.
+* **Not in scope:** no new `derived/` theorem, no new Separation, no new symbol.
+
+### Design-document status, corrected
+
+Anyone sizing this row from the design docs will size it wrong.
+
+* `INDEXED-DESIGN.md` §8.1 says "*what is left of C3 is **ι** at a value motive*".
+  **Stale — that landed.** `checker/src/mini/iota_ix_dep.rs` is 670 lines and is
+  routed live. `MINI-HANDOFF.md` §26 supersedes it and self-corrects. §8.1's
+  *other* claim — that nothing in `derived::inductive::family` is reachable from
+  `tg.rs` — is **correct and still true**, and is the only line in the repo
+  naming the actual defect. §8.1 also still cites pre-`4e86d46` `mini/src/…` paths.
+* `tg.rs:3927-3931`'s `Decline::Indices` doc says indices are "*unrepresentable
+  in `DeclSpec`, so there is **no derived-side backstop***". True of `DeclSpec`,
+  false as written: `derived/src/inductive/family/spec.rs:110`'s
+  `IndexedDeclSpec` wraps it precisely to represent them, and the derived side is
+  complete.
+* `INDEXED-ROW-AUDIT.md` §1's "live bug" claims are stale and the document's own
+  closing block already says so; the fixes are verified in place
+  (`class_p_ix.rs:419` now shifts; zero `ctor_atoms(` callers remain). Its §2
+  corpus census is still true and still useful.
+
+I have **not** corrected the first two in place: `tg.rs` is production code under
+three live seats, and `INDEXED-DESIGN.md` is the design document for the tranche
+a seat will pick up next — correcting it is that seat's first act, with the code
+in front of them, not mine from outside. Both are recorded here instead.
+
 ## What I would not do
 
 * **Bundle tranches.** The top three compose exactly additively; there is no
@@ -274,3 +369,7 @@ why the escape programme is not optional.
 * **Spend a seat on `eta (function-extensionality)`.** Worth ≤ 10, and pricing it
   at all requires touching `checker/`.
 * **Treat `proj_reduce` as a reference-population win.** It is zero there.
+* **Size the indexed-ι row off `INDEXED-DESIGN.md` §8.1.** It reads as a missing
+  construction; the construction landed and is firing in mini today.
+* **Write a new indexed ι in `derived/`.** It exists. This row is a publication
+  and re-instantiation job across the `EnvCore` seam.
