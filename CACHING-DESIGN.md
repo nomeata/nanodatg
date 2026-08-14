@@ -5,7 +5,7 @@ to be second-guessed the same way: verdict first, every claim sourced, and §7
 names what stays unfixed and unmeasured. The measurements taken for this study
 are in §6 — the narrowed-gate variant on the `DTree` tower, the full tutorial
 suite under it at the certified level (which PROFILE.md §9 names as not
-measured), `mini/tests/nested.rs`, and the attribution runs its one failure
+measured), `checker/tests/mini_nested.rs`, and the attribution runs its one failure
 required — using `scripts/profile-probe.diff` plus a ten-line extension
 (`MINI_FRAME_ACC`) in a scratch worktree.*
 
@@ -27,7 +27,7 @@ every figure in this paragraph comes from.
 
 **Narrow the `Gap` gate to the certified path — do not delete it, and do not
 build a second cache beside it.** The gate is one condition in
-`Checker::frame_put` (`mini/src/kernel.rs`): `if t.ev.thm().is_none() {
+`Checker::frame_put` (`checker/src/mini/kernel.rs`): `if t.ev.thm().is_none() {
 return }`. The recommendation is `if self.th.is_some() &&
 t.ev.thm().is_none() { return }`: on the acceptance path (`th: None`), where
 every entry's evidence is a `Gap` by construction and the gate disables the
@@ -86,7 +86,7 @@ The brief asked that this be found out rather than assumed. Found:
   acceptance run) on runs where its stated purpose cannot occur.
 * **And on the acceptance path the trail was never the issue.** Arming used to
   happen after the whole-file acceptance verdict; since the pipeline became one
-  per-declaration loop (`mini/src/decl_pass.rs`) it happens before the loop, so
+  per-declaration loop (`checker/src/mini/decl_pass.rs`) it happens before the loop, so
   the file's own zone A now runs *inside* the armed window along with the zone A
   work that always did — the mutual expansion's `kernel::add`
   (`mutual_aux.rs`). That does not change the argument, and the reason is the
@@ -127,7 +127,7 @@ At the level asked for — why a cached entry cannot be reused in a context
 where it is wrong.
 
 **The context cannot differ.** `Frame`'s existing argument
-(`mini/src/kernel.rs`, `Frame` doc) is unchanged and carries the whole load:
+(`checker/src/mini/kernel.rs`, `Frame` doc) is unchanged and carries the whole load:
 the memo is per telescope slot, pushed and popped at every one of the five
 sites that touch `lenv`, so a hit is only reachable while the telescope is the
 very one the entry was computed under; a re-entered binder gets an empty frame
@@ -197,8 +197,8 @@ wrong or needed narrowing:
   specification certifies, `constEv 134/134`, `gapped 0` — at
   `nested_iota --nested` going 3 878 982 → 51 830 194 conversions, 2 m 27 →
   25 m 52, peak **over 7.5 GB** (the seeding-site table,
-  `mini/src/nested_splice.rs:374–383`; the `#[ignore]` note,
-  `mini/tests/nested.rs:640`). Two consequences. PROFILE §5's
+  `checker/src/mini/nested_splice.rs:374–383`; the `#[ignore]` note,
+  `checker/tests/mini_nested.rs:640`). Two consequences. PROFILE §5's
   "`nested.rs` 309.50 → 124.21 s, 15 passed both ways" no longer describes
   the file: the heavy leg now sits inside a *non-ignored* test
   (`a_nested_declaration_declines_…` runs `nested_iota --nested`), so the
@@ -322,7 +322,7 @@ another seat's runs throughout; wall clocks are order-of-magnitude.
   `tutorial_first_blocker`. This is the measurement PROFILE §9 left open
   ("the tutorial corpus at the certified level"), taken at the exact
   configuration recommended.
-* **`mini/tests/nested.rs` under the narrowed gate: 13 passed, 1 failed,
+* **`checker/tests/mini_nested.rs` under the narrowed gate: 13 passed, 1 failed,
   1 ignored, 457.9 s** under a 4 GB-capped harness — **and the failure is §3's
   tree movement meeting this study's own cap, not the gate.** The failing
   test, `a_nested_declaration_declines_and_only_its_own_gate_opens_it`, has
@@ -349,7 +349,7 @@ git worktree add --detach WT origin/master
 cd WT && ln -s ../../vendor vendor
 git apply --3way scripts/profile-probe.diff   # -3way: master moved since 9a8702f
 # add MINI_FRAME_ACC (see this document's §6 preamble; ~10 lines in
-# mini/src/probe.rs and the frame_put condition in mini/src/kernel.rs)
+# mini/src/probe.rs and the frame_put condition in checker/src/mini/kernel.rs)
 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build -p mini --tests --examples --profile test
 ( ulimit -v 4194304; MINI_FRAME_ACC=1 MINI_FASTHASH=1 ./target/debug/examples/tower nested_deep )
 ( ulimit -v 4194304; MINI_FRAME_ACC=1 MINI_FASTHASH=1 cargo test -p mini --test tutorial )
@@ -367,7 +367,7 @@ plus the change, `test` profile, `perf stat -e instructions` per `47b262b`
 against each other so the two halves of step 1 could be attributed
 separately.*
 
-| configuration | `mini/tests/nested.rs` | 91 good tutorial exports |
+| configuration | `checker/tests/mini_nested.rs` | 91 good tutorial exports |
 | --- | ---: | ---: |
 | baseline (`8e2e45b`) | 17 905 884 629 054 | 453 882 252 046 |
 | gate narrowed only | 8 768 536 899 614 (2.042×) | 434 129 398 137 (1.045×) |
@@ -445,6 +445,6 @@ is 91 spawns of `mini --no-modelgen --verbose`, one per export.
 Sources: PROFILE.md §§1–9; CERTIFYING-OVERHEAD.md §§1–4 and its appendix;
 MINI-DESIGN.md §0.3, §0.4, §11, §13; MINI-HANDOFF.md §40; MEASUREMENTS.md
 (nested-inductive entries, 2026-08-07); QUESTIONS.md (the def-eq cache
-decision); `mini/src/kernel.rs` (`Frame`, `frame_get`/`frame_put`,
-`hash_expr`), `mini/src/blocker.rs`, `mini/src/run.rs:208`,
+decision); `checker/src/mini/kernel.rs` (`Frame`, `frame_get`/`frame_put`,
+`hash_expr`), `checker/src/mini/blocker.rs`, `checker/src/mini/run.rs:208`,
 `checker/src/util.rs:790–932`, `checker/src/tc.rs:2388`; and §6's own runs.

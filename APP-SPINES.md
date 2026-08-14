@@ -60,7 +60,7 @@ Three checks the brief demanded, all confirmed against the code:
 
 * **A constant's denotation is one node, not an inlined value.** `⟦c.{σ}⟧` is
   stored as a minted abbreviation symbol (`ip.abbrev`,
-  `mini/src/ledger.rs:836`), so a use-site spine is
+  `checker/src/mini/ledger.rs:836`), so a use-site spine is
   `app(app(c_sym,⟦x⟧),⟦y⟧)` — the head costs one node, the spine `n` nodes,
   and the arguments whatever they cost. The `n−1` nodes an n-ary symbol could
   remove are a minority share of the site before any argument is counted.
@@ -102,7 +102,7 @@ Corpus: the 91 `good/tutorial` exports, run individually (89 accept, 2
 decline), plus the `nested_model` fixture as a scale check (§3.5), debug
 build, `ulimit -v 4G`. **`init-prelude` cannot be measured at
 the TG level** — mini declines it (nat literals over 10,
-`mini/src/convert.rs:668`) — so it appears only in the export-level numbers,
+`checker/src/mini/convert.rs:668`) — so it appears only in the export-level numbers,
 which is a real limitation (§7). Per-file fixed cost of building the prelude
 (measured on the near-empty `001_basicDef`): 91,377 theorems, 61,185 term
 allocations; ×89 files ≈ 6.8% of the corpus totals below, not enough to move
@@ -194,7 +194,7 @@ n-ary symbol could remove:
 * **Typing is per Lean argument regardless of spine shape.** `dprod_app`
   consumes the Π telescope one binder at a time — instantiate the `dprod`
   defining axiom, peel the section, instantiate at the argument, unfold the
-  fibre (`mini/src/interp.rs:2436`). A saturated n-ary rule would still owe
+  fibre (`checker/src/mini/interp.rs:2436`). A saturated n-ary rule would still owe
   one argument membership and one fibre unfold per argument; what it could
   batch is the intermediate spine memberships, a fraction of the 74/call not
   measured here (§7) but structurally well under half.
@@ -236,7 +236,7 @@ shelve.
 
 ### 3.5 The heavy fixture, as a check
 
-`nested_model` (`mini/tests/fixtures/`, run with `--mutual --nested`; exit 4 —
+`nested_model` (`checker/tests/fixtures/`, run with `--mutual --nested`; exit 4 —
 accepted, with untranslated debt) is a single run at **709,127,055 theorems**,
 six times the whole tutorial corpus, and it reproduces every ratio that
 matters:
@@ -280,7 +280,7 @@ extending it is capped and against the design's own rule.** The `Direct`
 clause is the thesis's own interpretation for its §6.2 menagerie (`Eq` today,
 `Acc` when wired), not a size optimisation — and its former extra rows (`And`,
 `PUnit`) were deliberately deleted in favour of the general clause, with a
-standing rule that the table takes no fourth row (`mini/src/direct.rs`,
+standing rule that the table takes no fourth row (`checker/src/mini/direct.rs`,
 "the table had three rows and now has one"). Measured headroom confirms the
 deletion's wisdom: retained-store spines are 0.66% of nodes on the corpus and
 8.2% on the heavy fixture — where 141 of the 144 maximal spines are length 1,
@@ -309,7 +309,7 @@ Partly, and instructively. The deferred task — "wire the n-ary Π clause in
 `tg.rs`, and re-measure the 2903 first" — is about `checker/src/tg.rs`, where
 the `Pi` clause is still a counted decline (`tg.rs:7809`). **mini already
 consumes the n-ary Π rule**: `dprod_in_universe_pair_n` is called at
-`mini/src/interp.rs:2080`, inside the live Π typing clause. So the 2903
+`checker/src/mini/interp.rs:2080`, inside the live Π typing clause. So the 2903
 Π-into-`Type` sites measured on the old backend (`MEASUREMENTS.md:1224`) are
 a population whose consumer moved out from under them — re-measuring before
 wiring was exactly right, and the re-measurement is mini's own ledger, where
@@ -363,7 +363,7 @@ for f in vendor/arena-tests/good/tutorial/*.ndjson; do
       ./target/debug/mini "$f" 2> "stats-$(basename $f .ndjson).txt" )
 done
 ( ulimit -v 4194304; MINI_TERMSTATS=1 timeout 590 ./target/debug/mini \
-    mini/tests/fixtures/nested_model.ndjson --mutual --nested 2> stats-nested.txt )
+    checker/tests/fixtures/nested_model.ndjson --mutual --nested 2> stats-nested.txt )
 ```
 
 Export-level statistics are `scripts/appstats.py` over any `.ndjson` export.

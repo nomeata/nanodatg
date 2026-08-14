@@ -470,7 +470,7 @@ reads structure off the term and is **total**, `Interp::parts_of` is
 was standing in for decomposability, and it was wrong in both directions.
 Wrong on the read side: a term the *kernel* built — a substitution instance, or
 either endpoint of a `derived::congr` — never passed through `Interp::mk` and
-read back as structureless, which is `mini/src/conv.rs`'s six lost conversions
+read back as structureless, which is `checker/src/mini/conv.rs`'s six lost conversions
 on `mutual_aux_encoding` and, generalised, the 108 `not-decomposable` and 69
 `no-endpoint` above. Wrong on the write side: keeping the proxy true meant
 remembering every term ever built, forever. Clearing the table breaks the proxy;

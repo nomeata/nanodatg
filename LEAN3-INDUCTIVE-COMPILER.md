@@ -21,7 +21,7 @@ derivation exists as a function today and two corpus fixtures run it.
 
 ### The chain, with the code that performs each step
 
-`Eq` takes §6.2's own interpretation clause (`mini/src/direct.rs`), so
+`Eq` takes §6.2's own interpretation clause (`checker/src/mini/direct.rs`), so
 
 ```text
 ⟦Eq α a b⟧ = eq_set(⟦a⟧, ⟦b⟧) = [ ⟦a⟧ = ⟦b⟧ ]        direct.rs:311-318 (Clause::Eq)
@@ -40,7 +40,7 @@ a conditional singleton, with its characteristic theorem stored as
 
 Under binders, the statement `∀ x : A, lhs x = rhs x` is a `Π` whose codomain
 sort is `Prop`, so `Checker::pi_evidence` takes the **`Prop` clause**
-(`mini/src/kernel.rs:1973`, `if (n2 == 0)`) and
+(`checker/src/mini/kernel.rs:1973`, `if (n2 == 0)`) and
 
 ```text
 ⟦∀x:A. β⟧ = chi(h⃗, ⟦A⟧) = [ ∀x. (x ∈ ⟦A⟧ → • ∈ b(h⃗,x)) ]   interp.rs:2334-2368 (cond_site)
@@ -57,7 +57,7 @@ the TG statement over the scope hypotheses `x̄ ∈ ⟦A⟧`.
 
 ### It exists as one function today
 
-`mini/src/quot_classes.rs:504-590` (`rcompat_at`) is exactly that pipeline. It
+`checker/src/mini/quot_classes.rs:504-590` (`rcompat_at`) is exactly that pipeline. It
 takes `Quot.lift`'s compatibility hypothesis `h : ∀ a b, r a b → f a = f b`,
 which is an **arbitrary Lean proof term, not a `rfl`**, and produces
 
@@ -70,7 +70,7 @@ which is an **arbitrary Lean proof term, not a `rfl`**, and produces
 `122_quotLiftType` and `124_quotLiftReduction` both `accept`, so the derivation
 runs on real exports.
 
-`mini/src/recursor.rs:490-507` is the same elimination at `Eq.rec`'s major
+`checker/src/mini/recursor.rs:490-507` is the same elimination at `Eq.rec`'s major
 premise: it pulls `⊢ a = b` out of `⊢ t ∈ eq_set(a,b)` and uses it to justify
 the transport.
 
@@ -493,14 +493,14 @@ declarations Lean 4's export asks a checker to certify.
    construction rests on the user-facing type being δ-equal to the aux type, so
    that `Tree.mk`'s declared type typechecks against a body built from the aux
    constructor. Lean 4 hands us `Tree` as a primitive inductive; we cannot
-   redefine it. This is the same wall `mini/tests/nested.rs` documents from the
+   redefine it. This is the same wall `checker/tests/mini_nested.rs` documents from the
    other side.
 2. **Lean 3 has no `Tree.rec_1` to produce.** Lean 4's export *declares* one and
    a checker must certify its ι rules. Lean 3's algorithm has no notion of it.
    It would have to be invented (§8).
 3. **Lean 3's per-member recursor is weaker than Lean 4's** (§4). Lean 4's mutual
    `A.rec` has one motive per member and IHs across members; Lean 3's has one
-   motive and self-IHs only. `mini/src/mutual_aux.rs` already builds the *Lean 4*
+   motive and self-IHs only. `checker/src/mini/mutual_aux.rs` already builds the *Lean 4*
    shape; Lean 3's would be a regression.
 4. **Universe rigidity.** The nested occurrence must live at the *same* result
    universe (`:520-526`) and must agree on large elimination
@@ -550,7 +550,7 @@ Lean 3 (`mutual.cpp`, entry `operator()` at `:885-910`):
   occur in `mutual.cpp` at exactly lines 418 and 419, both inside
   `sizeof_spec`. The rules hold by δι and are relied on silently.
 
-`mini/src/mutual_aux.rs`, today:
+`checker/src/mini/mutual_aux.rs`, today:
 
 ```text
 inductive Tag (p⃗)        : Sort W          -- Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗
@@ -587,7 +587,7 @@ The shapes are settled (§5): Lean 3's generated recursors do **not** match Lean
 nanoda-inherited code.** Cost: this means treating `Tree.rec`/`Tree.rec_1` as
 declared by the export (which they are) and building their interpretations from
 a `derived/` carrier for `⟦Tree⟧`. That is the route
-`mini/tests/nested.rs:41-46` already scopes: `⟦Tree⟧` as the initial algebra of
+`checker/tests/mini_nested.rs:41-46` already scopes: `⟦Tree⟧` as the initial algebra of
 `X ↦ 1 + ⟦List⟧ X` over the **real** `⟦List⟧`, with `⟦Tree.rec⟧`, `⟦Tree.rec_1⟧`
 and their ι theorems built in `derived/`. Nothing from Lean 3 is reused except
 the confirmation that the two-motive shape is what has to come out. Estimated
@@ -670,8 +670,8 @@ for step 2 verbatim.
 `tests/lean/run/{nested_inductive,cases_nested}.lean`.
 
 On this side: `mini/src/{direct,interp,kernel,quot_classes,recursor,mutual_aux}.rs`,
-`derived/src/prop.rs`, `mini/tests/nested.rs`,
-`mini/tests/fixtures/nested_roundtrip.lean`, and live runs of
+`derived/src/prop.rs`, `checker/tests/mini_nested.rs`,
+`checker/tests/fixtures/nested_roundtrip.lean`, and live runs of
 `mini --dump-theorems` on `vendor/arena-tests/good/tutorial/{040_eqType,
 073_boolRecEqns,076_listRecReduction,077_RBTree.id_spec,094_ruleK,
 122_quotLiftType,124_quotLiftReduction}.ndjson` plus a purpose-built export.

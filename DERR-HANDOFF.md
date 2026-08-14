@@ -262,9 +262,9 @@ cross from `Result` to `Option`. This seat may not edit either crate.
 | `acc::{acc_intro, acc_pred_closed, acc_rect}` | hub, over `intro::`/`preds::`/`rect::` | `mini/src/{rec_acc,rec_acc_value,rec_acc_ap}.rs` |
 | `Acc::{new, with_apply, over}` | over the `_checked` methods | `mini/src/{acc,interp}.rs` |
 | `separation::hyp_syl`, `funcs::logic::hyp_syl` | over `rules::hyp_syl` | ~200 sites crate-wide |
-| `universe::{universe_replacement_n, least_universe_replacement_n}` | over `replacement_n::` | `mini/src/interp.rs` |
+| `universe::{universe_replacement_n, least_universe_replacement_n}` | over `replacement_n::` | `checker/src/mini/interp.rs` |
 | `funcs::{lambda_n, beta_conditional_n}` | over `funcs::beta::` | `checker/src/tg.rs`, `checker/src/sealed.rs` |
-| `funcs::app_off_domain` | over `funcs::apply::` | `mini/src/rec_acc_ap.rs` |
+| `funcs::app_off_domain` | over `funcs::apply::` | `checker/src/mini/rec_acc_ap.rs` |
 
 They are a **migration seam, not a design**. The endgame is one commit per
 consumer crate: switch `mini/` and `checker/` to `DResult`, delete the wrappers,

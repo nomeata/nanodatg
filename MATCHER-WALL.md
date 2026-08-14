@@ -56,7 +56,7 @@ the proof-irrelevance gate — the same shape as `mini`'s `def_eq_ev`
 `CERTIFYING-OVERHEAD.md` (2026-08-07) already named the cause: `mini`'s
 *certified* path re-enters full `infer_type` from inside itself —
 `beta_premise` infers the argument at every β step
-(`mini/src/kernel.rs:2125–2126`), `def_eq_ev` infers its left endpoint at every
+(`checker/src/mini/kernel.rs:2125–2126`), `def_eq_ev` infers its left endpoint at every
 `Lhs::Unknown` entry (`:3717`), nothing caches `infer_type` — and **97.8 % of
 conversions happen inside a repeat of an already-seen α-canonical judgement**.
 Both sites are still live at `d8c027f`. This study adds three things:
@@ -76,13 +76,23 @@ Both sites are still live at `d8c027f`. This study adds three things:
   line of it, `Checker::infer_type`, is 0.16 % (§2.4).
 * **Two lines of that are free, and they are measured.** `checker/src/main.rs`
   links mimalloc as the binary's `#[global_allocator]` and carries the
-  measurement that put it there (−28 % on `init-prelude`); `mini/src/main.rs`
-  has no `#[global_allocator]` and runs on the glibc allocator that is 44 % of
-  its profile. Copying those two lines into `mini` takes `p1` from
-  **2 998 879 824 804 to 2 173 504 088 058 instructions — −27.5 %**, and does
+  measurement that put it there (−28 % on `init-prelude`); the then-separate
+  `mini` binary had no `#[global_allocator]` and ran on the glibc allocator that
+  is 44 % of its profile. Copying those two lines into `mini` took `p1` from
+  **2 998 879 824 804 to 2 173 504 088 058 instructions — −27.5 %**, and did
   the same on the other two closures (−27.6 %, −29.3 %) with every conversion
   and gap count identical to the digit (§2.6). Between a quarter and a third of
   the run, sitting unclaimed in the sibling binary.
+
+  **Still unclaimed as of 2026-08-14 (`b91433b`), and now in the production
+  binary.** The mini binary is gone, but the two lines did not move with the
+  merge: `#[global_allocator]` appears in exactly one place in the workspace,
+  `checker/src/main.rs:37–38`, which builds `nanoda_bin` — **not** the unified
+  checker. `checker/src/bin/checker.rs`, the binary every routed run and every
+  integration test spawns, has no `#[global_allocator]` and therefore runs on
+  glibc. The measurement above is the reason to expect the same order of win
+  from adding them there; it has not been re-taken on the merged binary, so
+  treat the size as inherited rather than measured.
 
 **Three further things the numbers settle.**
 

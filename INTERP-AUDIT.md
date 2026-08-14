@@ -43,12 +43,12 @@ where they are unwitnessed, and why every `true` branch is checked one by one.
 
 | # | site | the step | side condition | supplied by | kind | fix cost / `_ev` exists? | end-to-end testable? |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **L1** | `mini/src/kernel.rs:1716` (`pi_evidence`) | `if n2 == 0` selects `⟦Π x:A.B⟧ = [∀x∈⟦A⟧. •∈⟦B⟧]` (a truth value) over `∏_{x∈⟦A⟧}⟦B⟧` | `lvl(Γ ⊢ B) = 0`, i.e. `⟦B⟧ ∈ U₀` | **nothing.** `n2` is `ground::eval` of `as_sort(whnf(infer B).ty)`. `cond_typing` is *unconditional* by design and says so (`interp.rs:2757–2760`). The witness `⟦B⟧ ∈ ⟦Sort l2⟧` is in hand as `tb.ev` (transported at `kernel.rs:1438`) and is **not referenced anywhere on the branch** (`1716–1727`) | **load-bearing** | 3 lines, no `derived/` work: require `tb.ev.mem_set() == Some(ip.sort(0))` on the branch. No `_ev` form to write — the evidence is already an argument of the function | **no** (see §2); the check landing at zero across the corpus is the ratchet |
-| **L2** | `mini/src/kernel.rs:1395` (`infer_type`, `App`) | `body_clause(&out_ty) == Prop` selects `tm = •` over `app(⟦f⟧,⟦a⟧)` | `sort(Γ ⊢ f a) = 0` | **nothing at this node.** The *certificate* on the same node is built from `shape` (`1383–1387`), read off `⟦type of f⟧` by `as_pi` — a different source. `cond_app` concludes about `•`, `dprod_app` about `app(⟦f⟧,⟦a⟧)`; nothing compares the certificate's subject with `tm` | **load-bearing**, and the one place mini has *two* classifiers for one clause — which `kernel.rs:2136–2138` says must not happen | 3 lines for the subject check (`ev`'s `as_mem().0 == tm`, else gap). Reading the clause off `shape` instead is the deeper fix but needs care: `shape` is `None` whenever the function's *evidence* gapped, where `body_clause` still yields a usable `•` | **no** for the wrong branch; the subject check itself is exercised by every application in the corpus |
-| **L3** | `mini/src/zoneb.rs:2951–2969` (`store`) | `ConstInterp { term: t.tm, typing: Sealed(t.ev) }` for `⟦T⟧`/`⟦T.ctor⟧`/`⟦T.rec⟧` | the sealed theorem's subject **is** `term` | **nothing.** Contrast the *declaration* funnel (`ledger.rs:623–635`), which gets it for free: `retarget_subject` refuses unless the membership's subject is `⟦val⟧` (`interp.rs:2746`). Zone B has no such step | **load-bearing** (it is the store the corpus reads by key) — but holds today *by construction*, since `lam_evidence` builds `tm` and `ev` from one site. A guard, not a live defect | one line before `put_const`. No `_ev` form needed | **no**; unit test + a zero-firings ratchet |
-| **L4** | `mini/src/kernel.rs:1532–1539` + `mini/src/proj_prop.rs:572` (`field_in_u0`) | the proof route is tried first and, on success, `⟦proj[T,j] x⟧ = •` | §6.2 wants `sort(Γ ⊢ proj) = 0` — the *Lean* sort of the field | **a different, weaker condition**: `field_in_u0` demands `⊢ ⟦βⱼ⟧ ∈ U₀` and **deliberately accepts a second route** — the field type's own declaration's carrier being in `U₀` even when its Lean sort is not `Prop` (`PUnit.{1}`; argued at `proj_prop.rs:549–571`) | **load-bearing**, divergence documented and one-directional | either accept and keep the argument, or gate the route on `is_prop_ev(&ty)` — **the `_ev` form exists**. The second changes which declarations type, so it needs a corpus run | **yes, and it is written** — `structure W : Type where u : PUnit.{1}`. No corpus member reaches it. It is a unit test (`proj_prop::tests::a_unit_like_data_field_denotes_the_point_by_its_carrier`, which asserts the divergence itself: `is_prop_ev` says *false* and the projection is `•` anyway) **and** an end-to-end fixture (`mini/tests/fixtures/field_in_u0_by_carrier.lean`, `designed.rs::a_data_field_whose_carrier_is_in_u0_denotes_the_point`). Option B is refuted by both |
-| **L5** | `mini/src/kernel.rs:1793–1795` (`lam_evidence`) | on a domain that did not interpret, the λ still gets `tm = Some(•)` while `ev` is a `Gap` | `sort(Γ ⊢ λ…) = 0` | the `prop` flag from `is_prop_ev` — which *is* witnessed, but the witness is discarded with the rest of the evidence on this path | load-bearing but **inert**: `Ev::Gap` cannot compose, so no certificate is ever built from the term; it can only propagate gaps | none proposed — recorded because it is the one place a term is minted with nothing behind it | n/a |
-| **L6** | `mini/src/kernel.rs:2454` (`def_eq_ev`) | the drift guard `t1.tm != tm1 ⇒ EndpointDrift` runs for `e1` and **not** for `e2` | `tm2 = ⟦e2⟧` | nothing names it; a wrong `tm2` produces a true theorem about the term the caller named, which then fails to compose at `retarget_set` (`interp.rs:2224`) | **dispatch** (robustness, not interpretation) | 3 lines mirroring `2454`, after `infer_type(e2)` — which `proof_irrel_ev` already computes | no; the value is a named gap instead of a composition failure |
+| **L1** | `checker/src/mini/kernel.rs:1716` (`pi_evidence`) | `if n2 == 0` selects `⟦Π x:A.B⟧ = [∀x∈⟦A⟧. •∈⟦B⟧]` (a truth value) over `∏_{x∈⟦A⟧}⟦B⟧` | `lvl(Γ ⊢ B) = 0`, i.e. `⟦B⟧ ∈ U₀` | **nothing.** `n2` is `ground::eval` of `as_sort(whnf(infer B).ty)`. `cond_typing` is *unconditional* by design and says so (`interp.rs:2757–2760`). The witness `⟦B⟧ ∈ ⟦Sort l2⟧` is in hand as `tb.ev` (transported at `kernel.rs:1438`) and is **not referenced anywhere on the branch** (`1716–1727`) | **load-bearing** | 3 lines, no `derived/` work: require `tb.ev.mem_set() == Some(ip.sort(0))` on the branch. No `_ev` form to write — the evidence is already an argument of the function | **no** (see §2); the check landing at zero across the corpus is the ratchet |
+| **L2** | `checker/src/mini/kernel.rs:1395` (`infer_type`, `App`) | `body_clause(&out_ty) == Prop` selects `tm = •` over `app(⟦f⟧,⟦a⟧)` | `sort(Γ ⊢ f a) = 0` | **nothing at this node.** The *certificate* on the same node is built from `shape` (`1383–1387`), read off `⟦type of f⟧` by `as_pi` — a different source. `cond_app` concludes about `•`, `dprod_app` about `app(⟦f⟧,⟦a⟧)`; nothing compares the certificate's subject with `tm` | **load-bearing**, and the one place mini has *two* classifiers for one clause — which `kernel.rs:2136–2138` says must not happen | 3 lines for the subject check (`ev`'s `as_mem().0 == tm`, else gap). Reading the clause off `shape` instead is the deeper fix but needs care: `shape` is `None` whenever the function's *evidence* gapped, where `body_clause` still yields a usable `•` | **no** for the wrong branch; the subject check itself is exercised by every application in the corpus |
+| **L3** | `checker/src/mini/zoneb.rs:2951–2969` (`store`) | `ConstInterp { term: t.tm, typing: Sealed(t.ev) }` for `⟦T⟧`/`⟦T.ctor⟧`/`⟦T.rec⟧` | the sealed theorem's subject **is** `term` | **nothing.** Contrast the *declaration* funnel (`ledger.rs:623–635`), which gets it for free: `retarget_subject` refuses unless the membership's subject is `⟦val⟧` (`interp.rs:2746`). Zone B has no such step | **load-bearing** (it is the store the corpus reads by key) — but holds today *by construction*, since `lam_evidence` builds `tm` and `ev` from one site. A guard, not a live defect | one line before `put_const`. No `_ev` form needed | **no**; unit test + a zero-firings ratchet |
+| **L4** | `checker/src/mini/kernel.rs:1532–1539` + `checker/src/mini/proj_prop.rs:572` (`field_in_u0`) | the proof route is tried first and, on success, `⟦proj[T,j] x⟧ = •` | §6.2 wants `sort(Γ ⊢ proj) = 0` — the *Lean* sort of the field | **a different, weaker condition**: `field_in_u0` demands `⊢ ⟦βⱼ⟧ ∈ U₀` and **deliberately accepts a second route** — the field type's own declaration's carrier being in `U₀` even when its Lean sort is not `Prop` (`PUnit.{1}`; argued at `proj_prop.rs:549–571`) | **load-bearing**, divergence documented and one-directional | either accept and keep the argument, or gate the route on `is_prop_ev(&ty)` — **the `_ev` form exists**. The second changes which declarations type, so it needs a corpus run | **yes, and it is written** — `structure W : Type where u : PUnit.{1}`. No corpus member reaches it. It is a unit test (`proj_prop::tests::a_unit_like_data_field_denotes_the_point_by_its_carrier`, which asserts the divergence itself: `is_prop_ev` says *false* and the projection is `•` anyway) **and** an end-to-end fixture (`checker/tests/fixtures/field_in_u0_by_carrier.lean`, `designed.rs::a_data_field_whose_carrier_is_in_u0_denotes_the_point`). Option B is refuted by both |
+| **L5** | `checker/src/mini/kernel.rs:1793–1795` (`lam_evidence`) | on a domain that did not interpret, the λ still gets `tm = Some(•)` while `ev` is a `Gap` | `sort(Γ ⊢ λ…) = 0` | the `prop` flag from `is_prop_ev` — which *is* witnessed, but the witness is discarded with the rest of the evidence on this path | load-bearing but **inert**: `Ev::Gap` cannot compose, so no certificate is ever built from the term; it can only propagate gaps | none proposed — recorded because it is the one place a term is minted with nothing behind it | n/a |
+| **L6** | `checker/src/mini/kernel.rs:2454` (`def_eq_ev`) | the drift guard `t1.tm != tm1 ⇒ EndpointDrift` runs for `e1` and **not** for `e2` | `tm2 = ⟦e2⟧` | nothing names it; a wrong `tm2` produces a true theorem about the term the caller named, which then fails to compose at `retarget_set` (`interp.rs:2224`) | **dispatch** (robustness, not interpretation) | 3 lines mirroring `2454`, after `infer_type(e2)` — which `proof_irrel_ev` already computes | no; the value is a named gap instead of a composition failure |
 
 ## 2. Why L1 and L2 are not end-to-end testable, stated plainly
 
@@ -108,7 +108,7 @@ answers `•` — so the assertions read the dumped conclusions.
   arms (`960`, `1494`).
 * **Literal/`Nat` acceleration: the population is empty.** `nat_unfold` refuses
   above 10 and there is no arithmetic fast path anywhere in `mini/`
-  (`grep -n "Nat.add\|nat_lit\|NatLit" mini/src/kernel.rs` — four hits, all the
+  (`grep -n "Nat.add\|nat_lit\|NatLit" checker/src/mini/kernel.rs` — four hits, all the
   unary expansion). `StrLit` interprets to nothing and says so.
 * **`split_app` returning `(None,None)`** (`1061`) for a term that is not an
   `app`: an absence, not a decision. Downstream gets gaps.
@@ -135,21 +135,21 @@ membership's subject is `⟦val⟧`. The axiom arm makes the same point in prose
 
 Three doc claims were found false against the code and **corrected in place**:
 
-1. `mini/src/proj_prop.rs:41–44` — *"the `Expr::Proj` arm … returns `tm: None`
+1. `checker/src/mini/proj_prop.rs:41–44` — *"the `Expr::Proj` arm … returns `tm: None`
    unconditionally with no `is_prop` test"*, while `kernel.rs:1534` returns
    `proj_prop::point_of(self)`. `git blame` puts the sentence in `9e60a27`, the
    same commit that added the `point_of` call: born stale.
-2. `mini/src/interp.rs:2346–2347` — *"the clause … has to be decided by
+2. `checker/src/mini/interp.rs:2346–2347` — *"the clause … has to be decided by
    `Checker::body_clause`"*. `cond_site`'s only callers are `pi_evidence` (a
    level numeral, L1) and `lam_evidence` (`is_prop_ev`); `body_clause` never
    reaches it.
-3. `mini/src/ledger.rs:47–48` — *"every clause is decided by
+3. `checker/src/mini/ledger.rs:47–48` — *"every clause is decided by
    `body_clause`/`term_clause`"*. `term_clause` has **zero** production callers
    in `mini/` (repo-wide grep: `kernel.rs:2139` definition plus four tests; every
    live caller is `checker/src/tg.rs`). The paragraph's point — that all of this
    is inference and not search — is right; the two function names were not.
    *(This third correction is in the working tree but **not** in this audit's
-   commit: `mini/src/ledger.rs` carries another agent's 229-line change at the
+   commit: `checker/src/mini/ledger.rs` carries another agent's 229-line change at the
    same moment, and `--only` on that path would have swept it in.)*
 
 ## 5. Method — how the population was enumerated
@@ -162,7 +162,7 @@ Complete greps, not samples; each is reproducible.
   1468, 1927, 2200, 2209, 2221, 2457, 2482; the eight `rec_*` codomain checks;
   `rec_acc_iota.rs:171`.
 * **Every mint of `•` as an interpretation**:
-  `grep -rn "point()" mini/src/kernel.rs mini/src/interp.rs mini/src/proj_prop.rs`
+  `grep -rn "point()" checker/src/mini/kernel.rs checker/src/mini/interp.rs checker/src/mini/proj_prop.rs`
   — four in the checker: `kernel.rs` 1396 (L2), 1794 (L5), 1803 (witnessed), and
   `proj_prop.rs:546` reached from `kernel.rs:1534` (L4).
 * **Every write to the interpretation store**:
