@@ -2441,7 +2441,26 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// a `bool` cannot say why. Every `Some` below is accompanied by evidence,
     /// even if — for now — much of that evidence is an `admit` naming a hole
     /// still to be closed.
+    ///
+    /// The body is bracketed by [`Certifier::eq_query_enter`] and
+    /// [`Certifier::eq_query_exit`], which is what gives the backend **scope
+    /// provenance**: which locals were already open when this query started, and
+    /// which the query opened for itself. That distinction cannot be recovered
+    /// from a certificate afterwards — `def_eq_binder_aux` opens its own locals
+    /// with `mk_dbj_level` exactly as `infer_lambda` does — and only the first
+    /// kind is part of the `Γ` whose interpretation the judgement quantifies
+    /// over. The bracket is here, around the whole recursive entry point, rather
+    /// than at any one of the returns below, so that every path out of a query
+    /// closes it: the hooks are called once per call, in pairs, including on the
+    /// early returns and on `None`.
     pub fn def_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        self.certifier.eq_query_enter(self.ctx);
+        let out = self.def_eq_scoped(x, y);
+        self.certifier.eq_query_exit(self.ctx, out)
+    }
+
+    /// [`Self::def_eq`]'s body, inside the scope bracket.
+    fn def_eq_scoped(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         crate::stepcount::bump(crate::stepcount::Kind::DefEqCall);
         if let Some(easy) = self.def_eq_quick_check(x, y) {
             return easy

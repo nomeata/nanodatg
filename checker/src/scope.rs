@@ -103,6 +103,42 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
+/// **The ambient context's own typing of a local, as a hypothesis**:
+/// `{⟦w⟧ ∈ ⟦A⟧} ⊢ ⟦w⟧ ∈ ⟦A⟧`.
+///
+/// The second sanctioned `Thm::assume` in this crate, and it is here rather
+/// than at its caller for exactly the reason I1 exists: a hypothesis must enter
+/// a derivation at a place that can be read and argued about.
+///
+/// # What the caller owes, and it is not a formality
+///
+/// `hyp` must be a member of `⟦Γ⟧` for the `Γ` of the judgement being stated —
+/// the interpreted typing of a local the checker *already had open* when the
+/// query started. Carneiro's Theorem 6.7 reads `Γ ⊢ e ≡ e'` as *for all
+/// `γ ∈ ⟦Γ⟧`, `⟦Γ ⊢ e⟧γ = ⟦Γ ⊢ e'⟧γ`*, so under that precondition the sequent
+/// this produces is the judgement's own statement. Without it, it is an
+/// assumption about a variable nothing quantifies over.
+///
+/// The precondition is discharged by *positive witness*, not by a side
+/// condition on levels: `crate::tg::TgBackend::close_at_boundary` compares the
+/// atom against the interpreted typings of the locals on
+/// `TcCtx::open_dbj_levels` at the query's entry, and passes only atoms that
+/// are literally one of them. A local the query opened for itself is not on
+/// that list, so its premise stays where it was and is still owed to the binder
+/// rule that opened it.
+///
+/// # Why this does not weaken I1
+///
+/// `assume` asserts nothing about `hyp`: what comes back records the
+/// hypothesis in the theorem's own `hyps()`, where every downstream gate can
+/// see it. In particular `certify::is_unconditional` — which the checker's
+/// reduction memos and its equality cache are gated on — is
+/// `hyps().is_empty()`, so a theorem produced here is excluded from exactly the
+/// stores that are keyed on something not mentioning `Γ`. Nothing is smuggled
+/// past a cache by calling this; the worst a wrong caller can do is state a
+/// weaker theorem than it meant to.
+pub fn assume_ambient(hyp: Formula) -> Thm { Thm::assume(hyp) }
+
 /// One open binder.
 #[derive(Debug, Clone)]
 pub struct Scope {

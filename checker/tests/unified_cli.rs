@@ -138,12 +138,34 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
     assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
-    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:152")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:148")), "the measured full-fixture baseline moved:\n{stdout}");
     assert!(
-        stdout.contains("conditional derivations: 590 made (0 of them copies), 570 accounted for by a rule, 20 escaped"),
+        stdout.contains("conditional derivations: 590 made (0 of them copies), 570 accounted for by a rule, 16 escaped"),
         "the full fixture retained conditional trace evidence:\n{stdout}",
     );
-    assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
+    assert!(
+        stdout.contains("at the judgement boundary: 4 closed as the ambient context's own typings (4 atoms), 7 still conditional (3 of their atoms ambient)"),
+        "the scope-provenance boundary row moved on the full fixture:\n{stdout}",
+    );
+    // 28, not the 30 this pinned before scope provenance landed, and the two
+    // are a **measured cost of the boundary abstraction**, recorded here rather
+    // than smoothed over.
+    //
+    // A certificate closed at the judgement boundary is a real `Thm` whose `Γ`
+    // is the ambient context's typings. `ty_conv` composes the outermost
+    // equality answer into the declaration's typing, so that typing inherits
+    // the same `Γ` — and `Sealed`/`hypothesis_free` then correctly refuse to
+    // persist it, because the store's key does not mention `Γ`. Two of this
+    // fixture's declarations lose their stored `⟦c⟧ ∈ ⟦T⟧` that way
+    // (`stored as ⟦c⟧ ∈ ⟦T⟧` 9 → 7, `uses answered from the store` 319 → 311).
+    //
+    // It costs no gap: the fixture's total falls 152 → 148 and no file in
+    // `vendor/arena-tests/good/tutorial` regresses (217 → 185 over the 91 of
+    // them, with `072_sortElimProp2Rec` reaching zero). The refusal is the
+    // conservative direction — an unstorable typing is re-derived, not
+    // mis-stored — so the trade is taken and pinned. `adoptedByCheckerTyping`
+    // is unchanged at 15, which is what says the *handoff* did not regress.
+    assert!(stdout.contains("checkerSlots=28\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
 }
@@ -214,11 +236,25 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 16, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 13, "the recursive-subject ratchet moved:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 22, "the structural cache replay did not consume Mini's dependent evidence:\n{stdout}");
     assert!(
-        stdout.contains("conditional derivations: 433 made (0 of them copies), 417 accounted for by a rule, 16 escaped"),
+        stdout.contains("conditional derivations: 433 made (0 of them copies), 417 accounted for by a rule, 13 escaped"),
         "a conditional reduction certificate was retained or the escape family moved:\n{stdout}",
+    );
+    // Scope provenance, pinned as an exact split rather than as a total.
+    //
+    // `addN`, `dblN` and `leN` each escaped with a single antecedent that was
+    // nothing but an ambient local's own typing, and those are the three that
+    // close. The other five ambient atoms are the four `N.brecOn.go`
+    // certificates, which also carry raw beta obligations and so are *not*
+    // closed — the row states that separately, so a change that closed them by
+    // relabelling their raw debt would move this assertion rather than hide
+    // inside the total. The eight atoms here are exactly the eight the escape
+    // census counts as context-local typings.
+    assert!(
+        stdout.contains("at the judgement boundary: 3 closed as the ambient context's own typings (3 atoms), 13 still conditional (5 of their atoms ambient)"),
+        "the ambient/query-opened split moved on the carrier fixture:\n{stdout}",
     );
     assert!(!stdout.contains("gap: eq_cache"), "a cache hit still lacks an exact structural recipe:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");
