@@ -10183,3 +10183,59 @@ gaps` column and the fact that fifteen fixtures carry gaps rather than five.
 Gates at this commit, all green, so later reds are attributable: `unified_cli`
 5/5, `mini_designed` 32/32, `cargo check --no-default-features --all-targets`
 clean but for existing warnings.
+
+### The same census against Lean's own exports — 2026-08-14
+
+The section above measures fixtures *we wrote*. The standing rule is that
+completeness is measured against Lean, so the same run was taken over the 91
+tutorial exports in `vendor/arena-tests/good/tutorial/`, same binary, same
+flags.
+
+**All 91 accept. 74 are fully certified with zero gaps. 17 carry 217 gaps.**
+
+| export | gaps | | export | gaps |
+| --- | ---: | --- | --- | ---: |
+| `076_listRecReduction` | 59 | | `116_rtreeRecReduction` | 9 |
+| `077_RBTree.id_spec` | 53 | | `103_unitEta2` | 8 |
+| `074_prodRecEqns` | 18 | | `106_funEta` | 5 |
+| `105_structEta` | 12 | | `107_funEtaDep` | 5 |
+| `118_accRecReduction` | 12 | | `098_natLitEq` | 5 |
+| `094_ruleK` | 10 | | `102_unitEta1` | 4 |
+| `124_quotLiftReduction` | 10 | | `075_nRecReduction` | 3 |
+| `125_quotIndReduction` | 2 | | `072_sortElimProp2Rec` | 1 |
+| `081_PSigma.snd` | 1 | | | |
+
+Aggregated by row across those seventeen:
+
+| | count |
+| --- | ---: |
+| relays — `trans` 46, `pi congruence` 37, `congruence` 29, `symm` 6 | **118** |
+| origin: `undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧` | **69** |
+| origin: the four `iota:` causes (domain 5, indexed family 5, bridge 1, several ctors 1) | 12 |
+| origin: `quot` 4, `nat_eq` 4, `unit_like` 3, `eq_cache` 3, `eta_struct` 2, `eta` 2 | 18 |
+
+**69 of the 99 originated gaps are one clause**, and it is the same one that
+dominates the fixture corpus (134 of that corpus's origins). Two independent
+populations — one we designed, one Lean produced — rank the frontier the same
+way. That is the strongest evidence available that the beta argument-typing
+obligation is the master key rather than one tranche among several.
+
+Three things this reframes:
+
+* **The goal is 217 gaps over 17 exports, not 383 over 15 fixtures.** The
+  fixture number is the development signal; this is the completeness claim.
+  `076_listRecReduction` and `077_RBTree.id_spec` alone are 112 of the 217.
+* **`nat_eq` is 4 here**, matching the fixture corpus's 5. The `Nat` bridge is a
+  small tranche on both populations, wherever it is measured.
+* **`eta` and `eta_struct` (4 between them) name a lemma we do not have** —
+  function extensionality — rather than a gap in threading. They are the only
+  rows in either census that state an unbuilt `derived/` construction outright.
+
+### Method note
+
+91 runs of the same `tg` binary at `b91433b`, one per export, `--no-modelgen`
+with and without `--verbose`; totals `grep`ed from the first line, origins from
+the `gap:` rows and summed with `awk`. No `perf stat` — nothing was landed. As
+in the section above, the origin/relay split is read off reason strings and is a
+hypothesis until confirmed against the origin bitmask; the per-export totals and
+the 74/91 clean count are not.
