@@ -39,7 +39,9 @@ The test to apply before building `X` for milestone `M` is: **when the next case
 arrives, do I extend `X` or replace it?**
 
 Worked examples from this file's own history. `enums.rs` → `wnat.rs` →
-`wlist.rs` each strictly generalised the last — that is the good pattern, and
+`wlist.rs` each strictly generalised the last *(`wnat.rs` was deleted on
+2026-08-11 — Lean's `⟦Nat⟧` is von Neumann `ω`, not a W-type; the `N` in this
+file is the corpus's own inductive and the generalisation pattern is unaffected)* — that is the good pattern, and
 it is why `List`'s memberships fell out of `N`'s with only a parameter added.
 The two-point-graph step behind `Bool.rec` is the bad one: it took `073` to zero
 gaps but cannot survive `N`, whose fibres are non-empty, so it must be replaced
@@ -508,14 +510,20 @@ list.*
 - **subsingleton elimination** — §5.3, which abandons W-types for `acc`; a
   separate construction. `is_k` recursors (`Eq.rec`) included. *(In:
   `derived/src/inductive/family/le*.rs`, `mini/src/{class_s,rec_acc*}.rs`; `is_k`
-  at `mini/src/convert.rs` and `mini/src/recursor.rs`.)*
-- **mutual and nested** inductives *(mutual is in: `mini/src/mutual_aux.rs`,
-  `mini/tests/mutual.rs`, ten fixtures, and `ci/check-mutual-blackbox.sh`.
+  at `checker/src/mini/convert.rs` and `checker/src/mini/recursor.rs`.)*
+- **mutual and nested** inductives *(mutual is in: `checker/src/mini/mutual_aux.rs`,
+  `checker/tests/mini_mutual.rs`, ten fixtures, and `ci/check-mutual-blackbox.sh`.
   **Nested is the only survivor of this list**, and its reason is now a
-  kernel-checked test rather than a scope line: `mini/tests/nested.rs`.)*
+  kernel-checked test rather than a scope line: `checker/tests/mini_nested.rs`.)*
 - **quotients**, propositional extensionality, choice *(quotients are in at both
   level clauses: `mini/src/{quot,quot_classes,quot_iota}.rs`, QUOT-MODEL.md.)*
-- primitive `Nat`/`String` literals, already shelved *(still shelved.)*
+- primitive `Nat`/`String` literals, already shelved *(**the `Nat` half is no
+  longer shelved**, 2026-08-14: a `NatLit` converts to a real literal and the
+  old `> 10` decline is gone — `checker/src/mini/convert.rs:715–731`, "the
+  binary clause replaced that with `num(n)`, 66 nodes at `2⁶⁴`" — and
+  `checker/src/mini/census.rs:280–289` pins "a nat literal is its own
+  expansion". The `String` half is still shelved: `convert.rs:732` only counts
+  it, and `ledger.rs:1755` calls it "the uninterpretable stand-in".)*
 
 Anything out of scope must surface as a *counted gap*, never as an
 unjustified `Proved`. The cardinal rule is unchanged: never return `Proved`
@@ -591,9 +599,14 @@ of the day; the constant is gone.)
 
 The `Bool` wiring report puts `N` (`041`/`067`/`075`) as needing "a bound that is
 no longer the tag set — i.e. the ω-tower". **That was wrong.** The prediction
-below was checked by construction rather than by argument: `derived/src/wnat.rs`
-derives `⊢ closed(1+1, B, U(1+1))` with **no hypothesis at all**, and
-`tests/wnat.rs` pins it. The rest of this section stands as written.
+below was checked by construction rather than by argument: the since-deleted
+`derived/src/wnat.rs`
+derived `⊢ closed(1+1, B, U(1+1))` with **no hypothesis at all**, and
+`tests/wnat.rs` pinned it. *(Both files were deleted on 2026-08-11 with the
+W-type `Nat`; the mathematical point — that the tag set seeds the bound and the
+ω-tower is not needed — is what this section is cited for and it stands. `N`
+here is the corpus's inductive, `041_natDef`, not Lean's `Nat`.)* The rest of
+this section stands as written.
 
 `enum(A) := W(A, ∅, U(A))` works because the bound is seeded at the tag set
 itself. For `N` the fibres stop being empty — `A = 1 + 1`, `B(inl •) = 0`,
@@ -702,7 +715,7 @@ remaining-cost estimate without checking the above first.
 
   **The encoding changed and this obstruction is gone.** `⟦Sort 0⟧` is not
   opaque in either crate — it is `U₀ = {0,1}` (`checker/src/tg.rs`,
-  `mini/src/interp.rs`) — and the membership is derived generally by
+  `checker/src/mini/interp.rs`) — and the membership is derived generally by
   `derived::cumul`'s `DeclUniverse::over_at` at any rung, with
   `IndexedUniverse::over_at` for indexed families. **This is the origin of the
   "underivable with this `Sort` encoding" phrase that recurs throughout the log

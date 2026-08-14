@@ -55,7 +55,7 @@ shown; §8 names what is not measured.*
 > liberally. And `em` is not an axiom in Lean 4 — `Classical.em` is a theorem,
 > Diaconescu from `choice` + `propext` + `funext` — so the true delta against
 > what layer 3 already asserts is `propext`, which is a standard axiom on every
-> list this repo keeps (`mini/src/convert.rs`'s `is_standard_axiom`).
+> list this repo keeps (`checker/src/mini/convert.rs`'s `is_standard_axiom`).
 >
 > **Leg three, which this document did not have and is the operative reason.**
 > The framing here is a layer that models *every* simple inductive as a W, and
@@ -289,7 +289,7 @@ tens of thousands; it is generic, and its genericity is the whole of it.
 Set that against the precedent `MODELGEN.md` §7 establishes for what makes a
 layer worth having:
 
-> **What would go.** `mini/src/mutual_aux.rs`, **1059 lines**, whole. … The
+> **What would go.** `checker/src/mini/mutual_aux.rs`, **1059 lines**, whole. … The
 > nested arc is the precedent — 2117 lines of `nested_ev.rs` deleted whole once
 > `mini` learned to recognise what `modelgen` had written.
 
@@ -328,7 +328,7 @@ example … : W.recOn ih (W.mk a f) = ih a f (fun b => W.recOn ih (f b)) := rfl
 
 This is not an objection. `modelgen`'s contract already emits ι rules as
 theorems under `T._model.iota_k_j` (`modelgen/README.md`, `MODELGEN.md` §1), and
-`mini/src/nested_splice.rs` already recognises them by that name. The gist's
+`checker/src/mini/nested_splice.rs` already recognises them by that name. The gist's
 output is the same species.
 
 **Do the proofs survive as terms?** Yes — the gist is heavily tactic-written
@@ -451,8 +451,9 @@ No — and the gist mildly argues the other way. It shows `W` is *derivable* fro
 `acc` plus a function-space carrier plus impredicative `Prop`, which is a
 statement about Lean's primitives, not about `derived/`'s. In `derived/`, `W`
 already exists, its bound is already discharged at `U(c)`
-(`bound::least_universe_closed`), and `wlist`/`wnat`/`wrec`/`inductive::carrier`
-are all built on it. The gist gives no reason to want fewer W-types; it gives
+(`bound::least_universe_closed`), and `wlist`/`wrec`/`inductive::carrier`
+are all built on it *(the list also named `wnat`, deleted 2026-08-11 with the
+W-type `Nat`)*. The gist gives no reason to want fewer W-types; it gives
 one reason to want a differently-carved one.
 
 ---

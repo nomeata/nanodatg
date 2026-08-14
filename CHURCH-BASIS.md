@@ -39,9 +39,12 @@ Three sharpenings of the brief, stated early:
    `Sort v` recursor, propositional ι — via a quotient of `A → Prop` (§4.2,
    compiled). Universe inflation is therefore **not** the fundamental
    obstruction for the non-recursive types; comprehension and extraction are.
-   But the cell only opens jointly with axioms `mini` does not carry
-   (`mini/src/axiom.rs:113` — `clause_for` names exactly one axiom,
-   `Quot.sound`), and opening it would still leave `List` and `Subtype` closed.
+   But the cell only opens jointly with axioms `mini` did not then carry
+   (`clause_for` named exactly one axiom, `Quot.sound`), and opening it would
+   still leave `List` and `Subtype` closed. *(**Out of date, 2026-08-14**:
+   `clause_for` now has three arms — `propext`, `Quot.sound` **and
+   `Classical.choice`** — `checker/src/mini/axiom.rs:295–307`. The `List`/
+   `Subtype` half of the sentence is unaffected and is the load-bearing half.)*
 3. **`List` is the load-bearing negative, and it is airtight.** Not because
    recursion is hard — the junk argument treats `List` and `Option` identically
    — but because the fragment has **no axiom of infinity at universe 0**:
@@ -65,9 +68,13 @@ convenience: most of it is forced.
 `mini` interprets Π directly (the dependent-product and conditional clauses),
 `Eq` as `eq_set`, `False` as the empty set; `modelgen` splices the `Quot`
 quartet and `Quot.sound`, and derives `funext` from it rather than asserting it
-(`MODELGEN.md` §1.5); `propext` would be of the same species. `em` and
-`Classical.choice` are **not** carried — `mini/src/axiom.rs`'s `clause_for` has
-one arm. So "encodable" here means: a term of the fragment
+(`MODELGEN.md` §1.5); `propext` would be of the same species. `em` was not carried, and
+`Classical.choice` **now is** — `checker/src/mini/axiom.rs`'s `clause_for` has
+three arms (`propext`, `Quot.sound`, `Classical.choice`, `:295–307`), and
+`Clause::Choice` is built on `derived::choice::Epsilon` plus the per-rung
+`checker/src/mini/choice_clause.rs`, with its own tests. *(This sentence said
+both were absent and its `clause_for` count was one; corrected 2026-08-14. The
+fragment named below is what the argument actually uses and is unchanged.)* So "encodable" here means: a term of the fragment
 {Π, `Eq`, `False`, `Prop`, `Quot`, `propext`, `funext`} satisfying `MODELGEN.md`
 §1.1's contract for the type — property 1, the recursor's declared type **on
 the nose** after renaming constants; property 3, every level list the export's

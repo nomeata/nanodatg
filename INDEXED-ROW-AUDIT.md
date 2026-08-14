@@ -204,7 +204,7 @@ audit did not name is the largest: `dep_motive`'s applied minor and every
    found no stop that a surviving wrapper had hidden.
 
    One wrapper resisted and is kept, fail-closed instead of deleted:
-   `family::minor_atoms_at`, which `mini/src/rec_ix_dep.rs` calls at a
+   `family::minor_atoms_at`, which `checker/src/mini/rec_ix_dep.rs` calls at a
    signature that cannot carry the `&mut Env` a pointwise induction hypothesis
    needs for its binder. It now **declines** a constructor with a function-typed
    recursive field rather than returning the plain list, and

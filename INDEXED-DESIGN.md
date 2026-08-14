@@ -113,7 +113,7 @@ Reading the recursor makes the answer depend on whether one was exported at all,
 which is not a property of the type; `mini::zoneb::subsingleton` computes it
 from the declaration and the exported recursor is kept as an **oracle**
 (`zoneb::elim_audit`, cross-checked over the whole corpus by
-`mini/tests/tutorial.rs`). The two agree on all 91 files, `071` and `072`
+`checker/tests/mini_tutorial.rs`). The two agree on all 91 files, `071` and `072`
 included.
 
 ### 2.2 The census — every indexed family in the 91 tutorial files [decoded]
@@ -268,8 +268,8 @@ function-typed ones are declined today and stay declined". **They are not
 declined.** `RecArg::general` (`derived/src/recarg.rs`) carries `γ` as a real
 telescope, `CtorSpec::rec_doms` (`derived/src/inductive/spec.rs:179`) stores it,
 and `gval.rs:37–43` turns the `j`-th summand into `Σ(z::γⱼ)` with the conjunct a
-bounded universal. `mini/src/ctor_ix.rs`'s general arm does it at an **indexed**
-family, and `mini/tests/fixtures/indexed_infinitary_ctor` reads
+bounded universal. `checker/src/mini/ctor_ix.rs`'s general arm does it at an **indexed**
+family, and `checker/tests/fixtures/indexed_infinitary_ctor` reads
 `constEv = 4/4, gapped = 0`. The `γ`-empty reading of this rule is still what a
 plain argument gets; it is no longer what every argument gets.)*
 
@@ -393,7 +393,7 @@ recursor engine *is* the erased declaration's `GenRecursor`.
 **Scope of this subsection, stated about itself:** it covers the **value
 motive** and nothing else. `⟦T.rec⟧ := app(grec(…), t)` below is the term for
 that clause; the `Prop`-motive recursor is a separate construction (§5.3,
-`mini/src/rec_ix_prop.rs`), as are class (S) and class (P) at an index
+`checker/src/mini/rec_ix_prop.rs`), as are class (S) and class (P) at an index
 (`mini/src/{class_s_ix,rec_s_ix,class_p_ix,rec_trunc_ix}.rs`). §5.3 says this
 about §5.1; this paragraph is §5.1 saying it about itself.
 
@@ -427,7 +427,7 @@ the nest discipline already discharges. No new derived theorem is needed for
 **This section is about the *term* and the *ι rule*, and it is right about
 both. It was silent about the recursor constant's *typing*, and that silence is
 what `077` blocked on** (2026-08-02, Otto, on reaching it; **closed** the same
-day by D8 and `mini/src/rec_ix_dep.rs`). `GenRecursor`'s
+day by D8 and `checker/src/mini/rec_ix_dep.rs`). `GenRecursor`'s
 conclusion is `app(grec,t) ∈ T` — one target **set**. The obligation at the
 nest's bottom is `app(grec,t) ∈ app(⟦C⟧, x⃗, t)`, a **fibre** varying with `t`.
 No choice of `T` makes those the same statement, so §5.2 below cannot supply
@@ -468,7 +468,7 @@ keep `Aᵢ` **Lean-positional and in the same order**.
 
 **Built as D8, `family/dep_rec.rs`, and consumed the same day.** It cashed: the
 consumer's whole difference from the `Prop` clause is one three-field `Clause`
-(`mini/src/minor_ix.rs`), because `IDEPᵢ`'s antecedent *is* `minor_atoms_at` at
+(`checker/src/mini/minor_ix.rs`), because `IDEPᵢ`'s antecedent *is* `minor_atoms_at` at
 the bound `vⱼ`. `068` derives at both σ and leaves the blocked list after five
 moves; `077` reaches `binder-congruence`. One consumer-side finding, on D8's own
 flagged risk: **`ICOV`'s unbounded index binders cost nothing, provided `T` is
@@ -488,7 +488,7 @@ be built; the reasoning is kept because the shape it recognises is real and
 because the section is cited elsewhere.*
 
 `RECURSOR-DESIGN.md` §5.2's three-way target choice died when `motive::cod` and
-`guard.rs` made `HYP` dischargeable from `COD ∧ DEP` alone — `mini/src/rec_dep.rs`'s
+`guard.rs` made `HYP` dischargeable from `COD ∧ DEP` alone — `checker/src/mini/rec_dep.rs`'s
 header records that the target is now simply the sort the motive was declared
 into. This section re-introduced a policy for the indexed case on the premise
 that the engine is the **simply typed** `grec`. §5.1 above shows that premise is
@@ -542,7 +542,7 @@ Two different things live at `u₁ = 0` and only the second was written down her
 `u = 0` **[decoded]** — never reaches `grec`.
 
 **Prop-motive *typing of the recursor constant* is not covered by §5.1 at all,
-and it is what used to block. It is wired** — `mini/src/rec_ix_prop.rs`,
+and it is what used to block. It is wired** — `checker/src/mini/rec_ix_prop.rs`,
 2026-08-02. `068`'s `rbTreeRef := RBTree.rec.{u,u}` is scheduled at `u := 0`
 and at `u := 1` **[measured**, `mini --block`**]**; at `u := 0` the recursor's
 own levels are `{0,0}`, the motive is `Sort 0`, so the whole recursor type is a
@@ -584,9 +584,9 @@ interpretation` **[measured]** — their declarations' *types* mention
 building anything. They needed the indexed class-(S) carrier (`LeCarrier` at
 `ni ≥ 1`) and the indexed class-(P) carrier (`TruncCarrier::over_family`)
 wired up — not `RBTree`'s eliminator. *(Both wirings landed:
-`mini/src/zoneb.rs` dispatches `class_s_ix::build` and `class_p_ix::build` on
-the branch that used to decline, with `mini/src/rec_s_ix.rs` and
-`mini/src/rec_trunc_ix.rs` above them. `072` closed at `c425ac5`, `071` with
+`checker/src/mini/zoneb.rs` dispatches `class_s_ix::build` and `class_p_ix::build` on
+the branch that used to decline, with `checker/src/mini/rec_s_ix.rs` and
+`checker/src/mini/rec_trunc_ix.rs` above them. `072` closed at `c425ac5`, `071` with
 class (S) at an index. The diagnosis in this paragraph is what the fix
 followed.)*
 That is the fourth time one gap label has covered more than one problem
@@ -693,8 +693,8 @@ requires at every instantiation.
   closed by naming "the wiring bridge from the reduct's lambda nest to
   `ih(accrec,…)`" as new work and a named risk, citing "§9.6" — a section that
   does not exist in this document; the referent is §9's *could not settle*
-  item 5. The bridge is built: `mini/src/rec_acc_ih.rs` and
-  `mini/src/rec_acc_iota.rs`, MINI-HANDOFF.md §27 piece 4 and §28.)*
+  item 5. The bridge is built: `checker/src/mini/rec_acc_ih.rs` and
+  `checker/src/mini/rec_acc_iota.rs`, MINI-HANDOFF.md §27 piece 4 and §28.)*
 - **`Eq`** (28 files): direct clause, §2.2/§2.4. No `acc` involvement.
 - A **recursive user-defined subsingleton** (the case needing `acc^φ_r` with
   `R ≠ ∅` and the full §5.3 recursion) has **no witness in the 91 files —
@@ -765,7 +765,7 @@ and are named nowhere in this document** — `derived/src/inductive/family/`'s
 indexed one, sharing `prop_rec`'s `motive_app` spine) and `trunc_fields.rs`
 (`le_prop_fields`'s twin), with `derived/tests/family_trunc_rec.rs`,
 `family_trunc_rec_ix.rs`, `family_trunc_fields.rs` above them, and
-`mini/src/rec_trunc.rs` / `rec_trunc_ix.rs` consuming them. Each carries its own
+`checker/src/mini/rec_trunc.rs` / `rec_trunc_ix.rs` consuming them. Each carries its own
 `MINORᵢ`/`minor_atoms` interface. This is **D5's failure one row over**: a
 document that understates its own tree mis-scopes the next task, which is the
 lesson §8 records twice and which this section then reproduced.)*
@@ -787,14 +787,14 @@ exported through `TruncCarrier::ctors`. The whole constant is a proof
 `mem` retargeted onto the former's abbreviation, exactly as the former's own
 typing was.
 
-`mini/src/zoneb.rs::build_trunc` **used to** end at `former_at`, computing
+`checker/src/mini/zoneb.rs::build_trunc` **used to** end at `former_at`, computing
 `TruncCarrier`'s per-constructor rules and discarding them — the third instance
 of "evidence produced and then made unreachable", and what blocked
 `069_boolPropRec` on `no-interp(BoolProp.a)`. It no longer does: the non-indexed
 route stores `⟦T.ctorᵢ.{σ}⟧` off `site.tc.ctors[site.i]` (`zoneb.rs:1302`, with
 the derivation in that function's own header), and the indexed route is
-`mini/src/class_p_ix.rs` (landed `c425ac5`, closing `072`), which reports its
-own shape failures as `Gap::TruncCtor` (`mini/src/ev.rs`). The paragraphs below
+`checker/src/mini/class_p_ix.rs` (landed `c425ac5`, closing `072`), which reports its
+own shape failures as `Gap::TruncCtor` (`checker/src/mini/ev.rs`). The paragraphs below
 size the *reachable* population and are unaffected by either landing.
 
 **The reachable consequence is far narrower than "a class of constructors"
@@ -888,7 +888,7 @@ void per §2.4. Correct that header in place when D1 lands.)
 Boundary rule throughout: `derived/` speaks `Term`/`Formula`/`FnSym` only;
 everything touching `ExprPtr`/`NamePtr`/export data is `checker/` (`tg.rs`)
 — and, since the mini port shares `derived/` wholesale and reimplements only
-clause dispatch **[read**, `mini/src/interp.rs` header**]**, each checker
+clause dispatch **[read**, `checker/src/mini/interp.rs` header**]**, each checker
 rung below lands twice (tg.rs and `mini/`), against the same derived
 exports.
 
@@ -935,7 +935,7 @@ two-polarity witness test):
   `χ(p⃗,x⃗) = [tup(x⃗) ∈ acc(A_φ,R)]` of arity `np + ni` over it, exports `chi`,
   `in_u0`, `intro`, `elim`, `only_point`, `irrel` and a per-constructor
   `ctor_intro`, and reaches other index terms through `at` / `chi_at` /
-  `cond_at`. Consumed by `mini/src/class_s_ix.rs` and `rec_s_ix.rs`; pinned by
+  `cond_at`. Consumed by `checker/src/mini/class_s_ix.rs` and `rec_s_ix.rs`; pinned by
   `derived/tests/family_le_index.rs`. `SCOPING.md` §6 is the scope it was built
   against and now records it as landed.
 - **D6** — **Built**, and it was listed unmarked here long after it existed,
@@ -1031,7 +1031,7 @@ two-polarity witness test):
   the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The conclusion's `x⃗`
   need no move — they are `∀`-bound.
 
-  **Consumed 2026-08-02** (`mini/src/rec_ix_prop.rs`) and it fitted. One
+  **Consumed 2026-08-02** (`checker/src/mini/rec_ix_prop.rs`) and it fitted. One
   interface defect surfaced and is fixed: `motive_congr_of` refused a
   hypothesis-carrying equation and the minor's *conclusion* needs one, because
   moving `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto `app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))` goes through a
@@ -1102,15 +1102,15 @@ two-polarity witness test):
   and where all five recorded late surprises lived. Measurable: `068`, and
   `077`'s Type-motive site.
 
-  **Done** — the `Prop` half as `mini/src/rec_ix_prop.rs` (§5.3, so no `grec`
-  and no `T`-policy) and the value half as `mini/src/rec_ix_dep.rs` (§5.1's
+  **Done** — the `Prop` half as `checker/src/mini/rec_ix_prop.rs` (§5.3, so no `grec`
+  and no `T`-policy) and the value half as `checker/src/mini/rec_ix_dep.rs` (§5.1's
   term, D8's typing), over one shared minor transport,
-  `mini/src/minor_ix.rs`. *(This said "What C3 still owes is **ι**, which D8
+  `checker/src/mini/minor_ix.rs`. *(This said "What C3 still owes is **ι**, which D8
   does not build; §5.1's argument that it is the erased ι with `ni` dead binders
   is untested." **It is built and consumed.** `derived`:
   `IndexedDepRecursor::{iota, iota_atoms, iota_vars}` in
-  `family/dep_rec.rs:38–55`. `mini`: `mini/src/iota_ix_dep.rs`, wired into
-  `mini/src/kernel.rs`'s constructor-match branch. `dep_rec.rs:44` answers §5.1
+  `family/dep_rec.rs:38–55`. `mini`: `checker/src/mini/iota_ix_dep.rs`, wired into
+  `checker/src/mini/kernel.rs`'s constructor-match branch. `dep_rec.rs:44` answers §5.1
   by name: "§5.1's 'the erased ι with `ni` dead binders' is not a remark about
   the term — it is the statement".)* Two things it met that this
   plan did not name, both recorded here because the value half meets the first
@@ -1210,9 +1210,9 @@ historical. **On the mini side all four landed**; see the paragraph below, which
 covers C1–C3, and note that C4 landed too: `094`, `117`, `118`, `071` and `072`
 all certify.
 
-*Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`mini/src/zoneb.rs`'s
-`build_indexed`, `mini/src/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
-`mini/src/rec_ix_prop.rs` and `mini/src/rec_ix_dep.rs`; what is left of C3 is
+*Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`checker/src/mini/zoneb.rs`'s
+`build_indexed`, `checker/src/mini/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
+`checker/src/mini/rec_ix_prop.rs` and `checker/src/mini/rec_ix_dep.rs`; what is left of C3 is
 **ι** at a value motive. `RBTree` is off the evidence ledger entirely — carrier,
 constructors and both eliminators — and `068` is no longer the corpus's first
 blocker, for the first time in the project. `tg.rs` is untouched — the rungs land
@@ -1274,12 +1274,12 @@ certificate — never a wrong `Proved`):
    Vec<Vec<FnSym>>` beside `recs: usize` (`derived/src/inductive/spec.rs:156,179`),
    with `with_rec_doms` and a `well_formed` clause at `:275`; `115`–`118`
    certify; `derived/tests/family_infinitary.rs` and
-   `mini/tests/fixtures/indexed_infinitary_ctor` are the witnesses at both ends.
+   `checker/tests/fixtures/indexed_infinitary_ctor` are the witnesses at both ends.
    The blast-radius sizing — `step.rs`, `values.rs`, `typed.rs`, `iota.rs`,
    `rect.rs::recarg_eta` all keying on `finord(m)` — was right about the shape
    of the change and is now a record of it, not a forecast. What is still
    witness-free is the narrower `MIXED` case: a plain recursive field beside a
-   function-typed one **at an indexed family** (`mini/src/ctor_ix.rs:145–155`;
+   function-typed one **at an indexed family** (`checker/src/mini/ctor_ix.rs:145–155`;
    the derived side is ready, `derived/tests/family_infinitary.rs`'s `mixed`).)*
 5. **Per-instantiation drift** — the branch is per-declaration (§2.1); the
    recursor's extra level `u_1` is per-σ as today. Nothing new, but C1 must

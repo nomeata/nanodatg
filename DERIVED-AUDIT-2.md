@@ -37,7 +37,7 @@ What was found instead is the same three shapes as last time, redistributed:
    can mint a hypothetical theorem" mitigation fails (finding 1). Crate-wide fact 1 from the first
    audit must be restated: CI rule 6 scans only `derived/` and `checker/`; **`mini/` is exempt by
    design** (R6′, `ci/check-mini-scope.sh`), is licensed to call `Thm::assume` in shipped code
-   (`mini/src/scope.rs`), depends on `derived`, and calls into it.
+   (`checker/src/mini/scope.rs`), depends on `derived`, and calls into it.
 3. **A new enumeration of F4-class release-unpinned claim legs** (finding 7) and F5-class doc
    mismatches (finding 8), all fail-closed or misuse-gated, none reachable through crate wiring.
 
@@ -65,7 +65,7 @@ pin at :211). Both docs read "From `⊢ t ∈ Uₘ` infer `⊢ t ∈ Uₙ`". A `
 pin, `Thm::mp` unions Γ, and the result is `Γ ⊢ t ∈ Uₙ` under an unconditional label — the kernel
 header's "comparing case" verbatim.
 
-Why this outranks every other instance of the same shape: `mini/src/interp.rs::fs_typing` calls
+Why this outranks every other instance of the same shape: `checker/src/mini/interp.rs::fs_typing` calls
 `self.cumul.raise(l1, n, dom_mem)` / `raise(l2, n, cod_mem)` on caller-supplied theorems, in a
 crate whose entry points explicitly traffic in `Γ ⊢` sequents (`to_body_symbol`'s doc:
 "Rewrite `Γ ⊢ ⟦b⟧ ∈ C`…") and which is exempt from boundary rule 6. `fs_typing`'s own success
@@ -160,7 +160,7 @@ Eight of the ten public constructions in the new/moved `ext`/`prop` slice skip t
 fields of `Apply`/`Funspace`/`Product` either. Concrete failure: `Thm::assume` the exact closed
 formula `lambda_n` would produce and pass it as `lam_ax` — every pin passes (they read `concl()`
 only), every `gen` succeeds, and release returns `{φ} ⊢ ∀p⃗ ∀A ∀C. (…)` from functions documented
-`⊢` outright. Adjacency note: `mini/src/interp.rs:349-357` calls `lam_in_funspace_n` in shipped
+`⊢` outright. Adjacency note: `checker/src/mini/interp.rs:349-357` calls `lam_in_funspace_n` in shipped
 code; today its `lam_ax` input is `lambda_n`-built and hypothesis-free, and mini's scope
 hypotheses have `x ∈ ⟦A⟧` shape rather than axiom shape, so this is a discipline gap with a live
 adjacent producer, not a current exploit. (`checker/src/tg.rs` imports the same entries.)
