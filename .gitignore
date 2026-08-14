@@ -7,3 +7,6 @@
 
 # Agent worktrees live here — real disk, never /tmp (which is tmpfs on this machine)
 .claude/worktrees/
+
+# Scratch measurement artefacts (logs, dumps) — the handoff points large temporaries here
+_tmp/
