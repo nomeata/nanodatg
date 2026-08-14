@@ -4118,6 +4118,153 @@ impl Decline {
     ];
 }
 
+/// Everything [`iota_decline_label`] is allowed to look at — the shape of one
+/// recursor and of the inductive it eliminates, read off `RecursorData` and
+/// `InductiveData` and nothing else.
+///
+/// A struct rather than seven arguments so that the classification is a *pure
+/// function of the shape*, and therefore testable without a `TcCtx`. That is
+/// the whole point: the two times this chain has lied (task #153, and the
+/// indexed-family row below it) the defect was in the **order** of the tests,
+/// which no fixture can catch and a table-driven test catches immediately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IotaShape {
+    /// `RecursorData::num_indices`.
+    num_indices: u16,
+    /// `RecursorData::all_inductives.len()`.
+    n_inductives: usize,
+    /// `RecursorData::is_k`.
+    is_k: bool,
+    /// [`TgBackend::recognised_ind`] of the eliminated inductive.
+    recognised: bool,
+    /// `InductiveData::is_nested`.
+    is_nested: bool,
+    /// `RecursorData::num_motives`.
+    num_motives: u16,
+    /// How many constructors the eliminated inductive has; `None` when it is
+    /// not in scope yet.
+    nctors: Option<usize>,
+}
+
+/// **Why `derive_iota` built no nest, named for the thing that actually owns
+/// the declaration.**
+///
+/// The order of these tests *is* the label, and getting it wrong is not
+/// cosmetic: the origin mask mints a bit per reason, so a clause that fires
+/// ahead of a more specific one prices a construction that would close
+/// nothing and hides the one that would.
+///
+/// # The ordering rule, and where it comes from
+///
+/// Several of these predicates are true at once for real declarations —
+/// `Eq` has `num_indices == 1` *and* `is_k`; a nested inductive is compiled
+/// through an auxiliary mutual block. So "first true predicate" is not a
+/// classification; the chain must test **most specific first**, and the
+/// authority on which is more specific is the engine that actually routes the
+/// declaration: `crate::mini::kernel::Checker::whnf_conv`'s recursor dispatch.
+/// Its order is
+///
+/// ```text
+/// K-rule (a separate branch entirely)
+///   → Quot.lift → Nat → Acc → nested/modelled → num_indices != 0 → dependent
+/// ```
+///
+/// and this chain mirrors it for the predicates the two have in common:
+/// `is_k`, then the hand-written recognisers, then `is_nested`, and only then
+/// `num_indices`. Mirror any future change to that dispatch here, and keep
+/// [`iota_label_specificity_is_mini_dispatch_order`] passing.
+///
+/// # Two recorded mislabels, both from this ordering
+///
+/// * **Task #153.** `num_motives != 1 || all_inductives.len() != 1` was one
+///   clause called "a mutual block", sitting in front of `is_nested`. On
+///   `init-prelude` it carried **100 gaps and not one of them was a mutual
+///   block**: all three recursors that tripped it are `Lean.Syntax`'s — `rec`
+///   66, `rec_1` 22, `rec_2` 12 — each with `all_inductives.len() == 1`,
+///   `num_motives == 3` and **`is_nested == true`**. Lean compiles a nested
+///   inductive through an auxiliary mutual block, so its recursor carries a
+///   motive per member while `all_inductives` still names only the one the
+///   user wrote. The fix split the clause in two and put `is_nested` in front
+///   of the motive count.
+/// * **The same defect, one line below the comment recording it.**
+///   `num_indices != 0` was tested *first*, ahead of `is_k`. Measured over
+///   both gap-bearing populations (`ORIGIN-RANKING.md`), "an indexed family"
+///   carried **117 gaps of which 28 were not an indexed-family problem**: 20
+///   are `Eq.rec`, which is K-like, and 8 are `Acc.rec`, which mini routes to
+///   `derived::rec_acc` off `direct::clause_for` before it ever asks about
+///   indices. One of the three mislabelled files is named `094_ruleK`.
+///
+///   `is_k` moving in front of `num_indices` re-sorts the `Eq.rec` 20 onto
+///   the K row. **`Acc.rec` is deliberately left on the indexed row**: it is
+///   genuinely an indexed family (`Acc : α → Prop` over one index), so the
+///   label is *true*, and the predicate that would separate it —
+///   `crate::mini::direct::clause_for` — is stated over mini's interned
+///   `Name` and is not reachable here without a name bridge that would be a
+///   tranche of its own. It is counted apart instead, by
+///   [`IOTA_LABEL_OVERLAP`], so the next seat reads it off the report rather
+///   than off a census.
+fn iota_decline_label(s: IotaShape) -> &'static str {
+    if s.n_inductives != 1 {
+        "iota: no interpretation — a mutual block"
+    } else if s.is_k {
+        "iota: no interpretation — a K-like eliminator"
+    } else if s.recognised {
+        "iota: no interpretation — a hand-written recogniser owns it"
+    } else if s.is_nested {
+        "iota: no interpretation — a nested inductive"
+    } else if s.num_indices != 0 {
+        "iota: no interpretation — an indexed family"
+    } else if s.num_motives != 1 {
+        // One inductive, not nested, and still several motives. Nothing on
+        // this corpus reaches it. Kept, and named for exactly what it is, so
+        // that a shape which is neither of the two above is *counted* rather
+        // than falling through to the constructor-count buckets below — where
+        // it would be read as a declaration the dependent arm could serve,
+        // which is the mistake this pass is about.
+        "iota: no interpretation — several motives, neither mutual nor nested"
+    } else {
+        match s.nctors {
+            Some(0) => "iota: no interpretation — no constructors",
+            Some(1) => "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE",
+            Some(_) => "iota: no interpretation — several constructors",
+            None => "iota: no interpretation — the inductive is not in scope yet",
+        }
+    }
+}
+
+/// Every clause of [`iota_decline_label`] whose predicate this shape satisfies,
+/// in the chain's own order — **not** just the one that fires.
+///
+/// The chain reports the first true predicate; when two are true at once the
+/// second is invisible, and that invisibility is precisely what let one row
+/// carry three populations. Reported by [`IOTA_LABEL_OVERLAP`] so that a
+/// mislabel is a line in `--verbose` rather than a census someone has to think
+/// to run.
+///
+/// The tail clauses (`num_motives`, and the constructor-count bucket) are
+/// mutually exclusive with nothing, so only the five overlapping head clauses
+/// are listed.
+#[cfg(feature = "stepcount")]
+fn iota_label_overlaps(s: IotaShape) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if s.n_inductives != 1 {
+        v.push("a mutual block");
+    }
+    if s.is_k {
+        v.push("a K-like eliminator");
+    }
+    if s.recognised {
+        v.push("a hand-written recogniser owns it");
+    }
+    if s.is_nested {
+        v.push("a nested inductive");
+    }
+    if s.num_indices != 0 {
+        v.push("an indexed family");
+    }
+    v
+}
+
 /// What [`TgBackend::walk_spec`] read off one declaration.
 ///
 /// Not stored: it is the *input* to `Inductive::build` and to the Lean-facing
@@ -14072,33 +14219,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // *reason*, so this row priced a construction — a mutual-block
             // elaborator — that would have closed nothing, and hid the one that
             // would. Split so that each clause tests the thing it is named for.
-            let why = if r.num_indices != 0 {
-                "iota: no interpretation — an indexed family"
-            } else if r.all_inductives.len() != 1 {
-                "iota: no interpretation — a mutual block"
-            } else if r.is_k {
-                "iota: no interpretation — a K-like eliminator"
-            } else if ind.is_some_and(|i| self.recognised_ind(ctx, &i)) {
-                "iota: no interpretation — a hand-written recogniser owns it"
-            } else if idat.as_ref().is_some_and(|i| i.is_nested) {
-                "iota: no interpretation — a nested inductive"
-            } else if r.num_motives != 1 {
-                // One inductive, not nested, and still several motives. Nothing
-                // on this corpus reaches it. Kept, and named for exactly what it
-                // is, so that a shape which is neither of the two above is
-                // *counted* rather than falling through to the constructor-count
-                // buckets below — where it would be read as a declaration the
-                // dependent arm could serve, which is the mistake this pass is
-                // about.
-                "iota: no interpretation — several motives, neither mutual nor nested"
-            } else {
-                match nctors {
-                    Some(0) => "iota: no interpretation — no constructors",
-                    Some(1) => "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE",
-                    Some(_) => "iota: no interpretation — several constructors",
-                    None => "iota: no interpretation — the inductive is not in scope yet",
-                }
+            // **The order of these tests is the label** and it now lives in
+            // one pure function, [`iota_decline_label`], whose doc carries the
+            // argument and whose tests pin the order. It used to be written
+            // out here, and both times it was written out here it lied — see
+            // that doc for task #153 and for the indexed-family row that
+            // repeated it one line below the comment recording it.
+            let shape = IotaShape {
+                num_indices: r.num_indices,
+                n_inductives: r.all_inductives.len(),
+                is_k: r.is_k,
+                recognised: ind.is_some_and(|i| self.recognised_ind(ctx, &i)),
+                is_nested: idat.as_ref().is_some_and(|i| i.is_nested),
+                num_motives: r.num_motives,
+                nctors,
             };
+            let why = iota_decline_label(shape);
             #[cfg(feature = "stepcount")]
             {
                 // Does the single constructor take fields? `t_policy` needs a
@@ -14137,6 +14273,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         None => 2,
                     }]
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                // The overlap census: what else this shape *also* is. See
+                // [`IOTA_LABEL_OVERLAP`].
+                {
+                    let all = iota_label_overlaps(shape);
+                    if all.len() > 1 {
+                        let sp = self.spell(ctx, name);
+                        let mut g =
+                            IOTA_LABEL_OVERLAP.lock().expect("iota_label_overlap poisoned");
+                        *g.entry(format!("{sp}  →  {}", all.join(" + "))).or_insert(0u64) += 1;
+                    }
                 }
                 let sp = self.spell(ctx, name);
                 let np = r.num_params;
@@ -20639,6 +20786,22 @@ static STRUCT_FIELDS: [std::sync::atomic::AtomicU64; 3] =
 /// own census, and the thing that says whether closing it is bounded work.
 static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// **The label a declaration got, against every other label its shape also
+/// satisfies** — the standing guard against the defect [`iota_decline_label`]
+/// has now shipped twice.
+///
+/// [`iota_decline_label`]'s tests pin the *order*; they cannot tell you that a
+/// row you are about to spend a tranche on is two populations wearing one
+/// name, because that is a fact about the declarations in front of the
+/// checker, not about the function. This counts it directly: for each
+/// declined recursor, the label it received and the labels it would have
+/// received had the earlier clauses not fired. A row whose overlap column is
+/// empty is one population. A row with an overlap is the thing that cost
+/// task #153 a hundred gaps and the indexed row twenty-eight — and it is now
+/// read off `--verbose` rather than out of a census.
+#[cfg(feature = "stepcount")]
+static IOTA_LABEL_OVERLAP: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 /// The constants that head a major premise and are not constructors, by kind
 /// and spelling — the second origin's census, and what says whether the step it
 /// is short of is a reduction that exists.
@@ -20783,6 +20946,21 @@ pub fn origin_report() -> String {
                 v.len(),
                 v.iter().map(|(_, n)| **n).sum::<u64>()
             ));
+            for (r, n) in v.iter().take(40) {
+                s.push_str(&format!("    {r:<96}  {n:>8}\n"));
+            }
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    {
+        let g = IOTA_LABEL_OVERLAP.lock().expect("iota_label_overlap poisoned");
+        if !g.is_empty() {
+            let mut v: Vec<(&String, &u64)> = g.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1));
+            s.push_str(
+                "  MISLABEL RISK — declined recursors satisfying more than one clause; the \
+                 label is the FIRST\n",
+            );
             for (r, n) in v.iter().take(40) {
                 s.push_str(&format!("    {r:<96}  {n:>8}\n"));
             }
@@ -23379,6 +23557,143 @@ mod tests {
 
     /// A fresh constant, usable to instantiate a quantifier at.
     fn constant(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
+
+    // ── `iota_decline_label`: the ordering guard ─────────────────────────────
+    //
+    // Two mislabels have shipped from this chain, both from clause *order*
+    // rather than from any clause being wrong. No fixture catches that: a
+    // mislabelled declaration still declines, still gaps, and still reports a
+    // true sentence about itself. These tests are the guard, and they are
+    // written against the *class* — "a more specific clause must win" — not
+    // against the two instances that were caught.
+
+    /// The shape of a declaration nothing declines on: one inductive, no
+    /// indices, not K, unrecognised, not nested, one motive, three
+    /// constructors. Every test below perturbs exactly the fields it is about.
+    fn plain() -> IotaShape {
+        IotaShape {
+            num_indices: 0,
+            n_inductives: 1,
+            is_k: false,
+            recognised: false,
+            is_nested: false,
+            num_motives: 1,
+            nctors: Some(3),
+        }
+    }
+
+    /// **`Eq.rec`: `num_indices == 1` and `is_k`.** The K rule is the specific
+    /// cause and `Eq` being indexed is incidental — mini routes K on a branch
+    /// of its own, before it ever asks about indices. Measured cost of getting
+    /// this backwards: 20 gaps on three files, one of them named `094_ruleK`.
+    ///
+    /// Falsified by putting the `num_indices` clause back in front of `is_k`,
+    /// which is the exact code this replaced.
+    #[test]
+    fn iota_label_prefers_k_over_indices() {
+        let s = IotaShape { num_indices: 1, is_k: true, ..plain() };
+        assert_eq!(iota_decline_label(s), "iota: no interpretation — a K-like eliminator");
+    }
+
+    /// A nested inductive is compiled through an auxiliary mutual block and
+    /// may be indexed as well; "nested" is the cause that owns it, because
+    /// mini routes `iota_model` off `nested_splice::recognise` before the
+    /// indexed arm.
+    #[test]
+    fn iota_label_prefers_nested_over_indices() {
+        let s = IotaShape { num_indices: 2, is_nested: true, ..plain() };
+        assert_eq!(iota_decline_label(s), "iota: no interpretation — a nested inductive");
+    }
+
+    /// A hand-written recogniser (`Nat`, `List`, `False`, an enum) owns its
+    /// declaration outright; mini dispatches `iota_nat` and the direct clauses
+    /// ahead of the indexed arm.
+    #[test]
+    fn iota_label_prefers_a_recogniser_over_indices() {
+        let s = IotaShape { num_indices: 1, recognised: true, ..plain() };
+        assert_eq!(
+            iota_decline_label(s),
+            "iota: no interpretation — a hand-written recogniser owns it"
+        );
+    }
+
+    /// Task #153's own case, kept as a regression: several motives on a nested
+    /// single-inductive recursor is **nested**, not "several motives". This
+    /// is `Lean.Syntax.rec`'s shape (66 gaps of the 100).
+    #[test]
+    fn iota_label_prefers_nested_over_motive_count() {
+        let s = IotaShape { num_motives: 3, is_nested: true, ..plain() };
+        assert_eq!(iota_decline_label(s), "iota: no interpretation — a nested inductive");
+    }
+
+    /// **The class guard.** Not "these three pairs come out right" but: for
+    /// *every* shape in the product of the overlapping predicates, the label
+    /// is the most specific clause that holds, where specificity is the order
+    /// `crate::mini::kernel`'s recursor dispatch uses. Enumerated rather than
+    /// sampled, so a reordering cannot slip through on a combination nobody
+    /// thought to write a case for.
+    ///
+    /// Falsified by swapping any adjacent pair of head clauses in
+    /// [`iota_decline_label`]; each swap fails this test.
+    #[test]
+    fn iota_label_specificity_is_mini_dispatch_order() {
+        // Most specific first. This list *is* the contract; changing the chain
+        // without changing this list is the failure being guarded against.
+        let ranked: [(&str, fn(&mut IotaShape)); 5] = [
+            ("iota: no interpretation — a mutual block", |s| s.n_inductives = 2),
+            ("iota: no interpretation — a K-like eliminator", |s| s.is_k = true),
+            ("iota: no interpretation — a hand-written recogniser owns it", |s| {
+                s.recognised = true
+            }),
+            ("iota: no interpretation — a nested inductive", |s| s.is_nested = true),
+            ("iota: no interpretation — an indexed family", |s| s.num_indices = 1),
+        ];
+        // Every subset of the five predicates, including the empty one.
+        for mask in 0u32..(1 << ranked.len()) {
+            let mut s = plain();
+            for (i, (_, set)) in ranked.iter().enumerate() {
+                if mask & (1 << i) != 0 {
+                    set(&mut s);
+                }
+            }
+            let got = iota_decline_label(s);
+            let want = ranked
+                .iter()
+                .enumerate()
+                .find(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, (l, _))| *l);
+            match want {
+                // At least one head predicate holds: the FIRST in rank order
+                // must be the label, whatever else is also true.
+                Some(l) => assert_eq!(got, l, "mask {mask:#07b} took a less specific clause"),
+                // None holds: the shape falls through to the tail clauses.
+                None => assert_eq!(got, "iota: no interpretation — several constructors"),
+            }
+        }
+    }
+
+    /// The tail of the chain is unaffected by the reordering: with no head
+    /// predicate true, the constructor-count bucket still decides, and the
+    /// motive count still precedes it.
+    #[test]
+    fn iota_label_tail_is_unchanged() {
+        assert_eq!(
+            iota_decline_label(IotaShape { nctors: Some(0), ..plain() }),
+            "iota: no interpretation — no constructors"
+        );
+        assert_eq!(
+            iota_decline_label(IotaShape { nctors: Some(1), ..plain() }),
+            "iota: no interpretation — a ONE-CONSTRUCTOR STRUCTURE"
+        );
+        assert_eq!(
+            iota_decline_label(IotaShape { nctors: None, ..plain() }),
+            "iota: no interpretation — the inductive is not in scope yet"
+        );
+        assert_eq!(
+            iota_decline_label(IotaShape { num_motives: 2, ..plain() }),
+            "iota: no interpretation — several motives, neither mutual nor nested"
+        );
+    }
 
     /// **A de Bruijn-level local is one kernel variable per (level, declared
     /// type) — the level alone does not identify it, and neither does the type
