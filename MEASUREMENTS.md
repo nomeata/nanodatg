@@ -10106,3 +10106,80 @@ brief's two `NAT-BRIDGE-FEASIBILITY.md` quotations were treated as hypotheses
 per the standing warning; one is confirmed (the clauses certify) and one is
 refuted (they are *not* "available from the export"). §4.6 and §4.7 are
 corrected in place.
+
+## The whole fixture corpus, not five ratchets — and one origin dominates it — 2026-08-14
+
+Taken at `f2a2af0` with the `tg` build, `--no-modelgen --verbose`, over **every**
+`checker/tests/fixtures/*.ndjson`. `CLAUDE-HANDOFF.md` names five ratchets;
+those five are not the population. Fifteen fixtures carry gaps.
+
+| fixture | gaps | of which `⟦arg⟧ ∈ ⟦binder domain⟧` |
+| --- | ---: | ---: |
+| `nat_char_equations` | 152 | 20 |
+| `mutual_aux_encoding` | 96 | 46 |
+| `ctor_abbrev_major` | 46 | 21 |
+| `proj_reduced_carrier` | 16 | 16 (as escapes) |
+| `quot_lift_reduction` | 12 | 0 |
+| `delta_inside_a_proof` | 11 | 2 |
+| `nested_roundtrip` | 11 | 4 |
+| `transport_through_eq_rec` | 11 | 5 |
+| `proj_stuck_subject` | 6 | 6 (as escapes) |
+| `whnf_of_a_proof` | 6 | 6 |
+| `ground_unit_subsingleton` | 4 | 0 |
+| `mono_prefix` | 4 | 0 |
+| `stuck_recursor_major` | 4 | 4 |
+| `proj_reduced_subject` | 2 | 2 (as escapes) |
+| `reducible_ctor_binders` | 2 | 2 |
+| **total** | **383** | **134** |
+
+`budget_decline` is excluded deliberately: it is 2100 nested `succ`s built to
+exhaust a budget (`mini_mutual.rs:796` says so), and its 2102 gaps are one per
+`succ`. It is a pathology fixture, not a certification target.
+
+### The shape of the 383
+
+Summed across the corpus, by what the row says about itself:
+
+| | count |
+| --- | ---: |
+| relays — `trans` / `congruence` / `pi congruence` / `symm` **over an admitted premise** | 208 |
+| origin: `undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary` | 134 |
+| origin: `proj_reduce` (all of it on `nat_char_equations`) | 14 |
+| origin: `iota: no interpretation — an indexed family` | 7 |
+| origin: `pi congruence: one Π of undetermined sort and one decided` | 7 |
+| origin: `nat_eq` / `nat_reduce` / `eq_cache` / `quot` / `unit_like` | 5 / 2 / 2 / 2 / 2 |
+
+**One origin is 134 of the 383, and the 208 relays sit predominantly on top of
+it** — every fixture whose relay count is large also has a large beta row, and
+the four relay rows name their premise as *admitted* rather than as their own
+failure. The beta argument-typing obligation is therefore not one of several
+comparable tranches; on this corpus it is the master key.
+
+Two consequences worth stating before anyone plans around the handoff's list:
+
+* **The five named ratchets are 176 of the 383.** `mutual_aux_encoding` (96) and
+  `ctor_abbrev_major` (46) are the second and third largest gap populations in
+  the tree and appear in no ratchet list. They are not new failures — both are
+  long-standing designed fixtures with tests in `mini_mutual.rs` and
+  `mini_designed.rs` — they were simply never counted here.
+* **The `Nat` bridge proper is small.** `nat_eq` + `nat_reduce` = **7** origins,
+  all on `nat_char_equations`, against that fixture's 152 gaps. The recorded
+  four-step plan (Eq-refl declarations, `eq_cash` consumption,
+  `BleClauses`/`ble_transfer`) is aimed at 7 originated gaps plus whatever
+  relays sit on them. Its reachable prize must be measured before it is built;
+  see the standing lesson that a deletion prices the *gap*, not the
+  *construction*.
+
+### Method note
+
+Every number is one `--no-modelgen --verbose` run per fixture against the same
+binary, `grep`ed for the `gap:` rows and `TOTAL gaps`. The origin/relay split
+here is read off the **reason strings**, which is exactly the thing an earlier
+census got wrong — 68 gaps once had strings that read like an origin and were
+relays. So the split above is a hypothesis to be confirmed against the origin
+bitmask, not a result. What is *not* hypothetical is the per-fixture `TOTAL
+gaps` column and the fact that fifteen fixtures carry gaps rather than five.
+
+Gates at this commit, all green, so later reds are attributable: `unified_cli`
+5/5, `mini_designed` 32/32, `cargo check --no-default-features --all-targets`
+clean but for existing warnings.
