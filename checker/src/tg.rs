@@ -3108,6 +3108,39 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// same lifetime as the checker's `TcCache` (`infer`/`whnf`/`eq`), which is
     /// the set of caches the (level, type) discipline exists to serve.
     locals: HashMap<LocalKey, kernel::FreeVar>,
+    /// [`Self::locals`] read backwards: which local a kernel variable stands
+    /// for. Written at the same single site, so the two cannot disagree.
+    ///
+    /// Needed because scope provenance is asked about an *assumption atom* —
+    /// `⟦w⟧ ∈ ⟦A⟧`, in which `⟦w⟧` is a bare [`kernel::FreeVar`] — and the
+    /// question is which binder that variable's local came from. `locals` is
+    /// keyed the wrong way round for that.
+    var_locals: HashMap<kernel::FreeVar, LocalKey>,
+    /// **The scope baseline**: the locals the checker already had open when the
+    /// outermost definitional-equality query was entered.
+    ///
+    /// A snapshot of `TcCtx::open_dbj_levels` taken at that entry, and the
+    /// whole of this backend's scope provenance. It is a list of *witnesses*,
+    /// not a rule about levels: an antecedent is entitled to the ambient
+    /// reading when it is literally the interpreted typing of one of these
+    /// locals, which is exactly Carneiro's `⟦Γ⟧`.
+    ///
+    /// A positive witness rather than a level test, and that was measured. The
+    /// obvious rule — "level below the baseline, and not opened by an
+    /// interpretation binder" — fails in both directions at once, because
+    /// [`LocalKey`] deliberately makes one variable serve every binder at the
+    /// same `(level, ⟦type⟧)`. An interpretation binder over a closed body
+    /// opens at a low [`Self::open_level`], so it passes the level test; and it
+    /// then *shares* its variable with a genuine ambient local, so blacklisting
+    /// the key rejects the ambient local too. On `proj_reduced_carrier` that
+    /// pair of errors left one of the three target certificates closed instead
+    /// of three, with every rejected atom reporting `belowBase=true` and
+    /// `interpOpened=true` together. Comparing against `⟦Γ⟧` itself has no such
+    /// failure mode: sharing a variable with an ambient local *is* the licence.
+    eq_ambient: Vec<ExprPtr<'t>>,
+    /// How many [`crate::tc::TypeChecker::def_eq`] queries are open. `0` is
+    /// "not inside one"; the transition `1 → 0` is the judgement boundary.
+    eq_depth: u32,
     params: HashMap<NamePtr<'t>, Term>,
     idxs: HashMap<u64, Term>,
 
@@ -4383,6 +4416,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             consts: HashMap::new(),
             spellings: HashMap::new(),
             locals: HashMap::new(),
+            var_locals: HashMap::new(),
+            eq_ambient: Vec::new(),
+            eq_depth: 0,
             params: HashMap::new(),
             idxs: HashMap::new(),
             parts: HashMap::new(),
@@ -4507,6 +4543,106 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         crate::escapes::made(&c.hyps, self.seq);
         MAX_ASSUMED.fetch_max(c.hyps.len() as u64, std::sync::atomic::Ordering::Relaxed);
         TgCert::Conditional { thm: c.thm, hyps: c.hyps }
+    }
+
+    /// **The interpreted typings of the ambient context**, `⟦Γ⟧` — one atom
+    /// `⟦w⟧ ∈ ⟦A⟧` per local the checker had open when this query started.
+    ///
+    /// Computed at the boundary rather than at the entry, deliberately. It is
+    /// only ever asked about a certificate that reached the boundary still
+    /// conditional (sixteen of them on `proj_reduced_carrier`, against 433
+    /// conditional derivations made), so building it eagerly at every query
+    /// entry would interpret the whole context thousands of times to answer a
+    /// question almost none of them ask — and would mint interpretations for
+    /// context types that nothing else in the run ever needs.
+    fn ambient_typings(&mut self, ctx: &mut TcCtx<'t, 'p>) -> Vec<Formula> {
+        let ambient = std::mem::take(&mut self.eq_ambient);
+        let mut out = Vec::with_capacity(ambient.len());
+        for w in &ambient {
+            let Expr::Local { binder_type, .. } = ctx.read_expr(*w) else { continue };
+            let subject = self.interp(ctx, *w);
+            let dom = self.interp(ctx, binder_type);
+            out.push(Formula::mem(subject, dom));
+        }
+        self.eq_ambient = ambient;
+        out
+    }
+
+    /// **The judgement boundary**: hand back `Γ ⊢ ⟦a⟧ = ⟦b⟧` where the ledger
+    /// would otherwise have charged an escape for
+    /// `⊢ (⟦w⟧ ∈ ⟦A⟧) → ⟦a⟧ = ⟦b⟧`.
+    ///
+    /// # Why this is the judgement and not a step taken on trust
+    ///
+    /// Carneiro's Theorem 6.7 interprets `Γ ⊢ e ≡ e'` as *for all `γ ∈ ⟦Γ⟧`,
+    /// `⟦Γ ⊢ e⟧γ = ⟦Γ ⊢ e'⟧γ`*. A derivation conditional on precisely the
+    /// ambient context's own typings is therefore the judgement's own
+    /// statement. The bare equation the escape ledger compares it against is
+    /// strictly *stronger* — and false in general off `⟦Γ⟧` — so charging a gap
+    /// for the difference was measuring this backend against a claim Lean never
+    /// makes.
+    ///
+    /// # What actually changes, and why it is not a relabelling
+    ///
+    /// The antecedent moves from **inside the formula** to the theorem's own
+    /// hypothesis set: [`crate::scope::assume_ambient`] plus one `mp`, both
+    /// kernel rules, giving a real `Thm` whose `concl()` is the bare equation
+    /// and whose `hyps()` are the ambient typings. Nothing is asserted and
+    /// nothing is dropped — the context is still there, in the place the kernel
+    /// keeps a context.
+    ///
+    /// That is also what keeps the caches honest without a new rule. A
+    /// conditional certificate carries its assumptions inside a closed formula,
+    /// so it may be stored anywhere; a sequent hypothesis sits outside the
+    /// formula, so a store keyed on anything that does not mention it would
+    /// re-assert it silently. The checker already gates its reduction memos and
+    /// its equality cache on `certify::is_unconditional`, which is
+    /// `thm().hyps().is_empty()` — so the certificates this produces are
+    /// *automatically* excluded from exactly those stores. See the comment on
+    /// `certify::hypothesis_free` for that distinction, which predates this.
+    ///
+    /// # Why only when every atom is ambient
+    ///
+    /// A certificate that also assumes a raw beta obligation is not the
+    /// judgement, however many of its other atoms are context typings, and
+    /// peeling the ambient ones off it would move no gap while making the
+    /// remainder harder to read. Those are counted instead, by
+    /// [`note_boundary_partial`], which is the reclassification row.
+    ///
+    /// # Why only at the outermost exit
+    ///
+    /// Because below it the antecedent is still owed to a binder.
+    /// [`Self::guard_and_generalise_at`] discharges a premise by generalising
+    /// the variable it mentions, and `gen_checked` will not abstract a variable
+    /// free in the hypotheses — correctly. Moving the premise to the hypothesis
+    /// set early therefore does not make the discharge unsound, it makes it
+    /// *fail*, and the derivation that needed it becomes a gap. Measured, by
+    /// doing exactly that in [`Self::cert`] with no scope test at all: on
+    /// `proj_reduced_carrier` the escapes fell 16 → 4 and the total rose
+    /// **16 → 37**; on `nat_char_equations`, 152 → 194. The boundary is the one
+    /// place where no binder is still waiting.
+    fn close_at_boundary(&mut self, ctx: &mut TcCtx<'t, 'p>, c: TgCert) -> TgCert {
+        let TgCert::Conditional { thm, hyps } = c else { return c };
+        let ambient = self.ambient_typings(ctx);
+        let n_ambient = hyps.iter().filter(|h| ambient.contains(h)).count() as u64;
+        if hyps.is_empty() || n_ambient != hyps.len() as u64 {
+            note_boundary_partial(n_ambient);
+            return TgCert::Conditional { thm, hyps }
+        }
+        let Some(ante) = conj_of(&hyps) else { return TgCert::Conditional { thm, hyps } };
+        // Nothing is taken on the caller's word: `mp` fails unless `thm` really
+        // is an implication with `ante` as its antecedent, and the result is
+        // re-checked to be an equation before it is called `Proved` — the
+        // cardinal rule of this module, applied to its own boundary.
+        match Thm::mp(&thm, &crate::scope::assume_ambient(ante)) {
+            Some(t) if t.concl().as_eq().is_some() => {
+                note_boundary_closed(hyps.len() as u64);
+                #[cfg(feature = "stepcount")]
+                crate::escapes::closed(&hyps);
+                TgCert::Proved(t)
+            }
+            _ => TgCert::Conditional { thm, hyps },
+        }
     }
 
     /// Take a certificate handed to a rule, as a conditional equation.
@@ -6957,9 +7093,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// The condition that *is* load-bearing is `nat_rec_shape`. Measured:
     /// replacing this whole predicate with `true` leaves every fixture
-    /// byte-identical but moves `tutorial/076_listRecReduction` from 59 gaps to
-    /// 62, because recursors outside the `Nat` shape then reach a gate that
-    /// promises what [`Self::iota`] cannot deliver.
+    /// byte-identical but moves `tutorial/076_listRecReduction` from 45 gaps to
+    /// 48, because recursors outside the `Nat` shape then reach a gate that
+    /// promises what [`Self::iota`] cannot deliver. (Re-measured after equality
+    /// scope provenance landed, which took 076's baseline 59 → 45; the mutation's
+    /// +3 is unchanged, so the guard keeps its only witness.)
     fn iota_nat_clause_ready(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -9959,7 +10097,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     Some(v) => *v,
                     None => {
                         let v = self.env_mut().fresh_var();
-                        self.locals.insert(key, v);
+                        self.locals.insert(key.clone(), v);
+                        // The same insert, read backwards, so that an
+                        // assumption atom about `v` can be traced back to the
+                        // binder it came from. Written here and nowhere else:
+                        // one insert, two tables, no way for them to drift.
+                        self.var_locals.insert(v, key);
                         v
                     }
                 };
@@ -20665,6 +20808,31 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.note_admit(reason)
     }
 
+    /// Snapshot the baseline, once, at the outermost query.
+    ///
+    /// `TcCtx::open_dbj_levels` at this moment *is* the `Γ` the judgement about
+    /// to be decided is stated in. Nested entries deliberately do not move it:
+    /// the distinction that matters is against `Γ` as the judgement sees it,
+    /// and an inner query's own frames are just as query-opened as the outer
+    /// one's — a local `def_eq_binder_aux` pushes after this snapshot is
+    /// absent from it, whichever depth pushed it, which is the safety-critical
+    /// direction.
+    fn eq_query_enter(&mut self, ctx: &mut TcCtx<'t, 'p>) {
+        if self.eq_depth == 0 {
+            self.eq_ambient.clear();
+            self.eq_ambient.extend_from_slice(ctx.open_dbj_levels());
+        }
+        self.eq_depth += 1;
+    }
+
+    fn eq_query_exit(&mut self, ctx: &mut TcCtx<'t, 'p>, c: Option<TgCert>) -> Option<TgCert> {
+        self.eq_depth = self.eq_depth.saturating_sub(1);
+        if self.eq_depth > 0 {
+            return c
+        }
+        c.map(|c| self.close_at_boundary(ctx, c))
+    }
+
     fn declar_checked(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -20786,11 +20954,48 @@ pub fn note_conditional() { CONDITIONAL.fetch_add(1, std::sync::atomic::Ordering
 /// Record one conditional certificate being handed back to a rule.
 fn note_consumed() { CONSUMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// Certificates closed at the judgement boundary by
+/// [`TgBackend::close_at_boundary`], and the antecedent atoms they moved into
+/// the theorem's own hypothesis set.
+static BOUNDARY_CLOSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BOUNDARY_ATOMS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Certificates that reached the boundary still conditional, and how many of
+/// *their* atoms were ambient anyway.
+///
+/// This row is the reclassification, and it is printed because it is the
+/// measurement that says how much of the remaining debt this lever can reach:
+/// a certificate with one ambient atom and eleven raw beta obligations is not
+/// closed by ambient abstraction and must not be reported as if it were.
+static BOUNDARY_STUCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BOUNDARY_STUCK_AMBIENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record one certificate closed at the judgement boundary.
+fn note_boundary_closed(atoms: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    BOUNDARY_CLOSED.fetch_add(1, Relaxed);
+    BOUNDARY_ATOMS.fetch_add(atoms, Relaxed);
+}
+
+/// Record one certificate that reached the boundary and stayed conditional.
+fn note_boundary_partial(ambient_atoms: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    BOUNDARY_STUCK.fetch_add(1, Relaxed);
+    BOUNDARY_STUCK_AMBIENT.fetch_add(ambient_atoms, Relaxed);
+}
+
 /// How many certificates finished conditional. Zero is the only value that lets
 /// a file be called fully derived.
+///
+/// A certificate closed at the judgement boundary is subtracted here rather
+/// than counted as consumed: it was not handed back to a rule, so saying so
+/// would be false, and it did not escape either, so charging it a gap would be
+/// false the other way. It gets its own term and its own report row.
 pub fn escaped() -> u64 {
     use std::sync::atomic::Ordering::Relaxed;
-    CONDITIONAL.load(Relaxed).saturating_sub(CONSUMED.load(Relaxed))
+    CONDITIONAL
+        .load(Relaxed)
+        .saturating_sub(CONSUMED.load(Relaxed))
+        .saturating_sub(BOUNDARY_CLOSED.load(Relaxed))
 }
 
 /// Record one fully-derived certificate.
@@ -23672,14 +23877,17 @@ fn ht_report() -> String {
 /// this value to an individual run without first introducing snapshot/delta
 /// ownership for all counters included here.
 pub fn global_gap_count() -> u64 {
-    use std::sync::atomic::Ordering::Relaxed;
     let recorded: u64 = TOTALS
         .lock()
         .expect("tg totals poisoned")
         .as_ref()
         .map(|rows| rows.iter().map(|(_, n)| *n).sum())
         .unwrap_or(0);
-    recorded + CONDITIONAL.load(Relaxed).saturating_sub(CONSUMED.load(Relaxed))
+    // Through [`escaped`], not by recomputing its subtraction: the verdict the
+    // CLI exits on and the `TOTAL gaps` row of the report have to be the same
+    // number, and they were kept in step by two copies of one expression until
+    // a term was added to only one of them.
+    recorded + escaped()
 }
 
 /// Render what the TG kernel actually derived over this run.
@@ -23715,6 +23923,13 @@ pub fn global_report() -> String {
             CONSUMED.load(Relaxed),
             escapes,
             MAX_ASSUMED.load(Relaxed),
+        ));
+        s.push_str(&format!(
+            "    at the judgement boundary: {} closed as the ambient context's own typings ({} atoms), {} still conditional ({} of their atoms ambient)\n",
+            BOUNDARY_CLOSED.load(Relaxed),
+            BOUNDARY_ATOMS.load(Relaxed),
+            BOUNDARY_STUCK.load(Relaxed),
+            BOUNDARY_STUCK_AMBIENT.load(Relaxed),
         ));
         // The census decomposes exactly that `escaped()` figure; see
         // `crate::escapes`. Printed next to the ledger line so the two can be
@@ -24947,6 +25162,178 @@ mod tests {
             vec![Formula::forall(w, Formula::imp(guard, stale))],
             "an assumption that is not literally the guard must be hoisted and stay owed"
         );
+    }
+
+    /// **A local the equality query opened for itself is not ambient**, even
+    /// when it is indistinguishable from an ambient one in every other respect.
+    ///
+    /// This is the adversarial half of the scope-provenance work, and it is the
+    /// direction where being wrong is a false theorem rather than a lost one. A
+    /// derivation conditional on `⟦w⟧ ∈ ⟦A⟧` for a `w` the *query* opened is
+    /// not the judgement `Γ ⊢ a ≡ b`: no `γ ∈ ⟦Γ⟧` ranges over that `w`, its
+    /// premise is owed to the binder rule that opened it, and abstracting it at
+    /// the boundary would hand the checker a bare equation nothing proved.
+    ///
+    /// **Two locals of the same declared type, deliberately.** With locals of
+    /// different types the atoms differ in their `⟦A⟧` component as well, and a
+    /// rule that compared nothing but the type would pass. Here the two atoms
+    /// differ *only* in the variable, so the only thing that can separate them
+    /// is the provenance of the binder — which is the property under test. The
+    /// ambient case is asserted alongside it for the same reason a refusal test
+    /// needs a positive control: a `close_at_boundary` that closed nothing at
+    /// all would otherwise pass the first assertion and prove nothing.
+    ///
+    /// # How this was falsified, and why it carries the whole guarantee
+    ///
+    /// Three misclassifications were written, built and run. Each abstracts a
+    /// local the query opened, and each fails the first assertion here:
+    ///
+    /// * **live scope instead of the baseline** — [`TgBackend::ambient_typings`]
+    ///   reading `ctx.open_dbj_levels()` at the boundary rather than the
+    ///   [`TgBackend::eq_ambient`] snapshot, i.e. asking "is this local in scope
+    ///   *now*" instead of "was it in `Γ` when the query began";
+    /// * **re-snapshotting at every entry** — dropping the `if self.eq_depth
+    ///   == 0` guard in [`TgBackend::eq_query_enter`], so a nested query adopts
+    ///   its own frame's local into `Γ`. This is why the test recurses under
+    ///   the opened binder: without that nested entry the mutation passes, and
+    ///   an earlier draft of this test did let it through;
+    /// * **broadening the rule to any membership at a bare variable** — the
+    ///   "the key contains a local, so call it ambient" shortcut.
+    ///
+    /// **The corpus catches none of the three.** `proj_reduced_carrier` stays
+    /// at 13 gaps and `nat_char_equations` at 148 under every one of them,
+    /// because in these fixtures every atom that reaches a boundary is in fact
+    /// ambient, and `def_eq_binder_aux` rewinds its frames before returning, so
+    /// the live scope and the snapshot happen to agree at the exit. The
+    /// distinction is therefore *unobserved* by every ratchet in the tree and
+    /// this test is the only thing standing on it — which is exactly why it is
+    /// constructed rather than harvested, and why it must not be deleted as
+    /// "covered by the corpus".
+    #[test]
+    fn scope_provenance_refuses_a_query_opened_local() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+
+                let (x, y) = (ctx.str1("x"), ctx.str1("y"));
+                let zero = ctx.zero();
+                let ty_a = ctx.mk_sort(zero);
+                let style = crate::expr::BinderStyle::Default;
+
+                // `Γ`: one local the checker already had open. Then the query
+                // starts, and *only then* does the second binder open — the
+                // whole content of the distinction.
+                let ambient = ctx.mk_dbj_level(x, style, ty_a);
+                be.eq_query_enter(ctx);
+                let opened = ctx.mk_dbj_level(y, style, ty_a);
+                // …and the query then recurses under that binder, which is
+                // literally what `def_eq_binder_aux` does: push a frame's local,
+                // then call `def_eq` on the opened body. The nested query must
+                // not re-take the baseline — if it does, its own frame's local
+                // reads as part of `Γ` from then on, including at the outer
+                // exit, which is the second mutation this test kills.
+                be.eq_query_enter(ctx);
+                assert!(
+                    be.eq_query_exit(ctx, None).is_none(),
+                    "a nested query with no answer must hand back no answer"
+                );
+
+                let dom = be.interp(ctx, ty_a);
+                let t_ambient = be.interp(ctx, ambient);
+                let t_opened = be.interp(ctx, opened);
+                assert_ne!(t_ambient, t_opened, "two distinct locals, or nothing is tested");
+
+                let h_opened = Formula::mem(t_opened.clone(), dom.clone());
+                let h_ambient = Formula::mem(t_ambient.clone(), dom.clone());
+
+                // ── The query-opened local: must NOT be abstracted. ──────────
+                let owed = derived::a1i(&Thm::eq_refl(t_opened.clone()), h_opened.clone());
+                let out = be.close_at_boundary(ctx, TgCert::Conditional {
+                    thm: owed,
+                    hyps: vec![h_opened.clone()],
+                });
+                match out {
+                    TgCert::Conditional { hyps, .. } => assert_eq!(
+                        hyps,
+                        vec![h_opened],
+                        "the query-opened local's premise must still be owed, unchanged"
+                    ),
+                    other => panic!(
+                        "a local opened inside the query was abstracted as ambient: {other:?}"
+                    ),
+                }
+
+                // ── The ambient local: the positive control. ─────────────────
+                let judgement = derived::a1i(&Thm::eq_refl(t_ambient.clone()), h_ambient.clone());
+                let out = be.close_at_boundary(ctx, TgCert::Conditional {
+                    thm: judgement,
+                    hyps: vec![h_ambient.clone()],
+                });
+                match out {
+                    TgCert::Proved(t) => {
+                        assert_eq!(
+                            t.concl(),
+                            &Formula::eq(t_ambient.clone(), t_ambient),
+                            "the boundary must conclude the bare equation, not the implication"
+                        );
+                        assert_eq!(
+                            t.hyps(),
+                            &[h_ambient],
+                            "the ambient typing must survive as the theorem's own Γ, not vanish"
+                        );
+                    }
+                    other => panic!("an ambient context typing was not abstracted: {other:?}"),
+                }
+            })
+        })
+        .unwrap()
+    }
+
+    /// **A nested query is not a boundary.** Only the outermost exit may
+    /// abstract, because below it a binder rule may still have to generalise
+    /// the variable — and `gen_checked` refuses to abstract one that is free in
+    /// the hypotheses, so an early move turns a discharge into a gap rather
+    /// than into a false theorem. Measured: doing it in
+    /// [`TgBackend::cert`] with no scope test raised `proj_reduced_carrier`
+    /// from 16 gaps to 37.
+    #[test]
+    fn only_the_outermost_query_exit_is_the_judgement_boundary() {
+        crate::tests::util::test_export_file(None, |export| {
+            export.with_ctx(|ctx| {
+                let env = export.new_env(crate::env::EnvLimit::Empty);
+                let mut be = TgBackend::new(&env);
+
+                let x = ctx.str1("x");
+                let zero = ctx.zero();
+                let ty_a = ctx.mk_sort(zero);
+                let ambient = ctx.mk_dbj_level(x, crate::expr::BinderStyle::Default, ty_a);
+
+                be.eq_query_enter(ctx);
+                be.eq_query_enter(ctx);
+
+                let dom = be.interp(ctx, ty_a);
+                let t = be.interp(ctx, ambient);
+                let h = Formula::mem(t.clone(), dom);
+                let thm = derived::a1i(&Thm::eq_refl(t.clone()), h.clone());
+                let cond = TgCert::Conditional { thm, hyps: vec![h.clone()] };
+
+                // The inner exit hands it straight back, ambient or not.
+                let inner = be.eq_query_exit(ctx, Some(cond)).expect("passed through");
+                assert!(
+                    matches!(inner, TgCert::Conditional { .. }),
+                    "a nested query exit must not abstract: {inner:?}"
+                );
+
+                // The outer exit is the boundary, and the same certificate closes.
+                let outer = be.eq_query_exit(ctx, Some(inner)).expect("passed through");
+                match outer {
+                    TgCert::Proved(t2) => assert_eq!(t2.hyps(), &[h], "Γ must be carried, not dropped"),
+                    other => panic!("the outermost exit did not close an ambient certificate: {other:?}"),
+                }
+            })
+        })
+        .unwrap()
     }
 
     /// A **conditional** certificate carries its assumptions inside the formula,

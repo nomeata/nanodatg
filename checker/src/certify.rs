@@ -411,6 +411,44 @@ pub trait Certifier<'t, 'p> {
         let _ = (ctx, name, uparams, ty, val, typing);
     }
 
+    // ── Equality-query scope ─────────────────────────────────────────────────
+    //
+    // A certificate a rule builds is a statement about the context it was built
+    // in, and the two kinds of local in that context are not interchangeable.
+    // One the checker already had open when the equality query started belongs
+    // to the *ambient* context `Γ`, and Carneiro's Theorem 6.7 reads
+    // `Γ ⊢ a ≡ b` as "for every `γ ∈ ⟦Γ⟧`, `⟦a⟧γ = ⟦b⟧γ`" — so a derivation
+    // conditional on precisely those locals' own typings **is** the judgement.
+    // One the query itself opened is not in `Γ`, and its typing premise has to
+    // be discharged by the binder rule that opened it before the query returns.
+    //
+    // The backend cannot tell the two apart from a certificate alone: they are
+    // both `Expr::Local`s and both interpret to a kernel variable. The pair of
+    // hooks below is what supplies the missing bit. `def_eq` brackets its whole
+    // body with them, so a backend that wants the distinction can snapshot
+    // whatever it needs at entry and act on it at exit; the depth is the
+    // backend's to track, because only the *outermost* entry marks the
+    // judgement boundary.
+    //
+    // Both default to doing nothing, so a backend that does not care about
+    // scope — [`NullCertifier`] — needs no change and pays nothing.
+
+    /// One definitional-equality query is starting.
+    ///
+    /// Called on **every** `def_eq`, nested ones included. A backend that wants
+    /// the outermost entry counts the depth itself.
+    fn eq_query_enter(&mut self, ctx: &mut TcCtx<'t, 'p>) { let _ = ctx; }
+
+    /// The query started by the matching [`Certifier::eq_query_enter`] is
+    /// returning `c`.
+    ///
+    /// Called on every exit, whether or not the query concluded anything, and
+    /// exactly once per entry. The certificate is passed through by default.
+    fn eq_query_exit(&mut self, ctx: &mut TcCtx<'t, 'p>, c: Option<Self::Cert>) -> Option<Self::Cert> {
+        let _ = ctx;
+        c
+    }
+
     // ── The typing judgement ─────────────────────────────────────────────────
     //
     // `def_eq` returns evidence; `infer` returns a *type*, and for a long time

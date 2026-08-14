@@ -111,7 +111,7 @@ fn default_checks_every_axiom_while_naive_keeps_its_ignore_rule() {
 /// iota, fail at the first affected equation rather than hiding in the full
 /// fixture's aggregate debt.
 ///
-/// **The full-fixture ratchet moved 152 → 65, and the trade is written here.**
+/// **The full-fixture ratchet moved 152 → 61, and both trades are written here.**
 /// `TgBackend::iota_nat_clause_ready` added the direct-clause arm to the ι
 /// readiness gate. Before it, every `Nat.rec` ι step inside a `PProd`
 /// projection subject was refused — `Nat` is a direct clause and publishes no
@@ -120,9 +120,14 @@ fn default_checks_every_axiom_while_naive_keeps_its_ignore_rule() {
 /// What is bought: `gap: proj_reduce` 14 → **0** and `gap: eq_cache` 2 → 0,
 /// with their relays. What is paid, and it is a real cost: the escape ledger
 /// rises 20 → 26, because a derivation that used to be admitted outright now
-/// reaches the boundary carrying antecedents. Net −87, which is *better* than
-/// the −74 `NANODA_ASSUME=proj_reduce` priced, because the deletion acquires
-/// the equation as an antecedent and this derives it.
+/// reaches the boundary carrying antecedents. That tranche alone is −87, which
+/// is *better* than the −74 `NANODA_ASSUME=proj_reduce` priced, because the
+/// deletion acquires the equation as an antecedent and this derives it.
+///
+/// Equality-query scope provenance is the second tranche, and it composes
+/// additively: it closes four of those escapes at the judgement boundary
+/// (26 → **22**) and takes the fixture 65 → **61**. Its own cost, two
+/// `checkerSlots`, is written at the assertion that pins it.
 ///
 /// The two ι counts are the ratchet that says the subject traces are actually
 /// being consumed rather than the gate merely being quieter: they **rise**,
@@ -157,12 +162,36 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
     assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
-    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:65")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:61")), "the measured full-fixture baseline moved:\n{stdout}");
     assert!(
-        stdout.contains("conditional derivations: 805 made (0 of them copies), 779 accounted for by a rule, 26 escaped"),
+        stdout.contains("conditional derivations: 805 made (0 of them copies), 779 accounted for by a rule, 22 escaped"),
         "the full fixture retained conditional trace evidence:\n{stdout}",
     );
-    assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
+    assert!(
+        stdout.contains("at the judgement boundary: 4 closed as the ambient context's own typings (4 atoms), 20 still conditional (5 of their atoms ambient)"),
+        "the scope-provenance boundary row moved on the full fixture:\n{stdout}",
+    );
+    // 28, not the 30 this pinned before scope provenance landed, and the two
+    // are a **measured cost of the boundary abstraction**, recorded here rather
+    // than smoothed over.
+    //
+    // A certificate closed at the judgement boundary is a real `Thm` whose `Γ`
+    // is the ambient context's typings. `ty_conv` composes the outermost
+    // equality answer into the declaration's typing, so that typing inherits
+    // the same `Γ` — and `Sealed`/`hypothesis_free` then correctly refuse to
+    // persist it, because the store's key does not mention `Γ`. Two of this
+    // fixture's declarations lose their stored `⟦c⟧ ∈ ⟦T⟧` that way
+    // (`stored as ⟦c⟧ ∈ ⟦T⟧` 9 → 7, `uses answered from the store` 426 → 418,
+    // both re-measured against `bad5c51` after the merge rather than carried
+    // over from the branch's own pre-merge 319 → 311).
+    //
+    // It costs no gap: the fixture's total falls 65 → 61 and no file in
+    // `vendor/arena-tests/good/tutorial` regresses (217 → 185 over the 91 of
+    // them, with `072_sortElimProp2Rec` reaching zero). The refusal is the
+    // conservative direction — an unstorable typing is re-derived, not
+    // mis-stored — so the trade is taken and pinned. `adoptedByCheckerTyping`
+    // is unchanged at 15, which is what says the *handoff* did not regress.
+    assert!(stdout.contains("checkerSlots=28\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 17, "a zero iota certificate was lost:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 22, "a successor iota certificate was lost:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "the PProd projection origin came back:\n{stdout}");
@@ -183,20 +212,21 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
 /// What this pins, and how each line was falsified:
 ///
 /// * **Deleting the new disjunct in `wants_proj_red_iota`** returns the fixture
-///   to 152 gaps with `gap: proj_reduce` back at 14 — every assertion below
+///   to 148 gaps with `gap: proj_reduce` back at 14 and `gap: eq_cache` back at
+///   2, and takes the two ι counts back to 10 and 13 — every assertion below
 ///   fails. That is the construction's own falsification and it is measured.
 /// * **Making `iota_nat_clause_ready` return `true` unconditionally** is *not*
 ///   visible here: measured, every fixture in this directory is byte-identical,
 ///   including the `gap: iota:` rows of `mutual_aux_encoding` and
 ///   `ctor_abbrev_major`. It is visible on the export corpus —
-///   `tutorial/076_listRecReduction` moves **59 → 62** — because that is where
+///   `tutorial/076_listRecReduction` moves **45 → 48** — because that is where
 ///   recursors outside the `Nat` shape reach this gate. So the guard is real and
 ///   this file cannot see it; `tg_tutorial.rs`'s corpus ratchet is what does.
 #[test]
 fn nat_direct_clause_iota_readies_the_pprod_projection_subjects() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 65, "the PProd projection ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 61, "the PProd projection ratchet moved:\n{stdout}");
     // The origin this tranche was scoped on, and the one that went with it.
     assert!(!stdout.contains("gap: proj_reduce"), "a PProd projection subject lost its iota evidence:\n{stdout}");
     assert!(!stdout.contains("gap: eq_cache"), "a cache hit lost the replayable Nat.rec trace:\n{stdout}");
@@ -277,11 +307,25 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
     let carrier = run_on("proj_reduced_carrier.ndjson", &["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&carrier.stdout);
     assert_eq!(carrier.status.code(), Some(4), "the carrier fixture's verdict moved:\n{stdout}");
-    assert_eq!(report_count(&stdout, "TOTAL gaps"), 16, "the recursive-subject ratchet moved:\n{stdout}");
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 13, "the recursive-subject ratchet moved:\n{stdout}");
     assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 22, "the structural cache replay did not consume Mini's dependent evidence:\n{stdout}");
     assert!(
-        stdout.contains("conditional derivations: 433 made (0 of them copies), 417 accounted for by a rule, 16 escaped"),
+        stdout.contains("conditional derivations: 433 made (0 of them copies), 417 accounted for by a rule, 13 escaped"),
         "a conditional reduction certificate was retained or the escape family moved:\n{stdout}",
+    );
+    // Scope provenance, pinned as an exact split rather than as a total.
+    //
+    // `addN`, `dblN` and `leN` each escaped with a single antecedent that was
+    // nothing but an ambient local's own typing, and those are the three that
+    // close. The other five ambient atoms are the four `N.brecOn.go`
+    // certificates, which also carry raw beta obligations and so are *not*
+    // closed — the row states that separately, so a change that closed them by
+    // relabelling their raw debt would move this assertion rather than hide
+    // inside the total. The eight atoms here are exactly the eight the escape
+    // census counts as context-local typings.
+    assert!(
+        stdout.contains("at the judgement boundary: 3 closed as the ambient context's own typings (3 atoms), 13 still conditional (5 of their atoms ambient)"),
+        "the ambient/query-opened split moved on the carrier fixture:\n{stdout}",
     );
     assert!(!stdout.contains("gap: eq_cache"), "a cache hit still lacks an exact structural recipe:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "a ready N.rec subject trace was not certified:\n{stdout}");

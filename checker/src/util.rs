@@ -281,6 +281,29 @@ pub struct TcCtx<'t, 'p> {
     /// of binders that are open above us). When a binder is opened and traversed under, this
     /// counter is incremented. When the binder is closed again, this counter is decremented.
     pub(crate) dbj_level_counter: u16,
+    /// **The context stack beside [`TcCtx::dbj_level_counter`]**: the
+    /// `Expr::Local` opened at each de Bruijn level, indexed *by* that level.
+    ///
+    /// The counter says how many binders are open; this says which. The live
+    /// context is [`TcCtx::open_dbj_levels`] — the prefix of length
+    /// `dbj_level_counter` — and everything past it is a retired binder whose
+    /// slot the next open overwrites.
+    ///
+    /// Liveness is the counter's, not this vector's, and that is deliberate.
+    /// Several callers rewind the counter in bulk rather than through
+    /// [`TcCtx::replace_dbj_level`] (`def_eq_binder_aux` drops a whole frame
+    /// stack at once, on both its exits), so a stack that tried to pop in
+    /// step with them would need every one of those sites to agree. Indexing
+    /// by level and slicing to the counter needs no agreement at all: a slot is
+    /// meaningful exactly while the counter says its binder is open.
+    ///
+    /// Its consumer is the proof backend's scope provenance: which locals were
+    /// already in `Γ` when a definitional-equality query began, so that a
+    /// derivation conditional on *their* typings can be recognised as the
+    /// judgement's own statement rather than charged as an undischarged
+    /// assumption. See `THREADING-CENSUS.md` §2, stage 1, which names this
+    /// stack, and `crate::tg::TgBackend::eq_query_enter`.
+    dbj_level_stack: Vec<ExprPtr<'t>>,
     /// Monotonically increasing counter for unique free variables. Any two free variables created
     /// with the `mk_unique` constructor are unique within their `(ExportFile, TcCtx)` pair.
     pub(crate) unique_counter: u32,
@@ -310,6 +333,7 @@ impl<'t, 'p: 't> TcCtx<'t, 'p> {
             export_file,
             dag: tdag,
             dbj_level_counter: 0u16,
+            dbj_level_stack: Vec::new(),
             unique_counter: 0u32,
             expr_cache: ExprCache::new(),
             eager_mode: false,
@@ -695,7 +719,27 @@ impl<'t, 'p: 't> TcCtx<'t, 'p> {
         self.dbj_level_counter += 1;
         let id = FVarId::DbjLevel(level);
         let hash = hash64!(crate::expr::LOCAL_HASH, binder_name, binder_style, binder_type, id);
-        self.alloc_expr(Expr::Local { binder_name, binder_style, binder_type, id, hash })
+        let e = self.alloc_expr(Expr::Local { binder_name, binder_style, binder_type, id, hash });
+        // Record which local this level now stands for. Written by index rather
+        // than pushed, because a bulk rewind of the counter leaves a stale tail
+        // that this open is entitled to overwrite; see `dbj_level_stack`.
+        let i = usize::from(level);
+        if self.dbj_level_stack.len() <= i {
+            self.dbj_level_stack.resize(i + 1, e);
+        }
+        self.dbj_level_stack[i] = e;
+        e
+    }
+
+    /// **The locals the checker currently has open**, outermost first.
+    ///
+    /// Exactly the `Γ` of the judgement being checked at this moment, as far as
+    /// de Bruijn-level binders go. `mk_unique` locals are not on this stack and
+    /// so are never reported: they have no stack position, which is precisely
+    /// the property that would let them be compared against a baseline.
+    pub(crate) fn open_dbj_levels(&self) -> &[ExprPtr<'t>] {
+        let n = usize::from(self.dbj_level_counter).min(self.dbj_level_stack.len());
+        &self.dbj_level_stack[..n]
     }
 
     /// Construct a free variable expression representing a deBruijn level, reusing
