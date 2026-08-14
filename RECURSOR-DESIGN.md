@@ -4,7 +4,10 @@ Task #23, 2026-08-01. Written as design only, before any code; **rungs 1–4 hav
 since landed** in `derived/src/inductive/` — see the §10 addendum, and read
 §1.6 before §3 onwards, because one of §1's corrections was itself wrong.
 Written against the tree as of that morning — `derived/src/inductive/` (the carrier machine), `derived/src/isum/`,
-`sigma/`, `fibre.rs`, `recarg.rs`, `wrec*`, `wnat_rec`, `wlist_rec`, and
+`sigma/`, `fibre.rs`, `recarg.rs`, `wrec*`, `wnat_rec` *(deleted 2026-08-11 with
+the W-type `Nat`, so the two places below that say to keep it as a cross-check
+instance — the packed-step row and §"Cross-check against the hand-written
+recursors" — can only be done for `wlist_rec` now)*, `wlist_rec`, and
 `checker/src/tg.rs`'s `RecCore`/`RecNest`/`RecBottom`/`derive_iota`. Two agents
 are editing `derived/` and `tg.rs` concurrently, so interface names cited here
 may drift; the arguments do not depend on the names.
@@ -27,10 +30,10 @@ a description of the code:
 
 | exclusion | status | artefact |
 | --- | --- | --- |
-| plain recursive arguments | **gone**, 2026-08-05 (§7.9, corrected) | `CtorSpec::with_rec_doms` (`derived/src/inductive/spec.rs:201`), `mini/src/zoneb.rs`'s `fun_rec` arm; `115`–`118` certify |
+| plain recursive arguments | **gone**, 2026-08-05 (§7.9, corrected) | `CtorSpec::with_rec_doms` (`derived/src/inductive/spec.rs:201`), `checker/src/mini/zoneb.rs`'s `fun_rec` arm; `115`–`118` certify |
 | non-indexed | **gone** | `mini/src/{ctor_ix,rec_ix_dep,iota_ix_dep,class_s_ix,class_p_ix}.rs`, `derived/src/inductive/family/`; `042`/`068`/`077` all certify |
-| non-mutual | **gone** | `mini/src/mutual_aux.rs`, `mini/tests/mutual.rs`, ten `mutual_*.lean` fixtures |
-| non-nested | **still excluded**, and now with a recorded reason | `mini/tests/nested.rs` — bridging `fromAux (toAux l) ≡ l` at a *variable* is propositional, asserted as a kernel-checked test |
+| non-mutual | **gone** | `checker/src/mini/mutual_aux.rs`, `checker/tests/mini_mutual.rs`, ten `mutual_*.lean` fixtures |
+| non-nested | **still excluded**, and now with a recorded reason | `checker/tests/mini_nested.rs` — bridging `fromAux (toAux l) ≡ l` at a *variable* is propositional, asserted as a kernel-checked test |
 
 Every passage below that reasons from an exclusion — §1.6, §4.4, §6, §7.9's last
 sentence, §8's rung 5, §11.1 — is annotated where it stands.
@@ -87,7 +90,7 @@ sentence, §8's rung 5, §11.1 — is annotated where it stands.
    `RBTree` is an **indexed family**, and the quoted signature (both indices
    dropped) appears in no export. *(The clause that stood here — "hence outside
    this design's scope by §7.9" — is dead. Indexed families are in scope now:
-   `mini/src/ctor_ix.rs`, `rec_ix_dep.rs`, `iota_ix_dep.rs`, and all three
+   `checker/src/mini/ctor_ix.rs`, `rec_ix_dep.rs`, `iota_ix_dep.rs`, and all three
    `RBTree` exports certify. The export facts in this paragraph are unaffected;
    only the scope conclusion drawn from them was.)*
 
@@ -422,7 +425,7 @@ The argument above is only as good as its witnesses. Concretely:
   *(The other half — "`RBTree` is an indexed family, so §7.9 requires the spec
   builder to decline it and `077`'s ι sites stay counted gaps" — was true of
   this design and is **false of the code**. `077`'s ι sites close:
-  `mini/src/iota_ix_dep.rs`, and the corpus is at `gapped 0`.)*
+  `checker/src/mini/iota_ix_dep.rs`, and the corpus is at `gapped 0`.)*
 
 ---
 
@@ -572,7 +575,7 @@ Two things used to present identically and respond to opposite fixes — a
 refused by `cumul::bnd_nullary_tags`) and an **infinite** one. Both certify now,
 and that they closed *together* is what identifies the route: a `κ`-tower would
 have closed the second and left the first. `derived/tests/cumul_infinite_fibre.rs`
-separates them at the terms and `mini/tests/fixtures/infinitary_branching.lean`
+separates them at the terms and `checker/tests/fixtures/infinitary_branching.lean`
 is the end-to-end witness, at `constEv = 6`; see DECISIONS.md 2026-08-05 and
 SCOPING.md §14.
 
@@ -599,8 +602,8 @@ detail that the two axes are handled by *disjoint certificate routes*:
 `proof_eq` for the Prop motive, and a separate route for §5.3. *(That second
 route was "nothing-yet — counted `is_k`/`Acc` gaps, e.g. `094`, `117`/`118`"
 when this was written. It is built: `mini/src/rec_acc*.rs` over
-`derived/src/{acc,rec_acc}/`; `094`'s K-rule is `mini/src/recursor.rs:596,626`
-and `mini/src/kernel.rs:886`; `117` and `118` both certify. The disjointness
+`derived/src/{acc,rec_acc}/`; `094`'s K-rule is `checker/src/mini/recursor.rs:596,626`
+and `checker/src/mini/kernel.rs:886`; `117` and `118` both certify. The disjointness
 claim — two axes, two routes — is what survives and is the point of the
 bracket.)*
 
@@ -701,10 +704,10 @@ Ordered by how silently they would bite.
    *(This item closed by naming "the remaining exclusions — indexed families,
    `is_k`, mutual/nested — still belong to the spec builder unchanged". **Only
    nested does.** Indexed: `mini/src/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep}.rs`
-   over `derived/src/inductive/family/`. `is_k`: `mini/src/convert.rs:129` and
-   `mini/src/recursor.rs:626`. Mutual: `mini/src/mutual_aux.rs`,
-   `mini/tests/mutual.rs`. Nested still declines, with its reason recorded as a
-   kernel-checked test in `mini/tests/nested.rs`. `mini/src/ctor_ix.rs` goes one
+   over `derived/src/inductive/family/`. `is_k`: `checker/src/mini/convert.rs:129` and
+   `checker/src/mini/recursor.rs:626`. Mutual: `checker/src/mini/mutual_aux.rs`,
+   `checker/tests/mini_mutual.rs`. Nested still declines, with its reason recorded as a
+   kernel-checked test in `checker/tests/mini_nested.rs`. `checker/src/mini/ctor_ix.rs` goes one
    shape further than this item contemplates — an **indexed** function-typed
    recursive argument, both exclusions at once.)*
 10. **`ctor_rules` keyed by name only** — the recorded pre-existing hazard
@@ -784,7 +787,7 @@ Each rung measurable, riskiest first-exposed rung marked.
    itself is void at a dependent motive: `COD(C,T)` says only that `T` holds
    every value of the motive and `∅`, nothing about closure, so §5.1's guarded
    minors leave nothing for a policy to site at a nullary constructor
-   (`motive.rs`'s header, and `mini/src/rec_dep.rs`, which discharges `COD` at
+   (`motive.rs`'s header, and `checker/src/mini/rec_dep.rs`, which discharges `COD` at
    `⟦Sort u₁⟧` outright). `derived/tests/deprec.rs` derives `DepRecursor` at
    both corpus shapes — two constructors none nullary, and thirteen with two
    live recursive calls on `sepBy`'s interleaved mask. What is left is a
@@ -874,7 +877,7 @@ this document left open.
    emitted at an ι site on either corpus.
 
    **That zero does not extend to the recursor's own typing, and `mini/`
-   measured the opposite** (2026-08-01, `mini/src/recursor.rs`). A checker that
+   measured the opposite** (2026-08-01, `checker/src/mini/recursor.rs`). A checker that
    asks `⊢ ⟦T.rec.{σ}⟧ ∈ ⟦its Lean type⟧` — as `mini`'s ledger does per
    `(declaration, σ)` — faces the obligation with `C` still a *bound variable*,
    `∀C ∀s⃗ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)`, and no instantiation has happened to
@@ -886,14 +889,14 @@ this document left open.
 
    *(This paragraph concluded "So §5.3's Σ-target variant is motivated by
    measurement after all." **That conclusion is refuted**, and by the very
-   header it points at: `mini/src/recursor.rs:85` — "`RECURSOR-DESIGN.md`
+   header it points at: `checker/src/mini/recursor.rs:85` — "`RECURSOR-DESIGN.md`
    §5.3's Σ-target variant is **retired**" — because the target premise is
    discharged at `⟦Sort u₁⟧` itself, "so the target policy is not a policy at
    all". `recursor.rs:29–35` also gives the count as **18**, not 22. The
    measurement stands; the inference from it did not, and the paragraph's own
    hedge below — "that is the assumption to drop, not the conclusion to keep" —
    is the half that held.)*
-   `mini/src/recursor.rs`'s header works the two candidate targets through.
+   `checker/src/mini/recursor.rs`'s header works the two candidate targets through.
    Its reading of `T := app(C,c₀)` is right, and its reading of `T := ⋃img(C)`
    is right *for the bare minor* `sᵢ := Sᵢ` — but that is the assumption to
    drop, not the conclusion to keep: `HYP` quantifies `sᵢ`, and the guarded

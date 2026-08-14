@@ -371,7 +371,7 @@ reaches it.
   memo attempts and their keys; "every binder entry mints fresh kernel
   variables"; `nat_char_equations` over half an hour and `#[ignore]`d —
   `MINI-HANDOFF.md` §40.
-* `beta_premise` runs `infer_type(arg)` — `mini/src/kernel.rs`, `beta_premise`;
+* `beta_premise` runs `infer_type(arg)` — `checker/src/mini/kernel.rs`, `beta_premise`;
   the compounding stated in code — `kernel.rs`, `beta_premise_of`; acceptance bails
   before the premise — `kernel.rs:1461`; `def_eq_ev` opens with
   `infer_type(e1)` — `kernel.rs:3080`; one fused traversal, no separate
@@ -385,7 +385,7 @@ reaches it.
 * +0.3% RSS for certificates beside memos; `NullCertifier` 0.08 s;
   `store_declar_typing` 16.0 s → 11.87 s — `MEASUREMENTS.md`.
 * Sealed funnel and invariants I1–I4; `Closed::discharge`; ~15 concurrent
-  scope stacks — `mini/src/scope.rs` module header.
+  scope stacks — `checker/src/mini/scope.rs` module header.
 * `FreeVar` branding; aliasing as a route to `⊢ ⊥` —
   `kernel/src/term.rs:37–62`.
 * Cache policy: unconditional-only entries; the end-of-definition certificate

@@ -1,4 +1,13 @@
-# `mini/` — handoff
+# The mini implementation — handoff
+
+> **`mini/` is not a directory.** This file was written while mini was a
+> separate crate with its own binary; as of 2026-08-14 (`b91433b`) the
+> workspace is `kernel`/`derived`/`checker` (`Cargo.toml:3`), the code is
+> `checker/src/mini/*.rs` (`checker/src/mini.rs:63–122`), the tests are
+> `checker/tests/mini_*.rs`, and there is no `mini` binary — the whole-file
+> mini policy is `checker --naive`. Module names below are still accurate;
+> crate names, binary names and `cargo -p mini` invocations are not. The
+> §4 module inventory was re-checked and every module it names still exists.
 
 Started by Otto (2026-08-02), continued by Wren (2026-08-03). Findings, not
 derivations. The derivations are in the module headers and in the commits; what
@@ -292,9 +301,9 @@ the crate, every number you measure is measured through it, and
 git worktree add --detach $W HEAD
 git diff <only my files> > $W/mine.patch     # run from the main tree
 git -C $W apply $W/mine.patch
-cd $W && cargo build -p mini --release
+cd $W && cargo build -p nanoda_lib --release --bin checker
 for f in /path/to/repo/vendor/arena-tests/good/tutorial/*.ndjson; do
-  $W/target/release/mini --verbose "$f"
+  $W/target/release/checker --naive --verbose "$f"
 done
 ```
 
@@ -362,7 +371,7 @@ about a directory.
 * **`minor_ix::domain_swap` must run at each binder's close**, not after the
   walk. **[Otto]**
 * **`trunc_ctor_bottom` splits fields by the `Slot` mask**, and the only thing
-  testing that split is `mini/tests/fixtures/prop_recursive_interleaved.ndjson`.
+  testing that split is `checker/tests/fixtures/prop_recursive_interleaved.ndjson`.
   Do not weaken it. **[Otto]**
 * `derived::inductive::motive::cod_at_funspace` **works** — repaired at
   `derived` `c2bd75f`, in two places and not the one re-association four
@@ -468,7 +477,7 @@ regression* — the pin says so beside the total.
 
 **The ι row is one pair, one key, one export and one construction, and every
 one of those numbers moved by a different amount.** It was 5/5/5/2. One
-construction (`mini/src/iota_dep.rs`) closed four pairs, four keys and four
+construction (`checker/src/mini/iota_dep.rs`) closed four pairs, four keys and four
 exports; what is left is construction 3, `RBTree`. This is the clearest instance
 yet of why the unit has to be named: "the ι row halved" is true of the
 constructions and false of everything else, and "the ι row is nearly gone" is
@@ -534,8 +543,8 @@ the constructor "a module, not a parameter", the recursor `derived`'s, and the
 δ-redex measured clean. Three of the four readings held; the risk ordering did
 not.)*
 
-`mini/src/class_p_ix.rs` is the carrier, the type former and the constructors;
-`mini/src/rec_trunc_ix.rs` the eliminator over Isla's `IndexedTruncRecursor`
+`checker/src/mini/class_p_ix.rs` is the carrier, the type former and the constructors;
+`checker/src/mini/rec_trunc_ix.rs` the eliminator over Isla's `IndexedTruncRecursor`
 (`c0519af`). The pair derives, `constEv` 160 → 161, and the label is empty.
 
 **1. The carrier was the *smallest* piece, not the largest.** The §5.2 indexed
@@ -709,7 +718,7 @@ major that is not already a constructor application needs one and `073`'s
 
 ### Construction 2 — **landed**, and where the route above did not survive
 
-`mini/src/iota_dep.rs`. `constEv` 162 → **166**, four pairs and four keys, the
+`checker/src/mini/iota_dep.rs`. `constEv` 162 → **166**, four pairs and four keys, the
 four exports `073`–`076`. Everything above held except where marked. Three
 corrections, in descending order of what they would have cost:
 
@@ -855,7 +864,7 @@ this row is the largest instance of it on the project.
 
 Row 4's three findings, none of which any scope named, are §11.1.
 
-`mini/src/proj_prop.rs`, both `Prop`-side halves. `constEv` 166 → **170**,
+`checker/src/mini/proj_prop.rs`, both `Prop`-side halves. `constEv` 166 → **170**,
 `library-gap` 28 → **24**, exports stopping 25 → **22**, `waiting:proj(And)`
 and `waiting:proj(PropStructure)` both gone. It is a **second call site** and nothing else:
 `derived::…::LePropFields` was built, tested and already consumed by
@@ -906,7 +915,7 @@ other), so it may owe `derived/` nothing either. **That is a prediction, not a
 measurement** — §1's fourth category — and the cheapest way to settle it is to
 try `decl_rect` at a constant `φ` and see whether `rect_parts` gives that step.
 
-`mini/src/proj_prop.rs`'s
+`checker/src/mini/proj_prop.rs`'s
 `a_class_t_structure_with_prop_fields_is_declined_not_spoken_for` is row 2's
 synthetic witness, so it exists in the repository independently of the corpus
 and will flip when the row lands.
@@ -1013,7 +1022,7 @@ constant in `z`. **That scope held exactly.** Isla built it as
 `derived::inductive::DeclProj` at `fb382db`, with η folded into the same `φ` for
 one Separation, and it wanted nothing the scope did not name.)*
 
-`mini/src/proj_data.rs`. The term is what route (b) said — every layer of a
+`checker/src/mini/proj_data.rs`. The term is what route (b) said — every layer of a
 class-(T) carrier element is a Kuratowski pair, so
 
 ```text
@@ -1104,7 +1113,7 @@ counter-shape is again cheap to synthesise.
 
 ## 9. Instruments
 
-* **`mini --dump-theorems`** (`mini/src/dump.rs`). Prints every stored theorem's
+* **`checker --dump-theorems`** (`checker/src/mini/dump.rs`). Prints every stored theorem's
   real conclusion with declines in place. `--dump-only` is a
   **Lean-name-component prefix**, so `--dump-only=List` shows `List`, `List.rec`
   and `List.cons`; it was exact, which made it useless for the question people
@@ -1121,17 +1130,23 @@ counter-shape is again cheap to synthesise.
   nobody to update the instrument. Read literally it says the library owes the
   row; the library does not, and had not since `211c46e`. An absence with a
   reason is the design's whole point and it is also its whole exposure — the
-  reason is prose and prose does not recompile. `mini/tests/dump.rs`'s
+  reason is prose and prose does not recompile. `checker/tests/mini_dump.rs`'s
   `a_store_that_gained_a_theorem_is_no_longer_printed_as_absent` is the ratchet;
   it asserts the **presence of a theorem line**, not the absence of a string, so
   renaming the reason cannot satisfy it.
-* **The bare run is now an instrument too.** `mini <export>` — no flags — runs
+* **The bare run is now an instrument too.** A no-flag run — then
+  `mini <export>`, today `checker --naive <export>` — runs
   to the end and exits **4** if it accepted the file and owes anything on the
   certification axis, with the verdict line naming what:
   `accept 91 declarations   uncertified: 1 type typing`. So *"is this
   certified"* no longer needs `--verbose` and a reader who knows which of nine
   counters to look at. `--acceptance-only` restores the old three codes for a
   run that compares acceptance and nothing else (`mini-vs-nanoda.sh`).
+  **Read the invocation carefully**: a bare `checker <export>` is *not* this
+  instrument — it is the split checker (mini for inductive, mutual and
+  quotient groups, nanoda for axioms, definitions, theorems and opaques,
+  `checker/src/mini/route.rs:114–124`), and on that path exit 4 also counts TG
+  gaps (`checker/src/bin/checker.rs:250–254`).
   MINI-DESIGN.md §0.7 has the code table and, more usefully, the argument for
   *which* counters are in the set and which are deliberately not.
 
@@ -1154,7 +1169,7 @@ counter-shape is again cheap to synthesise.
   knowing before reaching for the wrong one: `--block` deliberately does not
   stop on an underived `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`, so it can run a file to the end
   and report *no blocker at all* while an obligation is owed.
-  `mini/tests/fixtures/beyond_the_tower.ndjson` is such a file, and it is
+  `checker/tests/fixtures/beyond_the_tower.ndjson` is such a file, and it is
   checked in as a permanent one. Blocking answers "what do I fix next"; the
   exit code answers "is anything owed".
 * **`--block`** stops at the first `(declaration, σ)` it cannot discharge and
@@ -1486,7 +1501,7 @@ clause belongs to is decided by what asks for it, not by what it is**.
 |---|---|---|---|
 | 1 | `zoneb::ensure` | a **constant occurrence** that misses the store, through `Checker::fill_store` | anything named by a `Const` node |
 | 2 | `direct::build`, from `zoneb::build` | point 1, on a declaration `direct::clause_for` names | §6.2's own clauses (`Eq`, `Acc`) |
-| 3 | the **declaration pipeline**, `ledger.rs` | a declaration reaching its own typing obligation | `mini/src/axiom.rs` — an axiom's inhabitation (`Quot.sound`) |
+| 3 | the **declaration pipeline**, `ledger.rs` | a declaration reaching its own typing obligation | `checker/src/mini/axiom.rs` — an axiom's inhabitation (`Quot.sound`) |
 
 **Point 1 is reached from two callers and only recently from both.**
 `Checker::const_evidence` — `⟦c.{σ}⟧` and its typing, i.e. every `Const` node in
@@ -1590,8 +1605,8 @@ Better than any predecessor had, and the reading order matters:
    wherever a note says a certificate transfers unchanged;
 3. `QUOT-MODEL.md`, **corrected in place at `bd46a71`** — its `u = 0` half is
    now measurement rather than design, and its `ℓ > 0` half is still design;
-4. `mini/src/quot.rs` for the shape a primitive clause takes, and
-   `mini/src/proj_data.rs` for the shape a term-former takes.
+4. `checker/src/mini/quot.rs` for the shape a primitive clause takes, and
+   `checker/src/mini/proj_data.rs` for the shape a term-former takes.
 
 ### The board
 
@@ -1663,7 +1678,7 @@ premise, which is the piece to size before starting it.
 `rel_graph(A,r)` as the untested edge of the `ℓ > 0` *quotient* clause. It is
 the untested edge of `acc` too, and for exactly the same reason one layer
 along: every theorem in `derived/src/acc/` reads `⟨y,x⟩ ∈ R` while Lean's `r`
-interprets curried. `mini/src/acc.rs` consumes `rel_graph`, `graph_pair` and
+interprets curried. `checker/src/mini/acc.rs` consumes `rel_graph`, `graph_pair` and
 `pair_in_graph`, so the seam is now exercised — by the formation clause's
 symbol, which mentions the graph but does not yet *reason* about it. The
 bridges are consumed for real by `Acc.intro` and `Acc.rec`, both open.
@@ -1727,7 +1742,7 @@ rather than assumed.** `IndApparatus::acc` is §5.3's general class-(S)
 carrier's; `Interp::acc` is this clause's. They never compare notes — `Acc`
 takes the direct clause before the trichotomy, so it never acquires a
 `ClassS` — and what they *must* share is the pairing, which
-`mini/src/acc.rs`'s `the_two_acc_apparatus_share_one_pairing` asserts rather
+`checker/src/mini/acc.rs`'s `the_two_acc_apparatus_share_one_pairing` asserts rather
 than argues. Reaching for `IndApparatus::acc` instead would make an export
 that mentions `Acc` and nothing else build a `Wtype`, a `Bound`, an `IndChain`
 and a `Machine`; `117_accRecType` is exactly such an export.
@@ -1758,8 +1773,8 @@ transport gets written *once*: `acc_intro`'s second premise and `acc_rect`'s
   singleton can be eliminated. That is the sixth category's one β step, in the
   place it was predicted.
 
-`mini/src/quot.rs`'s `Prim::Ind` bottom is the closest worked example of all
-three moves in one bottom, and `mini/src/axiom.rs` is the shortest example of
+`checker/src/mini/quot.rs`'s `Prim::Ind` bottom is the closest worked example of all
+three moves in one bottom, and `checker/src/mini/axiom.rs` is the shortest example of
 a whole clause. `Interp::cond_app` is the one helper worth reading before
 either: it already does "apply a `Prop`-`Π` hypothesis at an argument",
 including the `point_of_proof` step that moves the membership off a scope
@@ -1840,7 +1855,7 @@ dependent one does not.** Anywhere a declaration is scheduled at both a `Prop`
 and a non-`Prop` σ, the non-`Prop` one is the σ that reports the truth.
 
 **3. `graph_pair` and `pair_in_graph` were attributed the wrong way round, and
-it is not cosmetic.** `mini/src/acc.rs`'s field docs read "the direction the
+it is not cosmetic.** `checker/src/mini/acc.rs`'s field docs read "the direction the
 **eliminator** needs" and "the direction the **constructor** needs"
 respectively. Measured: `Acc.intro` needs **`graph_pair`**. `acc_intro`'s second
 premise is `∀y. (y ∈ A → (⟨y,x̄⟩ ∈ R̄ → y ∈ acc(A,R̄)))`, so the pair membership
@@ -1879,7 +1894,7 @@ thing corrected.*
 goes.** §16: *"It is a construction the size of `iota_dep.rs`"* — 548 lines —
 *"and §10 is explicit that the cheapest moment to hand off is before the next
 construction."* Measured: **57 non-comment lines** in `intro_mem`, plus a
-`match` arm and two tests. `mini/src/acc.rs` went 269 → 419 lines and most of
+`match` arm and two tests. `checker/src/mini/acc.rs` went 269 → 419 lines and most of
 that is header.
 
 The mechanism was right and the *cost* was wrong, which is `SCOPING.md` §1's
@@ -2170,7 +2185,7 @@ them:
   wants, at a different arity — and after `Quot`, the shape of that reuse is
   known rather than predicted.
 * **`iota(RBTree.rec)`** — 1 pair, wiring over `IndexedDepRecursor::iota`, and
-  `mini/src/quot_iota.rs` is now a second precedent beside `iota_dep.rs` for
+  `checker/src/mini/quot_iota.rs` is now a second precedent beside `iota_dep.rs` for
   what a route at that site looks like.
 * **`unit-like(PUnit)` 2**, **`fun-eta` 2** — instrumented, and both are
   **conversion certificates rather than clauses**. §20.
@@ -2368,7 +2383,7 @@ it — `grep -rn … | grep -v /prop`, whole listing, 44 hits read — finds
 ```
 
 `derived/src/inductive/family/le_prop.rs:51`. It is exactly the theorem, and
-`mini/src/class_s.rs` **already builds a `LeProp` for every class-(S)
+`checker/src/mini/class_s.rs` **already builds a `LeProp` for every class-(S)
 declaration** (`ClassS::lp`). `PUnit` is class (S) at every `u`, because it is a
 **subsingleton** — one constructor, no fields — and `zoneb::subsingleton` is
 what the trichotomy asks, which is `SCOPING.md` §1's fifth item read the right
@@ -2728,7 +2743,7 @@ of the 91 exports summing `ledger`/`evidence`; a baseline worktree at `ffba4b1`
 is what makes it a delta rather than a reading.
 
 **1. The bridge finding, and it is a rule about occurrences.** §17 item 3 is
-corrected in place and so is `mini/src/acc.rs`. `Acc.rec` wants
+corrected in place and so is `checker/src/mini/acc.rs`. `Acc.rec` wants
 **`pair_in_graph`**, twice, and `graph_pair` not at all — the opposite of what
 §17 predicted, and the prediction failed inside a paragraph whose whole subject
 is how to choose between the two. `preds_in` is one formula occurring in
@@ -2764,7 +2779,7 @@ between the four live hypotheses, and the assertion that catches it is
 codebase call plain `close`: their theorems legitimately carry the *checker's*
 binder hypotheses, which no local `Scopes` knows about. That convention was
 already there in `rec_dep` and `acc.rs`; it is now written down in
-`mini/src/scope.rs`'s header, with the measurement that settles where the check
+`checker/src/mini/scope.rs`'s header, with the measurement that settles where the check
 may live — on the close path it fails 19 unit tests, all of them correct code,
 so it is a test-side check on a single-stack precondition and I2's set half is
 enforced in production by `Sealed` at the store funnel instead.
@@ -2845,7 +2860,7 @@ baseline worktree is against `ffba4b1` and the delta above excludes Mira's two
    one side and mini's on the other, which is the seam §16 item 3 named.
 2. **`iota(RBTree.rec)`**, 1 pair — still held on `RecArg`'s contract; `d4480c3`
    and `ffba4b1` are Mira's two landings on it. *(**Closed at §26.** The hold
-   was already released and the row is gone; `mini/src/iota_ix_dep.rs`.)*
+   was already released and the row is gone; `checker/src/mini/iota_ix_dep.rs`.)*
 3. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s. *(**And more of it
    is `derived/`'s than this line says** — §26 item 2 measured it: all four
    pairs reach `⟦RTree.rec⟧`, which `GenRecursor::build` refuses.)*
@@ -2896,7 +2911,7 @@ What was left was one factoring and one module. `rec_ix_dep::premise_at`
 (`a9c49d8`, committed alone and measured bit-identical) is `rec_dep::pre_at`
 one table along: `PRE = ICOD ∧ IDEP` from an `At` rather than from a nest
 position, with `sources: None` the eliminator's own frame and `Some` the use
-site's. Then `mini/src/iota_ix_dep.rs`, which is `iota_dep.rs`'s four steps
+site's. Then `checker/src/mini/iota_ix_dep.rs`, which is `iota_dep.rs`'s four steps
 with §8's three differences, all in the statement and all read rather than
 reconstructed:
 
@@ -3010,14 +3025,14 @@ lifted them, and the row did not move.)*
 map, which is the strongest form that assertion has ever taken; and
 `tutorial_first_blocker`, which moves from `077` on the `Threading` axis to
 `115` on the `Scope` one. The third is not:
-`mini/tests/dump.rs`'s `an_unreached_pair_is_named_as_unreached_not_omitted`
+`checker/tests/mini_dump.rs`'s `an_unreached_pair_is_named_as_unreached_not_omitted`
 **was failing at `4ba0904`**, and it went red at `5658439` — §25's own commit.
 `117` σ `(0,0)` stopped blocking, so σ `(1,1)` became *reached* and the file it
 asserted about had no "not reached" left in it. `dump.rs` was last touched at
 `184bde9`, which is what makes the attribution a read rather than a guess.
 
 > **"Green on its own" has to name which targets ran.** §25's measurement was a
-> corpus sweep and its unit tests; `cargo test -p mini` has four targets and the
+> corpus sweep and its unit tests; `cargo test -p mini` had four targets (today: the `checker/tests/mini_*.rs` suites under `-p nanoda_lib`) and the
 > integration ones take 70–90 seconds, which is exactly the interval a run
 > under time pressure skips. Nothing about the derivation was wrong — the
 > ratchet's *witness* had moved and its *property* had not, which is why the
@@ -3235,7 +3250,7 @@ worse"; a total on `gapped` alone cannot.
 
 §26.1 item 3's `RecAcc::new` hazard is avoided the way it says —
 `Base::over(env, ⟨the prelude's Sums⟩, acc_clause.sets.clone())`, then
-`RecAcc::over` — in `mini/src/rec_acc_ap.rs`, and
+`RecAcc::over` — in `checker/src/mini/rec_acc_ap.rs`, and
 `the_apparatus_is_over_the_clause_s_own_acc` asserts the two symbols and the
 pairing. Nothing to correct; it is recorded because *the note is what stopped
 it*, and the cost of the note was one paragraph against a class of failure §2
@@ -3298,7 +3313,7 @@ induction, where the hypothesis is available and A4 is simply shorter.
 `u₁ = 0` Lean's second predecessor hypothesis `∀ y hy, C y (h y hy)` is a
 conditional singleton and `preds` can show it inhabited; at `u₁ ≥ 1` it is a
 `dprod` and what is owed is not inhabitation but a **member** — which is
-`mini/src/rec_acc_ih.rs`, the largest single piece of this round. Half of a
+`checker/src/mini/rec_acc_ih.rs`, the largest single piece of this round. Half of a
 two-way helper carrying over is the honest outcome and the enum says which half.
 
 ### 5. Piece 2, sized by §25 item 3 as three facts, is three facts — and the
@@ -3487,7 +3502,7 @@ came from the *constructor-match* branch, where `num_indices = 1` routed them to
 declaration has.
 
 The instrument that settled it is one line of the `--block` report: **`gave up
-at mini/src/kernel.rs:874`**, which is the constructor-match arm's `None`, not
+at checker/src/mini/kernel.rs:874`**, which is the constructor-match arm's `None`, not
 the K-rule arm's at `:746`. Reading the two sites the report already prints was
 cheaper than reading `whnf`, and it is the eighth-for-eighth instance of
 *instrument the masked reason before scoping on top of it* — here the label
@@ -3549,7 +3564,7 @@ images over the same domain**, so what closes the level is: the rows agree
 pointwise, hence the sets are equal. The same is true one level down, where
 `cval(c,v) = prod(c,{v})` and the inner λ is a graph over `⟦r y ā⟧`.
 
-So `mini/src/rec_acc_iota.rs` has **one** extensionality lemma, `same_rows`,
+So `checker/src/mini/rec_acc_iota.rs` has **one** extensionality lemma, `same_rows`,
 run twice. It is `derived::ext::image_ext_n` with the domain equation dropped
 and the two membership conditions taken as *theorems* rather than as symbols —
 and that last part is forced, not a preference:
@@ -3644,7 +3659,7 @@ copy `mini/` into the worktree rather than to wait.
    `threading-incompleteness` **0**, two exports stopping over one declaration.
    *(And, since §29, `interpretation-scope` **0** and `library-gap` **4**: the
    residue moved axis without moving a pair.)*
-3. `mini/src/rec_acc_iota.rs`'s `same_rows` is the extensionality
+3. `checker/src/mini/rec_acc_iota.rs`'s `same_rows` is the extensionality
    `derived::ext::image_ext_n` cannot be instantiated to. If a second consumer
    appears — any pair of Replacement images over one domain whose symbols do not
    put the domain last — it belongs in `derived/ext`, and not before.
@@ -3694,7 +3709,7 @@ increment: `interpretation-scope` is now **zero**, so nothing on
 
 The briefing asked for `zoneb.rs:1544` to be checked rather than believed, and
 it holds exactly: the `--block` report on `115_rTreeRec` prints **one**
-construction site for `Gap::FunTypedRecArg`, `mini/src/zoneb.rs:1544`, and
+construction site for `Gap::FunTypedRecArg`, `checker/src/mini/zoneb.rs:1544`, and
 `Inductive::build` at `zoneb.rs:619` is after it. So `derived`'s recursor guards
 were never consulted for this declaration.
 
@@ -3795,7 +3810,7 @@ arriving two sections later. Its hypothesis is reflexivity at a constant fibre,
 which is precisely what `Interp::const_dprod` already relies on without naming.
 
 > *(**"Unread" was already false when this was written**, and §30 §1, §31 and
-> §32 §4 each repeated it. `mini/src/quot_classes.rs`'s `lift_at` has called
+> §32 §4 each repeated it. `checker/src/mini/quot_classes.rs`'s `lift_at` has called
 > `dprod_const_fibre_n` since `9edf304` — §18's own increment, twice per
 > `Quot.lift`, for the same reason at the same shape. Nothing downstream was
 > harmed; what it cost is the sizing. Four notes in a row treated the crossing
@@ -3872,7 +3887,7 @@ to 4 and is the first time *that* axis has risen at all; both are asserted
 separately, because a row that moved axis and a row that closed look identical
 in either number alone.
 
-`mini/tests/dump.rs`'s decline row expects the new key. It was pinned on
+`checker/tests/mini_dump.rs`'s decline row expects the new key. It was pinned on
 `fun-typed-rec-arg(RTree)` and its paragraph already recorded that `RTree` is
 the only declaration that declines; that is still true and is now true for a
 different reason, rewritten in place with the marker.
@@ -4194,7 +4209,7 @@ summand is placeable at all*, available four constructions before the placement
 would find out", and asked a successor to decide where it lives. The answer is
 **nowhere in the code yet**, and it is a measurement rather than a design call.
 
-`mini/src/zoneb.rs`'s
+`checker/src/mini/zoneb.rs`'s
 `the_fibre_summand_frontier_is_np_and_not_the_domain` — four synthetic
 declarations, one build:
 
@@ -4636,7 +4651,7 @@ are separated by their defining axioms rather than by arity.
 This is the finding, and it is about the notes rather than about `RTree`.
 
 > **`derived::ext::dprod_const_fibre_n` was never unread.**
-> `mini/src/quot_classes.rs`'s `lift_at` has called it since `9edf304` — twice
+> `checker/src/mini/quot_classes.rs`'s `lift_at` has called it since `9edf304` — twice
 > per `Quot.lift`, at a constant fibre, for the same reason — and §29 item 3,
 > §30 §1, §30 §4 item 3 and §32 §4 each say it is stored and unread. Four
 > sections, one crate, forty lines, one `grep`.
@@ -4681,7 +4696,7 @@ red with *"nothing was declined in this file"* — which is the increment
 succeeding, not failing. A sweep of `--dump-theorems` over all 91 exports finds
 **zero** `declined:` rows.
 
-The witness moved to `mini/tests/fixtures/squash_at_nonzero_sigma.ndjson`, a
+The witness moved to `checker/tests/fixtures/squash_at_nonzero_sigma.ndjson`, a
 **checked-in** fixture, so that test no longer skips when the gitignored corpus
 is absent — and its row carries a σ (`Squash σ=[1]`), which `RTree`'s never did.
 The per-σ property the test's own note records as owed still needs a declaration
@@ -4697,7 +4712,7 @@ it used to encode is now a second assertion.
 ### 6. Where `RTree` stops now, and it is not the last step
 
 1. **The dependent recursor.** `rec_dep`'s `MINOR` — *a minor premise does not
-   transport* — at `mini/src/rec_dep.rs:495`, `Cause::Threading`, 4 pairs.
+   transport* — at `checker/src/mini/rec_dep.rs:495`, `Cause::Threading`, 4 pairs.
    `Rx::fibre_apps` is wide and `Interp::dep_recursor` has Marit's `dep.rs`
    widening; what the minor premise now has to cross is the same `dprod`/`fs`
    seam one level up, and `reindex_at_tuple` is the rule `sigma/reindex.rs`
@@ -5400,11 +5415,11 @@ green under `mini clippy` too.
 
 ## §37. An indexed family with a function-typed recursive argument — landed
 
-`mini/tests/fixtures/indexed_infinitary_ctor` reads **`constEv = 4`** of 4,
+`checker/tests/fixtures/indexed_infinitary_ctor` reads **`constEv = 4`** of 4,
 `typeEv = 4`, `unsealed = 0`, `gapped = 0`, `untranslated declarations = 0
 constructors = 0`. Corpus unchanged at `accept=89 decline=2 reject=0`,
 `constEv=218 typeEv=218`, `moved − movedSealed = 8979`. `ci/check.sh` was green
-at `eab73e1`; the two commits after it touch `mini/src/ctor_ix.rs` only and are
+at `eab73e1`; the two commits after it touch `checker/src/mini/ctor_ix.rs` only and are
 green under `mini clippy`, `-p mini --lib`, `--test designed` and
 `--test infinitary`. **The full twelve-step run has not been repeated since
 `eab73e1`** — a successor should do that first.
@@ -5443,7 +5458,7 @@ fixture's `waiting` set is empty.
   `ctor_spec` declines a deeper telescope first. "Shift by `|γ⃗|`" and "shift by
   one" are the same function on the representable domain.
 
-### Mutations, `mini/src/ctor_ix.rs`, worktree, `--skip tutorial_`
+### Mutations, `checker/src/mini/ctor_ix.rs`, worktree, `--skip tutorial_`
 
 `shallow-frame` 2, `shift-by-one` 8, `uninterpreted-z` **0**, `row-slot-zero` 9,
 `reversed-indices` 9, `all-plains-before` 1, `mem-at-raw-slots` 2,
@@ -5496,7 +5511,7 @@ is `Inductive::minor_args` now.
 `mixed` constructor included, driven from
 `derived/tests/family_infinitary.rs`. **The mini side has not moved**: this was
 a `derived/`-only pass and `indexed_infinitary_ctor` still reads `constEv = 4`.
-Wiring the eliminator through `mini/src/rec_ix_dep.rs` is the next seat's, and
+Wiring the eliminator through `checker/src/mini/rec_ix_dep.rs` is the next seat's, and
 its first obstacle is named below.
 
 ### Still with no witness at the boundary
@@ -5507,7 +5522,7 @@ both ready for it (`derived/tests/family_infinitary.rs`'s `mixed` constructor
 builds and eliminates); nothing at the boundary exercises it, and
 `zoneb::ctor_bottom` has the arm to copy.
 
-`mini/src/rec_ix_dep.rs` rebuilds `IDEPᵢ`'s antecedent with
+`checker/src/mini/rec_ix_dep.rs` rebuilds `IDEPᵢ`'s antecedent with
 `derived::…::minor_atoms_general`. It called `minor_atoms_at`, which **declines
 a constructor with a function-typed recursive field** rather than returning the
 plain list — deliberately, since the plain list was a conjunction about another
@@ -5653,7 +5668,7 @@ sentence was read off the shared reason string, which is the thing a `?`-census
 exists to distrust — the same string had already been read as one item three
 times before this.)*
 
-`mini/tests/tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` used to say that two of
+`checker/tests/mini_tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` used to say that two of
 its three rows "never will" shrink, and gave `bnd`'s refutability at an infinite
 set as the reason. Every clause of that is dead and the doc comment now says so
 in place. The reason these two refused moved four times — `ind-spec(…: carrier)`,
@@ -5671,7 +5686,7 @@ There is no corpus witness for `|γ| > 1`, and there was none before either.
 
 ## §39. The parameterised dependent recursor — two frames, and the row that was never one row
 
-`mini/tests/fixtures/parameter_domain_branching` reads **`untranslated
+`checker/tests/fixtures/parameter_domain_branching` reads **`untranslated
 eliminators = 1`**, down from 4. `KTree.rec`, `PTree.rec` and `MTree.rec`
 translate; `XTree.rec` remains on the mixed-constructor axis, which none of this
 touches. `constEv`, `typeEv`, `pairs`, `unsealed` and `gapped` are unmoved (10,
@@ -5751,9 +5766,9 @@ arm. §37's own paragraph above is corrected in place with what is behind it.
 
 ### Mutations
 
-`mini/src/class_p_ix.rs`, worktree, `--no-fail-fast`, whole `-p mini --lib`:
+`checker/src/mini/class_p_ix.rs`, worktree, `--no-fail-fast`, whole `-p mini --lib`:
 `frame-nf` **2**, `no-rec-fun-guard` **2**, `greedy-peel` **0**,
-`uninterpreted-gamma` **0**. `mini/src/ctor_ix.rs`: `gamma-slot-zero` **1**
+`uninterpreted-gamma` **0**. `checker/src/mini/ctor_ix.rs`: `gamma-slot-zero` **1**
 (see §37, corrected). Both survivors were checked to compile — a mutation that
 fails to build and one that is killed both produce zero
 `^test \S+ \.\.\. FAILED` lines, so a count alone cannot tell them apart.
@@ -5892,7 +5907,7 @@ only the tail. `Gap::StuckRecursor` has no mint site left.
 28/41 pairs, all 13 misses that one variant. It is **not a usable regression** —
 with the certificate actually built it exceeds the project's 4 GB cap and
 aborts, where the unfixed build completes at 3.6 GB and 30 617 648 conversions.
-`mini/tests/fixtures/stuck_recursor_major.lean` reaches the same branch in
+`checker/tests/fixtures/stuck_recursor_major.lean` reaches the same branch in
 8 522 conversions and under two seconds: **3/5 → 5/5, 22 gapped conversions →
 0**. The delta against the unfixed build is 9 %, so `nested_model`'s memory is
 its own scale and not this branch's cost.
@@ -5955,7 +5970,7 @@ away.
 **`proj(PProd)` was never a fact about `PProd`.** `Gap::StructProj(Name)`
 renders as `proj({n})` with whatever structure the projection was on; there is
 no `PProd` branch anywhere in `mini/src`. The new fixture
-`mini/tests/fixtures/proj_stuck_subject.lean` declares its own three-field
+`checker/tests/fixtures/proj_stuck_subject.lean` declares its own three-field
 `Tri` and its own two-element `Two`, contains neither `Nat` nor `PProd`, and
 prints `proj(Tri)`.
 
@@ -6142,7 +6157,7 @@ all `Eq`, which never takes this route.
 
 So `psw.swap(0, 1)` is a **no-op on the entire corpus**. A first draft ran it,
 watched it survive on six exports, and would have reported a hole. The
-survival was vacuous. `mini/tests/fixtures/indexed_two_params.lean` is the cell
+survival was vacuous. `checker/tests/fixtures/indexed_two_params.lean` is the cell
 that makes the probe mean something, and its test asserts the arity as well as
 the count so that `fixedIndicesToParams` cannot quietly take the cell away.
 
@@ -6202,7 +6217,7 @@ eliminator went untranslated. The counter that moves is `untranslated`.
 one string had been read as **one** item four times — "pending `derived/`
 work", then two items neither in `derived/`, then (after `crossings`' and
 `ctor_at_binders`' parameter-frame fixes and §38's codomain bridge) something
-in `push_into_pi`. A `?`-census over `mini/src/rec_dep.rs` — 177 `?` sites and
+in `push_into_pi`. A `?`-census over `checker/src/mini/rec_dep.rs` — 177 `?` sites and
 22 bare `return None`, each printing `file:line` — settled it. **Both answers
 were at a bare `return None`**, which is the third round running that the
 `?`-census found what the reason string and the blocker trail did not:
@@ -6285,7 +6300,7 @@ at a depth.
 
 ### Mutations
 
-`mini/src/rec_dep.rs`, in a worktree, `--no-fail-fast`, oracle
+`checker/src/mini/rec_dep.rs`, in a worktree, `--no-fail-fast`, oracle
 `cargo test -p mini --lib --test designed`. A mutation that fails to build and
 one that is killed both produce zero `^test \S+ \.\.\. FAILED` lines, so each
 was checked to compile.
@@ -6327,7 +6342,7 @@ was checked to compile.
 
 ### The fixture, and the half of the corpus shape Lean cannot write
 
-`mini/tests/fixtures/reducible_ctor_binders.lean` — `Spelled` (control), `Cod`
+`checker/tests/fixtures/reducible_ctor_binders.lean` — `Spelled` (control), `Cod`
 (a plain recursive field spelled `constType (Cod α) (Cod α)`) and `FunCod`
 (three function-typed slots: one spelled, then **two different** aliases).
 `untranslated eliminators` **2 → 0**; seen red with `rec_slot_eq` stubbed, and
@@ -6378,7 +6393,7 @@ each by its own mutation and neither by the other's.
 ## §43. `#121`: an unused non-standard axiom is ignored, and `init-prelude`'s third blocker is gone
 
 **The owner's decision, verbatim:** *make the checker just ignore that unused
-axiom declaration; we cannot generate evidence for it.* `mini/src/unused_axiom.rs`
+axiom declaration; we cannot generate evidence for it.* `checker/src/mini/unused_axiom.rs`
 is the whole of it, and its header carries the principle at the site:
 
 > We cannot generate evidence for it, and nothing depends on it, so there is
@@ -6413,7 +6428,7 @@ declaration list and no environment, so that is where it belongs:
   type was checked on the way past and `axiom bad : (fun x => x)` was
   **rejected**. `mini::decl_pass` has no whole-file kernel pass, and the owner
   waived the loss explicitly ("it will not complain about the type of a dropped
-  axiom; that's not a concern"). `mini/tests/designed.rs`'s
+  axiom; that's not a concern"). `checker/tests/mini_designed.rs`'s
   `an_unused_axiom_may_now_be_illtyped` is that waiver as a red-before /
   green-after fixture, so the difference is a measurement and not a note.
 * **The `#56` reason is a different property and it survives.** Four

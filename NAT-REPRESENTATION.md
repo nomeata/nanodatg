@@ -46,10 +46,17 @@ and §0.1 inventories what already exists for it.**
 | `derived/src/nat/` | von Neumann `ω`, zero `∅`, binary numerals `num(n)` | `ble_uniqueness`, `Eval::ble_bool` |
 | ~~`interp`'s own comment~~ | ~~*"Milestone 4 replaces these with the kernel's primitive `ℕ`"*~~ — **struck**: `TermData` admits symbols only by definitional extension, so the signature stays `{∈, =}`, and `kernel/` is closed | nothing, ever |
 
-Nothing joins the first two: `derived/src/nat/` never mentions `wnat`, and
-`wnat.rs` says the ω-tower is not needed. The numeral bridge's links 1 and 2 were
-built over the second while the checker uses the first, which is why link 4
-cannot be written.
+Nothing joined the first two while both existed: `derived/src/nat/` never
+mentioned `wnat`, and `wnat.rs` said the ω-tower was not needed. The numeral
+bridge's links 1 and 2 were built over the second while the checker still used
+the first, which was why link 4 could not be written. **That gap is closed.**
+The W-type row was struck and its module deleted on 2026-08-11, and the checker
+now interprets `Nat` over the middle row: `⟦Nat⟧` is von Neumann `ω` with zero
+`∅` (`checker/src/tg.rs:1638–1642`, "`⟦Nat⟧` used to be `derived::wnat::Nat` …
+It is now `ω`"), and `derived::nat`'s apparatus is threaded through it —
+`SuccFun::over` at `tg.rs:1721`, `Eval::new` at `:1746`, and the shared
+`NatClause` holding `Nat`/`Add`/`Binary`/`Mul`/`Sub`/`Compare`/`Eval` at
+`checker/src/mini/nat_clause.rs:57–81`. There is one `Nat` carrier now, not two.
 
 **And the literal has no content.** `interp`'s `Expr::NatLit` arm gives each
 value one `env.declare(0)`; `Shared::lit_syms` says these symbols carry no
@@ -138,11 +145,18 @@ construction rather than by a caller's discipline. The whole construction is in
 `derived/src/nat/succ_fun.rs`, has no `checker/` dependency, and derives in
 0.06 s.
 
-This is the same route `mini` takes (`lam_nest` at `mini/src/direct.rs:544`,
+This is the same route `mini` takes (`lam_nest` at `checker/src/mini/direct.rs:544`,
 `:658`, β from `Interp::beta_spine`), which is why `mini` never needed a bespoke
 `succ_fun` either. **The port has no missing construction. It is assembly.**
 
-### What `wnat` is actually load-bearing for — the brief on this is wrong
+### What `wnat` was actually load-bearing for — the brief on this was wrong
+
+> *This subsection is the census taken **before** the deletion, on 2026-08-10,
+> and it is what justified the deletion. Read it as history: `derived/src/wnat.rs`,
+> `derived/src/wnat_rec.rs` and `derived/src/cumul/witness.rs` (with `NatUniverse`
+> and `NatMem`) no longer exist, and every file:line it cites into them or into
+> `checker/src/tg.rs` is dead. The outcome it predicted is what happened — see
+> the deletion recorded later in this file, and `derived/src/inductive.rs:8`.*
 
 The handoff for this tranche said `derived::wnat` is used "throughout
 `derived/`'s general inductive machinery — `carrier.rs`, `recursor.rs`,
@@ -197,7 +211,7 @@ else** — no typing on `g`, none on `t`/`f`, both clause premises stated only o
 ω (`ble_unique.rs:71`). Costs: `ble` is `12·bits + 10` (55 at 4 bits), the
 decode a flat 15.
 
-**None of it is wired.** `mini/src/nat_clause.rs:57` builds
+**None of it is wired.** `checker/src/mini/nat_clause.rs:57` builds
 `{nat, add, bin, mul, sub, cmp}` and **no `Boolean`**; `Boolean::new`,
 `ble_uniqueness`, `ble_transfer` and `uniqueness`/`transfer` appear only in
 `derived/tests/nat.rs`. On the checker side `Nat.ble` at literals is still
@@ -316,15 +330,15 @@ the concrete one nothing.
 `mini` expands a nat literal to a unary `succ`-tower and refuses anything over
 ten.
 
-* `mini/src/kernel.rs:1836` — `nat_unfold(n)`: `n > 10` → `Err("The mini kernel
+* `checker/src/mini/kernel.rs:1836` — `nat_unfold(n)`: `n > 10` → `Err("The mini kernel
   does not support nat literals larger than 10")`; otherwise `Nat.zero` or
   `Nat.succ (natLit (n-1))`.
-* `mini/src/kernel.rs:1808` — `infer_type` on `Expr::NatLit(n)` types it `Nat`
+* `checker/src/mini/kernel.rs:1808` — `infer_type` on `Expr::NatLit(n)` types it `Nat`
   and infers the *expansion*.
-* `mini/src/kernel.rs:1254` — `whnf`'s `NatLit` branch peels one `succ` and
+* `checker/src/mini/kernel.rs:1254` — `whnf`'s `NatLit` branch peels one `succ` and
   emits **no** `step!`: `⟦natLit n⟧` is *defined* as the interpretation of the
   expansion, so the unfolding is reflexivity at the term level.
-* `mini/src/convert.rs:641` — the same guard at load time, mirroring mini-lean's
+* `checker/src/mini/convert.rs:641` — the same guard at load time, mirroring mini-lean's
   `parseExprNatLit`. The counters `facts.nat_lits` / `facts.max_nat_lit` are
   bumped here, which is why they appear in the `--verbose` facts row.
 
@@ -1175,7 +1189,7 @@ systems, independently, refused to re-found their unary natural numbers and
 instead made the binary strings a first-class inductive type with a proved
 morphism into the unary one. Neither system's kernel knows anything about it.
 
-### 6.1 The carrier — must `⟦Nat⟧` be `ω`? No, and it isn't.
+### 6.1 The carrier — must `⟦Nat⟧` be `ω`? *(Answered "no" here; the project answered "yes" and built it — superseded, see §6.0)*
 
 **Confirmed by grep: nothing in this codebase assumes anything about `⟦Nat⟧`.**
 `Nat` goes through the general inductive translation like every other
@@ -1204,8 +1218,14 @@ standalone ones — `derived/src/wnat.rs` (`N := W(1+1, B, U(1+1))`,
 (both ι rules at those two terms), and their consumers
 `checker/src/tg.rs:1782, 4828, 10654` (gated by the hand-written recogniser
 `nat_shape`, `tg.rs:4996`) and `derived/src/cumul/witness.rs` (`NatUniverse`,
-`NatMem`). **`mini/` does not reference `wnat` at all.** `LIBRARY-BACKLOG.md`
+`NatMem`). The mini side referenced `wnat` nowhere. `LIBRARY-BACKLOG.md`
 §10 already records those eight files as scheduled for deletion.
+*(**That deletion has since happened**, 2026-08-11: `derived/src/wnat.rs`,
+`derived/src/wnat_rec.rs` and `derived/src/cumul/witness.rs` are gone, with
+them `NatUniverse`, `NatMem` and the `nat_shape` recogniser — no definition of
+any of the three survives anywhere in the tree — and the `tg.rs` line numbers
+above no longer point at Nat code. This paragraph is kept as the inventory that
+scoped the deletion, not as a description of the tree.)*
 
 So the carrier is genuinely free. The recommendation nevertheless is **do not
 change it**, for three reasons:
@@ -1354,7 +1374,7 @@ of what a replacement carrier owes.
 
 ### 7.2 If one nevertheless put `Nat` in `direct::Clause`
 
-`mini/src/direct.rs:165` — `pub enum Clause { Eq, Acc }`. Five things a new
+`checker/src/mini/direct.rs:165` — `pub enum Clause { Eq, Acc }`. Five things a new
 variant must supply:
 
 1. a row in `clause_for` (`direct.rs:204`), matching `Name::Str(Anon, s)`;
@@ -1365,9 +1385,9 @@ variant must supply:
    instantiated defining biconditional;
 4. an arm in `ctor_bottom` (`direct.rs:418`, `struct CtorSite`) plus an arm in
    the `step_hyp` match (`direct.rs:445`), yielding `⊢ • ∈ carrier`;
-5. an arm in `recursor::ensure` (`mini/src/recursor.rs:157–171`).
+5. an arm in `recursor::ensure` (`checker/src/mini/recursor.rs:157–171`).
 
-Dispatched at `mini/src/zoneb.rs:723–725`, *before* the eliminator trichotomy.
+Dispatched at `checker/src/mini/zoneb.rs:723–725`, *before* the eliminator trichotomy.
 
 **Two blockers, both real.** First, the mechanism is **Prop-only**:
 `former_bottom` types the denotation with `tower.cond_in_u0` (`direct.rs:340`),
@@ -1384,8 +1404,11 @@ they are the work.** They are not, however, blockers in the sense of §7.2's
 paragraph: the standing rule against a fourth row is a rule against a *collapse
 that happens to be convenient*, and `⟦Nat⟧ = ω` is not one. It is the same kind
 of row `Acc` is — a construction the general route does not have and cannot
-reach — and the general route's `⟦Nat⟧` is a W-type carrier that no binary
-numeral can be a term of. What is real is the first blocker, and it is
+reach — and the general route's `⟦Nat⟧` **was** a W-type carrier that no binary
+numeral could be a term of. *(That clause is why this section was written and it
+no longer holds: the general route no longer supplies `Nat`'s carrier. `⟦Nat⟧` is
+`ω`, `checker/src/tg.rs:1638–1642`, and `num(n)` is a term of it — which is what
+made §7.3 below buildable.)* What is real is the first blocker, and it is
 engineering: the two bottoms are `[φ]`/`•`-shaped and need a second route.
 
 ### 7.3 What the direct clause has to supply — read off the code
@@ -1395,8 +1418,8 @@ the superseded §6 recommendation's answer and is now the wrong one: with one
 carrier, the literal clause is only expressible if `⟦Nat⟧` **is** `ω`, so the
 interpretation axis is exactly where the change starts.)*
 
-**Built.** All twelve rows are in, `mini/src/nat_clause.rs` and
-`mini/src/rec_nat.rs` are the two new modules, and the corpus is unmoved at
+**Built.** All twelve rows are in, `checker/src/mini/nat_clause.rs` and
+`checker/src/mini/rec_nat.rs` are the two new modules, and the corpus is unmoved at
 accept 89 / decline 2 / reject 0, constEv 218/218, unsealed 0, gapped 0. What
 is *not* built is §7's step 4, the accelerated operations, and §1.3.3 is the
 measurement that says it is the next thing and not an optimisation.
@@ -1421,8 +1444,8 @@ thread `ip.prelude.tower` in, which is what `Nat::over` exists for.
 | 4 | `direct.rs:292` `former_bottom` | a **non-`[φ]` route**: the term `ω` and `Nat::omega_mem` raised to `⟦Sort 1⟧`, instead of `tower.cond_in_u0` |
 | 5 | `direct.rs:418` `ctor_bottom` | a **non-`•` route**: `Nat.zero ↦ 0` with `Nat::zero_mem`, `Nat.succ ↦ succ(x)` with `Nat::succ_mem_at` |
 | 6 | `recursor.rs:157` | `Some(Clause::Nat) => rec_nat::ensure(…)` |
-| 7 | new `mini/src/rec_nat.rs` | the bottom of `Nat.rec`'s nest — at `u₁ = 0`, `•` and `induction_scheme` at `φ(z) := • ∈ app(C,z)`; at `u₁ ≥ 1`, `natrec(c,g,t)` and `nat::natrec_mem` |
-| 8 | new `mini/src/iota_nat.rs` | `selects`/`fire`, the sibling of `iota_dep` and `iota_model`, out of `Nat::iota_zero`/`iota_succ` |
+| 7 | new `checker/src/mini/rec_nat.rs` | the bottom of `Nat.rec`'s nest — at `u₁ = 0`, `•` and `induction_scheme` at `φ(z) := • ∈ app(C,z)`; at `u₁ ≥ 1`, `natrec(c,g,t)` and `nat::natrec_mem` |
+| 8 | new `checker/src/mini/iota_nat.rs` | `selects`/`fire`, the sibling of `iota_dep` and `iota_model`, out of `Nat::iota_zero`/`iota_succ` |
 | 9 | `interp.rs:132`/`154` | a `NatClause` cached beside `direct`/`acc`, lazy with a failure flag (`acc.rs:43–55`) |
 | 10 | `kernel.rs:2478` | `⟦natLit n⟧ := Eval::numeral(n)` with `Eval::mem`, replacing `nat_unfold`'s `n`-deep recursion |
 | 11 | `kernel.rs:1650` | `whnf`'s `NatLit` arm now **owes a `step!`** — see below |
@@ -1484,7 +1507,7 @@ actual definition, by δ + ι, not be assumed. Three tiers:
   likewise. For these the "primitive recursion equations" characterisation does
   not directly apply; the right characterisation is the `Acc.rec` fixpoint
   equation, and `mini` does have that machinery
-  (`mini/src/rec_acc_iota.rs`) — but this is a separate design question and it
+  (`checker/src/mini/rec_acc_iota.rs`) — but this is a separate design question and it
   is *not* answered here.
 * **Fuel-based:** `Nat.div`/`Nat.modCore` use a structural inner `go` with a
   fuel argument. Structural, so tier 1 in principle, but the characterisation to

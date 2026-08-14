@@ -1,7 +1,51 @@
 # Unifying the global environment — a design and a recommendation
 
+> **Read this first — what this document is, as of 2026-08-14 (`b91433b`).**
+> This is the *design and staging record* for the environment unification,
+> written on 2026-08-09 and extended as each stage landed. **It is not a
+> description of the checker as it stands.** Two things in particular have
+> changed underneath it, and a section that contradicts either of them is
+> narrating a superseded stage, not the architecture:
+>
+> 1. **There is no `mini` crate and no mini binary.** The workspace is
+>    `kernel`, `derived`, `checker` (`Cargo.toml:3`; the `checker` crate's
+>    package name is still `nanoda_lib`). The surviving mini implementation is
+>    modules under `checker/src/mini/` — `checker/src/mini.rs:63–122` declares
+>    them — and its tests are `checker/tests/mini_*.rs`. The unified checker
+>    binary is `checker` (`checker/src/bin/checker.rs`); the only other binary in
+>    the workspace is upstream nanoda's own `nanoda_bin` (`checker/src/main.rs`),
+>    and neither of them is a mini binary. Wherever this document writes
+>    `checker/src/mini/x.rs` or `checker/tests/mini_y.rs` it has been rewritten to the current
+>    path; wherever it says "the two crates" or "either engine's crate", read
+>    "the two dispatches inside `checker`".
+> 2. **There are not two checkers with a choice between them.** There is one
+>    parse, one `Instantiations::compute`, one loop over declaration groups and
+>    one dispatch on declaration kind. Inductive, mutual-inductive and quotient
+>    groups are constructed by the mini implementation; axioms, definitions,
+>    theorems and opaque definitions are checked by nanoda and produce TG
+>    evidence **in that same call**. Each group is accepted and type-checked
+>    **exactly once**. There is **no fallback to the other engine, no repair
+>    sweep, and no post-loop second validation pass** — `checker/src/mini/route.rs:38`
+>    ("One decision means no fallback") is the code saying so. `Mode` has exactly
+>    one variant, `Split` (`route.rs:70–74`), it is the **default**
+>    (`checker/src/bin/checker.rs:125`), and the `--route=…` flag this document
+>    describes below has been **removed** — passing it exits 2 with "use the
+>    default split checker or --naive" (`checker.rs:115–118`). The historical
+>    whole-file mini checker is `Driver::Plain`, selected by `--naive`, and is the
+>    only way to run that policy. TG gaps are certification debt: the normal CLI
+>    exits 4 while any remain (`checker.rs:250–254`, alongside `uncertified` and
+>    `untranslated`), and `--acceptance-only` suppresses only that exit code, not
+>    the columns (`checker.rs:61–64`, `checker/tests/unified_cli.rs:54–68`).
+>
+> The staging narrative below (tracks A, B, D) is **history and is worth
+> keeping**: it records what was tried, what was measured, and why the shape
+> settled where it did. Section §5 track D was the section most at risk of being
+> read as current design and has been corrected in place, with its superseded
+> content kept explicitly labelled as the stage it was.
+
 *2026-08-09. A design, on the owner's instruction, for the step after #120:
-one global environment for `checker/` and `mini/`, leaning toward nanoda's
+one global environment for the nanoda checker and mini — then two crates,
+`checker/` and `mini/` — leaning toward nanoda's
 design, to unblock choosing one checker or the other per declaration.
 Written ahead of the implementation; track B's first rungs have since
 landed — B0 as the `explore/b0-shared-env` prototype, B1/B2 as `tg::EnvCore`
@@ -60,13 +104,13 @@ recommendation in one paragraph:
 Per the standing instruction, before anything is built on it:
 
 1. **There is no `ctor_rules` table in `mini`.** The `ConstKey`-keyed tables
-   on the constructor side are `ctor_untranslated` (`mini/src/interp.rs:589`)
+   on the constructor side are `ctor_untranslated` (`checker/src/mini/interp.rs:589`)
    and the per-constructor certificate vectors inside `Translated`
    (`ctor_abbrev`, `field_abbrev`, `rec_dom_abbrev`, `interp.rs:687–717`);
    the per-constructor *rules* live on `ConstantInfo::Recursor::rules`, keyed
-   by constructor `Name` inside the entry (`mini/src/env.rs:123`).
+   by constructor `Name` inside the entry (`checker/src/mini/env.rs:123`).
 2. **The `isRec` panic population is six files, not four-plus-one.** Four
-   `mini/tests/fixtures` files, one `modelgen/tests` fixture
+   `checker/tests/fixtures` files, one `modelgen/tests` fixture
    (`mutual_nonrec`), and one `modelgen` *output* shape (`nest_odd_shapes`'
    generated block) — MODELGEN.md §4, measured file by file there. The cause
    is one: upstream recomputes `isRec` per member, Lean sets it per block
@@ -105,7 +149,7 @@ Per the standing instruction, before anything is built on it:
   (`util.rs:221`, filled at `parser.rs:802`) — the block extent an
   inductive's check runs over (`inductive.rs:31`).
 
-**`mini/`** (`mini/src/env.rs`, `kernel.rs`, `convert.rs`):
+**`mini/`** (`checker/src/mini/env.rs`, `kernel.rs`, `convert.rs`):
 
 * `Declaration` (`env.rs:49`) — five kinds: Axiom, Def (`DefKind`), Quot,
   Inductive (constructors **bundled in**), Mutual. Recursors are **not** an
@@ -119,7 +163,7 @@ Per the standing instruction, before anything is built on it:
   `add_block` (`kernel.rs:4830–4863`): open-body rules, `num_motives`, and a
   computed `k_type: Option<E>` where the export has `is_k: bool`.
 * Since #120, `Name`/`Level`/`E` *are* `NamePtr`/`LevelPtr`/`ExprPtr` in the
-  binder-erased normal form (`mini/src/arena.rs`). `convert.rs` already
+  binder-erased normal form (`checker/src/mini/arena.rs`). `convert.rs` already
   reads the parse-time `DeclarMap` — mini is *already* a reader of nanoda's
   store at load time; what it is not yet is a reader at check time.
 
@@ -326,13 +370,13 @@ whole reason the engines can remain two while the certificates become one.
    it rebinds, and `IndApparatus.mach` holds the core's
    `Rc<RefCell<Machine>>` — the checker's `Inductives::build` takes the same
    pair instead of minting its own `Sums`/`Wtype`/`Bound`.
-   `mini/tests/envshare.rs` pins each identity with its disagree direction;
-   `mini/tests/envshare_tg.rs` (behind `mini`'s `tg` feature) runs both
+   `checker/tests/mini_envshare.rs` pins each identity with its disagree direction;
+   `checker/tests/mini_envshare_tg.rs` (behind `mini`'s `tg` feature) runs both
    engines over one core in one thread, in either order.
 2. **One `Sealed` — paid; B3, landed.** The two were the same newtype with
-   the same gate; `mini/src/ev.rs` now re-exports `checker/src/sealed.rs`'s
+   the same gate; `checker/src/mini/ev.rs` now re-exports `checker/src/sealed.rs`'s
    type (mini depends on `nanoda_lib` already), and the identity is pinned by
-   a witness function (`mini/src/ev.rs::sealed_is_the_checkers_type`) that a
+   a witness function (`checker/src/mini/ev.rs::sealed_is_the_checkers_type`) that a
    reintroduced private newtype stops compiling.
 3. **One key — paid; B3, landed.** The joint key is
    `const_store::ConstKey = (NameKey, Vec<LevelKey>)`
@@ -434,10 +478,17 @@ map must be validated in the sense the other engine relies on: types
 well-formed, values typed, and — for inductive groups — the export's
 constructor and recursor entries **in agreement with what the checking
 engine derived** from the specification. Nanoda enforces this by
-construction (mint-and-compare, `inductive.rs:85–94`). Mini today generates
-but never compares (`parseRecInfo` stub); on a mixed run that would let
+construction (mint-and-compare, `inductive.rs:85–94`). *(As of 2026-08-14 the
+next sentence is out of date in one direction: mini still does not do nanoda's
+full mint-and-compare, but it is no longer true that it never compares — a
+load-time **shape** comparison exists and its findings are reported,
+`Facts::recursor_shape_mismatches`, `checker/src/mini/convert.rs:67`, `:621`,
+printed at `checker/src/bin/checker.rs:198–203`, and it is exactly what
+`checker/src/routed.rs:47–54` records as covering a mini-routed inductive's
+export recursors.)* Mini generates
+but never fully compares (`parseRecInfo` stub); on a mixed run that would let
 nanoda ι-reduce with export rules nothing checked. The comparison to promote
-exists, tested: `mini/tests/mutual.rs::compare_recursors` (`mutual.rs:
+exists, tested: `checker/tests/mini_mutual.rs::compare_recursors` (`mutual.rs:
 590–723`) — counts, K-ness, types and rule bodies at positionally
 instantiated levels, with one recorded benign divergence class (parameter-
 sort owners: mini-lean K-like, Lean not, `mutual.rs:642–674`; the shared map
@@ -494,7 +545,8 @@ where seats are live — sequence or coordinate.
 
 * **A0** — extend `compare_recursors`' sweep to the tutorial corpus; pin the
   divergence ledger at zero rows outside the parameter-sort K class.
-* **A1** — the read adapter (`mini/src/genv.rs` beside the seam):
+* **A1** — the read adapter (a proposed `genv.rs` beside the seam; **it was
+  never built and no such file exists at `b91433b`**):
   `Environment` becomes map-view + overrides; `add` writes to overrides;
   behaviour bit-identical; corpus and instruction ratchets unchanged.
 * **A2** — decouple fill from check, so a group can be filled-but-foreign;
@@ -515,7 +567,7 @@ stage 6"):
 * **B1** — one `Env`, one `Prelude`, one `Tower` — **landed**, as
   `tg::EnvCore` + `Interp::over` + `install_shared_core` (§3.4 item 1); the
   `Nat::over` test template (two-over-one agree, fresh disagrees) is pinned
-  at this level by `mini/tests/envshare.rs`.
+  at this level by `checker/tests/mini_envshare.rs`.
 * **B2** — one `Machine` behind the shared `RefCell` — **landed with B1**:
   the machine lives in the `EnvCore`, over a `Wtype`/`Bound` built once on
   the prelude tower's own `Sums`, and both engines' inductive layers take
@@ -544,7 +596,7 @@ stage 6"):
   than an asserted fiction, with `divergent` the B5 work list.
 
   **The crossing, measured** (91 tutorial exports, mini first, then the
-  checker over the same core; `mini/tests/envshare_tg.rs::cross_sweep_tutorial`
+  checker over the same core; `checker/tests/mini_envshare_tg.rs::cross_sweep_tutorial`
   reproduces): mini published 798 entries / 1014 certificate slots, the
   checker 57 / 99. **52 defining equations crossed** — the checker adopted
   mini's carrier and equation outright. **0 typings crossed**: 469 typing
@@ -562,7 +614,7 @@ stage 6"):
   structural gaps if not. **Re-scoped by the owner's sharpening** ("for a
   merged environment, `interp` must return the same terms — use the same
   code to handle lambdas in both modules") **and by the measurement that
-  sizes it** (`mini/tests/route_tg.rs::skeleton_key_divergence_sweep`, both
+  sizes it** (`checker/tests/mini_route_tg.rs::skeleton_key_divergence_sweep`, both
   engines full-run over one core per export, site-table keys compared as
   terms, then re-compared *nominal-blind* — every `FnSym` id and memoised
   hash blanked, structure, brands and the shared free variables kept):
@@ -611,7 +663,7 @@ stage 6"):
 
   **And what it did not buy, which is the more useful number.** Deleting
   the merge — the mutation that gives each engine its own key space again —
-  reddens **one** test, the new one. `mini/tests/{tutorial,designed}.rs`
+  reddens **one** test, the new one. `checker/tests/mini_{tutorial,designed}.rs`
   stay green, the arena table is unchanged, and no gap or verdict moves.
   The merge removes a *hazard* (two carriers for one shape is now
   unrepresentable) and buys 90 shapes; it does not move a measured
@@ -928,8 +980,10 @@ stage 6"):
   gaps **47 → 31**, and `proj_reduce` **7 → 5**. On the independent stuck
   projection/congruence fixture, real derivations **488 → 499**, total gaps
   **47 → 36**, and `proj_reduce` **4 → 3**. The controls are exact:
-  `proj_reduced_carrier` remains **139**, `field_in_u0_by_carrier` remains
-  **0**, and the full Nat handoff fixture remains **172**. The ratchet in
+  `proj_reduced_carrier` remained **139**, `field_in_u0_by_carrier` remained
+  **0**, and the full Nat handoff fixture remained **172** — *all four figures
+  are as measured at this landing on 2026-08-11; later tranches moved three of
+  them, see the current-ratchet note at the end of B8.* The ratchet in
   `checker/tests/unified_cli.rs` also pins the one-loop route counts and the
   absence of both the retired opaque-projection congruence mismatch and a
   shared-lambda body interpretation drift.
@@ -973,8 +1027,8 @@ stage 6"):
   On `proj_reduced_subject.ndjson`, real derivations **226 → 262**, total TG
   gaps **31 → 12**, and `proj_reduce` **5 → 1**. On
   `proj_stuck_subject.ndjson`, derivations **499 → 541**, gaps **36 → 9**, and
-  `proj_reduce` **3 → 0**. The two exact controls are unchanged:
-  `proj_reduced_carrier` stays **139** and `field_in_u0_by_carrier` stays
+  `proj_reduce` **3 → 0**. The two exact controls were unchanged across *this*
+  landing: `proj_reduced_carrier` at **139** and `field_in_u0_by_carrier` at
   **0**. The full Nat handoff also benefits from ready PProd projection
   subjects: derivations **2015 → 2035**, gaps **172 → 164**, and
   `proj_reduce` **18 → 14**, while all 10 zero and 13 successor ι ratchets stay
@@ -989,35 +1043,87 @@ stage 6"):
   `recFst` cell) before widening the gate; after that, record the application
   congruence leg for projection heads used as functions.
 
-**Track D — the driver** — **landed** ahead of A2/A3, scoped to the evidence
-axis, as `mini`'s `--route` flag (`mini/src/route.rs`, the driver;
-`checker/src/routed.rs`, the checker's half). The policy function is
-`Mode::pick` — `Split` is the owner's split (inductive constructions, the
-quotient family and axioms → mini; definitions and theorems → checker), and
-`ForceMini`/`ForceChecker` keep both single-engine runs reachable behind the
-same flag. The seam is the `GroupEngine` trait: one declaration group in,
-the gap/decline ledger out; certificates land in the shared store, and
-nothing about dispatch, `whnf` or `def_eq` crosses it. The driver replaces
-`Ledger::run`'s single call inside `check_file_with_interp` with an
-interleaved walk — declarations in file order, each group handed to the
-engine the policy picks, both engines over the run's one `EnvCore` — and the
-checker's export entries follow their **route anchor** (constructors and
-recursors to their inductive, the quotient family to `Quot`), so one
-decision covers one group on either side. The asymmetry is in the return
-types: a mini decline falls back to the checker as a counted, named event
-(`fellBack:name=reason`), a routed name the export never saw falls back to
-mini the same way, and export groups neither engine vouched for are swept,
-checked and named (`strays`). What this stage deliberately does **not**
-route is the acceptance axis: mini's zone A still checks the whole file
-(1.58% of a mini run), because mini's `Environment` is grown by checking —
-single-engine acceptance is track A's shared syntactic store, and the two
-panic→status sites of §3.9 also remain (a checker rejection is still a
-panic). `mini/tests/route_tg.rs` pins the policy (three modes over one
-file), both crossing directions, the fallback and the stray sweep.
+  **Current ratchet, read from `checker/tests/unified_cli.rs` at `b91433b`
+  (2026-08-14) — B6's and B8's gap totals above are the values at their own
+  landings and four of them have since moved.** The committed assertions today
+  are: `nat_char_equations` **152** TG gaps (B6/B8 record 172/164), with the
+  declaration-boundary prefixes still **0 / 1 / 7** and the ι ratchets still
+  **10 zero / 13 succ** exactly as B6 states; `proj_reduced_subject` **2** (B8
+  records 12); `proj_stuck_subject` **6** (B8 records 9);
+  `proj_reduced_carrier` **16** (B7/B8 record it as the unmoving 139 control —
+  the structural-recursion tranches closed it); and `field_in_u0_by_carrier`
+  **0**, the one control that has held throughout. The architectural claims of
+  B6–B8 were re-verified at the same commit and **stand**: there is no TG Nat
+  carrier and no TG Nat recursor nest (`NatClause` is one shared object,
+  `checker/src/mini/nat_clause.rs:57`), `DeclProj` is built at most once and
+  lazily over mini's own translation (`checker/src/tg.rs:2040–2048`,
+  `:2094`), and no fixture runs a second validation pass.
 
-**The crossing under routing, measured** (`Split`, the same 91 exports,
-`--no-modelgen`; the sweep behind the numbers is one `mini --route=split`
-run per file): mini published 573 entries / 571 slots, the checker 88 / 156.
+**Track D — the driver.** This entry has two stages, and only the second is
+the architecture. The first is kept because the measurements that follow it
+were taken under it and are not intelligible without it; **do not read it as a
+description of the tree.**
+
+> **Stage D1 — the routed evidence axis, as first landed (2026-08-10).
+> Superseded: every mechanism named in this box is gone from the tree.** It
+> arrived ahead of A2/A3, scoped to the evidence axis, as a `--route` flag on
+> the then-separate `mini` binary. `Mode` then had three variants — `Split`,
+> plus `ForceMini`/`ForceChecker` to keep both single-engine runs reachable
+> behind the same flag — and under that policy the quotient family **and
+> axioms** went to mini. The return types were asymmetric on purpose: a mini
+> decline **fell back to the checker** as a counted, named event
+> (`fellBack:name=reason`), a routed name the export never saw fell back to mini
+> the same way, and export groups neither engine vouched for were swept,
+> **checked** and named (`strays`). Stage D1 deliberately did *not* route the
+> acceptance axis: mini's zone A still checked the whole file (1.58% of a mini
+> run), because mini's `Environment` is grown by checking.
+>
+> **What replaced each piece**, verified at `b91433b`: the `--route=…` flag is
+> removed and now exits 2 with "use the default split checker or --naive"
+> (`checker/src/bin/checker.rs:115–118`); `Mode` has the single variant `Split`
+> (`checker/src/mini/route.rs:70–74`) and it is the default (`checker.rs:125`);
+> `ForceMini`'s role is taken by `--naive`, which selects `Driver::Plain`, the
+> historical whole-file mini checker, while `ForceChecker` has no successor;
+> **axioms now go to nanoda**, not mini (`route.rs:114–124`); there is **no
+> fallback in either direction** — a nanoda rejection or a missing export group
+> returns `Err` rather than retrying on mini (`route.rs:374–414`), and the module
+> header says it outright at `route.rs:38`, "One decision means no fallback";
+> and the stray sweep is gone — unclaimed export anchors are **observed and
+> reported, never checked** by a second pass (`route.rs:416–431`,
+> `routed.rs:215–217`). No `fellBack` or `strays` counter survives; the only
+> route counters are `toMini`, `toChecker` and `unclaimed`
+> (`route.rs:193–219`, `:237–249`).
+
+**Stage D2 — the one loop, which is what the tree does.** One parse, one
+`Instantiations::compute`, one loop over declaration groups, one dispatch on
+declaration kind, each group accepted and type-checked exactly once. The policy
+function is `Mode::pick` (`checker/src/mini/route.rs:114–124`): inductives,
+mutual blocks and the quotient family → the mini implementation; definitions,
+theorems, opaque definitions **and axioms** → nanoda. The seam is still the
+`GroupEngine` trait (`route.rs:148–150`): one declaration group in, the
+gap/decline ledger out; certificates land in the shared store, and nothing about
+dispatch, `whnf` or `def_eq` crosses it. Nanoda produces its TG evidence **while
+it accepts** the group, so the driver's evidence step for a checker-routed group
+is intentionally empty — running it again would be a second pass
+(`route.rs:334–350`). The checker's export entries follow their **route anchor**
+(constructors and recursors to their inductive, the quotient family to `Quot` —
+`checker/src/routed.rs:95–133`), so one decision covers one group on either
+side. A nanoda-accepted ordinary declaration is then mirrored **unchecked** into
+the mini syntactic environment, purely so a later mini-owned inductive can refer
+to it: `install_checked_noninductive` (`route.rs:409–410`,
+`checker/src/mini/kernel.rs:4867–4898` — "it deliberately does not infer a type,
+compare a value, or apply mini's acceptance rules"). The two panic→status sites
+of §3.9 remain (a checker rejection is still raised as a panic and caught,
+`route.rs:171–182`). `checker/tests/mini_route_tg.rs` pins the policy and both
+crossing directions; `checker/tests/unified_cli.rs` pins the one-loop route
+counts, `--naive`, and the exit-4 debt rule.
+
+**The crossing under routing, measured — under stage D1, 2026-08-10; the
+command no longer exists** (`Split`, the same 91 exports, `--no-modelgen`; the
+sweep behind the numbers was one `mini --route=split` run per file, which today
+is `checker --no-modelgen`, `--route` having been removed). Every mention of
+`ForceMini` and of falling back below is stage D1's mechanism, not the tree's:
+mini published 573 entries / 571 slots, the checker 88 / 156.
 **7 typings crossed checker→mini** (`adoptedByMiniTyping=7`, `converged=7`,
 on `052`/`072`/`113`/`114`) — the direction B4 measured at **0**, observable
 for exactly the reason B4 predicted: with defs routed away, mini's
@@ -1056,13 +1162,20 @@ checker's stage-1 scope wiring (THREADING-CENSUS §2) is what would turn the
 checker's 156 slots into a typing per def and the 7 into a population
 (§3.6); it is independent work, already sequenced first in PIVOT §5.
 
-**The comprehensive merge, in progress** (the owner's correction of this
+**The comprehensive merge** (the owner's correction of this
 track's shape: one environment, one parse, one entry per declaration — "it
-shouldn't matter which code created it"). The destination is now explicit:
-there is one `checker` crate and one declaration loop, inductive groups take
-mini's implementation, all other groups take nanoda's, and `--naive` selects
-the old mini-only path. The top-level `mini/` crate disappears; its surviving
-code becomes modules under `checker/`. Stage 1, **one parse, landed**:
+shouldn't matter which code created it"). **Its structural half has landed and
+is stage D2 above**: as of `b91433b` there is one `checker` crate and one
+declaration loop, inductive groups take mini's implementation, all other groups
+take nanoda's, and `--naive` selects the old mini-only path. The top-level
+`mini/` crate is **gone**; its surviving code is modules under
+`checker/src/mini/` (`checker/src/mini.rs:63–122`) and its tests are
+`checker/tests/mini_*.rs`. What is **still outstanding**, verified in the tree at
+that commit: the cond third of the mint unification (`prop_infos` and
+`cond_by_sym` both still exist and there is no `cond_store.rs`, against
+`const_store.rs` / `lam_store.rs` / `pi_store.rs` which do), and the entry
+collapse (`adopt_shared`, `divergent` and the `alias` guard are all still
+present). Stage 1, **one parse, landed**:
 the routed driver drives the checker over the `ExportFile` mini's load
 installed as its arena (`mini::arena::installed_export_file`), so the joint
 `NameKey` is an identity rather than an agreement between two deterministic
@@ -1096,7 +1209,7 @@ run seam classifies a *decline* by, so a budget refusal printed `reject` —
 a true file in the population of false ones — and no committed fixture
 exhausted the budget, so nothing could go red. Both sites now leave through
 one funnel (`kernel.rs::budget_refusal`) and
-`mini/tests/budget.rs` + its generated fixture are the cell, red before
+`checker/tests/mini_budget.rs` + its generated fixture are the cell, red before
 the funnel and green after.
 
 ## 6. σ, and what this design assumes about it
@@ -1173,7 +1286,7 @@ the store remains one, and no finding in this document re-opens the wall.
 * **The `Interp::over` refactor size** — done, and it was construction
   plumbing as read: every `env` access became a statement-scoped guard, and
   the corpus ratchet plus one committed fixture
-  (`mini/tests/fixtures/quot_lift_reduction.lean`) hold the one dynamic
+  (`checker/tests/fixtures/quot_lift_reduction.lean`) hold the one dynamic
   hazard that introduced — a guard held across a closure's second borrow.
   Instruction cost of the cells, measured over the whole 91-export tutorial
   loop (release, two runs each): 360.36 G before, 361.86 G after — **+0.42%**.
@@ -1186,9 +1299,9 @@ the store remains one, and no finding in this document re-opens the wall.
   (`inductive.rs:12–30`); not prototyped.
 
 Sources: `kernel/src/{term.rs, thm.rs}`; `checker/src/{env.rs, tc.rs,
-inductive.rs, tg.rs, util.rs, parser.rs, sealed.rs}`; `mini/src/{env.rs,
+inductive.rs, tg.rs, util.rs, parser.rs, sealed.rs}`; `checker/src/mini/{env.rs,
 kernel.rs, convert.rs, run.rs, interp.rs, ev.rs, arena.rs, mutual_aux.rs,
-nested_splice.rs}`; `mini/tests/mutual.rs`; `derived/src/nat/apparatus.rs`
+nested_splice.rs}` (then the separate crate `mini/src/`); `checker/tests/mini_mutual.rs`; `derived/src/nat/apparatus.rs`
 — all read in this tree at `f29c7ef`; PIVOT.md; PRELUDE-COST.md;
 MODELGEN.md §4; MONOMORPH.md §1, §8; MINI-DESIGN.md §0, §11;
 THREADING-CENSUS.md §2; README.md.

@@ -1,6 +1,17 @@
 # DERIVED-AUDIT — does each construction in `derived/` prove what its `# Interface` header says?
 
 Audit date: 2026-07-31/08-01, against the working tree mid-session (five coding agents active).
+
+> **Two of this audit's slices are about files that no longer exist
+> (re-checked 2026-08-14).** `derived/src/wnat*` and `derived/src/cumul/witness.rs`
+> — with `NatUniverse` and `NatMem` — were deleted on 2026-08-11 when `⟦Nat⟧`
+> became von Neumann `ω` rather than a W-type (`derived/src/inductive.rs:8`,
+> `derived/src/cumul.rs:51–52`). So **finding F2** (`NatMem::over` never reads
+> `hyps()`) and the `wnat/typing.rs` doc defect are moot rather than
+> outstanding, and F6's verification argument cites an apparatus that is gone.
+> Nothing else in the audit depends on them; the surviving W-family modules
+> (`wlist`, `wlist_rec`, `enums`, `wrec*`, `wbool_rec`, `twopoint`,
+> `wlist_fun`) are all still there and their entries stand.
 Method: read-only. The kernel (`kernel/src/thm.rs`, in full) was read first to fix what a `Thm`
 establishes; every `derived/` module was then audited by comparing its `# Interface` (or doc-comment)
 claims against the exact expression that assembles the returned conclusion, with adversarial input
@@ -33,7 +44,7 @@ Two crate-wide facts, verified directly, frame all of this:
    *(**Rule 6 was deleted the day after this was written** — `kernel/src/thm.rs`
    carries the retraction, `ci/check-boundary.sh` carries R6′ — and `Thm::assume`
    is called in shipped code today at `checker/src/scope.rs` and
-   `mini/src/scope.rs`. **The conclusion survives for `derived/`**, which is what
+   `checker/src/mini/scope.rs`. **The conclusion survives for `derived/`**, which is what
    this audit is about: R6′'s I1 keeps the scan over shipped `derived/` code a
    ban, because `derived/` derives and does not assume. What does **not** survive
    is the generalisation, and it is load-bearing for the severity notes below —

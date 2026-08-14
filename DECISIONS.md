@@ -2109,7 +2109,7 @@ produces.
   `∀w. (w ∈ A → φ)` shape the library consumes, and `test_support::assume` as the
   sanctioned way for a test to obtain a hypothetical theorem — so I1 is a
   single-*file* property, with **no `#[cfg(test)]` exemption**, which is strictly
-  stronger than the ban it replaces. It is a port of `mini/src/scope.rs` and
+  stronger than the ban it replaces. It is a port of `checker/src/mini/scope.rs` and
   **has no production caller yet**: `tg.rs` still expresses assumptions as
   antecedents (`CondEq`) with the escape ledger counting the ones that reach a
   boundary. It is the seed for the evidence threading, and R6′ needs a sanctioned
@@ -2136,11 +2136,11 @@ produces.
 **Left for the owner, and since done:** `kernel/README.md` (the "hyps()
 obligation" section) and `kernel/src/thm.rs` (the module header, and `mk_union`'s
 doc) said CI rejects `Thm::assume` outside `kernel/`. That was already false —
-`checker/src/scope.rs` is allowlisted and `mini/src/scope.rs` always was — and
+`checker/src/scope.rs` is allowlisted and `checker/src/mini/scope.rs` always was — and
 `kernel/` being the TCB, this task flagged rather than made the correction.
 **All four sites now carry the retraction** (`kernel/README.md` and
 `kernel/src/thm.rs` both read "That rule is gone", and `thm.rs` names rule 6 as
-retired); `mini/src/scope.rs` states R6′ rather than the ban.
+retired); `checker/src/mini/scope.rs` states R6′ rather than the ban.
 
 ## 2026-08-04 — The certification axis is in the default verdict, and the four counters that define it
 
@@ -2167,7 +2167,7 @@ closed under `Gap` variants added later.
 **Two things the notes did not survive.**
 
 * `pairs − typeEv` was in the set on a symmetry argument and is now in it on
-  evidence. `mini/tests/fixtures/beyond_the_tower.lean` reads `constEv = 2`,
+  evidence. `checker/tests/fixtures/beyond_the_tower.lean` reads `constEv = 2`,
   `typeEv = 1`: `Type 30 → Type 30` has sort `Sort 32`, above `CUMUL_HEIGHT`, so
   the *constant* typing derives and the type's own does not. A definition
   watching only constant typings calls that run clean.
@@ -2244,11 +2244,11 @@ interface question the `κ` work has to answer, and it is readable off one
 integer — `constEv` on the fixture below, `2` today, `4` under a `κ`-tower with
 `bnd` still proved per fibre, `6` if `FibreFacts`' first component disappears.
 
-**The witnesses, and why there are two.** `mini/tests/fixtures/infinitary_
+**The witnesses, and why there are two.** `checker/tests/fixtures/infinitary_
 branching.lean` declares three trees whose recursive-argument domains differ in
 one coordinate each — `B2` (two nullary constructors), `P1` (one field), `N`
 (one recursive argument) — because two would catch a permutation and not a
-clamp; `mini/tests/infinitary.rs` runs it and pins that the first certifies and
+clamp; `checker/tests/mini_infinitary.rs` runs it and pins that the first certifies and
 the other two do not. It asserts **no exit code**: the fixture is deliberately a
 set of underived obligations and the reporting path is a live surface.
 `derived/tests/cumul_infinite_fibre.rs` pins the same three at the terms, and
@@ -2280,7 +2280,7 @@ typeEv=218`.
 both.** The `untranslated` axis below picks up exactly this fixture's two
 declarations — `untranslated: 2 declarations`,
 `notrans:ind-fibre-value(FieldTree)=1`, `notrans:ind-fibre-value(NTree)=1` — and
-`mini/tests/infinitary.rs` now asserts that row beside the `waiting` one. They
+`checker/tests/mini_infinitary.rs` now asserts that row beside the `waiting` one. They
 fail differently and both are kept: `waiting` is per *pair*, so losing a
 declaration's pairs moves it and not the other; `untranslated` is per
 *declaration*, so merging two declarations moves it and not the other. Nothing
@@ -2421,7 +2421,7 @@ four tests each, `equinumerous_sandwich`'s two by the consumer's test alone.
 ## 2026-08-05 — Infinitary branching is wired: the tower stops being the catcher, `constEv` on the fixture is 6
 
 Successor to the `ω`-tower entry above, and it settles it. `constEv` on
-`mini/tests/fixtures/infinitary_branching.ndjson` is **6** — every pair —
+`checker/tests/fixtures/infinitary_branching.ndjson` is **6** — every pair —
 `waiting` is empty, and `untranslated declarations=0`.
 `inductive NTree | leaf | node : (Nat → NTree) → NTree` certifies end to end.
 
@@ -2451,7 +2451,10 @@ producer *tree* that fed `FibreFacts::bnd` is unreached — `bnd_carrier`,
 `closed::tower_closed`, the `B(a) ∈ ω` form, is *derived from*
 `tower_closed_bnd` and `bounded`, and `tower_closed` is what
 `WMem::w_in_universe` carries, which `wnat`, `wlist`, `cumul::enums` and
-`NatUniverse` spend. SCOPING.md §14.3's "`bnd` is spent in exactly one
+`NatUniverse` spend. *(Of those four consumers, `wnat` and `NatUniverse` were
+deleted on 2026-08-11 — see this log's own entry for that day and
+`derived/src/cumul.rs:51–52`. The finding is unaffected: `wlist`,
+`cumul::enums`, `wrec` and `inductive/carrier.rs` still spend it.)* SCOPING.md §14.3's "`bnd` is spent in exactly one
 mathematical place" is right and is exactly why: that one spend is on the path
 to a live theorem. Nothing in the unreached list was deleted — *unused* and
 *wrong* are different, all of it is tested at the terms, and deleting ~2 000
@@ -2486,7 +2489,7 @@ recursive argument whose domain mentions a *parameter*
 which is structural and **re-openable**. *(It was re-opened on 2026-08-05 and
 this decline is closed: `isum_in_universe_under` carries the antecedent, and the
 mini-side half was a discharge of `rec_dom_sort` through the parameter scopes.
-`constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
+`constEv` on `checker/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
 SCOPING.md §14.5a.)* A recursive argument at telescope depth ≥ 2 still
 declines, and SCOPING.md §14.5's estimate that this is "one `k`-ary
 call site, not a theorem" is **wrong**: `sigma_n::summand_at` is `k`-ary only
@@ -2500,7 +2503,7 @@ and `B` swapped in `tower_amb`; `T ∈ Uₙ` in the `W ⊆ Uₙ` slot; `fin_sub`
 forgetting to move the seed variable; the power-set closure where the product
 closure belongs; a *second* `paths` symbol for the membership theorem; and
 `fibre_facts` returning `None` unconditionally — all killed, the last by
-`mini/tests/infinitary.rs` alone. The one that survived was a per-case
+`checker/tests/mini_infinitary.rs` alone. The one that survived was a per-case
 conclusion check in `over_at_general` that duplicated `fin_elim`'s own; it is
 deleted rather than kept, since one guard at the place that owns the goal is the
 whole of what it was doing.
@@ -2738,7 +2741,7 @@ thing that got us here.
 visited with the harness checking for zero. That is the faithful shape and it
 is what the shell steps do, but in Rust it is per-suite code to write and keep
 in step with 41 sites. `skip_guard::no_inputs(dir, n)` takes the useful half of
-it — it is the counted form, used by the twelve `mini/tests/tutorial.rs` sites
+it — it is the counted form, used by the twelve `checker/tests/mini_tutorial.rs` sites
 that gate on an empty file list, and it fires on a present-but-empty directory
 too.
 
@@ -3579,6 +3582,12 @@ rather than assumed: `Nat.ble lit₃ lit₅` cannot fire ι because its major pr
 is an opaque constant, not a constructor application of anything.
 
 ## 2026-08-11 — There is one checker pipeline, not a successor fork
+
+**Landed in full.** The merge below was carried out at `4e86d46` ("Unify mini
+into the checker crate") and `8815abb` ("Dispatch declarations through one
+checker pass"); verified at `b91433b`, `Cargo.toml:3` lists three members and
+`checker/src/mini.rs:63–122` is where the surviving code lives. Read the
+decision as recorded, not as pending.
 
 The question "is mini or checker the successor?" has a false premise. They are
 to be merged into one `checker` crate with one loop over declarations and one

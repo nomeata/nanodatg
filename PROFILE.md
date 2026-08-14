@@ -43,7 +43,7 @@ step 1 landed, so the gate reads `self.th.is_some() && t.ev.thm().is_none()`
 and the acceptance axis has a live memo, and `hash_expr` is gone — since
 `#120` an `E` is `checker`'s `ExprPtr` and pointer identity is structural
 identity, so `Frame::map` is keyed on the `E` itself. Landed figures, `perf
-stat -e instructions` on the `test` profile: `mini/tests/nested.rs`
+stat -e instructions` on the `test` profile: `checker/tests/mini_nested.rs`
 17 905 884 629 054 → **8 408 759 079 586** (2.13×), the 91 good tutorial
 exports 453.88 G → **431.28 G** (1.05×), frame-cache hit rate over that corpus
 3.38% → **18.15%**. The 12.7× headline below was measured on the `tower`
@@ -52,7 +52,7 @@ probe, which is not on master; the two numbers just given are.)*
 Removing the gate — nothing else, and no change to any verdict or ledger
 line — takes the `DTree` tower from **91.9 s to 8.8 s (10.5×)**; adding a
 non-allocating key makes it **7.25 s (12.7×)**; at `opt-level = 3`, **6.33 s
-(14.5×)** (§5). `mini/tests/nested.rs`, the CI binary this is about, goes
+(14.5×)** (§5). `checker/tests/mini_nested.rs`, the CI binary this is about, goes
 **309.50 s → 124.21 s with all fifteen tests still passing**. The empirical cost is **n^2.20 ± 0.12** in tower expression
 nodes (R² = 0.985, seven towers over a 4.5× size range); with the memo live it
 is **n^1.98 ± 0.10** — the memo removes a factor of ten and about a fifth of an
@@ -90,7 +90,7 @@ tower are ~95% of each tower's cost.
 
 ## 1. The reference comparison, first, because it decides the framing
 
-`mini/tests/fixtures/nested_model.lean` is the `Tree` isomorphism tower written
+`checker/tests/fixtures/nested_model.lean` is the `Tree` isomorphism tower written
 by hand — the same development `mini::nested_ev::iso` generates. It exists as
 Lean source *and* as an export, so all four implementations can be pointed at
 the same declarations.
@@ -103,7 +103,7 @@ the same declarations.
 | mini zone A + the two §5 changes | acceptance | **0.70 s** |
 | mini, full run (`--mutual --nested`) | acceptance + TG certification | **97.0 s**, 686 MB RSS |
 
-*Lean: `/usr/bin/time lean mini/tests/fixtures/nested_model.lean`, best of
+*Lean: `/usr/bin/time lean checker/tests/fixtures/nested_model.lean`, best of
 three, against three runs of a one-line `prelude` file (0.31 / 0.16 / 0.10 s —
 the spread is page cache, so 0.10 s is the startup floor and ~0.05 s is an
 upper bound on the marginal cost). nanoda: `target/debug/nanoda_bin` on a
@@ -351,8 +351,8 @@ tower.
 
 | | wall | tests |
 | --- | ---: | --- |
-| `mini/tests/nested.rs`, baseline | **309.50 s** | 15 passed |
-| `mini/tests/nested.rs`, `MINI_FRAME_ALL=1 MINI_FASTHASH=1` | **124.21 s** | 15 passed |
+| `checker/tests/mini_nested.rs`, baseline | **309.50 s** | 15 passed |
+| `checker/tests/mini_nested.rs`, `MINI_FRAME_ALL=1 MINI_FASTHASH=1` | **124.21 s** | 15 passed |
 
 2.49×, with every assertion in the file — including the export oracle and the
 generated-recursor comparison — still passing. It ran three times per CI run
@@ -514,7 +514,7 @@ both references have) or the α-canonical `Sealed` key CERTIFYING-OVERHEAD.md §
 already specifies. **That, and not arity, interning, or the TG kernel, is where
 the next factor lives.**
 
-**What this is worth to CI (`#110`).** `mini/tests/nested.rs` — the binary that
+**What this is worth to CI (`#110`).** `checker/tests/mini_nested.rs` — the binary that
 runs these towers — is **309.50 s baseline and 124.21 s with experiment A + G**,
 15 tests passing either way. 2.49×, 185 s saved per invocation. It ran three
 times per CI run when this was written, so ~9 minutes; the feature matrix has
@@ -525,7 +525,7 @@ since been narrowed to `-p nanoda_lib` and it runs once, so ~3 minutes.
 * **Lean's kernel caches.** The toolchain ships `src/lean/kernel` empty; the
   C++ was not available and is not asserted. Only Lean's wall clock is
   evidence here.
-* **The rest of CI.** Only `mini/tests/nested.rs` was timed end to end
+* **The rest of CI.** Only `checker/tests/mini_nested.rs` was timed end to end
   (§5); `ci/check.sh` was ~45 minutes at the time and was not run, because this
   study lands no behaviour change. (It has since been measured directly:
   2 824 s before the feature matrix was narrowed and 986 s after —
@@ -576,10 +576,10 @@ perf report -i p.data --stdio --no-children --percent-limit 0.5
 # §4 the TG side
 cargo build -p mini --bin mini --profile test
 ( ulimit -v 8388608; KERNEL_TERM_PROBE=1 ./target/debug/mini --acceptance-only --mutual --nested \
-    mini/tests/fixtures/nested_model.ndjson )
+    checker/tests/fixtures/nested_model.ndjson )
 
 # §1 the references
-lean mini/tests/fixtures/nested_model.lean
+lean checker/tests/fixtures/nested_model.lean
 cargo build -p nanoda_lib --bin nanoda_bin --profile test
 ./target/debug/nanoda_bin cfg.json     # see scripts/mini-vs-nanoda.sh for the flags
 ```

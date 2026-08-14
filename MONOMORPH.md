@@ -695,7 +695,7 @@ matches the originals **ledger row for ledger row**, and on mode-A output
 is 147 against the originals' 218 because a monomorphized declaration has one σ
 and a polymorphic one takes `DEFAULT_LEVELS = [0,1]`; that is the pass working,
 not a loss.) The two behaviours have fixtures of their own —
-`mini/tests/fixtures/ground_unit_subsingleton.lean` and `mono_prefix.lean`, the
+`checker/tests/fixtures/ground_unit_subsingleton.lean` and `mono_prefix.lean`, the
 latter the only fixture in the tree that is `monomorph`'s output rather than
 `lean4export`'s.
 

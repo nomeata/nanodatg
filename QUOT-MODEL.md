@@ -6,9 +6,9 @@ equivalence-class construction `quot(A,R) ⊆ 𝒫A` cannot land in `⟦Sort 0�
 Sources read for this note: thesis.txt (§2.7.1 at 812–832, §3.1.1 at 1022–1029,
 §6.1 at 1905–1935, §6.2 at 2040–2140, §6.3 at 2183–2415), `derived/src/quot/*`,
 `derived/src/tower/rungs.rs`, `derived/src/prop/*`, `derived/src/anchor/falsity.rs`,
-`kernel/src/thm.rs` (`define` and its choice note), `mini/src/kernel.rs` (`add_quot`),
-`mini/src/interp.rs` (`point_of_proof`, `CondSite`/`FibreSite`), `mini/src/ledger.rs`,
-`checker/src/instantiations.rs`, `mini/src/zoneb.rs` and `checker/src/tg.rs`
+`kernel/src/thm.rs` (`define` and its choice note), `checker/src/mini/kernel.rs` (`add_quot`),
+`checker/src/mini/interp.rs` (`point_of_proof`, `CondSite`/`FibreSite`), `checker/src/mini/ledger.rs`,
+`checker/src/instantiations.rs`, `checker/src/mini/zoneb.rs` and `checker/src/tg.rs`
 (`provably_nonzero`), MINI-DESIGN.md §6.2–6.4,
 LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4, INDEXED-DESIGN.md §8.1.
 
@@ -33,18 +33,18 @@ LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4, INDEXED-DESIGN.md §8.1.
    and one genuinely missing seam (the `R̄`-graph conversion). Details in §6.
    *(Corrected in place at `184bde9`: the seam is **built** — `rel_graph` and
    its two bridges, `derived/src/quot/graph.rs` — and its first consumer is
-   `Acc`, not `Quot`. `mini/src/acc.rs` names `rel_graph(A,r)` in `Acc`'s
+   `Acc`, not `Quot`. `checker/src/mini/acc.rs` names `rel_graph(A,r)` in `Acc`'s
    formation clause, because `derived/src/acc/` reads `⟨y,x⟩ ∈ R` for exactly
    the reason `derived/src/quot/` does. So finding 3 below is a statement about
    two constructions and reads as one.)*
 6. **None of this will move a corpus number.** `Declaration::Quot` is given no
-   `(declaration, σ)` pairs at all (`mini/src/ledger.rs:289`), so the four
+   `(declaration, σ)` pairs at all (`checker/src/mini/ledger.rs:289`), so the four
    primitives can be built, stored and used without a single ledger row changing.
    A flat delta is the *expected* outcome of landing the clause, not evidence
    against it. §5 has the measurable consequences, which are downstream.
 
 **Landed at `u = 0`, `6706616`–`89e960e`, and completed at `f2c4b5b`.**
-*(`Quot.sound`'s own inhabitation — T8 — is `mini/src/axiom.rs`, at the
+*(`Quot.sound`'s own inhabitation — T8 — is `checker/src/mini/axiom.rs`, at the
 declaration pipeline rather than at `zoneb::ensure`, because an axiom has no
 constant occurrence to hang a clause off. `constEv` 195 → **197**: both of
 `123`'s `u = 0` pairs, since `quotSoundType`'s value is the same constant. The
@@ -256,11 +256,11 @@ function space, obligations per primitive at `u = 0`:
 | T4 | ι, `v ≥ 1`: `Γ ⊢ ⟦Quot.lift α r β f h (Quot.mk α r a)⟧ = ⟦f a⟧` | descend the five-deep `beta_spine` on the stored λ-nest to reach `app(f̄, ⟦Quot.mk r a⟧)`, then two `Thm::eq_leibniz` steps along `⟦mk…⟧ = •` and `⟦a⟧ = •` (both from `point_of_proof`); app-congruence is one Leibniz instance at `φ(x) := app(f̄,⟦a⟧) = app(f̄,x)` |
 | T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | `f`'s own certificate **plus the same congruence as T3** — `chi(h⃗,⟦α⟧)` and `chi(h⃗,⟦Quot α r⟧)` share the symbol and the holes and differ in the domain argument. `CondSite` taking the domain as an argument is what keeps it one step (§2.1). ι at `v = 0` is proof irrelevance, and `124_quotLiftReduction` closes on it |
 | T6 | `ind` typing: `Γ ⊢ • ∈ app(ḡ, q)` at the nest's own `q` | **not a lemma, and `derived/` owes nothing.** *(Corrected at `0f17034`, built.)* At a nest bottom the quantifier is never introduced, because `q` is this nest's own binder: it inhabits `⟦Quot α r⟧`, which β-reduces to `⟦α⟧`, so **`q` is its own witness** for `h : ∀a:α, β (mk a)` and no `a` is produced; and `⟦mk a⟧` is `•` at *every* `a`, so `h`'s fibre does not mention its binder and the application lands on `app(ḡ,•)` whatever it is applied at. One Leibniz along `• = ⟦q⟧` finishes. The quantified form below is the right shape only for a consumer holding an arbitrary `q` |
-| T7 | `ind` ι (`ind β h (mk r a) ≡ h a`, the rule at mini/src/kernel.rs:2564) | both sides are proofs: `point_of_proof` on each side, `trans`/`symm`. **Not a `u = 0` obligation** — see below |
+| T7 | `ind` ι (`ind β h (mk r a) ≡ h a`, the rule at checker/src/mini/kernel.rs:2564) | both sides are proofs: `point_of_proof` on each side, `trans`/`symm`. **Not a `u = 0` obligation** — see below |
 | T8 | `sound` typing: `Γ ⊢ • ∈ [t₁ = t₂]` where `t₁ = ⟦mk a⟧`, `t₂ = ⟦mk b⟧` | both provably `•`: `eq_refl`, Leibniz, `cond_intro`. `r a b` is never consulted — `sound` is *free* at `Sort 0`, because `A` is a subsingleton |
 
 **T7 is uniform in `u`, not a `Sort 0` obligation.** `Quot.ind`'s motive is
-hardwired `β : Quot α r → Prop` in `add_quot` (`mini/src/kernel.rs`), and its
+hardwired `β : Quot α r → Prop` in `add_quot` (`checker/src/mini/kernel.rs`), and its
 level parameter list is `[u]` alone — there is no `v`. So both sides of its
 ι-rule are proofs at **every** `u`, and the derivation above is the whole of it at
 every level. It is tabulated here for locality; it is not part of what the `u = 0`
@@ -314,7 +314,7 @@ claims, and this note makes only the first.
 
 ### 2.5 `Quot.lift` out of a `Prop` quotient into `Type` is real, and costs nothing
 
-Checked against the primitive types as ported verbatim in `mini/src/kernel.rs`
+Checked against the primitive types as ported verbatim in `checker/src/mini/kernel.rs`
 (`add_quot`, lines 2496–2523): `Quot : ∀(α : Sort u), (α → α → Prop) → Sort u` and
 `Quot.lift` carries an independent `sort_v` for `β`. Nothing ties `v` to `u`;
 `u = 0, v = 1` typechecks, and thesis §3.1.1 exhibits precisely that instance —
@@ -542,7 +542,7 @@ the thesis's `n′ ≥ 1` hedge at thesis.txt:2359 is its shadow. It is a split 
 ### 5.1 How to tell whether it landed — not by the corpus number
 
 **Landing the clause will not move any ledger row, and a flat delta must not be
-read as the clause failing.** `mini/src/ledger.rs:289` gives `Declaration::Quot`
+read as the clause failing.** `checker/src/mini/ledger.rs:289` gives `Declaration::Quot`
 no `(declaration, σ)` pairs at all — the four primitives are counted as
 declarations with no interpretable content and `continue`d, exactly as inductives
 are. So `⟦Quot⟧`, `⟦Quot.mk⟧`, `⟦Quot.lift⟧` and `⟦Quot.ind⟧` can be built,
@@ -590,7 +590,7 @@ Sound as far as it goes; five findings, in decreasing order of substance.
    `rel_graph` with its two bridge lemmas. The Verdict block at the top of this
    file was corrected when that landed; this finding's body was not, so it read
    "genuinely unbuilt" and "exist nowhere yet" long after both. Its first
-   consumer was `Acc`, not `Quot`; `mini/src/quot_classes.rs` is the second. The
+   consumer was `Acc`, not `Quot`; `checker/src/mini/quot_classes.rs` is the second. The
    finding as written is below, and it is right about everything except the
    existence.*
 
@@ -656,8 +656,8 @@ Sound as far as it goes; five findings, in decreasing order of substance.
   `Tower::sub` and `Tower::at(0) = None` are as quoted in
   `derived/src/tower/rungs.rs`; `add_quot`'s four types, `Quot.lift`'s independent
   `[u,v]`, `Quot.ind`'s `[u]`-only motive and both ι rules are as quoted in
-  `mini/src/kernel.rs`; the `CondSite`/`FibreSite` keying of §2.1 is read off
-  `mini/src/interp.rs`. The countermodel computations (`quot(1,R) = {1}`,
+  `checker/src/mini/kernel.rs`; the `CondSite`/`FibreSite` keying of §2.1 is read off
+  `checker/src/mini/interp.rs`. The countermodel computations (`quot(1,R) = {1}`,
   `quot(0,R) = 0`, `{1} ∉ U₀`) are two-line set calculations against the printed
   interfaces of `eqv.rs`/`classes.rs`. The `123_quotSoundType` figures in §5.1 are
   from an actual run of `mini --verbose`; the per-declaration split of those four
@@ -668,7 +668,7 @@ Sound as far as it goes; five findings, in decreasing order of substance.
   never been exercised against a Lean-side `r` at all (§6, finding 3. The clause
   is analysis." **All four clauses are false**, and the Verdict block at the top
   of this same file says so — "Landed at `u = 0`, `6706616`–`89e960e`, and
-  completed at `f2c4b5b`". The branch is `mini/src/quot.rs::build`; T6 was
+  completed at `f2c4b5b`". The branch is `checker/src/mini/quot.rs::build`; T6 was
   dissolved rather than written (§2.3's own correction); `derived/src/quot/` is
   exercised against a Lean-side `r` through `rel_graph`. The honesty note this
   bullet belonged to is otherwise intact — it is the record of what was analysis

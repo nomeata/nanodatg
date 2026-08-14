@@ -381,10 +381,10 @@ Entry 7 (`rec_acc`) is **no longer a blocker** — it landed 2026-08-01, with
 *(This read "Still blocked on the in-flight §5.2 carrier compiler
 (`derived/src/inductive/`) and on the recursor/ι wiring. Do not dispatch." **Both
 are built.** §5.2's `good`: `derived/src/inductive/family/good.rs`, wired at
-`mini/src/zoneb.rs::build_indexed`. §5.3's subsingleton carrier:
+`checker/src/mini/zoneb.rs::build_indexed`. §5.3's subsingleton carrier:
 `derived/src/inductive/family/{le,le_rec,le_prop,le_prop_rec,le_prop_fields,le_index}.rs`,
-wired at `mini/src/class_s.rs` and `mini/src/class_s_ix.rs`. `is_k`/`Eq.rec`:
-`mini/src/convert.rs` and `mini/src/recursor.rs`, and `094_ruleK` certifies.)*
+wired at `checker/src/mini/class_s.rs` and `checker/src/mini/class_s_ix.rs`. `is_k`/`Eq.rec`:
+`checker/src/mini/convert.rs` and `checker/src/mini/recursor.rs`, and `094_ruleK` certifies.)*
 
 One fact worth recording so it is not re-derived: `good`'s base
 case needs `Eq`'s *elimination* at the set level, and that already exists —
@@ -499,9 +499,15 @@ different carrier, and `RecBottom::Nat`'s bottom is `natrec(z,s,b)` with no
   the corpus we inherited, not the output we generate.
 
   `Quot.sound` (at `Sort 0`) and `propext` are **built** — `mini::axiom`, over
-  `derived::prop::prop_ext`. `Classical.choice` is not, and it is not a library
-  item: see `mini/src/axiom.rs`'s header for why `ε` cannot be a term of the
-  kernel's language and what decision would have to be taken instead.
+  `derived::prop::prop_ext`. **`Classical.choice` is now built too** — the entry
+  used to say it was not, and that it was not a library item because `ε` cannot
+  be a term of the kernel's language. `clause_for` has a `Classical.choice` arm
+  (`checker/src/mini/axiom.rs:295–307`), `Clause::Choice` is derived over
+  `derived::choice::Epsilon` with the per-rung `ε` in
+  `checker/src/mini/choice_clause.rs`, and the module header records what it
+  bought: `before Clause::Choice constEv=3 library-gap=4
+  waiting:axiom(Classical.choice)=4`, after `constEv=7`, no library gap and no
+  waiting rows (`axiom.rs:220–223`). **Do not re-derive this.**
 - **The ω-recursion theorem / ω-tower completion** — off the critical path
   since the transitivity clause landed; `INDUCTIVES.md` ("Does `N` need the
   ω-tower? No — measured") explicitly warns against restarting it.

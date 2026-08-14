@@ -44,7 +44,7 @@ brief's premises need correction before sequencing.** The load-bearing facts:
   `FreeVar`. §3 designs the finished form: the key must be the **`Local`
   node**, not the bare level, and the wiring home is exactly
   THREADING-CENSUS.md §2 stage 1, whose plumbing (`checker/src/scope.rs`, a
-  tested port of `mini/src/scope.rs` with **no production caller yet**) is
+  tested port of `checker/src/mini/scope.rs` with **no production caller yet**) is
   sitting in the tree waiting.
 * **"Fully monomorphic" is mode B, and no checker of nanoda lineage can read
   mode B today.** The Mathlib-scale validation the brief cites — 776,723
@@ -96,7 +96,7 @@ Per the standing instruction, before anything is built on them:
    was written and is **no longer**: CACHING-DESIGN's step 1 landed, the gate
    in `frame_put` is now `self.th.is_some() && t.ev.thm().is_none()`, and the
    acceptance axis has a live memo (corpus hit rate 3.38% → 18.15%,
-   `mini/tests/nested.rs` 17.906 T → 8.409 T instructions).
+   `checker/tests/mini_nested.rs` 17.906 T → 8.409 T instructions).
 3. **"Assume fully monomorphic input."** Only mode B is fully monomorphic,
    and mode B's output is refused by every kernel that mints recursors by
    name — nanoda, and Lean itself (MONOMORPH §4.2: "Mode B needs a checker
@@ -121,7 +121,7 @@ Per the standing instruction, before anything is built on them:
 Two different Rust types; a real correspondence on closed terms; already
 exercised in one direction on every parse.
 
-| | `mini::Expr` (`mini/src/expr.rs:204`) | `checker::Expr` (`checker/src/expr.rs`) |
+| | `mini::Expr` (`checker/src/mini/expr.rs:204`) | `checker::Expr` (`checker/src/expr.rs`) |
 | --- | --- | --- |
 | bound variable | `BVar(u32)` | `Var { dbj_idx: u16 }` |
 | free variable | **none** — ambient telescope `Checker::lenv` | `Local { binder_name, binder_style, binder_type, id: FVarId }` with `FVarId::{DbjLevel(u16), Unique(u32)}` |
@@ -131,7 +131,7 @@ exercised in one direction on every parse.
 | everything else | `Const/App/Lam/Forall/Let/Sort/Proj/StrLit` | same constructors, ptr-shaped |
 
 On closed expressions (no `Local`) the two are in bijection up to binder
-names and literal width — `mini/src/convert.rs` *is* that bijection's
+names and literal width — `checker/src/mini/convert.rs` *is* that bijection's
 checker→mini half, run on every declaration mini has ever checked. The
 reverse bridge does not exist, and **this design does not build it**: bridging
 at runtime would keep mini's uncached engine in the loop for exactly the
@@ -306,7 +306,7 @@ Three legs, each already load-bearing somewhere in the tree:
    opening names exactly the variable every other opening of the same key
    uses, and the assumption formula `w ∈ ⟦T⟧` is *literally the same
    formula* each time — `⟦·⟧` is deterministic, which the design requires
-   independently of any cache (`mini/src/kernel.rs`, the `Clause` doc: two
+   independently of any cache (`checker/src/mini/kernel.rs`, the `Clause` doc: two
    equal terms interpreting unequally would break every congruence). Mini's
    variables are fresh per opening and addressed relative to stack depth
    (`scope_term` reads `scopes.len() - 1 - depth`), which is why its frame's
@@ -349,7 +349,7 @@ already do it.
 ## 4. Measured for this study
 
 Both runs in the pivot worktree at `d1b1698`, `test` profile, single thread,
-`ulimit -v 8 GB`, identical input `mini/tests/fixtures/nested_model.ndjson`
+`ulimit -v 8 GB`, identical input `checker/tests/fixtures/nested_model.ndjson`
 (the hand-written `Tree` tower, 40 declarations, both engines' common
 denominator — PROFILE §1's reference fixture). Counters, not clocks.
 
@@ -387,11 +387,11 @@ W=.claude/worktrees/pivot   # detached at origin/master, vendor symlinked
 cd $W
 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build -p nanoda_lib --features tg --bin nanoda_bin --profile test
 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build -p mini --bin mini --profile test
-# config: export_file_path = mini/tests/fixtures/nested_model.ndjson,
+# config: export_file_path = checker/tests/fixtures/nested_model.ndjson,
 # unsafe_permit_all_axioms, nat+string extensions, num_threads 1
 ( ulimit -v 8388608; perf stat -e instructions ./target/debug/nanoda_bin cfg.json )
 ( ulimit -v 8388608; perf stat -e instructions ./target/debug/mini --no-modelgen \
-    --acceptance-only --mutual --nested mini/tests/fixtures/nested_model.ndjson )
+    --acceptance-only --mutual --nested checker/tests/fixtures/nested_model.ndjson )
 ```
 
 (`--no-modelgen` because no `modelgen` binary is built in this tree; the
@@ -399,6 +399,16 @@ fixture contains no nested declaration to splice, so the flag changes
 nothing — PROFILE §2 runs the same fixture as "no tower".)
 
 ## 5. Sequencing — what proceeds today, what waits, and on what
+
+> **Superseded as a plan (2026-08-11, DECISIONS.md).** "Today" here is
+> 2026-08-08. Item 2 below proposes lifting mini's indexed-family coverage
+> *into* `tg.rs`; the standing rule is now the opposite — mini-owned inductive
+> carriers, constructor graphs, recursors, projection packages and certificates
+> are authoritative, and TG must consume those exact objects rather than
+> reconstruct a parallel carrier or recursor. Item 4's "Mini CI relief
+> (`mini/`)" presumes a separate crate, and there is none. §6's boundary
+> argument is about a crate edge that no longer exists. The threading item (1)
+> is the part that outlived the section.
 
 **Today, in parallel, none blocked on the others:**
 
