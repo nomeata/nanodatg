@@ -10285,3 +10285,68 @@ the `gap:` rows and summed with `awk`. No `perf stat` — nothing was landed. As
 in the section above, the origin/relay split is read off reason strings and is a
 hypothesis until confirmed against the origin bitmask; the per-export totals and
 the 74/91 clean count are not.
+
+## `init-prelude` under the unified checker — where it actually stops — 2026-08-14
+
+Run at `b91433b`, `checker --verbose --mutual --nested` with modelgen on, debug
+build, ~34 minutes.
+
+**Three flag findings first, because every command in `CLAUDE-HANDOFF.md` uses
+`--no-modelgen` and none of this is visible under it.**
+
+* `--no-modelgen`: declines at declaration 1 — `Nested inductive Lean.Syntax not
+  supported`, exit 2, `prefix declarations=0`.
+* modelgen on, no other flags: modelgen does its job — `Lean.Syntax: model of 26
+  declarations`, `Lean.Syntax._model.0: model of 22 declarations`, and
+  `statements: 20 compared against the installed recursors' own rules, 0 differ`
+  — and then the *checker* declines `Mutual inductive Lean.Syntax._model.0 not
+  supported`. The nested splice emits a **mutual** inductive, so the nested
+  gate alone is not enough.
+* `--mutual --nested` with modelgen: gets through, and runs to the wall below.
+  The two are separate gates by design (`bin/checker.rs:78-84`): `--mutual`
+  opens a block whose recursor rules the kernel derives, `--nested` opens a
+  declaration whose `T.rec_1` carries an ι rule.
+
+**Where it stops.**
+
+```
+init-prelude.ndjson  decline  budget: weak-head reduction recursed past 2000
+  levels while reducing 260146; mini bounds this because the alternative is a
+  stack overflow, which reports nothing
+… while checking type of recursor for ByteArray.IsValidUTF8
+prefix   declarations=44  pairs=0  certified=0
+facts    declars=2131  natLits=35  maxNatLit=18446744073709551616  strLits=25
+         scheduledPairs=3959  recMismatches=0  mutualBlocks=0
+clauses  interpreted=222959  remaining=243  bvar=55447  sort=9032  const=45736
+         app=77816  lam=12649  pi-prop=280  pi-arrow=10439  pi-dep=8432
+         let=25  proj=211  natLit=3103  strLit=32
+```
+
+So the file gets *far*: 2131 declarations' facts, 3959 scheduled pairs, 222 959
+clauses interpreted with 243 remaining, `recMismatches=0`. It is not a shallow
+failure.
+
+**Two things this corrects.**
+
+* **The certified prefix is 0, not ≥265.** The task list records
+  "init-prelude's certified prefix 0 → ≥265" as closed at `9ac7d41`; this run
+  reports `prefix declarations=44 pairs=0 certified=0`. Either that result was
+  measured on a different pipeline or the prefix stops earlier now. It is not
+  reproducing.
+* **The wall is `ByteArray.IsValidUTF8`, and it is a depth bound, not a gap.**
+  This is the decline the task list has carried since the 22.50 T measurement,
+  and it is still exactly there. It is hit *while checking the type of the
+  recursor*, on a term involving `List.utf8Encode` under an `Eq`, and the bound
+  is a **2000-level whnf recursion guard** that exists because the alternative
+  is a silent stack overflow. Note `maxNatLit` is 2^64 — the file contains a
+  literal at the `UInt64` boundary.
+
+Nothing here is a certification question. The whole gap apparatus never gets to
+run on this file, because acceptance stops first.
+
+### Method note
+
+One run, one binary, no `perf stat` — this measures *where* it stops, not what
+it costs. The instruction figure of record (22.50 T) predates the pipeline
+unification and was not re-taken. `/usr/bin/time` does not exist in this
+environment; use the shell builtin or `perf` if a cost number is wanted.
