@@ -4637,6 +4637,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         match Thm::mp(&thm, &crate::scope::assume_ambient(ante)) {
             Some(t) if t.concl().as_eq().is_some() => {
                 note_boundary_closed(hyps.len() as u64);
+                #[cfg(feature = "stepcount")]
+                crate::escapes::closed(&hyps);
                 TgCert::Proved(t)
             }
             _ => TgCert::Conditional { thm, hyps },

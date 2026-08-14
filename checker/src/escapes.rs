@@ -93,6 +93,7 @@ struct Census {
     prov: HashMap<Formula, Prov>,
     made: HashMap<Vec<Formula>, (u64, u32)>,
     taken: HashMap<Vec<Formula>, u64>,
+    closed: HashMap<Vec<Formula>, u64>,
     decls: HashMap<u32, String>,
 }
 
@@ -105,6 +106,7 @@ thread_local! {
         prov: HashMap::new(),
         made: HashMap::new(),
         taken: HashMap::new(),
+        closed: HashMap::new(),
         decls: HashMap::new(),
     });
 }
@@ -143,6 +145,23 @@ pub fn taken(hyps: &[Formula]) {
     });
 }
 
+/// One conditional certificate was **closed at the judgement boundary** as the
+/// ambient context's own typings.
+///
+/// A third fate, alongside [`made`] and [`taken`], and it needs its own
+/// register for the same reason the ledger gives it its own term: the
+/// certificate was not handed back to a rule, so calling it `taken` would be
+/// false, and it did not escape, so leaving it out would make this census
+/// disagree with `escaped()`. It did before this existed — on
+/// `076_listRecReduction` the census announced 15 escaping certificates while
+/// the ledger reported 1, because the 14 the boundary had closed were still
+/// counted here.
+pub fn closed(hyps: &[Formula]) {
+    CENSUS.with(|c| {
+        *c.borrow_mut().closed.entry(hyps.to_vec()).or_insert(0) += 1;
+    });
+}
+
 /// Name the declaration a backend sequence number belongs to.
 pub fn decl(seq: u32, name: &str) {
     CENSUS.with(|c| {
@@ -160,7 +179,8 @@ fn report_from(c: &Census) -> String {
     // The residue: assumption lists made more often than they were consumed.
     let mut escaping: Vec<(Vec<Formula>, u64, u32)> = Vec::new();
     for (hyps, (n, seq)) in c.made.iter() {
-        let used = c.taken.get(hyps).copied().unwrap_or(0);
+        let used = c.taken.get(hyps).copied().unwrap_or(0)
+            + c.closed.get(hyps).copied().unwrap_or(0);
         if *n > used {
             escaping.push((hyps.clone(), n - used, *seq));
         }
