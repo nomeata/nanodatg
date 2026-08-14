@@ -6918,6 +6918,58 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         self.nat_shape(ctx, &r.all_inductives[0])
     }
 
+    /// The **direct-clause** arm of the ι readiness gate.
+    ///
+    /// [`Self::wants_proj_red_iota`] asks whether mini published a plain
+    /// recursive class-(T) translation and a dependent-elimination package —
+    /// which is precisely the condition [`Self::mini_dep_rec_bottom`] needs, so
+    /// it predicts the `RecBottom::Dep` arm of [`Self::iota`]'s adopted nest and
+    /// nothing else. [`Self::iota`]'s own `usable` accepts a **second** arm,
+    /// `RecBottom::Nat`, and that arm is unreachable from the first question:
+    /// `Nat` is a *direct clause* — [`crate::mini::direct::clause_for`] routes
+    /// it to the native `NatClause` before [`crate::mini::zoneb::build`] runs,
+    /// so `publish_projection_translation` is never called for it and
+    /// [`Self::mini_plain_recursive_translation_at`] is permanently `None`.
+    ///
+    /// The consequence was measured, not guessed. On
+    /// `checker/tests/fixtures/nat_char_equations.ndjson` every one of the 30
+    /// refusals of [`crate::tc::TypeChecker::authoritative_reduction_ready`] was
+    /// a `Nat.rec` ι step inside a `PProd` projection subject, declined for
+    /// "mini published no translation at these levels" — so
+    /// [`crate::tc::TypeChecker::reduce_proj`] dropped the subject trace at all
+    /// 14 `PProd` sites, `proj_red` was handed the *unreduced* `Nat.rec` subject,
+    /// and `derive_projection_computation` exited at "the structure head is not a
+    /// constructor". The projection composition was never at fault.
+    ///
+    /// This **adds** an arm; it never removes one. The caller keeps its original
+    /// condition as the second disjunct, so no redex that was ready stops being
+    /// ready.
+    ///
+    /// [`Self::rec_bottom`] consults `RecBottom::Enum` before `RecBottom::Nat`,
+    /// and [`Self::iota`]'s `usable` rejects `Enum`, so a faithful mirror would
+    /// appear to owe an `enum_rec_shape(name).is_none()` conjunct. It does not:
+    /// [`Self::enum_arity`] requires `!ind.is_recursive` and
+    /// [`Self::nat_shape`] requires `ind.is_recursive`, so the two recognisers
+    /// are disjoint on every declaration and the conjunct could never be false
+    /// where the rest of this predicate is true. It was written, measured to
+    /// move no fixture and neither large export, and removed rather than
+    /// shipped as a guard no test can reach.
+    ///
+    /// The condition that *is* load-bearing is `nat_rec_shape`. Measured:
+    /// replacing this whole predicate with `true` leaves every fixture
+    /// byte-identical but moves `tutorial/076_listRecReduction` from 59 gaps to
+    /// 62, because recursors outside the `Nat` shape then reach a gate that
+    /// promises what [`Self::iota`] cannot deliver.
+    fn iota_nat_clause_ready(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> bool {
+        self.mini_const(ctx, name, levels).is_some()
+            && self.nat_rec_shape(ctx, &name).is_some()
+    }
+
     /// `Some(())` when `name` is the recursor of the interpreted
     /// **parameterised** shape — `List.rec`.
     ///
@@ -20450,6 +20502,12 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
             return false
         }
+        // The direct-clause arm, tried first because it is the cheap one and
+        // because the class-(T) question below is permanently `None` for a
+        // direct clause. See [`Self::iota_nat_clause_ready`].
+        if self.iota_nat_clause_ready(ctx, name, levels) {
+            return true
+        }
         let given = ctx.read_levels(levels).to_vec();
         let Some(ind_given) = given.get(1..) else { return false };
         let ind_levels = ctx.alloc_levels_slice(ind_given);
@@ -20487,7 +20545,27 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let reduced_subject = reduced_subject.and_then(|(subject, cert)| {
             self.consume(&cert).map(|cert| (subject, cert))
         });
-        if let Ok(out) = self.derive_projection_computation(ctx, redex, reduct, reduced_subject) {
+        let computed = self.derive_projection_computation(ctx, redex, reduct, reduced_subject);
+        #[cfg(feature = "stepcount")]
+        if let Err(e) = computed {
+            let shape = match ctx.read_expr(redex) {
+                Expr::Proj { .. } => "redex=Proj",
+                Expr::App { .. } => {
+                    let (h, _) = ctx.unfold_apps(redex);
+                    match ctx.read_expr(h) {
+                        Expr::Proj { .. } => "redex=App(Proj,..)",
+                        _ => "redex=App(other,..)",
+                    }
+                }
+                _ => "redex=other",
+            };
+            *PROJ_DECLINE
+                .lock()
+                .expect("proj_decline poisoned")
+                .entry(format!("{shape}  {e}"))
+                .or_insert(0u64) += 1;
+        }
+        if let Ok(out) = computed {
             return self.cert(ctx, out)
         }
         #[cfg(feature = "stepcount")]
@@ -20855,6 +20933,15 @@ static PROJ_RED: [std::sync::atomic::AtomicU64; 4] =
 #[cfg(feature = "stepcount")]
 static PROJ_STRUCTS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// Why [`TgBackend::derive_projection_computation`] declined, by redex shape
+/// and by its own error string — the census that separates "the composition is
+/// wrong" from "the rule was handed the wrong objects". It is what showed that
+/// all 14 `PProd` sites on `nat_char_equations` exited at the *first* line of
+/// the computation, 12 of them because the redex is an application rather than
+/// a projection at all and 2 because the subject had not been reduced.
+#[cfg(feature = "stepcount")]
+static PROJ_DECLINE: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 /// For the multi-constructor declarations: is any constructor nullary?
 /// Index 0 = yes (`t_policy` has its point), 1 = none (policy 3, declines).
 #[cfg(feature = "stepcount")]
@@ -21047,6 +21134,18 @@ pub fn origin_report() -> String {
         ));
         for (r, n) in v.iter().take(25) {
             s.push_str(&format!("    {r:<96}  {n:>8}\n"));
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    {
+        let g = PROJ_DECLINE.lock().expect("proj_decline poisoned");
+        if !g.is_empty() {
+            s.push_str("  …why the projection computation declined\n");
+            let mut v: Vec<(&String, &u64)> = g.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1));
+            for (r, n) in v.iter().take(30) {
+                s.push_str(&format!("    {r:<110}  {n:>8}\n"));
+            }
         }
     }
     #[cfg(feature = "stepcount")]

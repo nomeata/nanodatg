@@ -110,6 +110,25 @@ fn default_checks_every_axiom_while_naive_keeps_its_ignore_rule() {
 /// mutations make a parallel TG Nat nest, or a return to abbreviation-only
 /// iota, fail at the first affected equation rather than hiding in the full
 /// fixture's aggregate debt.
+///
+/// **The full-fixture ratchet moved 152 → 65, and the trade is written here.**
+/// `TgBackend::iota_nat_clause_ready` added the direct-clause arm to the ι
+/// readiness gate. Before it, every `Nat.rec` ι step inside a `PProd`
+/// projection subject was refused — `Nat` is a direct clause and publishes no
+/// class-(T) translation for the gate's only question — so `reduce_proj`
+/// dropped the subject trace at all 14 `PProd` sites and `proj_red` admitted.
+/// What is bought: `gap: proj_reduce` 14 → **0** and `gap: eq_cache` 2 → 0,
+/// with their relays. What is paid, and it is a real cost: the escape ledger
+/// rises 20 → 26, because a derivation that used to be admitted outright now
+/// reaches the boundary carrying antecedents. Net −87, which is *better* than
+/// the −74 `NANODA_ASSUME=proj_reduce` priced, because the deletion acquires
+/// the equation as an antecedent and this derives it.
+///
+/// The two ι counts are the ratchet that says the subject traces are actually
+/// being consumed rather than the gate merely being quieter: they **rise**,
+/// 10 → 17 at `Nat.zero` and 13 → 22 at `Nat.succ`. A change that widened the
+/// gate without the ι rule certifying anything new would move the gap total
+/// and leave these two alone.
 #[test]
 fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let rec_add = run_nat_prefix(75, &["--no-modelgen", "--verbose"]);
@@ -138,14 +157,58 @@ fn authoritative_nat_handoff_reaches_recadd_and_both_iota_equations() {
     let full = run(&["--no-modelgen", "--verbose"]);
     let stdout = String::from_utf8_lossy(&full.stdout);
     assert_eq!(full.status.code(), Some(4), "the full fixture's known TG debt moved:\n{stdout}");
-    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:152")), "the measured full-fixture baseline moved:\n{stdout}");
+    assert!(stdout.lines().next().is_some_and(|line| line.ends_with("tg gaps:65")), "the measured full-fixture baseline moved:\n{stdout}");
     assert!(
-        stdout.contains("conditional derivations: 590 made (0 of them copies), 570 accounted for by a rule, 20 escaped"),
+        stdout.contains("conditional derivations: 805 made (0 of them copies), 779 accounted for by a rule, 26 escaped"),
         "the full fixture retained conditional trace evidence:\n{stdout}",
     );
     assert!(stdout.contains("checkerSlots=30\tadoptedByCheckerTyping=15"), "the inductive typing handoff regressed:\n{stdout}");
-    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 10, "a zero iota certificate was lost:\n{stdout}");
-    assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 13, "a successor iota certificate was lost:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 17, "a zero iota certificate was lost:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 22, "a successor iota certificate was lost:\n{stdout}");
+    assert!(!stdout.contains("gap: proj_reduce"), "the PProd projection origin came back:\n{stdout}");
+}
+
+/// **The ι readiness gate has two arms, and the direct-clause one is new.**
+///
+/// `nat_char_equations`'s seventeen theorems are all `Eq.refl _` through Lean's
+/// `brecOn`/`below` nest, whose step case projects the induction hypothesis out
+/// of a `PProd`. Before `TgBackend::iota_nat_clause_ready` every one of those
+/// projections was admitted, and the reason was **not** the projection rule:
+/// the subject is a `Nat.rec` redex, `authoritative_reduction_ready` refused its
+/// ι step because `Nat` is a `mini::direct` clause and publishes no class-(T)
+/// translation for the gate's only question, `reduce_proj` therefore dropped the
+/// subject trace, and `proj_red` was handed an unreduced subject whose head is a
+/// recursor rather than a constructor.
+///
+/// What this pins, and how each line was falsified:
+///
+/// * **Deleting the new disjunct in `wants_proj_red_iota`** returns the fixture
+///   to 152 gaps with `gap: proj_reduce` back at 14 — every assertion below
+///   fails. That is the construction's own falsification and it is measured.
+/// * **Making `iota_nat_clause_ready` return `true` unconditionally** is *not*
+///   visible here: measured, every fixture in this directory is byte-identical,
+///   including the `gap: iota:` rows of `mutual_aux_encoding` and
+///   `ctor_abbrev_major`. It is visible on the export corpus —
+///   `tutorial/076_listRecReduction` moves **59 → 62** — because that is where
+///   recursors outside the `Nat` shape reach this gate. So the guard is real and
+///   this file cannot see it; `tg_tutorial.rs`'s corpus ratchet is what does.
+#[test]
+fn nat_direct_clause_iota_readies_the_pprod_projection_subjects() {
+    let full = run(&["--no-modelgen", "--verbose"]);
+    let stdout = String::from_utf8_lossy(&full.stdout);
+    assert_eq!(report_count(&stdout, "TOTAL gaps"), 65, "the PProd projection ratchet moved:\n{stdout}");
+    // The origin this tranche was scoped on, and the one that went with it.
+    assert!(!stdout.contains("gap: proj_reduce"), "a PProd projection subject lost its iota evidence:\n{stdout}");
+    assert!(!stdout.contains("gap: eq_cache"), "a cache hit lost the replayable Nat.rec trace:\n{stdout}");
+    // The gate is a *prediction*: anything it readies must actually certify, or
+    // the ledger trades a projection gap for an iota one and nets nothing.
+    assert!(!stdout.contains("gap: iota:"), "a readied Nat.rec subject trace was not certified:\n{stdout}");
+    assert!(!stdout.contains("gap: whnf"), "a subject trace drifted from its endpoints:\n{stdout}");
+    // …and it must certify by *consuming* mini's Nat evidence, not by going
+    // quiet. Both counts rise when the gate opens; a gate that merely stopped
+    // asking would leave them where they were (10 and 13).
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.zero"), 17, "the zero carrier is not being consumed:\n{stdout}");
+    assert_eq!(report_count(&stdout, "ι sites computed at Nat.succ"), 22, "the successor carrier is not being consumed:\n{stdout}");
 }
 
 /// Mini owns the `Pair`/`Tri` declarations and publishes their class-(T)
