@@ -3013,3 +3013,95 @@ fn propexts_typing_is_about_its_own_declared_type() {
         );
     }
 }
+
+// ── The `EnvCore` seam, for indexed class-(T) evidence ───────────────────────
+
+/// The **unified** route — no `--naive`. Every other runner in this file uses
+/// the whole-file Mini checker, which never crosses the `EnvCore` seam because
+/// one engine holds both ends. The seam only exists on the production route,
+/// where Mini owns the inductive group and nanoda/TG check the definitions in
+/// the same call, so a test about publication has to run that route.
+///
+/// `--acceptance-only` for [`run`]'s reason: these fixtures accept while still
+/// owing certification debt, and the axis under test here is neither.
+fn run_unified(name: &str) -> String {
+    let path = fixture(name);
+    let out = Command::new(env!("CARGO_BIN_EXE_checker"))
+        .arg("--no-modelgen")
+        .arg("--verbose")
+        .arg("--acceptance-only")
+        .arg(&path)
+        .output()
+        .expect("spawn checker");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{name} must be ACCEPTED on the unified route:\n{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout
+}
+
+/// `(translations, eliminators)` off the seam readiness row, `(0, 0)` when the
+/// row is absent — which is exactly the state this test exists to forbid.
+fn published_indexed(stdout: &str) -> (u64, u64) {
+    let Some(l) = stdout.lines().find(|l| l.contains("indexed class-(T) evidence PUBLISHED"))
+    else {
+        return (0, 0)
+    };
+    let n: Vec<u64> = l
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().expect("digits"))
+        .collect();
+    assert_eq!(n.len(), 2, "the readiness row changed shape: {l}");
+    (n[0], n[1])
+}
+
+/// **Mini's indexed class-(T) evidence reaches the shared core.**
+///
+/// `derived::inductive::family::IndexedDepRecursor::iota` concludes the indexed
+/// ι rule, `crate::mini::rec_ix_dep` builds it and mini fires it live — and for
+/// as long as this project has had an indexed route, **none of it crossed the
+/// `EnvCore` seam**. `rec_ix_dep`'s value clause inserted into mini's private
+/// `IndApparatus::dep_elims` and omitted the `publish_dep_elim` its non-indexed
+/// sibling `rec_dep` performs three lines from the identical insert, and
+/// `zoneb`'s indexed branch likewise inserted `IndexedTranslation` privately
+/// where its non-indexed branch publishes first. `EnvCore` is the only channel
+/// TG reads, so TG saw nothing.
+///
+/// Measured cost of that silence (`ORIGIN-RANKING.md` rank 1): **89 gaps**
+/// across `mutual_aux_encoding`, `ctor_abbrev_major` and `077_RBTree.id_spec`,
+/// the largest single tranche in the tree.
+///
+/// **This test asserts readiness, not consumption.** It is deliberately the
+/// weaker claim: a publication channel's failure mode is silence, and silence
+/// is indistinguishable from "the consumer declined" unless the producing side
+/// is counted. Pinning it separately means a future regression names which of
+/// the two halves broke.
+///
+/// Three fixtures, not one, and each carries a different indexed shape: `Ix` is
+/// tag-indexed beside a plain `N` (so a route that published *any* translation
+/// would pass on one of them alone), `Aux` is the three-member mutual encoding
+/// at six constructors, and `RBTree` is the two-index family with a genuinely
+/// family-valued motive.
+#[test]
+fn mini_publishes_indexed_class_t_evidence_across_the_envcore_seam() {
+    for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
+        let (tr, el) = published_indexed(&run_unified(name));
+        assert!(
+            tr >= 1,
+            "{name}: mini published NO indexed translation. `zoneb`'s indexed branch \
+             filled `IndApparatus::indexed` without `publish_indexed_translation`, so \
+             `EnvCore` — the only store TG reads — holds nothing for this family."
+        );
+        assert!(
+            el >= 1,
+            "{name}: mini published an indexed translation but NO indexed eliminator. \
+             `rec_ix_dep`'s value clause built `IndexedDepRecursor` evidence, kept the \
+             nest-bottom abbreviation, and did not call `publish_ix_dep_elim`. This is \
+             the exact seam defect, and it is worth 89 gaps."
+        );
+    }
+}

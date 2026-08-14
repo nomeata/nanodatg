@@ -1206,14 +1206,27 @@ Three things the design did not say, all of which C1–C3 will meet again:
 there, now under a sharper reason (see below). That is still true — `tg.rs` has
 no `IndexedDeclSpec`, no `family::`, and `gen_scope` still returns
 `Decline::Indices` — and it is the reason this §8 plan is not yet purely
-historical. **On the mini side all four landed**; see the paragraph below, which
+historical. *(Partly overtaken, 2026-08-14: mini now **publishes** its indexed
+class-(T) translation and its `IndexedDepRecursor` package across the `EnvCore`
+seam, so the evidence is reachable from `tg.rs` even though no consumer reads
+it yet. The sentence's claim about `IndexedDeclSpec` and `family::` names in
+`tg.rs` remains true and is the right test of C1–C4's status.)* **On the mini side all four landed**; see the paragraph below, which
 covers C1–C3, and note that C4 landed too: `094`, `117`, `118`, `071` and `072`
 all certify.
 
 *Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`checker/src/mini/zoneb.rs`'s
 `build_indexed`, `checker/src/mini/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
-`checker/src/mini/rec_ix_prop.rs` and `checker/src/mini/rec_ix_dep.rs`; what is left of C3 is
-**ι** at a value motive. `RBTree` is off the evidence ledger entirely — carrier,
+`checker/src/mini/rec_ix_prop.rs` and `checker/src/mini/rec_ix_dep.rs`; **C3's ι at a
+value motive landed too** — `checker/src/mini/iota_ix_dep.rs`, 670 lines, routed live
+from the `num_indices != 0` arm of `checker/src/mini/kernel.rs`'s recursor
+dispatch. *(This paragraph said "what is left of C3 is **ι** at a value
+motive". That was true when written and is not now. `MINI-HANDOFF.md` §26
+supersedes it. Anyone sizing the indexed-ι tranche off this sentence sizes it
+as a missing construction; the construction exists, is complete, and fires in
+this binary today — which is why the tranche is a consumption problem. See the
+2026-08-14 note at the end of this section for what the consumption problem
+actually is, because it is not the one the sentence implies either.)*
+`RBTree` is off the evidence ledger entirely — carrier,
 constructors and both eliminators — and `068` is no longer the corpus's first
 blocker, for the first time in the project. `tg.rs` is untouched — the rungs land
 twice, and this is the first of the two. Point 3 below bit exactly as written:
@@ -1240,6 +1253,105 @@ for at prelude scale: `gen_scope` now tests the **eliminator trichotomy before
 families — the ones §5.2 would serve — while every indexed `Prop` (`Eq`, `HEq`,
 `Acc`, …) lands in `…declined: sort-ambiguous or Prop (class S/P)` where §5.3
 and the truncation clause will find it.
+
+### 8.2 What consuming the indexed ι in `tg.rs` actually costs — measured, 2026-08-14
+
+`ORIGIN-RANKING.md` ranks this the largest tranche in the tree and sizes it as
+"~800–1000 lines of wiring, no new `derived/` theorem", on the reading that
+`IndexedDepRecursor::iota` already concludes the rule and only the publication
+was missing. **The first half is right and the second is not.** Recorded here
+because §8.1 is where a seat will look.
+
+* **No new `derived/` theorem is needed.** Confirmed. `IndexedDepRecursor::iota`
+  (`derived/src/inductive/family/dep_rec.rs`) concludes the indexed ι at Lean's
+  own minor with the index vector eliminated, and mini fires it live.
+* **The publication really was missing, in two places, and is now fixed.**
+  `zoneb.rs`'s indexed branch filled `IndApparatus::indexed` without publishing,
+  and `rec_ix_dep.rs`'s value clause inserted a `DepElim` without the
+  `publish_dep_elim` its non-indexed sibling performs three lines from the
+  identical insert. `EnvCore` now carries `ix_translated` and `ix_dep_elims`.
+* **But receiving the rule is not enough, and this is the part the sizing
+  missed.** The rule is `∀p⃗ ∀m ∀S⃗ ∀T. (PRE → …)` with
+  `PRE = ICOD(m,T) ∧ IDEP(m,S⃗)`, and **`tg.rs` cannot discharge `PRE`**:
+  - `tg.rs` contains **zero** occurrences of `IDEP`, `ICOD`, `idep` or `icod`;
+  - `derived/` *states* the premise (`family/dep_motive.rs`'s `icod` and
+    `idep_parts`) but only as `Formula` builders — stating is not discharging;
+  - the only thing that discharges it is `checker/src/mini/minor_ix.rs` (895
+    lines), whose `transport_at` at `ni > 0` reads a recursive field's index
+    expressions **out of Lean syntax in mini's `E` representation** and which
+    every caller reaches through a live `mini::kernel::Checker`. `TgBackend`
+    holds the same Lean syntax as `ExprPtr<'t>` and holds no `Checker`.
+
+  This is `NAT-CHAR-CENSUS.md` §3 B's obstruction — "everything mini publishes
+  to tg arrives as finished data through the shared const store, not as a
+  resumable checker" — resurfacing at a second site. It is a *premise-discharge*
+  problem, not a wiring problem, and no amount of publication reaches it.
+
+**Two routes reach it. Do not transliterate `minor_ix` into `tg.rs`** — that is
+900 lines of the most intricate code in the tree and it would be a second copy
+of a module mini owns. But note carefully what the semantic-ownership rule does
+and does not forbid here, because the obvious reading of it is wrong:
+
+> TG must consume mini's exact carriers, recursors and certificates. It is
+> **not** forbidden from discharging a premise about them. `tg.rs` already
+> discharges the *non-indexed* `DEP` itself, in `dep_minor_typed`, walking the
+> minor's own Lean binder type — and `dep_minor_typed` is TG-native, not a port
+> of mini's `minor` module.
+
+So the two candidates are:
+
+**(A) Write `ix_dep_minor_typed` in `tg.rs`, beside `dep_minor_typed`.** The
+established precedent, and the closer one: TG already holds what it needs —
+`dom_exprs[np+1+i]` is the minor's declared binder type and `derive_iota_core`
+already walks binder telescopes over `ExprPtr`. What is new against
+`dep_minor_typed` is that a recursive slot's induction hypothesis sits at the
+child's own index vector `d⃗ᵢⱼ`, read off the constructor's binder type, so the
+walk needs `ind_spine_at`'s equivalent over `ExprPtr` (~40 mechanical lines) and
+the per-child index memberships. Bigger in `tg.rs`, ~400–600 lines, and it keeps
+the premise discharge on the side that has the use site.
+
+**(B) Publish the *discharged premise* from mini.** Less `tg.rs` code, and it
+has this going for it:
+
+* `rec_ix_dep::rec_bottom` already derives `PRE` at the checker's **telescope
+  binders** — `c.binders(depth)` / `c.scope_vars(depth)`, i.e. kernel free
+  variables, hence generalisable — and `premise_at`'s own doc states that the
+  eliminator's nest and a use site "want the *same* premise about *different*
+  terms".
+* So mini can generalise that derivation and publish
+  `⊢ ∀p⃗ ∀C ∀S⃗ ∀T. (typings → PRE)`, and `tg.rs` instantiates it at the use
+  site's own terms and discharges `typings` from the `obligations` it already
+  computes in `derive_iota_core`.
+* **The shape to copy is `DepBottom::cod_gen`**, which does exactly this for the
+  `COD` half of the non-indexed `PRE`: derived once per declaration with
+  `cod_at_funspace`, closed with `derived::gen_all`, and consumed in `fire_dep`
+  by two `inst_all`s and a `u_mp`. The indexed row wants the same move applied
+  to the whole premise rather than to one conjunct.
+* **Its weakness, and it is the reason (A) is listed first.** `cod_gen` is
+  derived by `tg.rs` from a `derived` function that takes only `ind`; nothing in
+  the tree currently publishes a *discharged, generalised* premise across the
+  seam, so (B) needs mini-side generalisation machinery that does not exist —
+  `PRE` is proved under the scope's memberships, and closing it means turning
+  those into antecedents in the order `tg.rs` can supply them from
+  `obligations`. Verify that `Closed::discharge` gives that shape on the nose
+  before committing to (B); if it does not, (A) is the cheaper of the two.
+
+**Whichever is taken, settle it before writing rather than during.** The
+measurement that prices it is not `NANODA_ASSUME`'s: the deletion makes the
+origin *acquire* `PRE` as an antecedent, so it prices a world in which the
+premise holds and says nothing about whether either route can establish it.
+That is the whole distinction this section exists to record.
+
+What remains after that is TG-native and is the honest ~800–1000 lines the
+ranking predicted: `RecBottom::IxDep`, a `mini_ix_dep_rec_bottom` that reads the
+published package and checks identity, and a `fire_ix_dep` following
+`iota_ix_dep.rs`'s four-step composite. Two of its steps have no non-indexed
+analogue and should be budgeted separately — a recursive atom is
+`tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` at the child's *own* indices rather than `tⱼ ∈ W`, and
+step 4's reverse chain carries an index vector per child. `fire_ix_dep` is
+*simpler* than `fire_dep` in one respect that partly pays for this:
+`IndexedDepRecursor`'s theorems are already `∀`-closed, so none of
+`DepBottom`'s `iota_gen`/`refl_gen`/`gvars` hoisting is needed.
 
 ---
 
