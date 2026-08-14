@@ -1846,7 +1846,17 @@ fn build_indexed(
         ctor_abbrev,
         rec_dom_abbrev,
     });
-    app.indexed.insert((*ind_name, inst.to_vec()), tr.clone());
+    // **Publish before the private index is filled**, exactly as the
+    // non-indexed translation above does. This is the channel the routed
+    // checker's indexed ι consumer reads; it never reconstructs an indexed
+    // carrier. Omitting it was half of the seam defect `ORIGIN-RANKING.md`
+    // rank 1 measured: `IndexedTranslation` was built, stored mini-privately,
+    // consumed only inside mini, and invisible to TG.
+    let ix_key = (*ind_name, inst.to_vec());
+    if !app.publish_indexed_translation(ix_key.clone(), tr.clone()) {
+        return Err(Gap::IndSpec(*ind_name, "shared indexed translation divergence"))
+    }
+    app.indexed.insert(ix_key, tr.clone());
     // Release the `Env` guard before `c` is borrowed again below.
     drop(kenv_g);
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;

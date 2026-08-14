@@ -817,6 +817,37 @@ pub struct WRec {
     pub funspace: Thm,
 }
 
+/// **The indexed analogue of [`DepRec`]** — everything a consumer on the other
+/// side of the `EnvCore` seam needs to restate `IndexedDepRecursor::iota` at a
+/// use site, and nothing it could rebuild for itself.
+///
+/// The three fields are the three things that would be *different objects* if
+/// rebuilt, which is the whole reason this crosses the seam as a package rather
+/// than as a recipe:
+///
+/// * `dr` carries the ι rule itself, its per-constructor binder lists
+///   ([`IndexedDepRecursor::iota_vars`](derived::inductive::family::IndexedDepRecursor::iota_vars))
+///   and its antecedent atoms in *declared* field order
+///   ([`iota_atoms`](derived::inductive::family::IndexedDepRecursor::iota_atoms)).
+///   `over_family` mints a `w_rect` Separation per call, so a second build is a
+///   second family of symbols no equation relates to the first.
+/// * `tr` is the indexed class-(T) translation the rule is stated over — the
+///   constructor abbreviations a major premise must reach and the index
+///   abbreviations a recursive child is stated at. `IndexedCtor::mem_lean` is
+///   about *this* build's `ind(p⃗,x⃗)`.
+/// * `wrec` supplies the composite symbol `minor_ihs` spells recursive
+///   induction hypotheses with. [`DepRec`]'s own field doc gives the argument.
+///
+/// Unlike `DepRec` there is no `gr`: `Interp::indexed_dep_recursor` builds a
+/// `GenRecursor` to stand the family on and does not retain it, and no consumer
+/// of the ι rule needs it — the rule quantifies over the minors Lean declared,
+/// not over the general eliminator's.
+pub struct IxDepRec {
+    pub dr: Rc<derived::inductive::family::IndexedDepRecursor>,
+    pub tr: Rc<crate::mini::zoneb::IndexedTranslation>,
+    pub wrec: Rc<WRec>,
+}
+
 /// The general and dependent eliminators of one declaration, over one machine.
 pub struct DepRec {
     pub gr: Rc<derived::inductive::GenRecursor>,
@@ -892,6 +923,42 @@ impl IndApparatus {
         elim: Rc<DepElim>,
     ) -> bool {
         joint_key(&key).is_some_and(|joint| self.core.publish_dep_elim(joint, dep, elim))
+    }
+
+    /// The same, for an **indexed** family: hand the exact
+    /// [`IxDepRec`] and its Lean-facing nest bottom to the shared semantic
+    /// core.
+    ///
+    /// A parallel channel rather than a widened [`Self::publish_dep_elim`],
+    /// because the two packages are different objects — `DepRec` carries a
+    /// `DepRecursor`, `IxDepRec` an `IndexedDepRecursor`, and the ι rules they
+    /// hold differ in their antecedent's order, in what a recursive atom says
+    /// and in what the Lean right-hand side spells. A sum type here would only
+    /// move the match into every consumer.
+    ///
+    /// Called from [`crate::mini::rec_ix_dep`] after the abbreviation's
+    /// endpoints are checked, which is exactly when its sibling calls the one
+    /// above. Omitting this call was the whole of the seam defect: the
+    /// evidence existed, mini consumed it, and TG had no channel to receive it
+    /// on.
+    pub(crate) fn publish_ix_dep_elim(
+        &self,
+        key: ConstKey,
+        dep: Rc<IxDepRec>,
+        elim: Rc<DepElim>,
+    ) -> bool {
+        joint_key(&key).is_some_and(|joint| self.core.publish_ix_dep_elim(joint, dep, elim))
+    }
+
+    /// Hand mini's indexed class-(T) translation to the shared semantic core,
+    /// as `crate::mini::zoneb` already does for the non-indexed one. Same
+    /// channel, same moment — published before the private index is filled.
+    pub(crate) fn publish_indexed_translation(
+        &self,
+        key: ConstKey,
+        tr: Rc<crate::mini::zoneb::IndexedTranslation>,
+    ) -> bool {
+        joint_key(&key).is_some_and(|joint| self.core.publish_indexed_translation(joint, tr))
     }
 
     fn build(core: &EnvCore, p: &Prelude) -> Option<IndApparatus> {
