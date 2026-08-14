@@ -31,8 +31,21 @@ use std::path::Path;
 // (arena 152/0/2, `init-prelude`'s 16341 gaps / 2261 escapes, the tutorial
 // reports) are byte-identical with it linked in.
 //
-// Nothing else in the tree may assume this: `cargo test` builds the *library*,
-// which has no `#[global_allocator]`, so the test suite still runs on glibc.
+// **This is not the only place any more, and it is no longer the one that
+// matters.** `src/bin/checker.rs` — the unified checker, which is what every
+// integration suite spawns and what the corpus numbers are quoted from — links
+// the same allocator, with its own measurement taken on its own binary. Between
+// 2026-08-08 and 2026-08-14 it did not, and this paragraph said so; the merge to
+// the unified checker left these two lines behind on `nanoda_bin`, so for that
+// week the production checker ran on glibc while the older binary got mimalloc.
+// Read `src/bin/checker.rs` for the numbers that apply to the checker; the
+// figures above are `nanoda_bin`'s own and are what put the lines in the tree.
+//
+// What is still true is the narrow half: `cargo test` builds the *library*, and
+// `nanoda_lib` has no `#[global_allocator]`, so anything running **in process**
+// in a test binary is on glibc. Only the two binary targets get mimalloc, and
+// they get it independently — a test asserting on allocator behaviour must
+// spawn one of them rather than call the library.
 // ─────────────────────────────────────────────────────────────────────────────
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

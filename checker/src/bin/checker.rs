@@ -65,6 +65,57 @@
 
 use std::path::PathBuf;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The allocator, and why it is here.
+//
+// This is the production checker — every integration suite spawns it through
+// `CARGO_BIN_EXE_checker` and the split dispatch is its default — so this is
+// where the allocator belongs. The workload is ~1.7 billion small, short-lived,
+// same-sized allocations (`Rc<TermData>` boxes and small `Vec<Term>` buffers)
+// freed in near-LIFO order: the pattern glibc's free-bin management handles
+// worst and a size-class/free-list allocator handles best. `PERF-REVIEW.md` F1
+// put 47 % of `init-prelude`'s cycles inside glibc malloc and `MATCHER-WALL.md`
+// §2.4 put 44.0 % of `p1`'s samples there.
+//
+// Measured **on this binary**, `--release --features tg`, medians of three
+// alternating runs on an otherwise loaded box (2026-08-14):
+//
+//                           instructions:u   task-clock   cache-misses   peak RSS
+//     nat_char_equations         −32.0 %       −40.7 %       −16 %        +12 %
+//     077_RBTree.id_spec         −33.0 %       −43.5 %       −42 %         +8 %
+//     perf/shift-cascade         −26.0 %       −42.0 %       −40 %       +0.7 %
+//
+// **Price this on `task-clock`, not on `instructions:u`.** The two disagree by
+// 9–17 points in the same direction, because what mimalloc removes is mostly
+// cache misses and stalls rather than retired instructions. The instruction
+// count is a *floor* on the win, not an estimate of it — quote it only when the
+// comparison at hand is instruction-for-instruction.
+//
+// **Peak RSS goes up, and that is the trade.** mimalloc reserves arenas up
+// front: +12 % of a 19 MB run, +8 % of a 27 MB one, and lost in the noise by the
+// 304 MB one. The direction is worth stating because `MATCHER-WALL.md` §2.6
+// measured RSS *falling* 3.8–7.0 % when these same two lines went into the
+// then-separate `mini` binary. That result does not reproduce on the merged
+// binary; this table is the current number and that one is history.
+//
+// **This is a binary target, deliberately.** `kernel/` is the trusted base and
+// has no dependencies — `ci/check-boundary.sh` rule 2 enforces that. The
+// allocator is linked by the *executable*, so the kernel's dependency story is
+// untouched: glibc malloc was already unaudited foreign code serving every
+// `Rc::new` in the kernel, on exactly the same footing. Nothing in the
+// soundness argument mentions the allocator.
+//
+// **The verdicts are byte-identical, and that was checked rather than
+// inherited.** All 54 `checker/tests/fixtures/*.ndjson` and all 91
+// `vendor/arena-tests/good/tutorial/*.ndjson` were run under both allocators
+// and compared on stdout, stderr and exit code: **145 identical, 0 differing**,
+// spanning 125 `accept`, 16 `decline` and 4 `reject` verdicts with their gap,
+// escape and route counts. Both axes of MINI-DESIGN.md §0 are represented, so
+// this is an identity result and not a run of empty outputs.
+// ─────────────────────────────────────────────────────────────────────────────
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (flags, paths): (Vec<String>, Vec<String>) =
