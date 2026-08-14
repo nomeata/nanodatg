@@ -23,7 +23,7 @@ keyed theorems, non-vacuity — and what did not travel is that the theorem the
 **consumer's own obligation** is stated at applies the transported object to
 something.)*
 
-`derived::sigma::push` was scoped from `mini/src/rec_dep.rs`'s `PUSH` decline,
+`derived::sigma::push` was scoped from `checker/src/mini/rec_dep.rs`'s `PUSH` decline,
 built to that scope, and fitted unadapted — the fifth `derived` interface in a
 row to do so. It closes the `u₁ = 0` clause outright. It cannot close `u₁ ≥ 1`,
 and the reason was invisible from either side's scope:
@@ -230,7 +230,7 @@ low by six times.
 
 The instrument was the eighth category's own one-line `grep`, run in the other
 direction: `grep -rn 'push' derived/src mini/src` found the consumer's decline
-(`mini/src/rec_dep.rs`) stating the two theorems it wanted **in full**, and the
+(`checker/src/mini/rec_dep.rs`) stating the two theorems it wanted **in full**, and the
 two statements did not match the ones the library's decline had written down.
 **When two files decline the same artefact from opposite sides, diff their
 statements of it before building either** — the difference is the direction, and
@@ -315,7 +315,7 @@ avoid.)*
 
 Two instances, one round, both about the same theorem. `ext::dprod_const_fibre_n`
 was called "stored and unread" by four consecutive `MINI-HANDOFF.md` sections
-while `mini/src/quot_classes.rs` had been calling it for two days; and
+while `checker/src/mini/quot_classes.rs` had been calling it for two days; and
 "`retarget_set` takes no hole, so that is where the build fails" was a correct
 reading of `retarget_set` and a wrong claim about the crate, which has
 `congr_arg` and already used it eight lines from the call site above.
@@ -540,7 +540,7 @@ rather than the code.
 `pair_in_graph` as having *no occurrence* in `mini/src` beyond an unused import.
 It has seven, in `acc.rs` alone: built at `:164`, stored at `:145`, pinned at
 `:351`. My grep ended in `| head -20`, and the `derived/` hits filled lines 1–19
-with `mini/src/acc.rs:103` at line 20 — **I concluded absence from a truncated
+with `checker/src/mini/acc.rs:103` at line 20 — **I concluded absence from a truncated
 listing.** Same family as the count above and a different fix, because this was
 not a count: `wc -l` would not have helped.
 
@@ -747,7 +747,7 @@ Read the lines. All five took under five minutes and each changed a scope.
   rule.** `punitRec` (2 level params) got 2 pairs; `accRecType` (2 params) got
   1. Unknown, and worth knowing before anyone predicts a pair count.
 * **`Declaration::Quot` and `Declaration::Inductive` bear no pairs at all**
-  (`mini/src/ledger.rs:289`). Building their interpretations moves **no ledger
+  (`checker/src/mini/ledger.rs:289`). Building their interpretations moves **no ledger
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
 * **`Quot.ind`'s ι rule is uniform in `u`, confirmed at the level where it could
@@ -829,7 +829,7 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
 
 * **`derived/src/inductive/motive.rs`'s `cod_at_funspace` — fixed, and the
   diagnosis recorded here was half of it.** It returned `None` at every input,
-  and this entry (and `mini/src/rec_dep.rs`'s header, and that file's
+  and this entry (and `checker/src/mini/rec_dep.rs`'s header, and that file's
   `cod_at_funspace_is_dead_…` test) all say the cause is *one* re-association:
   `k = h ∧ (mx ∧ my)` where the two `gen_under`s want `(h ∧ mx) ∧ my`. True,
   and not sufficient — the union injection was also lifted under `k` with
@@ -850,7 +850,7 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — §10 took the `fs` clause
   out of `⟦Π⟧`, so reaching it costs `ext::dprod_const_fibre_n` — *(which this
   bullet, and four sections of `MINI-HANDOFF.md`, called "stored and unread".
-  It never was: `mini/src/quot_classes.rs`'s `lift_at` has called it since
+  It never was: `checker/src/mini/quot_classes.rs`'s `lift_at` has called it since
   `9edf304`. It is now `Interp::dprod_is_fs`, one method with three consumers,
   so the crossing is a **method call** and this bullet's remaining force is its
   second half alone. `MINI-HANDOFF.md` §33 item 3 is the finding: a "nothing
@@ -860,9 +860,9 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   `⟦Sort u₁⟧`. `rec_dep.rs`'s test now asserts those two statements (and that
   it is `Some`) instead of `is_none()`: a tombstone goes stale silently in one
   direction and loudly in the other, and in neither direction does it carry the
-  reason. `mini/src/rec_dep.rs`'s and `mini/src/recursor.rs`'s headers and
+  reason. `checker/src/mini/rec_dep.rs`'s and `checker/src/mini/recursor.rs`'s headers and
   `MINI-HANDOFF.md` §4's shaky-list entry are corrected in place with it.
-* **`mini/src/recursor.rs`**'s header used to route the class-(S) obligation
+* **`checker/src/mini/recursor.rs`**'s header used to route the class-(S) obligation
   through `rec_typed`'s `fs(1,T)` and worry about retargeting to `fs(A_φ,T)`.
   That is not the path: the nest opens `∀t`, so there is no function to build
   and the scope atom supplies what the retarget was for. **Checked rather than
@@ -901,7 +901,7 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   pinned unconditional at `:351`, so the **import is live** and only the theorem
   is unspent. (I recorded it here as an "unused `use` line"; that was wrong, and
   the two readings imply opposite actions — an unused import gets deleted, a
-  stored-but-unspent theorem gets a consumer. `mini/src/quot_classes.rs:82` had
+  stored-but-unspent theorem gets a consumer. `checker/src/mini/quot_classes.rs:82` had
   it right all along: *"the bridge with no consumer yet"*.) `Quot.sound` at
   `u ≥ 1` is predicted to be its first real consumer, and that prediction is a
   reading of `q_sound`'s statement, **not a build**.
@@ -959,16 +959,16 @@ modulo one `fs_cong` against the domain conversion. Everything it needs —
 `checker/src/tg.rs::derive_pi_bridge` (`:13142`) is the same repair, done. Read
 it before writing mini's; it handles both orientations with a `flip`.
 
-**`mini/src/interp.rs:994` is the doc that hid this.** `Interp::fs`'s header
+**`checker/src/mini/interp.rs:994` is the doc that hid this.** `Interp::fs`'s header
 says `dprod_const_fibre_n` "is not needed to say so — the interpretation simply
 *is* `fs`". True of *building* an interpretation, false of *relating* two, and
 that is the whole row. It should be corrected when the arm lands.
 
 ### Measured, not predicted
 
-**Landed** (Wren), `mini/src/interp.rs::dprod_fs_bridge` + `BinderShapes::apply`'s
+**Landed** (Wren), `checker/src/mini/interp.rs::dprod_fs_bridge` + `BinderShapes::apply`'s
 two mismatch arms. Every number below reproduced exactly, and
-`mini/tests/tutorial.rs` now pins them. Two things this scoping got wrong, both
+`checker/tests/mini_tutorial.rs` now pins them. Two things this scoping got wrong, both
 small: the mirror is handled *inside* `apply` rather than before the scope opens
 (normalising earlier would reorder the acceptance recursion, which must not
 depend on the certificate), and discharging the row exposes one further
@@ -1129,8 +1129,8 @@ Holds, checked independently:
 
 * `LeCarrier` stops at `acc_set: Term` (`le.rs:303`, `ac.of(a_phi, r)`). No
   conditional singleton, no `FnSym`, no `∈ U₀`.
-* `[tup(x⃗) ∈ acc(A_φ,R)]` exists **only as prose** — `mini/src/zoneb.rs:107` and
-  `:498`, `mini/src/direct.rs:23`, `mini/src/class_s.rs:25`,
+* `[tup(x⃗) ∈ acc(A_φ,R)]` exists **only as prose** — `checker/src/mini/zoneb.rs:107` and
+  `:498`, `checker/src/mini/direct.rs:23`, `checker/src/mini/class_s.rs:25`,
   `derived/…/le_rec.rs:468`, `INDEXED-DESIGN.md:575`.
 * `LeProp::build` refuses `ni ≠ 0` (`le_prop.rs:150–151`).
 
@@ -1169,7 +1169,7 @@ things decide it:
    (S) precisely what `derived` already does for class (P), in the same
    directory, for the same kind of object. One level down the same split holds:
    `derived::prop::apparatus` mints `eq_set` and `and_set` — both conditional
-   singletons of positive arity — and `mini/src/direct.rs:275` only calls
+   singletons of positive arity — and `checker/src/mini/direct.rs:275` only calls
    `cond_in_u0` at them. **`derived` mints the symbol and exports the
    characteristic theorem; `mini` calls `cond_in_u0` where it needs the typing**
    is the established seam, and it is not the seam either route as posed puts it
@@ -1188,7 +1188,7 @@ things decide it:
 ### What `derived/` owed — and this is the first time it was not "nothing"
 
 **Landed at `90d9bf3` as `derived/src/inductive/family/le_index.rs`**
-(`LeIndexCarrier`, `LeIndexCtor`), consumed by `mini/src/class_s_ix.rs` and
+(`LeIndexCarrier`, `LeIndexCtor`), consumed by `checker/src/mini/class_s_ix.rs` and
 `rec_s_ix.rs`, pinned by `derived/tests/family_le_index.rs`. The specification
 below is what it was built against and is left standing because it is still the
 interface; everything in it is exported under the name in brackets, plus `at`,
@@ -1489,7 +1489,7 @@ free — it has no side condition, while Lean's ι computes only on `Eq.refl`.
 
 held in `IndApparatus::deprecs` per `(declaration, σ)`. `--dump-only=Bool` on
 `073` prints it: `ι 0`, `ι 1`, `gen ι 0`, `gen ι 1` at `Bool.rec σ = [1]`.
-`mini/src/rec_dep.rs`, `recursor.rs` and `rec_ix_dep.rs` contain **no occurrence
+`checker/src/mini/rec_dep.rs`, `recursor.rs` and `rec_ix_dep.rs` contain **no occurrence
 of the string `iota`**. One theorem covers all four — `mᵢ = 0` at `Bool`/`Prod`
 and the recursive half exercised by `N`/`List` — so this is one construction and
 four declarations. **`derived/` owes nothing**; it is threading, and it is the
@@ -2022,7 +2022,7 @@ worth asking rather than answering from the shape of the quantifier.
 COD(C,T) := (∀x. (x ∈ W → ∀y. (y ∈ app(C,x) → y ∈ T))) ∧ ∅ ∈ T
 ```
 
-`mini/src/rec_dep.rs`'s `cod_at_rung` takes `T := ⟦Sort u₁⟧` and spends **two
+`checker/src/mini/rec_dep.rs`'s `cod_at_rung` takes `T := ⟦Sort u₁⟧` and spends **two
 rung facts** — `Rung::transitive` and `Rung::empty_mem` — because a rung is
 transitive and contains `∅`. That is the only route in the tree. So the recursor
 is built per level today **not because the theorem needs a universe but because
@@ -2042,7 +2042,7 @@ action.*
 
 * *It is **live**, at three sites: `derived/tests/deprec.rs:1451` fires it
   inside a real `COD` discharge, `:1989` is its direct test, and*
-  *`mini/src/rec_dep.rs`'s*
+  *`checker/src/mini/rec_dep.rs`'s*
   *`cod_at_funspace_is_stated_at_a_function_space_and_at_another_target`*
   *asserts that it returns `Some` — so it has both a test and consumers, and
   neither the "no test" nor the "`rec_dep` pins the `None`" sentence survives.
@@ -2140,7 +2140,7 @@ witness anywhere in `vendor/arena-tests`, `good/` or `bad/`.**
 That last sentence is still true and it is the *interesting* one, because #37 is
 done and the restriction it did not lift is the one nothing in the corpus can
 see. The witness this section says the corpus cannot supply was then written:
-`mini/tests/fixtures/infinitary_branching.lean` and
+`checker/tests/fixtures/infinitary_branching.lean` and
 `derived/tests/cumul_infinite_fibre.rs`.
 
 **What this paragraph said next is superseded — read §14 instead.** It read:
@@ -2318,7 +2318,7 @@ round behind the code. Trust them for *intent* and measure for *state*.
 ## 14. Infinitary branching — **landed**, by path codes rather than a `κ`-tower
 
 Successor to §12. **Done**: `constEv` on
-`mini/tests/fixtures/infinitary_branching.ndjson` is **6**, every pair, and
+`checker/tests/fixtures/infinitary_branching.ndjson` is **6**, every pair, and
 `inductive NTree | leaf | node : (Nat → NTree) → NTree` certifies end to end.
 The route is B, §3 below — bound `W` by its labelled path codes — and Route A,
 the `κ`-tower this section was originally written to scope, was never started
@@ -2356,7 +2356,8 @@ is wrong, and the complete pattern is
 
 **with no fibre condition at all** — no `bnd`, no `B(a) ∈ ω` — and its header's
 first line is *"a universe is closed under `sup`"*. It is consumed by `wnat`,
-`wlist`, `enums`, `wrec`, `wrec_unit` and `inductive/carrier.rs`. A universe is
+`wlist`, `enums`, `wrec`, `wrec_unit` and `inductive/carrier.rs` *(`wnat` was
+deleted on 2026-08-11; the other five stand)*. A universe is
 already the W-type's **bound**, at every W-type in the library, and it is
 already sup-closed at a `Nat`-indexed fibre.
 
@@ -2496,12 +2497,16 @@ carriers) and `Approx::bounded`/`rec_acc::Bounded` (the recursion theorem's
 axiom A1), the real surface is **36 files**. Anyone scoping from a grep will
 overstate this by a factor of three.
 
+*(Column heading as of this census: `mini` was then a fourth crate. It is now
+modules inside `checker` — the three `src` files are `checker/src/mini/*.rs` and
+the four `tests` are `checker/tests/mini_*.rs`. The counts are unaffected.)*
+
 | crate | files | src | tests |
 |---|---:|---:|---:|
 | kernel | **0** | 0 | 0 |
 | derived | 28 | 22 | 6 |
 | checker | 1 | 1 (doc only) | 0 |
-| mini | 7 | 3 | 4 |
+| mini (then a crate) | 7 | 3 | 4 |
 
 By role: **7 producer** files (`bounded`, `pullback`, `finite`, `finord`,
 `sum_bnd`, `carrier_bnd`, `telescope_bnd`), 7 consumer, 7 statement/shape-pin,
@@ -2553,7 +2558,7 @@ with `bnd` afterwards*, and they are independent choices.**
 
 | fate of `bnd` | what it means | `mini/` cost |
 |---|---|---|
-| **(i)** survives, new proof | name and formula unchanged, `FibreFacts` keeps both fields | **zero code changes.** One integer in `mini/tests/infinitary.rs` (`constEv` 2→4), and six comments asserting "`bnd` is refutable at an infinite set" that stop being true |
+| **(i)** survives, new proof | name and formula unchanged, `FibreFacts` keeps both fields | **zero code changes.** One integer in `checker/tests/mini_infinitary.rs` (`constEv` 2→4), and six comments asserting "`bnd` is refutable at an infinite set" that stop being true |
 | **(ii)** derivable from `k ∈ Uₙ` | formula stays, every proof of it is free | ~6 sites: `zoneb.rs:2435, 2484, 2496-2510`, the `carrier_bnd` memo in `interp.rs:527-528/845-846/1192-1223`, `ev.rs`. `constEv` 2→6; the "both facts unconditional" guard at `zoneb.rs:2456` relaxes, which is what closes `FieldTree` |
 | **(iii)** disappears | no formula; `FibreFacts` loses a field | all of (ii), plus hard compile breaks at `zoneb.rs:2435,2501,2522` and `interp.rs:1213-1214`; `fibre_facts` (147 lines) deleted wholesale; `Gap::IndFibreValue` probably retired |
 
@@ -2572,8 +2577,8 @@ So the real choice is **(ii) on Route A** or **(iii) on Route B**. Route B force
 (iii): there is no tower left to state `bnd` over.
 
 **(iii) is what landed, and the row's `mini/` cost was over-stated.** Measured
-across the three commits: `mini/src/zoneb.rs`, `mini/src/interp.rs` and
-`mini/tests/infinitary.rs` — **three** files, not seven, and no hard compile
+across the three commits: `checker/src/mini/zoneb.rs`, `checker/src/mini/interp.rs` and
+`checker/tests/mini_infinitary.rs` — **three** files, not seven, and no hard compile
 break anywhere except the one `FibreFacts { bnd, mem }` literal. The predicted
 break sites `zoneb.rs:2435,2501,2522` and `interp.rs:1213-1214` were all inside
 code that was deleted wholesale rather than adapted. `Gap::IndFibreValue` was
@@ -2587,8 +2592,8 @@ That is the architecture answer, and it is **not one answer**: under (ii)
 name** — and the cheapest landing that actually closes `NTree` already breaks
 that containment, because it must reach past `bnd`'s producers and delete them.
 
-**Coordination note.** Of the files another seat owns, only `mini/tests/dump.rs`
-(3 lines) and `mini/tests/tutorial.rs` (4 comment blocks) appear anywhere in
+**Coordination note.** Of the files another seat owns, only `checker/tests/mini_dump.rs`
+(3 lines) and `checker/tests/mini_tutorial.rs` (4 comment blocks) appear anywhere in
 this radius, and both are **doc-only under all three scenarios**. `main.rs`,
 `run.rs`, `ledger.rs`, `dump.rs` and `designed.rs` are entirely clean of `bnd`.
 
@@ -2647,7 +2652,7 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
   before the `γ` typings were read there was nothing in the declaration to read
   `H` off.
 
-  **Measured.** `constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson`
+  **Measured.** `constEv` on `checker/tests/fixtures/parameter_domain_branching.ndjson`
   is **8** — four trees, two `def`s each, `waiting` empty,
   `untranslated declarations=0`. The `?`-census over `zoneb::fibre_facts`,
   `cumul::decl::over_at_general`, `cumul::sigma::unary_telescope_at` and
@@ -2666,7 +2671,7 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
   the other. **One δ/β step, §4's calibration entry exactly**, and the next
   piece of work on this row. The corpus ratchet is unchanged: `accept=89
   decline=2 reject=0`, `constEv=218 typeEv=218`, `untranslated: 1 declaration`
-  at both files. `mini/tests/dump.rs`, `decl.rs`'s header, `zoneb.rs`'s
+  at both files. `checker/tests/mini_dump.rs`, `decl.rs`'s header, `zoneb.rs`'s
   `rec_dom_sort` and `fibre_facts` headers and the two `zoneb` tests have all
   been corrected in place.
 
@@ -2708,7 +2713,7 @@ one line and the shape print beside it printed two facts.*
 `derived/` proves that a Grothendieck universe is closed under W-types at an
 arbitrary fibre family, with no ordinals; `DeclUniverse::over_at_general` spends
 that theorem; `FibreFacts` has no `bnd` field. **`constEv` on
-`mini/tests/fixtures/infinitary_branching.ndjson` is `6`**, up from `2`, with
+`checker/tests/fixtures/infinitary_branching.ndjson` is `6`**, up from `2`, with
 `waiting` empty and `untranslated declarations=0`. Route A — the `κ`-tower and
 the ~5 000-line transfinite-recursion development §2 prices — buys nothing this
 does not, and should not be started.
@@ -2750,7 +2755,8 @@ estimate did not name.**
    `closed::tower_closed`, the `B(a) ∈ ω` form, is *derived from*
    `tower_closed_bnd` and `bounded`, and `tower_closed` is what
    `WMem::w_in_universe` carries, which is what `wnat`, `wlist`, `cumul::enums`
-   and `NatUniverse` spend. §3a's "`bnd` is spent in exactly one mathematical
+   and `NatUniverse` spend *(`wnat` and `NatUniverse` were deleted on
+   2026-08-11; the finding rests on the survivors)*. §3a's "`bnd` is spent in exactly one mathematical
    place, `cumul/closed.rs:221`/`:258`" is exactly right and is exactly why:
    that one spend is on the path to a live theorem. **`bnd`, `bounded`,
    `bounded_at`, `tower_closed_bnd` and `fin_bnd` are all standing, as the proof
@@ -2833,7 +2839,7 @@ obstacle.* All are `mem`-side rather than `bnd`-side:
 
 * ~~**a recursive argument whose domain mentions a parameter**~~ — **closed**
   (§5a). `inductive Tree (α) | node : (α → Tree α) → Tree α` certifies;
-  `constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
+  `constEv` on `checker/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
   *This bullet twice gave a reason the declaration could not be placed and both
   expired — first "`bnd` at a parameter is refutable under any `H`", then
   "`isum::isum_in_universe` refuses a conditional input where it is spent".* The
@@ -2848,7 +2854,7 @@ obstacle.* All are `mem`-side rather than `bnd`-side:
   recursive slot the atom `tup(d⃗ᵢⱼ) ∈ r(Inj_j(•))`, a membership at a single
   point, and a `Σ(z::γⱼ)` summand needs `∀z ∈ γⱼ. … ∈ r(Inj_j(⟨z,•⟩))`.
   Located by census at `family/good.rs:247`; `constEv` on
-  `mini/tests/fixtures/indexed_infinitary_ctor.ndjson` is **0**, target 4.
+  `checker/tests/fixtures/indexed_infinitary_ctor.ndjson` is **0**, target 4.
 * **a recursive argument with a telescope of depth ≥ 2** —
   `node : (α → β → Tree) → Tree`. Declines at `unary_telescope_at`, which wants
   exactly one binder. Needs a `telescope_at`, not a call site — see answer 3.

@@ -641,7 +641,9 @@ the hand-written ones by construction (different fibres, seeds, trailing
 `+ 0`), so the test is gaps/escapes/arena/fragment, plus ι provenance still
 showing real derivations. `derived`'s `enums/wnat/wlist/wnat_rec/wlist_rec/
 wbool_rec/twopoint/wlist_fun` are then demoted to cross-check tests or
-deleted per the derived-side owner's call; the checker stops referencing
+deleted per the derived-side owner's call *(that call was taken for two of
+them on 2026-08-11: `wnat.rs` and `wnat_rec.rs` are deleted, `⟦Nat⟧` being von
+Neumann `ω` rather than a W-type; the other six exist)*; the checker stops referencing
 them when the `Inductives` fields go.
 
 ---

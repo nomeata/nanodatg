@@ -45,7 +45,7 @@ design rule, stated once and applied everywhere below:
 ### 0.1 The first measurement: what the backend/checker split costs nanoda
 
 *Added 2026-08-01, from building §6.2's classifiers **[implemented and tested,
-`mini/src/kernel.rs`]**. This is a finding about **nanoda**, not a note about
+`checker/src/mini/kernel.rs`]**. This is a finding about **nanoda**, not a note about
 mini, and it is the clearest measurement so far of what task #29 should aim
 at.*
 
@@ -111,7 +111,7 @@ deserves more suspicion than this section first gave it.
 ### 0.2 The second measurement: `local_premises` has nothing to reconstruct
 
 *Added 2026-08-01, from threading the reduction certificates
-**[implemented and tested, `mini/src/conv.rs`]**. Also a finding about
+**[implemented and tested, `checker/src/mini/conv.rs`]**. Also a finding about
 nanoda.*
 
 To contract `(λ x:A. b) a` the certificate needs `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`.
@@ -194,7 +194,7 @@ caches" — it is:
 > declarations, and a `Γ`-carrying one is local to the binder that introduced
 > it and is re-derived at zero cost from the scope anyway.
 
-**Settled by measurement, 2026-08-01** (`mini/tests/tutorial.rs`,
+**Settled by measurement, 2026-08-01** (`checker/tests/mini_tutorial.rs`,
 `tutorial_conversion_split`), once `whnf` and `assert_def_eq` returned
 conversions. Over every conversion the two were *asked for* on the 91 exports —
 a decision-only call hands in no endpoints and states nothing, so those are not
@@ -298,7 +298,7 @@ debt.*
 
 223 `(declaration, σ)` pairs over the 91 exports. Each asks for one thing,
 `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. **Measured twice**: before zone B's boundary existed,
-and after it landed (`mini/src/zoneb.rs`, the carrier and constructor half).
+and after it landed (`checker/src/mini/zoneb.rs`, the carrier and constructor half).
 
 | outcome | before | after | axis |
 | --- | ---: | ---: | --- |
@@ -352,7 +352,7 @@ and it is a *ratchet* (`tutorial_evidence_ledger`), so a later change that
 re-introduces threading debt fails a test rather than quietly widening a row.
 
 **The ratchet has since moved off zero, once, and the mechanism is the same one
-this section is about.** `mini/src/recursor.rs` put `⟦Eq.rec⟧` in the store;
+this section is about.** `checker/src/mini/recursor.rs` put `⟦Eq.rec⟧` in the store;
 `094_ruleK`, which had been blocked at `recursor(Eq)`, then got one step
 further and stopped at the ι rule — `Gap::Iota`, correctly threading, because
 every piece of that step exists and `whnf`'s recursor arm hands it no
@@ -404,8 +404,8 @@ only because the first one does. So mini has a second mode, and it is the one
 to reach for when the question is "what now":
 
 ```text
-mini --block <export.ndjson>          # exit 3, and the report on stdout
-cargo test -p mini --test tutorial first_blocker -- --nocapture
+checker --naive --block <export.ndjson>   # exit 3, and the report on stdout
+cargo test -p nanoda_lib --test mini_tutorial first_blocker -- --nocapture
 ```
 
 Armed, the interpretation pass stops at the **first** `(declaration, σ)` whose
@@ -427,7 +427,7 @@ rather than argued: `Ledger::type_ev_only_gap` counts the pairs whose constant
 typing derives while the type's typing does not, and it is **0** on the corpus.
 
 That zero is a fact *about the corpus*, not a structural one, and
-`mini/tests/fixtures/beyond_the_tower.lean` is a file where it is **1**: a
+`checker/tests/fixtures/beyond_the_tower.lean` is a file where it is **1**: a
 declaration at `Type 30 → Type 30` gets its constant typing and not its type's
 own, because the arrow's sort is above `CUMUL_HEIGHT`. `--block` therefore runs
 that file to the end and reports no blocker while a real obligation is owed —
@@ -455,7 +455,7 @@ The drop used to sit *after* a whole-file kernel pass, which checked such an
 axiom's **type** on the way past; `mini::decl_pass` has no whole-file kernel
 pass to sit after, and the owner waived the lost rejection ("it will not
 complain about the type of a dropped axiom; that's not a concern").
-`mini/tests/designed.rs`'s `an_unused_axiom_may_now_be_illtyped` is the waiver
+`checker/tests/mini_designed.rs`'s `an_unused_axiom_may_now_be_illtyped` is the waiver
 as a fixture, so the difference is measured rather than described. The
 **used**-axiom decline keeps its ordering — it must lose to any rejection — by
 being issued after the loop rather than before it.
@@ -501,6 +501,12 @@ verdict.
 | `3` | blocked — `--block` only (§0.6) | neither |
 | `4` | accepted, and something is uncertified **or untranslated** | certification |
 
+*(On the unified `checker` binary this row has a **third** source, added when TG
+evidence moved into the same pass: `tg_gaps > 0`. The condition is
+`!(unc.is_clean() && notrans.is_clean() && tg_gaps == 0) && !acceptance_only`,
+`checker/src/bin/checker.rs:250–254`, and the verdict grows a `tg gaps:` column.
+`--acceptance-only` suppresses only the exit code, not the columns.)*
+
 `4` is not a verdict about the file — the file was accepted — which is why it
 does not reuse `1` or `2`. A clean run's verdict line is unchanged; a run with
 debt grows one or two columns, `untranslated: 1 declaration` and/or
@@ -514,7 +520,7 @@ exports declaring a non-standard axiom their own declarations refer to (`031`,
 `032`) and mutual inductives at the parser. A declaration mini could not translate inside a file it accepted is
 **not** one of these — it is a `4`. The word "decline" was doing both jobs and a
 brief written from the wrong sense nearly routed the second to exit `2`;
-`mini/src/zoneb.rs`'s header now separates the three senses, and the internal
+`checker/src/mini/zoneb.rs`'s header now separates the three senses, and the internal
 notion is spelled **untranslated** everywhere it is reported.
 
 **A run to completion, not a stop at the first gap.** `--block` is unchanged
@@ -590,11 +596,29 @@ and the entry nobody had noticed was the one that is not permanent.
 
 ---
 
-## 1. Crate layout
+## 1. Crate layout — *there is no such crate; see the banner*
 
+> **THE CRATE IN THIS SECTION'S TITLE NO LONGER EXISTS.** As of 2026-08-14
+> (`b91433b`) the workspace is `members = ["kernel", "derived", "checker"]`
+> (`Cargo.toml:3`). There is no `mini/Cargo.toml`, no `mini/src/`, and no `mini`
+> binary: the surviving implementation is modules under `checker/src/mini/`
+> (declared at `checker/src/mini.rs:63–122`), its tests are
+> `checker/tests/mini_*.rs`, and the CLI is `checker/src/bin/checker.rs`, where
+> the whole-file mini policy is `--naive`. Read the manifest and the file list
+> below as the **original build plan**, not as a map of the tree; the module
+> *names* mostly survived, the paths did not.
+>
+> Two further claims in this section are false today and are load-bearing if
+> believed: mini **does** live behind the `tg` feature and **does** reach
+> `tc.rs` and `tg.rs` — `checker/src/mini/route.rs` drives `checker/src/routed.rs`
+> into `ExportFile::check_declar_scheduled`, and `checker/src/mini/run.rs` calls
+> `crate::tg::global_gap_count`; a non-`--naive` run of the unified binary in
+> fact *requires* `--features tg` (`checker/src/bin/checker.rs:119–124`). The
+> trust story is unchanged and still correct.
+>
 > **Historical, and this section in particular is read as a map when it is not
 > one.** `lib.rs` lists 42 modules against the ten below.
-> **`mini/src/inductive.rs` never existed** — zone A lives in `mini/src/kernel.rs`
+> **`mini/src/inductive.rs` never existed** — zone A lives in `checker/src/mini/kernel.rs`
 > (`add_block`), so the bullet naming it is the one most likely to send a reader
 > looking for a file. **`MiniEnv` never existed** either: `env.rs` holds
 > `Environment`/`Declaration`/`ConstantInfo`, and the interpretation store is
@@ -615,30 +639,30 @@ derived = { path = "../derived" }
 checker = { path = "../checker" }   # parser + instantiations only; see §2
 ```
 
-* `mini/src/expr.rs` — `Name`, `Level`, `Expr` (owned, de Bruijn), `shift`,
+* `checker/src/mini/expr.rs` — `Name`, `Level`, `Expr` (owned, de Bruijn), `shift`,
   `substs`, `subst_level`, ground-level evaluation. Ports of
   `MiniKernel/Types.lean` + `ExprUtils.lean` + the `Expr` helpers at the top
   of `Kernel.lean`.
-* `mini/src/convert.rs` — `ExprPtr → mini::Expr` conversion and the
+* `checker/src/mini/convert.rs` — `ExprPtr → mini::Expr` conversion and the
   declaration schedule (§2, §3).
-* `mini/src/scope.rs` — binder open/close; the **only** module that calls
+* `checker/src/mini/scope.rs` — binder open/close; the **only** module that calls
   `Thm::assume`/`Thm::implies_intr` (§4).
-* `mini/src/interp.rs` (+ submodules) — `⟦·⟧` against `mini::Expr`: the §6.2
+* `checker/src/mini/interp.rs` (+ submodules) — `⟦·⟧` against `mini::Expr`: the §6.2
   clause dispatch, skeleton handling, sort tower, per-`(name, levels)`
   constant interpretations (§7).
-* `mini/src/kernel.rs` — the port of `Kernel.lean`'s mutual block, with the
+* `checker/src/mini/kernel.rs` — the port of `Kernel.lean`'s mutual block, with the
   signatures of §6. One file, like the original.
-* `mini/src/env.rs` — `MiniEnv`: syntactic `ConstantInfo` store (port of
+* `checker/src/mini/env.rs` — `MiniEnv`: syntactic `ConstantInfo` store (port of
   `Types.lean`) plus the per-instantiation interpretation store, all
   certificates `Sealed` (§4.3, §8).
 * `mini/src/inductive.rs` — the declaration-shape zone: mini-lean's inductive
   checks and recursor generation, ported verbatim (§9).
-* `mini/src/blocker.rs` — the **abort at the first missing derivation** (§0.6):
+* `checker/src/mini/blocker.rs` — the **abort at the first missing derivation** (§0.6):
   the gap mint trail, the report, and the term rendering it needs.
 * `mini/src/main.rs` — reads one `.ndjson` export, prints the verdict and the
   gap ledger in the same row format the corpus harness scrapes; `--block`
   prints the first blocker instead and exits 3.
-* `mini/tests/tutorial.rs` — the 91-export harness (§11).
+* `checker/tests/mini_tutorial.rs` — the 91-export harness (§11).
 
 Depending on `checker` is deliberate and safe: `checker` is a library crate
 whose `lib.rs` already exports `parser`, `util`, `instantiations`, `level`,
@@ -657,7 +681,7 @@ before; §4.4 states the hypothesis-discipline rule that replaces rule 6.
 
 **Superseded — mini and `checker` now share the representation.** What
 follows described the owned-tree `Expr` mini converted *into*; PIVOT.md §1.1's
-migration removed the conversion, and `mini/src/arena.rs` is the seam. Mini's
+migration removed the conversion, and `checker/src/mini/arena.rs` is the seam. Mini's
 `Name`, `Level` and `E` are `checker`'s `NamePtr`, `LevelPtr` and `ExprPtr` —
 hash-consed, `Copy`, and read through `view()`. The variant names below are
 still the ones `view()` hands back, and every note under the listing still
@@ -691,7 +715,7 @@ Notes, each matching a mini-lean decision **[read, `Types.lean`,
 
 * No `Local` variant and no binder names/styles: mini is pure de Bruijn;
   **and this is now enforced rather than incidental** — `checker` hash-conses
-  binder names and styles into the node, so `mini/src/arena.rs` pins them to
+  binder names and styles into the node, so `checker/src/mini/arena.rs` pins them to
   one value on everything mini builds and `convert::Cv::expr` normalises every
   parsed expression to match. Without that, `==` on expressions would start
   distinguishing spellings. See that module's header;
@@ -809,7 +833,7 @@ ground level and its numeral always succeeds. **Consequence for §7: the
 interpretation must evaluate a level with the numeric evaluator (mini's
 `ground::eval`, mirroring `instantiations::eval`) and must never pattern-match
 a simplified level for `succ^n zero`.** Pinned by
-`mini/src/ground.rs`'s `grounding_decides_exactly`.
+`checker/src/mini/ground.rs`'s `grounding_decides_exactly`.
 
 ---
 
@@ -831,7 +855,7 @@ Mini-lean's `openType type k` pushes a type on the telescope. Mini-rust's
 counterpart also acquires the typing hypothesis, once, at the open:
 
 ```rust
-// mini/src/scope.rs — the only module that names Thm::assume / Thm::implies_intr.
+// checker/src/mini/scope.rs — the only module that names Thm::assume / Thm::implies_intr.
 pub struct Scope {
     ty: Expr,        // the domain, indexed in the enclosing context
     dom: Term,       // ⟦ty⟧, interpreted once at the open
@@ -918,7 +942,7 @@ stage 1 of the census lands:
 
 > **R6′ (hypothesis discipline).**
 > **I1 — single introduction point.** `Thm::assume` and `Thm::implies_intr`
-> are called only in the scope module (`mini/src/scope.rs`; in nanoda, the
+> are called only in the scope module (`checker/src/mini/scope.rs`; in nanoda, the
 > stage-1 equivalent). *Grep-enforceable exactly as rule 6 is today, with a
 > path allowlist instead of a ban.*
 > **I2 — hypotheses are scoped.** At every point of execution,
@@ -992,7 +1016,7 @@ Policy, and how it differs from nanoda's:
   `Gap::Recursor`/`Gap::IndexedCtor` are minted with a carried `Cause`. The
   variant listing above has drifted hard — roughly eleven variants renamed or
   gone and eleven new ones — and `Cause::Assumption` is retired, which §0.6
-  records and this section does not. `mini/src/ev.rs` is the enum.)*
+  records and this section does not. `checker/src/mini/ev.rs` is the enum.)*
 
 ---
 
@@ -1069,7 +1093,7 @@ consumers, with the search half absent by construction):
   the *expression*, not about the level alone. So mini has both classifiers.
 
   **But they are three lines each, not nanoda's hundred, and they are exact
-  rather than approximate** **[implemented and tested, `mini/src/kernel.rs`]**.
+  rather than approximate** **[implemented and tested, `checker/src/mini/kernel.rs`]**.
   nanoda's `body_clause` is a syntactic walk over heads and arities with a
   redex arm, a `let` arm, a projection arm and the `syn_type` shadow walk
   beside it, and its own doc says why: *"the decision needs the body's sort,
@@ -1325,7 +1349,7 @@ follows `assertIsDefEqImpl` **[read]** exactly (acceptance fidelity):
    with `symm` of the other. The two types are never compared, the recursive
    `assert_def_eq` at every proof comparison disappears, and one of §13 risk
    2's two strictness deltas is gone rather than merely watched.
-   **[implemented and tested, `mini/src/interp.rs`, `point_of_proof`]**
+   **[implemented and tested, `checker/src/mini/interp.rs`, `point_of_proof`]**
 
    A consequence worth recording, because it bit twice: `⟦f⟧` need not be `•`
    even when `f` is a proof. §6.2 sends a proof-valued *application* or
@@ -1480,7 +1504,7 @@ hand back a symbol from a different one. That is a cache in the TCB, which has
 24 lines of headroom under the 700-line cap. So: *the right response to "the
 call graph is the key" is to add the missing caller-side table, not to
 memoise a function that cannot see a canonical key without being handed one.*
-`mini/src/zoneb.rs`'s `a_second_translation_mints_no_second_symbol` is what
+`checker/src/mini/zoneb.rs`'s `a_second_translation_mints_no_second_symbol` is what
 holds the current call graph to that.
 
 What mini does not have: whnf/infer/defeq result memos keyed on
@@ -1505,7 +1529,7 @@ This paragraph predicted the consequence and named the wrong blocker. It said
 mini would gap on `⟦T⟧ ∈ ⟦Type 0⟧` until `derived::cumul` was generalised past
 its `B(a) ∈ ω`-on-the-nose demand (`WIRING-DESIGN.md` verdict 5's `finord`
 blocker). **`⟦T⟧ ∈ ⟦Type 0⟧` works** — `cumul::decl::DeclUniverse` discharges
-exactly that, and `mini/src/zoneb.rs` derives it for `Bool`, `Color`, `Empty`,
+exactly that, and `checker/src/mini/zoneb.rs` derives it for `Bool`, `Color`, `Empty`,
 `N` and `Nat` today. What does gap is one level up and one field along:
 `⟦T⟧ ∈ ⟦Type n⟧` for `n ≥ 1`, because the cumulative chain's `u1` is a fixed
 field, and `⊢ Aᵢ ∈ U₁` for a constructor with a non-recursive field, because
@@ -1606,10 +1630,11 @@ argument. **Zone B does not follow**: `ledger::fill_declaration` records
 block, so a use site reports that reason and nothing reaches `zoneb::ensure`,
 where a member is indistinguishable from a single inductive and would be
 translated as if its siblings did not exist. The frontend still declines a
-mutual export by default (`convert::LoadOptions`); `mini --mutual` opens the
-gate and `mini/tests/mutual.rs` is what uses it.
+mutual export by default (`convert::LoadOptions`); `--mutual` opens the
+gate — today `checker --mutual`, and `checker/tests/mini_mutual.rs` is what
+uses it.
 
-*And zone B does not have to.* `mini/src/mutual_aux.rs` **encodes the block
+*And zone B does not have to.* `checker/src/mini/mutual_aux.rs` **encodes the block
 away** at the block's own position in the per-declaration loop.
 `mini::decl_pass::Pass::step` drives `mutual_aux::Expander`, which replaces each
 block it can express by a tag
@@ -1641,7 +1666,7 @@ are passed to `Aux.rec` untouched, because `Mot … (Tag.tᵢ p⃗ idx⃗)` ι-r
 `Aux.rec` the *same* motive and minors, so a rule's induction hypothesis
 `Aux.rec … (Tag.t_k p⃗ idx⃗) …` is literally what `T_k.rec …` unfolds to — which
 holds across telescopes, so `MA.mk : MB → MA N.z` builds at arity 1 and its ih
-is at `MB`'s arity 0. `mini/tests/fixtures/mutual_aux_encoding.lean` is the
+is at `MB`'s arity 0. `checker/tests/fixtures/mutual_aux_encoding.lean` is the
 unindexed encoding written by hand, and it certifies all 23 of its pairs.
 
 **Indices go through the same encoding because they are inside the tag.**
@@ -1669,7 +1694,7 @@ someone editing the rule.
 
 **Nesting is a different dance, and zone A now does it.** Lean's nested
 compiler reduces `inductive Tree | node : List Tree → Tree` to the mutual block
-`{Tree, ListTree}`, which zone A already takes. `mini/src/nested.rs` is that
+`{Tree, ListTree}`, which zone A already takes. `checker/src/mini/nested.rs` is that
 reduction, run **inside the acceptance pass**: it specialises the declaration
 into a block with a *mimic* copy of every container the type is nested into,
 hands the block straight back to `kernel::add`, and **restores** what comes out
@@ -1710,8 +1735,8 @@ The block that is checked is the specialised one; the declarations installed are
 the restored ones, and the restoration is a **rewrite, not a derivation**.
 `List Tree` and the mimic are isomorphic and *not equal* — bridging them needs
 `fromAux (toAux l) ≡ l` at a **variable**, which is propositional.
-`mini/tests/fixtures/nested_roundtrip.lean` is the encoding built out to that
-point and `mini/tests/nested.rs` asserts mini's kernel rejects the equation,
+`checker/tests/fixtures/nested_roundtrip.lean` is the encoding built out to that
+point and `checker/tests/mini_nested.rs` asserts mini's kernel rejects the equation,
 with two closed instances accepted as the controls. `thesis.txt:902` says the
 same in one line about Coq: mutual inductives, nested inductive types and
 coinductive types "can all be encoded using regular inductives, although some
@@ -1728,12 +1753,12 @@ every such declaration with `ind-spec(T: nested occurrence)`.
 **The second of the two routes is built, checked, and measured; what is left is
 its wiring.** *Corrected 2026-08-06; this paragraph read "two routes stay open"
 and costed both, which was right about the routes and stale about their state.*
-`mini/tests/fixtures/nested_model.lean` is the specialised block's own model
+`checker/tests/fixtures/nested_model.lean` is the specialised block's own model
 written out as an export: the block as an ordinary `mutual`, `Tree`, `treeLeaf`
 and `treeNode` as `def`s over it, `pack`/`unpack` and **both** propositional
 round trips, `treeRec` and `treeRec1` at the types the export declares for
 `Tree.rec` and `Tree.rec_1`, and all four ι rules as theorems with proofs. Lean
-checks it at export time and `mini/tests/nested.rs` checks every declaration of
+checks it at export time and `checker/tests/mini_nested.rs` checks every declaration of
 it through `kernel::add`.
 
 Its price is two lemmas and no more. `Tree.rec` on `leaf` and `Tree.rec_1` on
@@ -1772,7 +1797,7 @@ dispatch arm** beside `quot_iota` and `rec_acc_iota`, cashing the generated ι
 theorem rather than using `DepRecursor::iota`. `MEASUREMENTS.md`'s "The keying
 is a rename for typing and a new route for reduction" is the trace.*
 
-*That arm is `mini/src/iota_model.rs` and it fires. **What it could not do is
+*That arm is `checker/src/mini/iota_model.rs` and it fires. **What it could not do is
 the obvious thing**: apply the model's ι theorem to the redex's own arguments
 and hand the application to `eq_cash::cash`. That application is a Lean **type
 error** — the theorem binds `M₀ : T._model.self → Sort v` and the redex's motive
@@ -1798,7 +1823,7 @@ a fibre summand that a count cannot describe.
 `MODELGEN.md` §1 is its contract. `mini/src/nested_ev.rs` — 2117 lines of Rust
 that built the same tower and handed each declaration to `kernel::add` — is
 deleted, and `ci/check-mutual-blackbox.sh` no longer scans it. What is left on
-mini's side is `mini/src/nested_splice.rs`, which **recognises** the tower,
+mini's side is `checker/src/mini/nested_splice.rs`, which **recognises** the tower,
 checks each statement against the export's own and keys `⟦T⟧`, `⟦T.ctorᵢ⟧` and
 `⟦T.rec_k⟧` onto it. The two facts below were learned by building the
 hand-written model and are still exactly why the tower has the shape it has;
@@ -1880,7 +1905,7 @@ constructor is nullary — one path, nothing branching on whether the telescopes
 agree, and the eight fixtures that predate the generalisation are its
 regression suite: every one of them is unchanged to the counter.
 
-`mini/tests/fixtures/mutual_index_sorts.lean`'s `HA : N → Type` / `HB : Type`
+`checker/tests/fixtures/mutual_index_sorts.lean`'s `HA : N → Type` / `HB : Type`
 block is the **arity** axis and used to be `Reason::IndicesDiffer`, exit 4 with
 three pairs uncertified; the same export is exit 0 with all 56 certifying.
 `mutual_index_telescopes.lean` is the two axes that leaves open — three members
@@ -1902,7 +1927,7 @@ on the tag. That was a guess that was never measured; the shape wanted the
 indices in the tag.*
 
 The recursor generation now has an oracle that is not mini:
-`mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`
+`checker/tests/mini_mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`
 compares the generated recursor's type, rule order and every rule's
 right-hand side against the export's own, over every designed fixture and the
 whole tutorial corpus. It found one standing divergence, which is mini-lean's
@@ -1926,7 +1951,7 @@ consumer") — with the sharper mini justification: the zone's *outputs* are
 
 **Zone B — the interpretation (evidence-carrying, per ground levels, at the
 declaration).** For each `(T, ℓ⃗)`, `(T.ctorᵢ, ℓ⃗)` and `(T.rec, ℓ⃗')` the
-pre-pass scheduled, driven by `mini/src/ledger.rs`'s `fill_declaration` when
+pre-pass scheduled, driven by `checker/src/mini/ledger.rs`'s `fill_declaration` when
 the declaration walk reaches `T`:
 
 *(This paragraph said "on demand", and cited `WIRING-DESIGN.md` §7.1 —
@@ -1935,14 +1960,14 @@ using declaration's σ. That is **nanoda's** decision and mini never inherited
 the premise: `checker::instantiations::compute` handles `Declar::Inductive`,
 `Declar::Constructor` and `Declar::Recursor` explicitly and propagates demand
 through recursor rules and through an inductive's constructors' types, and
-`mini/src/convert.rs` writes a schedule entry for every declaration where
+`checker/src/mini/convert.rs` writes a schedule entry for every declaration where
 `insts.for_name` is `Some` — inductives included — before it matches on the
 declaration kind. Mini had the schedule and read it for `def`s only. Two
 things were measured when it started reading it for inductives too: the
 schedule's `(name, σ)` set covers **every** lookup, with the miss path made to
 `panic!` and the corpus run; and three declarations that nothing in the corpus
 uses at a ground level turn out to decline, which no run had ever asked. See
-`mini/tests/dump.rs`.)*
+`checker/tests/mini_dump.rs`.)*
 
 1. Build the `DeclSpec` from `T`'s stored declaration at ground `ℓ⃗`: `np`
    from the declaration, per-ctor `CtorSpec` with field masks (`Rec`/`Plain`
@@ -1954,10 +1979,10 @@ uses at a ground level turn out to decline, which no run had ever asked. See
 
    *(This list read "indices, function-typed recursive arguments, mutual,
    nested". **Three of the four are translated now**: indices through
-   `mini/src/ctor_ix.rs` and `zoneb::build_indexed`; function-typed recursive
+   `checker/src/mini/ctor_ix.rs` and `zoneb::build_indexed`; function-typed recursive
    arguments through `CtorSpec::rec_doms` — `Gap::FunTypedRecArg` documents in
    `ev.rs` that it has no mint site left; mutual through
-   `mini/src/mutual_aux.rs`. Nested is the only survivor.)*
+   `checker/src/mini/mutual_aux.rs`. Nested is the only survivor.)*
 2. `Inductive::build(kenv, machine, spec)` → carrier, `ty_ax`, ctor terms
    and memberships; `wrec_total::iota`/`wrec_funspace` →
    `GenRecursor::build` → S1–S4 **[read, the struct: `computes`, `sv`,
@@ -2000,7 +2025,7 @@ against cross-apparatus mixing **[read, `carrier.rs`]**.
 > 2026-08-01, §5.3/§5.2's carriers are `derived/src/inductive/family/` with
 > `mini/src/class_s*.rs` above them, the `finord` blocker is
 > `derived/src/cumul/finord.rs`, and the dependent eliminator is
-> `derived::inductive::DepRecursor` wired by `mini/src/rec_dep.rs`. The
+> `derived::inductive::DepRecursor` wired by `checker/src/mini/rec_dep.rs`. The
 > function-eta row already carries its own correction in the closing paragraph
 > below. The criterion the section was named for is met —
 > `constEv = typeEv = 218`, `gapped = 0` — so read the rows as the record of
@@ -2016,7 +2041,7 @@ Named so the success criterion is honest. Verified against
 | `acc` carrier | DONE (entry 1) | — |
 | `rec_acc` (accessibility recursor) | **in flight now** (`derived/src/rec_acc/`, live agent) | prerequisite of §5.3 |
 | §5.3 subsingleton elimination + §5.2 `good`/indexed carriers | BLOCKED on `rec_acc` (entry 8) | indexed families: `042/068/077` (`RBTree`), `Eq.rec` users |
-| function-typed recursive args (`Σ(z::γ)` fibre) | **non-indexed: landed** (`mini/tests/infinitary.rs`, `constEv = 6`, no `waiting` key). **Indexed: the carrier landed 2026-08-06** (`derived/tests/family_infinitary.rs`); what is left is `ctor_ix`'s two bridges — see `indexed_infinitary_ctor.lean`'s header | `116_rtreeRecReduction` |
+| function-typed recursive args (`Σ(z::γ)` fibre) | **non-indexed: landed** (`checker/tests/mini_infinitary.rs`, `constEv = 6`, no `waiting` key). **Indexed: the carrier landed 2026-08-06** (`derived/tests/family_infinitary.rs`); what is left is `ctor_ix`'s two bridges — see `indexed_infinitary_ctor.lean`'s header | `116_rtreeRecReduction` |
 | cumul generalisation past `B(a) ∈ ω` (`finord` blocker) | named in WIRING verdict 5, not started | `⟦T⟧ ∈ ⟦Type 0⟧` for general-path inductives — hits mini harder than nanoda (§7, no recognisers) |
 | function eta lemma (graph extensionality at a typed term) | not in backlog yet — **this design adds it** | every `tryFunEta` site; nanoda admits it today |
 | interpreted structures: projection membership, structure eta, unit-like subsingleton | follows from zone B + per-structure lemmas; not separately in backlog | `inferProj` results, `tryStructureEta`, `def_eq_unit` analogues; `081_PSigma.snd`'s known escape |
@@ -2031,7 +2056,7 @@ funspace, prop split, beta_conditional, the congruence family).
 that was wrong — it was invisible, which is not the same thing.** The reading
 came from an evidence ledger in which every row was an uninterpreted
 inductive, so `FunEta`, `StructProj`, `UnitLike` and the cumul item all read
-zero. Building zone B's boundary (`mini/src/zoneb.rs`) turned 36 of the 223
+zero. Building zone B's boundary (`checker/src/mini/zoneb.rs`) turned 36 of the 223
 pairs into library rows immediately, and neither of the two items they name is
 in the table above:
 
@@ -2056,7 +2081,7 @@ composes against it already.
 2. **Acceptance vs mini-lean** (port fidelity): a committed fixture table of
    mini-lean's per-file verdicts on the 91 exports (generated once with
    `lake build` outside this repo's CI — mini-lean is not a workspace
-   member), compared by `mini/tests/tutorial.rs`. Any divergence is a
+   member), compared by `checker/tests/mini_tutorial.rs`. Any divergence is a
    red test naming the file. The two deliberate strictness deltas (§6.4
    beta-domain check, §6.5 proof-irrel type check) are watched by exactly
    this gate.
@@ -2136,7 +2161,7 @@ verdict-and-ledger level only.
    without the confounders, first. **Zone A was already in the port; zone B's
    boundary — the declaration walk, the carrier, `DeclUniverse`, and the
    Lean-facing λ-nests for the type former and the constructors — landed
-   2026-08-01** (`mini/src/zoneb.rs`), with the eliminator trichotomy deciding
+   2026-08-01** (`checker/src/mini/zoneb.rs`), with the eliminator trichotomy deciding
    the branch per declaration. Outstanding, in the order the ledger puts them:
    the two `derived/` items of §10, the recursor nest with its ι rules, the
    `Prop` classes, and indexed families.
