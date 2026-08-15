@@ -488,15 +488,12 @@ step, and that is worth more than 15.8 s. Recorded and left.
    `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
    itself is not on the short gate list seats actually run**. Every guard this
    document adds is downstream of that.
-6. **Shadowed assertions (§6), the unfixed remainder.** Four were fixed; three
-   groups were not, and two of the three need a file this branch does not own:
+6. **Shadowed assertions (§6), the unfixed remainder.** Six were fixed; two
+   groups were not, and both need a file this branch does not own, or a
+   measurement it did not take:
    * `origin_report()`'s surviving early return and the `if asked > 0` report
      gates, both in `checker/src/tg.rs` — §6.4. Neither is read by a test today;
      the second makes a live `mini_designed.rs` assertion unfalsifiable.
-   * `tg_tutorial.rs:1917` and `:1931` are the **same predicate**
-     (`assert!(fired >= 92)`) on an unchanged local, carrying two different
-     failure stories. The second cannot fail. Confirmed by inspection, not
-     mutation — a literally identical predicate needs none.
    * `tg_tutorial.rs:721`'s `assert_eq!(counted, n)` compares two printings of
      one local (`escapes`, `global_report`), so it is `escapes == escapes`. The
      independent observation that *would* separate it exists and is unused:
@@ -603,6 +600,8 @@ are this audit's, and each was measured.
 | **7** | **symmetric predicate** | **`kernel/tests/rules.rs`** | **`opair_description_mentions_both_components` asserts `occurs_free(a) && occurs_free(b)`, symmetric in `a` and `b`. *Measured: building `⟨b,a⟩` under the name `⟨a,b⟩` (`thm.rs:818`, singleton half naming `b`) leaves every test in the file green.* Fixed by rebuilding the Kuratowski formula from `is_singleton`/`is_upair`** |
 | **8** | **degenerate instantiation** | **`checker/src/tests/level.rs`** | **all five assertions about `eq_antisymm` named a pair that *is* equal, so both conjuncts hold. *Measured: rewriting it as `leq(l,r) && leq(l,r)` — dropping antisymmetry — leaves `--no-default-features --lib` at 246/246.* It gates sort defeq (`tc.rs`) and constructor level agreement (`inductive.rs`), so the degenerate form accepts `Sort u ≡ Sort v` whenever `u ≤ v` — the unsound direction. Fixed with a strict pair in **both** argument orders** |
 | **9** | **no reachable occupant** | **`checker/tests/mini_dump.rs`** | **the assertion named two reason strings (`"has no \`iota\` field"`, `"neither built nor tested"`) that had been **deleted from `dump.rs`**. No run could emit either, so no mutation could trip it — one line below a header warning against exactly that. Fixed by asserting the absence *shape*, at the one row nothing else in the test reaches** |
+| **10** | **the identical predicate** | **`checker/tests/tg_tutorial.rs`** | **`assert!(fired >= 92)` written **twice**, fourteen lines apart, on an unchanged local — once blaming the dependent arm, once the degenerate arm. The second could never execute a failing branch, and the "the degenerate arm stole a general site" story had no assertion of its own. Needs no mutation: an identical predicate on an unchanged local is shadowed by inspection. Folded into one assertion carrying both stories** |
+| **11** | **vacuous fixture** | **`checker/src/tests/util.rs`** | **`hash_test0` ran **20 000 iterations of `None == None`**. Its config sets `nat_extension: false` and `string_extension: false`; both `mk_*_lit_quick` open with `if !…extension { return None }`, and the test does not unwrap. No mutation to hash-consing, `Ptr::get_hash` or literal allocation could fail it. Fixed with a config that has the extensions on, **plus an `is_some()` guard so the test fails rather than passes if a default ever moves back*** |
 
 Instance 7 carries a trap worth keeping: `assert_ne!(is_opair(p,a,b),
 is_opair(p,b,a))` is **not** a fix. `is_upair` is symmetric in meaning but not
@@ -612,15 +611,27 @@ separates them.
 
 ### 6.4 What was fixed, and what was reported instead
 
-Fixed on this branch, each with its separating mutation watched red and
-restored: instances **6, 7, 8, 9** (`kernel/tests/henkin.rs`,
-`kernel/tests/rules.rs`, `checker/src/tests/level.rs`,
-`checker/tests/mini_dump.rs`). `kernel/` production code is unchanged;
-`git diff kernel/src/` is empty and both kernel mutations ran under a restore
-trap.
+Fixed on this branch — instances **6–11**, five of the six with a separating
+mutation watched red and restored (`kernel/tests/henkin.rs`, `kernel/tests/rules.rs`,
+`checker/src/tests/level.rs`, `checker/tests/mini_dump.rs`,
+`checker/tests/tg_tutorial.rs`, `checker/src/tests/util.rs`). `kernel/`
+production code is unchanged; `git diff kernel/src/` is empty and both kernel
+mutations ran under a restore trap.
 
-**Reported rather than fixed, because `checker/src/tg.rs` is owned by another
-seat:**
+Instance 10 is the one case where **no mutation was run, deliberately**: two
+byte-identical predicates on an unchanged local are shadowed by inspection, and
+there is no separating mutation to look for. That is the strongest form of the
+finding, not a gap in the evidence.
+
+Instance 11's fix has a second half worth copying. The vacuity was not a
+mistake in the assertions — they are fine — but in the *fixture*, and a fixture
+can drift back. So the test now asserts `is_some()` before comparing, and fails
+at the point it would go vacuous. That is `ci/skip-guard.rs`'s rule ("a check
+that examined nothing reports success") applied one level in: to an assertion
+rather than to an input.
+
+**Reported rather than fixed.** The first two need `checker/src/tg.rs`, which
+another seat owns; the third needs a measurement this branch did not take.
 
 * **Instance 2's residue.** `origin_report()`'s early return survives, and now
   returns `ix_readiness_report()` — so the indexed readiness rows are safe in
@@ -637,6 +648,20 @@ seat:**
   only `if asked > 0`. The row exists iff the assertion holds, so the
   `contains(…)`/`unwrap_or_else(panic!)` above it catches the only state that
   would trip it. Separating it needs the *gate* changed, in `tg.rs`.
+* **`tg_tutorial.rs::escaped_assumptions_are_reported_as_gaps` is two
+  tautologies.** `assert_eq!(counted, n)` and `assert!(total >= n)` read three
+  numbers that `global_report` prints from **one local**: `let escapes =
+  escaped()` feeds the `gap: undischarged assumption` row, the `TOTAL gaps` sum,
+  and the `… {} escaped` line alike. So the first is `escapes == escapes` and
+  the second is "a sum of non-negatives ≥ one of its terms". No behavioural
+  mutation — no assumption actually leaking to the boundary — can trip either.
+  **The fix is available and is not a `tg.rs` change**: the test's own header
+  already states the property that is asserted nowhere — *"`028` discharges
+  every one of its conditional derivations, `029` leaves one over"* — and the
+  `match escaped { 0 => …, n => … }` accepts either outcome for either file.
+  Pinning `escaped_count` per fixture makes it a behavioural claim. Not done
+  here only because it needs the two current values measured first, and a new
+  ratchet must not be guessed.
 
 ### 6.5 One claim this audit refuted
 
@@ -689,7 +714,9 @@ first:
 unaudited, and the highest-yield names there are the `family_*`, `cumul_*`,
 `verify_*` and `w*rec` groups.
 
-Of those 687, **four were confirmed by mutation and fixed**, and one candidate —
+Of those 687, **six were confirmed and fixed** (five by mutation, one — instance
+10 — by inspection, which is what an identical predicate admits), and one
+candidate —
 `derived/tests/hyp.rs::binary_operations_union_merge` — was **refuted**: a
 `close` that ignores its requested order goes red there, because the fixture's
 `[p, q]` is not the canonical rank order. That refutation is the reason §6.6
