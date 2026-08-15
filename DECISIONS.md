@@ -3663,13 +3663,45 @@ failure it was written to prevent. `ci/check-test-inputs.sh` keeps the general
 rule, now about `stepcount`, and its self-test cell was re-pointed and watched
 firing for the new reason.
 
-**Invariant.** All three populations byte-identical to master `5bab7c0`, per
-file: 54 designed fixtures (14 gap-bearing, **215**), Lean's 91 tutorial
-exports (21 gap-bearing, **156**), `init-prelude` (accept **1822**, tg gaps
-**11556**, prefix 152, pairs 32).
+**Invariant.** Byte-identical to a built reference of master, per file, on
+**four** captures — both harnesses of the exports, since the two are different
+populations (see below) and only one of them was in the original brief:
 
-**Correction to a standing figure.** `CLAUDE-HANDOFF.md` records the exports
-as "16 carry gaps, **168** total", measured at `d73c94f`. Measured at
-`5bab7c0` with one process per export, it is **21 files / 156**. The total
-improved and the spread widened; the handoff figure is stale, not wrong at the
-time.
+| capture | harness | figure |
+| --- | --- | ---: |
+| 54 designed fixtures | `checker --no-modelgen --verbose` | 14 gap-bearing, **215** |
+| 91 tutorial exports | `checker --no-modelgen --verbose` | 16 gap-bearing, **168** |
+| 91 tutorial exports | `nanoda_bin <cfg>` | 21 gap-bearing, **156** |
+| `init-prelude` | `checker --verbose --mutual --nested` | accept **1822**, tg gaps **11556**, prefix 152, pairs 32 |
+
+### "The 91 exports" names two populations, and they differ
+
+**This entry originally recorded 21 files / 156 as a *correction* to the
+standing 16 / 168. That was wrong: both numbers are right, about different
+harnesses, and the standing figure was never stale.** Measured at `5e01d45`
+over the same glob, `vendor/arena-tests/good/tutorial/*.ndjson`, 91 files:
+
+| harness | what it runs | gap-bearing | total |
+| --- | --- | ---: | ---: |
+| `checker --no-modelgen <f>`, `tg gaps:` on the verdict line | the **unified split route** — inductive groups to mini, the rest to nanoda, each at *every scheduled instantiation* | 16 | **168** |
+| `nanoda_bin <cfg>`, `TOTAL gaps` in the report | the **whole export through `tc.rs`**, each declaration once at its own universe parameters | 21 | **156** |
+
+Both totals sum the same quantity — the recorded rows plus `escaped()`, which
+is exactly `tg::global_gap_count()` — so the difference is not in the
+accounting but in *what work the process does*. On `076_listRecReduction` the
+split route reports 45 against `nanoda_bin`'s 9, and on `077_RBTree.id_spec`
+28 against 45; the per-instantiation replay is why the two do not even order
+the corpus the same way.
+
+Both are ratcheted, in different places, and neither is redundant:
+
+* **16 / 168 is the production figure** — the split route is what ships — and
+  is what `CLAUDE-HANDOFF.md`, `ORIGIN-RANKING.md` and the coordinator's
+  handoff quote. Quote this one when the label is bare "the 91 exports".
+* **21 / 156 is the `tc.rs` figure**, and it is what
+  `checker/tests/tg_tutorial.rs::check()` measures — that helper spawns
+  `CARGO_BIN_EXE_nanoda_bin` and greps `TOTAL gaps`, so every allowlist and
+  ratchet in that suite is stated against it.
+
+The ambiguity is the defect, not either number. A bare "the exports are N"
+should not be written again without naming the binary.
