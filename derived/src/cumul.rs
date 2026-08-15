@@ -121,18 +121,24 @@ pub use wmem::WMem;
 // ─────────────────────────────────────────────────────────────────────────────
 // Closing note — 2026-07-31, in two sessions: the one that built the tower and
 // refuted the target it was asked for, and the one that finished the chain to
-// `⟦N⟧ ∈ U₁`. The first session's record is kept as written, because its
-// corrections are what made the second short — with one exception: it named
-// `crate::wnat` and `cumul::witness` in the present tense, and both were
-// deleted when the `Nat` carrier moved to von Neumann `ω` ([`crate::nat`],
-// `DECISIONS.md` 2026-08-11). Those citations are corrected where they stand
-// rather than annotated at the end, so nothing below reads as a live module
-// path. The mathematics is untouched; the W-type argument is about W-types and
-// never depended on which module carried `Nat`.
+// `⟦N⟧ ∈ U₁`. Kept as written, because its corrections are what made the second
+// session short — but read it knowing that its worked example is no longer in
+// the tree. `⟦N⟧` throughout this note is the **W-type** presentation
+// `W(1+1, B, U(1+1))`, whose carrier was `crate::wnat` and whose membership was
+// derived by `cumul::witness` (`NatUniverse`, `NatMem`). All of that was
+// deleted on 2026-08-11, when `⟦Nat⟧` became von Neumann `ω` (`DECISIONS.md`) —
+// its membership is [`crate::tower::Rung::omega_mem`] and costs nothing: no
+// seed, no stage arithmetic, no `Fin` discharge. The *route* survived and
+// generalised; it is [`decl`], run end to end from declaration data in
+// `derived/tests/cumul_decl.rs`. The mathematics below is untouched — the
+// argument is about W-types and never depended on which module carried `Nat`.
 //
-// WHAT IS DONE, all unconditional and each pinned by a test in
-// `derived/tests/cumul.rs` at fresh constants or (for the last three) at
-// closed terms:
+// WHAT THESE TWO SESSIONS DERIVED, all unconditional, and — except for the last
+// two — each still pinned by a test in `derived/tests/cumul.rs` at fresh
+// constants or (for `finord`) at closed terms. The last two are about the
+// W-type `Nat` and went with it; `cumul_decl.rs`'s
+// `the_naturals_from_a_declspec_land_in_u1` is the surviving analogue, the same
+// statement by the same route from a `DeclSpec` rather than a hand-built `W`:
 //
 //   ⊢ ∀a ∀b ∀c. ((a ⊆ b ∧ b ⊆ c) → a ⊆ c)                    [subset_trans]
 //   ⊢ ∀a ∀b ∀z. (z ∈ a ∪ b → (z ∈ a ∨ z ∈ b))                [mem_bin_union_elim]
@@ -157,18 +163,22 @@ pub use wmem::WMem;
 //   the same two at Fin⁺                        [WMem::w_sub_tower_bnd, w_in_universe_bnd]
 //   ⊢ bnd(∅)   ⊢ ∀e. bnd({e})   ⊢ ∀x ∀y. ((bnd x ∧ bnd y) → bnd(x ∪ y))   [finite]
 //   ⊢ finord(m) = {I₀} ∪ (… ∪ ∅)   ⊢ bnd(finord(m))     for each m       [finord]
-//   ⊢ 1 = succ 0        ⊢ 1 ∈ ω        ⊢ (1+1) ∈ U₁           [NatUniverse]
-//   ⊢ W(1+1, B, U(1+1)) ∈ U(ω)   — i.e. ⊢ ⟦N⟧ ∈ U₁            [NatUniverse::nat_in_u1]
+//   ⊢ 1 = succ 0        ⊢ 1 ∈ ω        ⊢ (1+1) ∈ U₁           [witness, deleted]
+//   ⊢ W(1+1, B, U(1+1)) ∈ U(ω)   — i.e. ⊢ ⟦N⟧ ∈ U₁            [witness, deleted]
 //
-// The last of those is the deliverable, it is at closed terms, and the deleted
+// The last of those was this note's deliverable, at closed terms, and
 // `wnat::Nat`'s `zero`/`succ`/`zero_ne_succ` at the same terms were what
-// stopped it being a statement about a one-element set.
+// stopped it being a statement about a one-element set. Neither statement is
+// orphaned by the deletion: `⊢ (1+1) ∈ U₁` — `Bool`'s tag set, which was never
+// about `Nat` — is [`bool_tags_in_u1`], and the non-vacuity obligation is
+// re-imposed at every shape by `cumul_decl.rs`, which makes each declaration
+// exhibit provably distinct elements of the set it has just placed in `U₁`.
 //
 // ── THE STATEMENT IN THE BRIEF IS FALSE, AND THIS IS THE FIRST THING TO KNOW ──
 //
 // `W(A,B,u) ∈ u` is **refutable** at the `u` the development actually uses.
-// `⟦N⟧` **was** `W(A, B, U(A))` with `A = 1+1`, in the deleted `wnat` — today
-// `⟦Nat⟧` is von Neumann `ω` ([`crate::nat`]) and none of this is on its path.
+// `⟦N⟧` **was** `W(A, B, U(A))` with `A = 1+1`, in `wnat` — today `⟦Nat⟧` is
+// von Neumann `ω` ([`crate::nat`]) and none of this is on its path.
 // The refutation below is about W-types and stands whatever carries `Nat`:
 //
 //   * `V_ω`, the hereditarily finite sets, satisfies every clause of
@@ -178,7 +188,10 @@ pub use wmem::WMem;
 //   * `A ∈ V_ω`, so `U(A) ⊆ V_ω`, so **every member of `U(A)` is finite**;
 //   * `crate::bound::least_universe_closed` gives `closed(A,B,U(A))`, so
 //     `W(A,B,U(A))` really is the least closed subset, and `wnat`'s `zero`,
-//     `succ`, `zero_ne_succ` and `succ_inj` made it infinite.
+//     `succ`, `zero_ne_succ` and `succ_inj` made it infinite. The refutation
+//     did not lose its infinite `W` when `wnat` went: `cumul_decl.rs` exhibits
+//     the same three at the `DeclSpec` for `N`, at a carrier whose fibres are
+//     `finord(0)` and `finord(1)` rather than `0` and `1`.
 //
 // So `W(A,B,U(A)) ∉ U(A)`. `W ∈ u` is a *size* statement and the size has to
 // come from somewhere: the correct target is
@@ -258,9 +271,10 @@ pub use wmem::WMem;
 //
 //          Fin(A,B) := A ⊆ S ∧ ∀a ∈ A. (B(a) ⊆ S ∧ B(a) ∈ ω)
 //
-//      At `wnat` the seed was then `S := (1+1) ∪ 1` — the fibres are `0` and
+//      At `wnat` the seed was then `S := (1+1) ∪ 1` — its fibres were `0` and
 //      `1` — which is a great deal smaller and needs no facts about `B` as a
-//      set at all. See `witness`.
+//      set at all. `decl` generalises that hand-picked seed to `S := A ∪ ⋃T`;
+//      see "THE COMPOSITION" at the bottom of this file.
 //
 //  (b) `⊢ ∀A ∀B. (Fin(A,B) → closed(A,B,T))`  [closed::tower_closed]
 //      The route in the old note is exactly right and every step of it already
@@ -294,7 +308,8 @@ pub use wmem::WMem;
 //      cannot be identified — at `c = d = A` the antecedent `ω ∈ U(A)` is
 //      refutable, which is the whole content of the correction above.
 //
-//  (g) `⊢ W(1+1, B, U(1+1)) ∈ U(ω)`, i.e. `⊢ ⟦N⟧ ∈ U₁`  [NatUniverse::nat_in_u1]
+//  (g) `⊢ W(1+1, B, U(1+1)) ∈ U(ω)`, i.e. `⊢ ⟦N⟧ ∈ U₁`  [witness, deleted;
+//      `DeclUniverse::ty_in_u1` is the statement's home now]
 //      At closed terms, no hypothesis. The obligations and what they cost:
 //        * `1 ∈ ω` — one Extensionality, `1 = {∅} = ∅ ∪ {∅} = succ 0`, exactly
 //          as the old note predicted. It is the **only** equality-of-sets step
@@ -310,9 +325,12 @@ pub use wmem::WMem;
 //          would have needed an Extensionality and a case analysis; the
 //          defining equation is the short way and it is easy to miss.
 //        * `ω ∈ U₁` — `Rung::omega_mem`, free.
-//      Non-vacuity is `Nat::zero`, `Nat::succ` and `Nat::zero_ne_succ` at the
+//      Non-vacuity was `wnat::Nat::zero`, `::succ` and `::zero_ne_succ` at the
 //      same closed terms, so `N` is provably infinite and `N ∈ U₁` is not a
-//      statement about a set with fewer than two elements. That it is *not*
+//      statement about a set with fewer than two elements. The obligation is
+//      not optional and did not go with the carrier — `cumul_decl.rs` discharges
+//      it from the constructors a `DeclSpec` produces, at every shape it files.
+//      That it is *not*
 //      also a member of its own bound `U(1+1)` is the refutation recorded
 //      above, and is why the deliverable was worth restating before proving.
 //
@@ -331,34 +349,45 @@ pub use wmem::WMem;
 //     `(1, [nullary, {args: [β₀], recs: 1}])`, with `α ∈ U₁` an antecedent in
 //     the *conclusion* exactly as predicted. What is not done is transporting
 //     that onto `crate::wlist`'s hand-built `WList`, whose fibre family is a
-//     different term; `NatMem::over`'s split — the theorem at a caller-supplied
-//     carrier — is the shape that would be needed, and nobody has asked for it,
+//     different term; the shape that would be needed is the one `NatMem::over`
+//     had — the theorem at a caller-supplied carrier rather than a minted one,
+//     which [`decl`] now provides — and nobody has asked for it,
 //     because `checker/src/tg.rs` has no `⟦List α⟧ ∈ ⟦Type 0⟧` entry to keep.
 //     What the general route buys is measured and small; see `MEASUREMENTS.md`,
 //     "`⟦T⟧ ∈ ⟦Type 0⟧` wired into the checker".
 //
-// ── WHAT THE CHECKER NOW CONSUMES — 2026-08-01 ──────────────────────────────
+// ── WHAT THE CHECKER CONSUMES — 2026-08-01, restated after the carrier moved ─
 //
-// `checker/src/tg.rs` uses `NatMem::over` and `enums::enum_in_u1`, so
-// `⟦N⟧ ∈ ⟦Type 0⟧`, `⟦Bool⟧ ∈ ⟦Type 0⟧`, `⟦Unit⟧` and `⟦Empty⟧` are discharged
-// rather than assumed. Two things had to change here for that, and both are
-// plumbing rather than mathematics:
+// `checker/src/tg.rs`'s `ind_ty_u1` files four `⊢ body ∈ ⟦Type 0⟧` entries, and
+// three of the four come from here: `⟦Empty⟧`, `⟦Unit⟧` and `⟦Bool⟧` are
+// `enums::enum_in_u1` at `zero_in_u1`, `unit_in_u1` and [`bool_tags_in_u1`].
+// The fourth, `⟦N⟧`, no longer does. It was `NatMem::over` climbing this
+// hierarchy; since `⟦Nat⟧` is `ω` it is `tower::Rung::omega_mem` outright, with
+// no chain, no seed and nothing from this module. All four are discharged
+// rather than assumed, which was the point.
+//
+// What is still load-bearing here is the plumbing that made a checker-side
+// consumer possible at all, and it is unchanged:
 //
 //   * `Chain::over` (`ambient`) builds the chain over a **caller-supplied**
-//     tower, `Wtype` and `Bound`. `Chain::new` mints its own, and a theorem
-//     about those symbols says nothing about the checker's — the failure mode
-//     is silent, which is why the constructor guards on the pairing, the power
-//     set and `U(·)` being shared. `Sums`, `Wtype`, `Bound`, `Space`, `Peano`
-//     and `OmegaCore` became `Clone` for it: cloning one copies the *same*
-//     symbols, which is the whole point.
-//   * `NatMem::over` is `NatUniverse::new` minus the `Nat` it used to build.
-//     `Cases::new` mints a fresh `rec₊`, so a second `Nat` has a different
-//     fibre family and hence a different `W`; the client's own `N` has to be
-//     handed in.
+//     tower, `Wtype` and `Bound` — `tg.rs` calls it with the prelude's tower
+//     and the `Inductives`' own symbols. `Chain::new` mints its own, and a
+//     theorem about those symbols says nothing about the checker's; the failure
+//     mode is silent, which is why the constructor guards on the pairing, the
+//     power set and `U(·)` being shared. `Sums`, `Wtype`, `Bound`, `Space`,
+//     `Peano` and `OmegaCore` became `Clone` for it: cloning one copies the
+//     *same* symbols, which is the whole point.
+//   * The reason a carrier has to be handed in rather than minted survives the
+//     deletion of the module that first hit it. `Cases::new` mints a fresh
+//     `rec₊`, so a second `Nat` has a different fibre family and hence a
+//     different `W`, and a theorem about it speaks of a set no rule in the
+//     checker mentions. `NatMem::over` was that split for the W-type `Nat`;
+//     [`decl`] carries it now, over an `Inductive` the caller already has.
 //
 // `enums` is the same argument where the fibres are empty, and it is shorter
 // rather than merely different — no case analysis, and the seed is the tag set
-// itself. It reuses `NatMem::tags_in_u1` for `Bool`'s `(1+1) ∈ U₁`.
+// itself. `Bool`'s `(1+1) ∈ U₁` is [`bool_tags_in_u1`], which is the one lemma
+// of `witness` that outlived it, kept because it was never about `Nat`.
 
 // ── PRACTICALITIES THAT COST TIME ───────────────────────────────────────────
 //
@@ -400,8 +429,8 @@ pub use wmem::WMem;
 // — to get one stage covering `f : B(a) → T` — so `bnd(B(a))` is the weakest
 // hypothesis that carries the proof and nothing weaker could. `bounded`, the
 // old hypothesis's whole content, becomes the four-line specialisation
-// `tower_closed`, so `wnat` (as it then was), `enums` and the checker keep the
-// statement they already discharge and pay nothing for the generality.
+// `tower_closed`, so `enums` and the checker keep the statement they already
+// discharge and pay nothing for the generality.
 //
 // Two things about this that are worth having in writing.
 //
@@ -430,12 +459,16 @@ pub use wmem::WMem;
 //   bnd(finord(mᵢ))                    `finord::bnd_finord`, then `Thm::gen`
 //                                      over `st.seed` and one instantiation
 //   finord(mᵢ) ⊆ S, A ⊆ S              their seed's business, as before
-//   S ∈ U(c), S ∈ U₁, ω ∈ U₁           unchanged from `witness`/`enums`
+//   S ∈ U(c), S ∈ U₁, ω ∈ U₁           unchanged from `enums`
 //
-// `derived/tests/cumul.rs` walks the whole path at terms that already exist:
-// `the_general_membership_statement_reproves_the_naturals_in_u1` weakened
-// `wnat`'s `Fin` to `Fin⁺` and got `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`,
-// the same theorem `NatUniverse` produced. That test went with the carrier.
+// `derived/tests/cumul.rs`'s
+// `the_general_membership_statement_reproves_the_naturals_in_u1` walked the
+// whole path at terms that already existed: it weakened `wnat`'s `Fin` to `Fin⁺`
+// and got `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`, the same theorem `witness`
+// produced by hand. It went with the carrier, and
+// `derived/tests/cumul_decl.rs`'s `the_naturals_from_a_declspec_land_in_u1` is
+// the same walk from a `DeclSpec` — the only place `w_in_universe_bnd` is now
+// exercised at a concrete W-type, and the reason the route is still pinned.
 //
 // ── THE COMPOSITION — 2026-08-01, later the same day ────────────────────────
 //
@@ -459,15 +492,16 @@ pub use wmem::WMem;
 //
 //   * **The tower seed is `S := A ∪ ⋃T`**, `T` the fibre codomain. `⋃T` and not
 //     `T`, because `Fin⁺` wants `B(a) ⊆ S` and `B(a)` is a *member* of `T`. It
-//     generalises `witness`'s `A ∪ 1` and needs nothing about `B` as a set of
-//     pairs, so the generic `A ∪ ⋃⋃⋃B` rejected at (a) above stays rejected.
+//     generalises the `A ∪ 1` seed `witness` picked by hand, and needs nothing
+//     about `B` as a set of pairs, so the generic `A ∪ ⋃⋃⋃B` rejected at (a)
+//     above stays rejected.
 //   * **The bound seed stays `{A,T}`.** `isum::in_universe` removed the
 //     obstacle to the tight seed `c := A`, and the tight seed still buys
 //     nothing: this route needs `S ∈ U(c)`, hence `A ∈ U(c)` *and* `T ∈ U(c)`,
 //     and at `c = {A,T}` both are one use of transitivity at a member of the
 //     seed. At `c = A` the second becomes `n + 1` closure steps. See
 //     `decl`'s header.
-//   * **No case analysis on the tag sum anywhere.** `witness` needs one
+//   * **No case analysis on the tag sum anywhere.** `witness` needed one
 //     (`sum_cases` + `unit_eta` + two `rec₊` rules) because it reads each
 //     fibre off its tag. `decl` goes through `Fibre::values_in_target` and one
 //     elimination over the *codomain* `T`, whose `n` cases are `⊢ vᵢ ∈ T` and
