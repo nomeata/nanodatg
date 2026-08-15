@@ -962,12 +962,31 @@ is red, and a later seat scores it as progress. `in_un` remains the right and
 promised fix for `Squash`/`MyBool` (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.5) —
 which is a **different** tranche, and must not be merged with this one.
 
-What is genuinely unmeasured is §8.6's mixed-σ question: the corpus schedules
-only `[0,0]` and `[1,1]` (`DEFAULT_LEVELS = [0,1]`), so the data carrier at
-`(0,1)` / `(1,0)` — one `Prop` field and one data field, lifted by
-`Cumul::lift(0,n)` — has never been exercised. `Simple.lean:26-27` makes this a
-production case rather than a curiosity: `PUnit`'s role in the models is
-`PSigma'.{0,u} (fun _ : p => PUnit.{u})`.
+**Mixed σ is measured now, and it makes this section's fix cover more while
+costing no more.** *(Added 2026-08-15. The paragraph here said the mixed
+question was "genuinely unmeasured" and that the corpus schedules only `[0,0]`
+and `[1,1]`. The second half was right and is the reason for the first: a
+default is `vec![l; nparams]`, uniform by construction, so **no** value of
+`DEFAULT_LEVELS` can produce a mixed σ and no amount of re-running the corpus
+would have found one.)*
+
+`checker/tests/fixtures/psigma_mixed_sigma.lean` demands all four σ of
+`PSigma'` by name. `PSigma'.{0,1}` and `PSigma'.{1,0}` **decline**, with
+`ind-spec(PSigma': class (P) above Prop)` — the same reason, the same site, as
+`(1,1)`. So mixed σ is **not a second gap**: `PSigma'` is red at three σ and
+green at one, and the single classification decision above closes all three.
+That is a narrowing of the blocker, not a widening of it.
+
+And the carrier those three should get is green today. The same fixture
+declares `PSigma` (`Sort (max 1 u v)`) beside it, which is **the same
+instantiated declaration** at every σ here — `max 0 1`, `max 1 0`, `max 1 0 1`
+and `max 1 1 0` are all `1` — differing only in the level expression
+`large_eliminating` reads. It derives at all four σ, mixed included: the general
+data carrier takes one `Prop` component and one data component at rung 1 with
+no complaint. `Cumul::lift(0,n)`, the lemma §8.6 predicted this case would
+spend, is built (`derived/src/tower/cumulative.rs:180`), public through
+`Interp::raise_in_gamma` and `Interp::cumul_lift`, and already in the path at
+`zoneb.rs:2953`. **`derived/` is owed nothing by mixed σ.**
 
 ### 8.3 The `Acc` retirement is a real cost, not a saving
 
@@ -1007,12 +1026,22 @@ check buys the reason string.
   theorems subsume `fun_eta.rs`, `unit_like.rs` and our K handling. The README
   says they are emitted "when the exported kernel metadata calls for them", which
   is a weaker guarantee than "always".
-* Whether `PSigma'` translates at mixed universes `(0,1)` and `(1,0)`. Still
-  open, and now the *only* open `derived/`-side question about `PSigma'` (§8.2):
-  `tight_psigma_prime` does not isolate it and the σ pre-pass schedules only
-  `[0,0]` and `[1,1]`, so nothing in the corpus has ever run the data carrier
-  over one `Prop` field and one data field. `Cumul::lift(0,n)`
-  (`derived/src/tower/cumulative.rs:180`) is the lemma it would spend.
+* ~~Whether `PSigma'` translates at mixed universes `(0,1)` and `(1,0)`.~~
+  **Closed 2026-08-15, and closed as a decline.** `PSigma'` declines at both,
+  with `ind-spec(PSigma': class (P) above Prop)` — the same reason and site as
+  `(1,1)`, so §8.2's one classification fix covers all three red σ. The
+  `derived/` side is **not** open: the same fixture measures Lean's `PSigma`,
+  which is the identical instantiated declaration at both mixed σ, deriving its
+  data carrier at all four. `Cumul::lift(0,n)` exists and is already spent on
+  that path. `checker/tests/fixtures/psigma_mixed_sigma.lean` and
+  `mini_designed::psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop`.
+
+  *Why it stayed open so long is worth keeping.* It was not under-measured, it
+  was **unreachable**: `instantiations::compute_in` spells a default as
+  `vec![l; nparams]`, so a mixed σ can only come from a declaration that demands
+  one, and no file in `vendor/arena-tests` or `checker/tests/fixtures` did.
+  Re-running the corpus at any `DEFAULT_LEVELS` would have produced the same
+  nothing and read as a pass.
 * Whether the recognition path scales. §6 measures the **modelling** side at
   `init-prelude` scale and `MODELGEN.md` measures the predecessor's at Mathlib
   scale. The **recognition** side has never been run at more than fixture scale,
@@ -1052,6 +1081,12 @@ first.*
 | — `PSigma.{1,1}` apparatus (2026-08-15) | full data carrier: carrier ax, `ctor 0 mem`, `ctor 0 inj`, rec typing, `ι 0`, `gen ι 0`, rec abbrev at `σ = [1,1,1]`; `elim PSigma computed=true oracle=true` |
 | `⊢ Σ ∈ U₀` | **refutable**, not missing: `U₀ = {0,1}`, `1 = {∅}`, Kuratowski pairs ⟹ `Σ(1,λ_.1) = {1} ∉ U₀`. `thesis.txt:2461` states the Σ clause "For n > 0" only |
 | `Σ ∈ Uₙ` entry points | **public**, five of them, `derived/src/cumul.rs:96-100`; no `max(1,…)` clamp exists in `derived/`'s executable code |
+| **mixed σ, `psigma_mixed_sigma.ndjson`** (2026-08-15, release binary, `--naive`) | `accept 10 declarations`, `pairs=8`, `constEv=5`, `waiting:ind-spec(PSigma': class (P) above Prop)=3`, **TOTAL gaps 0** |
+| — `PSigma'` per σ | `[0,0]` **class-(P) truncation carrier**; `[0,1]`, `[1,0]`, `[1,1]` **declined**, one reason |
+| — `PSigma` per σ (control, `max 1 u v`) | **data carrier at all four**, `[0,1]` and `[1,0]` included — carrier, carrier ax, `closed`, `ctor 0 mem`, `ctor 0 inj`, universe placement |
+| — the two shapes at mixed σ | **identical instantiated declarations**: `max 0 1 = max 1 0 1 = 1`, `max 1 0 = max 1 1 0 = 1` |
+| — `Cumul::lift(0,n)`, §8.6's predicted spend | already built and already in the path: `derived/src/tower/cumulative.rs:180` → `Interp::raise_in_gamma`/`cumul_lift` → `zoneb.rs:2953` |
+| — a mixed σ from a default | **impossible**: `instantiations::compute_in` seeds `vec![l; nparams]` |
 | `PSigma'.rec` level params | `[u, v]` — small-eliminating |
 | `PSigma.rec` level params (control) | `[u_1, u, v]` — large-eliminating |
 | `init-prelude.ndjson` with `--no-modelgen` | declines at `Lean.Syntax`, as `CLAUDE-HANDOFF.md` records |

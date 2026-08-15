@@ -114,6 +114,37 @@ use crate::util::{
 /// missing *interpretation* of `PSigma`, not a missing rule. `[1]` does not
 /// move at all, which is the check that the rule is not paying for itself
 /// somewhere else.
+///
+/// # A default is **uniform**, and that is a statement about coverage
+///
+/// *The paragraph above is this tree's only measurement of one declaration
+/// across σ, and it is about a different axis from the one it keeps being cited
+/// for. It compares two whole lists — every parameter `0` against every
+/// parameter `1` — on Lean's `PSigma`, and what moved was a **projection typing
+/// rule** for a `Prop`-valued field. It says nothing about a σ whose entries
+/// differ from one another, and it cannot: [`compute_in`]'s default pass spells
+/// every default as `vec![l; nparams]`, one level repeated, so no entry of this
+/// list — and no list — can ever produce a mixed instantiation.*
+///
+/// A mixed σ therefore exists only where some declaration **demands** one, at
+/// level arguments that evaluate to different numerals. That is not exotic:
+/// `vendor/lean-inductive-models/src/InductiveModels/Simple.lean:26` builds
+/// `False`'s role over the model basis as `PSigma'.{0,u} (fun _ : p =>
+/// PUnit.{u})`, so every model on that tool's Type route carries one. But until
+/// `checker/tests/fixtures/psigma_mixed_sigma.lean` nothing in
+/// `vendor/arena-tests` or in `checker/tests/fixtures` demanded one, and
+/// **`(0,1)` and `(1,0)` had never been run on anything.** Absent is not
+/// passing.
+///
+/// Measured there, over four demanded σ of two declarations that differ only in
+/// their declared resultant sort: the general data carrier takes one `Prop`
+/// component and one data component at rung 1 without complaint, and `PSigma'`
+/// declines at both mixed σ for the reason it already declines at `(1,1)` —
+/// `ind-spec(PSigma': class (P) above Prop)`, a classification made on the
+/// declaration's own level expression before σ exists. `MODEL-BASIS.md` §8.6
+/// and `mini_designed::
+/// psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop`
+/// carry it; none of it is a property of this constant.
 pub const DEFAULT_LEVELS: &[u32] = &[0, 1];
 
 /// One ground instantiation: a natural number per universe parameter, in the

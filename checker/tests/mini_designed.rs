@@ -189,7 +189,16 @@ fn elim(stdout: &str) -> BTreeMap<String, (bool, bool)> {
 ///
 /// Groups are keyed by `(declaration, σ)`; a declaration scheduled at several σ
 /// contributes all of its groups, in the dump's own sorted order.
-fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
+/// `--dump-theorems` over a fixture, as stdout.
+///
+/// Split out of [`theorem_lines`] because the dump carries two sections that
+/// are not theorem lines and that a test may legitimately want: the group
+/// headers, which name *which carrier* a `(declaration, σ)` pair got, and the
+/// `── untranslated` rows, which name the pairs that got none. A count cannot
+/// see either — [`waiting`] says how many pairs are blocked and on what, never
+/// at which σ — and "at which σ" is the whole question for a declaration whose
+/// instantiations want different carriers.
+fn dump(file: &str) -> String {
     let path = fixture(file);
     let out = Command::new(env!("CARGO_BIN_EXE_checker"))
         .arg("--naive")
@@ -204,6 +213,39 @@ fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
         .expect("spawn mini");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     assert_eq!(out.status.code(), Some(0), "mini did not accept {file}:\n{stdout}");
+    stdout
+}
+
+/// The dump's `(declaration, σ)` group headers, as the dump spells them —
+/// e.g. `inductive PSigma   σ = [0, 1]`, `class-(P) PSigma'   σ = [0, 0]`.
+///
+/// The leading word is the **carrier class**, which is the thing being read:
+/// `inductive` is the general data carrier, `class-(P)` the truncation. Only
+/// the `── inductive apparatus` section is scanned, so a constant's own group
+/// header — same indentation, no class word — cannot be mistaken for one.
+fn apparatus_headers(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .skip_while(|l| !l.contains("── inductive apparatus"))
+        .take_while(|l| !l.contains("── untranslated"))
+        .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.contains("σ = "))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+/// The dump's `── untranslated` rows — `<decl> σ=<inst>  (<reason>)`, one per
+/// `(declaration, σ)` pair that was reached and produced nothing.
+fn untranslated_rows(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .skip_while(|l| !l.contains("── untranslated"))
+        .filter(|l| l.contains("not translated:"))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
+    let stdout = dump(file);
     let mut lines = Vec::new();
     let mut here = false;
     for l in stdout.lines() {
@@ -841,6 +883,175 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
     ]
     .into();
     assert_eq!(w, expected, "the Squash frontier moved — re-read the fixture header:\n{out}");
+}
+
+/// **`PSigma'` and `PSigma` at mixed σ — `(0,1)` and `(1,0)`, the
+/// instantiations of a basis member that nothing had ever run.**
+///
+/// `MODEL-BASIS.md` §8.6 lists "whether `PSigma'` translates at mixed universes
+/// `(0,1)` and `(1,0)`" as not established. It was not established because it
+/// was not *reachable*: `instantiations::DEFAULT_LEVELS` seeds a defaulted
+/// declaration at `vec![l; nparams]`, which is uniform by construction, so a
+/// mixed σ appears only where some declaration demands one — and nothing in
+/// `vendor/arena-tests` or in this directory did. **Skip is not pass.** The
+/// eight `def`s in `psigma_mixed_sigma.lean` demand all four σ of both types by
+/// name, so neither type is defaulted at all and the fixture measures the same
+/// eight pairs whatever `DEFAULT_LEVELS` becomes.
+///
+/// # What it measures, and why the second declaration is the instrument
+///
+/// `PSigma'` (`Sort (max u v)`) and `PSigma` (`Sort (max 1 u v)`) are **the same
+/// instantiated declaration at both mixed σ**: `max 0 1`, `max 1 0`,
+/// `max 1 0 1` and `max 1 1 0` are all `1`. Same parameters, same constructor,
+/// same fields, same ground resultant sort. The only difference is one Lean
+/// cannot see through σ and the checker decides on before σ exists —
+/// `zoneb::large_eliminating` reads the **declaration's own** level expression
+/// (`zoneb.rs:1149`), where `max u v` is not `provably_nonzero` and `max 1 u v`
+/// is.
+///
+/// So `PSigma` is not a second subject, it is the **control**: it puts the
+/// general data carrier over one `Prop` component and one data component at
+/// rung 1 — the carrier a per-σ basis clause for `PSigma'` would have to reach
+/// — and measures it on the identical instantiated shape rather than on an
+/// analogy. It derives at all four σ, mixed included, and that is the finding:
+/// the mixed instantiations owe **no new `derived/` construction**.
+/// `Cumul::lift(0,n)` (`derived/src/tower/cumulative.rs:180`), which
+/// `MODEL-BASIS.md` §8.6 predicted this case would spend, is already built,
+/// already public through `Interp::raise_in_gamma`, and already in the path at
+/// `zoneb.rs:2953`.
+///
+/// # This test pins a decline, and pins that it is not a new one
+///
+/// `PSigma'` derives at `(0,0)` and declines at the other **three** σ with one
+/// reason, `ind-spec(PSigma': class (P) above Prop)` — `build_trunc` refusing a
+/// nonzero ground resultant level, the same site `Squash.{1}` reaches above.
+/// Mixed σ is therefore *not* a second, harder gap beside `(1,1)`: one
+/// classification decision covers all three, and closing it closes all three.
+/// That is the load-bearing negative result, and it is why the expectations
+/// below are the current behaviour, decline and all.
+///
+/// **The class must not be "fixed" by reading σ.** A `large_eliminating` that
+/// read the substituted sort would see `Sort 1` at three of `PSigma'`'s four σ,
+/// call it provably nonzero, and hand a possibly-`Prop` declaration a W-type —
+/// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3, pinned by
+/// `zoneb::tests::a_possibly_prop_declaration_never_acquires_a_w_type`. Such a
+/// checker reports `computed=true` for `PSigma'` here and disagrees with Lean's
+/// own exported recursor, which is the first assertion below.
+///
+/// # Why the rows and not the counts
+///
+/// `constEv = 5` against `waiting = 3` splits the eight `def`s, and it is a
+/// real oracle — `tight01` and `tight10` are on the blocked side while
+/// `wide01` and `wide10` are on the derived side, which no count of a single
+/// declaration could say. But it cannot tell `(0,1)` from `(1,0)`, and those
+/// are **not interchangeable**: at `(0,1)` the first component is the
+/// proposition and the fibre is data, at `(1,0)` it is the other way round. A
+/// checker that sorted, `max`-ed or otherwise normalised σ would collapse the
+/// two into one pair and every count here would stay green. The two `σ=[0, 1]`
+/// / `σ=[1, 0]` rows and the two `σ = [0, 1]` / `σ = [1, 0]` headers are what
+/// refuses that, and they are asserted as *exact sets* so a fifth carrier or a
+/// fourth decline cannot appear quietly.
+///
+/// The headers also carry the answer to "which carrier does each mixed σ get?"
+/// in the dump's own vocabulary — `inductive` is the general data carrier,
+/// `class-(P)` the truncation — so the day a basis clause gives `PSigma'` the
+/// per-σ licence, the two mixed rows move from the untranslated list to
+/// `inductive PSigma' σ = [0, 1]` / `σ = [1, 0]` and this test is what shows
+/// they landed on the carrier the control already validates.
+///
+/// # Falsifiers (`TEST-INVENTORY.md` §6)
+///
+/// Four mutants of `psigma_mixed_sigma.lean`, each re-exported through
+/// `scripts/export-fixture.sh` and run against this test. Each died at its own
+/// assertion and at no earlier one — measured, not predicted:
+///
+/// | mutation | died at |
+/// | --- | --- |
+/// | `tight01`/`tight10` rewritten to demand `PSigma'.{1,1}` — the mixed σ stop being demanded, `pairs`, `constEv`, `waiting` and the headers **all stay put** | `untranslated_rows`: one row where three were wanted |
+/// | `wide01`/`wide10` rewritten to demand `PSigma.{1,1}` — same, on the control | `apparatus_headers`: three headers where five were wanted |
+/// | `PSigma` declared `Sort (max u v)` instead of `Sort (max 1 u v)`, i.e. made into a second `PSigma'` | the `PSigma` `elim` assertion: `(false, false)` where `(true, true)` was wanted |
+/// | `tight00` rewritten to demand `PSigma'.{1,1}` — the one green tight σ taken away | `constEv`: 4 where 5 was wanted |
+///
+/// The first is the one worth reading twice: it is the **"skip is not pass"**
+/// mutation, it is what this fixture exists to refuse, and every counter in the
+/// test survives it. Without the row assertions the fixture could stop
+/// exercising mixed σ entirely and stay green.
+///
+/// Two assertions are **not** independently falsified here and say so rather
+/// than being claimed:
+///
+/// * **`PSigma'`'s `elim` row.** The mutation that trips it is
+///   `zoneb::large_eliminating` reading the σ-substituted sort, and that file
+///   belongs to another seat. It is the same mutation
+///   [`squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today`] pins
+///   with the same instrument, and `zoneb::tests::
+///   a_possibly_prop_declaration_never_acquires_a_w_type` pins directly.
+/// * **`waiting`'s count.** Over this fixture's fixed eight pairs `5 + 3 = 8`,
+///   so `constEv` and `waiting` are co-determined and every mutation found here
+///   moves both — `constEv` is asserted first and shadows it (§6.1 gate 1).
+///   What `waiting` adds that `constEv` cannot is the **reason key**: that all
+///   three declines are `ind-spec(PSigma': class (P) above Prop)` and nothing
+///   else, so a decline arriving from a different site would trip it with the
+///   counts unchanged. That mutation is also `zoneb.rs`'s.
+#[test]
+fn psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop() {
+    let out = run("psigma_mixed_sigma.ndjson");
+    let e = elim(&out);
+    // Lean's own verdict, from the two exported recursors. `PSigma'`'s
+    // `computed=true` would be the σ-substituted-sort bug and nothing else;
+    // `PSigma`'s `computed=false` would be the mirror mistake, a `max 1 …`
+    // read as possibly zero.
+    assert_eq!(
+        e.get("PSigma'"),
+        Some(&(false, false)),
+        "PSigma' must be small-eliminating, at the declaration and per Lean:\n{out}"
+    );
+    assert_eq!(
+        e.get("PSigma"),
+        Some(&(true, true)),
+        "PSigma must be large-eliminating, at the declaration and per Lean:\n{out}"
+    );
+
+    let ev = evidence(&out);
+    assert_eq!(ev.get("pairs"), Some(&8), "the pair population changed:\n{out}");
+    // The five that derive: `tight00`, and all four `wide*` — including both
+    // mixed ones, which is the positive half of the finding.
+    assert_eq!(ev.get("constEv"), Some(&5), "the derived population changed:\n{out}");
+    let expected: BTreeMap<String, u64> =
+        [("ind-spec(PSigma': class (P) above Prop)".to_string(), 3)].into();
+    assert_eq!(
+        waiting(&out),
+        expected,
+        "the PSigma' frontier moved — re-read the fixture header:\n{out}"
+    );
+
+    // Which carrier each (declaration, σ) pair got, per σ and in the dump's own
+    // words. Five and exactly five.
+    let d = dump("psigma_mixed_sigma.ndjson");
+    assert_eq!(
+        apparatus_headers(&d),
+        vec![
+            "inductive PSigma σ = [0, 0]",
+            "inductive PSigma σ = [0, 1]",
+            "inductive PSigma σ = [1, 0]",
+            "inductive PSigma σ = [1, 1]",
+            "class-(P) PSigma' σ = [0, 0]",
+        ],
+        "the carriers moved:\n{d}"
+    );
+    // …and the three that got none. `PSigma' σ=[0, 0]` is absent because it
+    // derived, and no `PSigma` row is here at any σ; both absences are the
+    // point and both are pinned by the equality.
+    let why = "declaration not translated: ind-spec(PSigma': class (P) above Prop)";
+    assert_eq!(
+        untranslated_rows(&d),
+        vec![
+            format!("PSigma' σ=[0, 1] ({why})"),
+            format!("PSigma' σ=[1, 0] ({why})"),
+            format!("PSigma' σ=[1, 1] ({why})"),
+        ],
+        "the untranslated pairs moved:\n{d}"
+    );
 }
 
 // ─────────────────────────────────────────── zero constructors, with params ──

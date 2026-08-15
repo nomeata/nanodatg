@@ -146,6 +146,25 @@ fn a_filtered_dump_is_deterministic_too() {
 /// gitignored corpus is absent, and its row **carries a σ** (`Squash σ=[1]`),
 /// which `RTree`'s never did. The per-σ half still wants a declaration
 /// declining at *two* σ and is still owed.)*
+///
+/// *(**The per-σ half is owed no longer, and it is asserted somewhere else.**
+/// `tests/fixtures/psigma_mixed_sigma.lean` declares `PSigma'`
+/// (`Sort (max u v)`) beside `PSigma` (`Sort (max 1 u v)`) and demands four σ
+/// of each by name. `PSigma'` translates at `[0, 0]` and declines at `[0, 1]`,
+/// `[1, 0]` and `[1, 1]` — **three** rows for one name, each carrying its own
+/// σ, and two of them mixed, which no default can produce
+/// (`instantiations::DEFAULT_LEVELS` spells a default as `vec![l; nparams]`).
+/// It is stronger than the two σ this paragraph asked for in the way that
+/// matters: one of the four σ **succeeds**, so the rows pin that the decline is
+/// per instantiation and not per name, which a declaration declining at every σ
+/// cannot.
+///
+/// The assertion lives in `mini_designed::
+/// psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop`
+/// rather than here, because the same fixture's other half — which carrier each
+/// σ got — is read from the `── inductive apparatus` headers and belongs beside
+/// the counts it contradicts. This test keeps `Squash`, which is the smaller
+/// statement and the one about a single row.)*
 #[test]
 fn an_untranslated_declaration_is_shown_with_its_reason() {
     let out = run(&fixture("squash_at_nonzero_sigma.ndjson"), &["--dump-theorems"]);
