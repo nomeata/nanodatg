@@ -1471,6 +1471,39 @@ its first assertion.
 **What is left is `IDEP` alone**, and the ~800–1000 lines above are its size.
 The decline now says so.
 
+#### 8.4.1 Three findings that are not about indexed families
+
+Recorded here because all three were found by walking one telescope, and none of
+them is a fact about `ICOD`.
+
+1. **`has_type_uncached` has no `Expr::Pi` arm, for any declaration.** Not an
+   indexed-recursor fact — a hole in the typing rules with a general blast
+   radius, and the rule it wants (`pi_store::Full::rule`) has been sitting on
+   the shared `Π` store the whole time behind `want_full = false`. What else was
+   downstream of it is **unmeasured** and is its own tranche; measure it before
+   sizing it, because `HtMiss::Pi`'s raw count is obligations *asked*, not
+   declarations that would move.
+
+2. **A guard that declines for cost must say so at its call site.** The
+   `Decline::Indices` that blocked this tranche is documented as a cost guard in
+   `typeable_shape`'s own header ("a cost guard, not a soundness one … answering
+   `true` only lets a rule be attempted") — and that header is not where anyone
+   reads it. The reader is at the *call site*, where an obligation comes back
+   `None` and the only visible fact is a decline naming indices. Three tranches
+   this week were blocked by a guard whose documentation already said it was not
+   load-bearing. **A `Decline` variant that exists for cost should be named so
+   at the point it is returned**, or the next seat will price it as an
+   obstruction again — as `§8.3` item 4 did.
+
+3. **`checker/` had never consumed a rung closure lemma**, and after this change
+   it consumes them **only along the `ICOD` path**. `ty_in_rung`, `pi_in_rung`
+   and `lift_rung` are private and reached from `ix_icod` alone; `has_type_a`
+   does not call them, so every other obligation in the checker still has
+   neither Π-formation nor cumulativity. Generalising means having `has_type_a`
+   dispatch into `ty_in_rung` when its target is a rung's `set`, which is one
+   arm and a real blast radius — deliberately **not** taken here, so that the
+   ICOD landing is attributable.
+
 ---
 
 ## 9. Failure modes and open questions
