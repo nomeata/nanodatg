@@ -464,6 +464,76 @@ step, and that is worth more than 15.8 s. Recorded and left.
 
 ---
 
+## 4.5 The shadowed assertion — four instances, one rule
+
+*Found on `joachim/icod-rung` while landing the indexed ι tranche, 2026-08-15.
+Recorded here rather than in that tranche's design doc because it is a fact
+about how this tree is tested, not about indexed families.*
+
+**The rule.** *An assertion downstream of a gate that the same mutation trips is
+untested.* The only way to know it works is to construct a mutation that
+separates it from the gate — one that leaves the gate satisfied and trips only
+the assertion. And **"gate" is wider than "an earlier `assert!`"**: an early
+`return` in reporting code is a gate, a counter that names a different event is
+a gate, and a reason string that cannot discriminate is a gate.
+
+This is the same disease as §"Why this document exists" — an unobserved check —
+one level down. There, a whole suite was outside the gate list. Here, an
+assertion is inside a suite that runs, passes, and never exercises it.
+
+**The four instances, in the order they were found.**
+
+1. **An earlier assertion shadows a later one.** `mini_designed`'s indexed test
+   asserts a decline label and *then* a readiness counter. Every mutation tried
+   against the counter also moved the label, so the label assertion fired first
+   and the counter assertion was never reached. Separated by a mutation that
+   **keeps the label and zeroes the count** — making the fieldless-`IDEP` clause
+   return the fielded error — at which point it fired on its own.
+
+2. **A reporting early-return shadows every row behind it.** The indexed
+   tranche's readiness rows (`ICOD`, `IDEP`, `PRE`, publication) lived inside
+   `origin_report()`, which returns `String::new()` when `ORIGINS` is empty —
+   i.e. when **nothing declined**. That is exactly the state the tranche was
+   working towards. The moment the ι rule started certifying, every row vanished
+   and the two tests reading them went red **on success**, costing several
+   cycles hunting a regression that did not exist. *A readiness counter whose
+   only witness is a failure is not a readiness counter.* Fixed by extracting
+   `ix_readiness_report()`, emitted whatever the origin ledger says.
+
+3. **A counter that names the wrong event shadows what it appears to check.**
+   `assert_eq!(FIRED, PRE)` was added to pin the composite, and the mutation
+   that drops step 4 **left it passing** — because the counter incremented when
+   `fire_ix_dep` *returned an equation*, not when the site *certified*;
+   `derive_iota_core` still has to join that equation against the reduct's own
+   contraction. Renamed `composite BUILT`, and the thing that actually catches
+   it — the fixtures' own gap counts — asserted instead.
+
+4. **A tautological reason string shadows the diagnosis.** Asked why `RBTree`'s
+   minor premises fail, `ht_shape` on the minor's declared *type* answers "a Π —
+   needs `dprod_in_universe`" — which it answers for **every** minor premise of
+   every recursor, because a minor's type is always a `Π`. It was about to be
+   reported as a second site for the missing `Expr::Pi` arm. The `HtMiss`
+   histogram settled it as `HtMiss::Lam` instead. A reason string that is
+   constant over the population cannot distinguish a diagnosis from a
+   restatement of the question.
+
+**The adjacent disease: an error message that blames the wrong thing.** Two
+defects in this tranche survived because the failure they cause is rare and its
+message points elsewhere. The indexed nest was never marked `adopted`, so its
+chain started at a head the redex's own interpretation is not — reported as
+`"the reduct does not contract to what the recursor computes"`, which blames the
+*reduct*. And a use-site domain written through its own nullary `def` is a
+symbol `target_head_step` has no head to step; the recursor's declared minor
+type never has that shape, so the path was never exercised. A misleading message
+that survives because its failure is rare is the same fact as an assertion that
+survives because its gate always fires first.
+
+**What to do about it.** When adding an assertion, ask what mutation it is meant
+to catch, then *make* that mutation and confirm it dies **there** rather than
+earlier. Predicting the death point wrongly is itself worth recording — it has
+happened on this branch, and each time the wrong prediction was the interesting
+part.
+
 ## 5. What is still open
 
 1. **Per-leg counters in `check-test-guards.sh` and `check-test-inputs.sh`**
@@ -482,7 +552,11 @@ step, and that is worth more than 15.8 s. Recorded and left.
    suspects are the mini-unification commits `4e86d46`…`02ab90f`.
 4. ~~The `076_listRecReduction` budget~~ — **resolved 2026-08-15** (§3.2), two
    tranches, both attributed, re-based 31 → 9 with the derivation written.
-5. **The gate list is the real finding, and it is not fixed.** §3.5's two
+6. **The shadowed-assertion audit** (§4.5) — the rule is written and its four
+   instances are named, but **the tree has not been swept for others**. A
+   separate seat owns that; this entry exists so the sweep is not mistaken for
+   done.
+7. **The gate list is the real finding, and it is not fixed.** §3.5's two
    ratchets each fired correctly the first time they were run; nobody ran them
    for four days. `ci/check.sh`'s step `tests (tg backend)` does cover
    `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
