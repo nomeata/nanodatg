@@ -343,6 +343,19 @@ want of `TruncCarrier::in_un` — which does not exist in
 `derived/src/inductive/family/trunc.rs` — plus the one deleted line. Item 3 of
 §7 is closed by the same fixture.
 
+**`PSigma'` is not this case, and `in_un` is not its fix** *(2026-08-15)*. It
+declines at the same line with the same `class (P) above Prop`, so it reads like
+a second witness, and it is not one. The soundness argument above turns on "a
+class-(P) recursor does not offer a `Sort 1`-valued motive, so no Lean-accepted
+judgement can observe the collapse". `PSigma'` breaks that premise from outside
+the recursor: its mandatory family includes `PSigma'.rec'`, an ordinary `def`
+with an **arbitrary `Sort w` motive** over primitive `.proj` expressions, plus
+`fst_mk`/`snd_mk` proved by `Eq.refl`. On a carrier `‖a‖ ⊆ {•}` those are
+unprovable — at `α := Nat`, `fst_mk` would demand `∅ = {∅}`. Giving `PSigma'`
+`in_un` would turn its type former green while the family stayed red. Its
+carrier at a nonzero σ must be the **data** carrier; see `MODEL-BASIS.md` §3.6
+and §8.2. `Squash` and `MyBool` remain the witnesses this section is about.
+
 ## 4. Ranked consequences for the design
 
 1. **No work (correctness of the current List/Nat/Bool path).** Class (T)
