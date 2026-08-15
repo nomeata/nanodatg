@@ -240,12 +240,37 @@ HENKIN_ROOT="${HENKIN_SCAN_ROOT:-$ROOT}"
 # the root itself contains that component and the scan read zero files. An
 # unanchored exclusion is a rule about the *absolute* path of the checkout,
 # which is not a property of this repository.
+HENKIN_ROOT="${HENKIN_ROOT%/}"
+#
+# `_tmp/` and `vendor*` join the exclusions for the same reason `.claude/` is
+# there: they are gitignored, and every one of them is somewhere a *second
+# checkout of this repository* routinely lands. Measured: a reference checkout
+# unpacked under `_tmp/` gave two files named `derived/src/choice/epsilon.rs`,
+# and rule 7 reported `is called 2 times in derived/src/choice/epsilon.rs — one
+# seam, not two` on a tree whose tracked sources had exactly one. Two seats hit
+# that. The rule is about *this* repository's source, which is the tracked
+# files; a gitignored scratch directory is not a second caller.
 henkin_files() { # henkin_files <-print|-print0>
   find "$HENKIN_ROOT" -name '*.rs' -type f -not -path "$K/*" \
-    -not -path "$HENKIN_ROOT/target*" -not -path "$HENKIN_ROOT/vendor/*" \
+    -not -path "$HENKIN_ROOT/target*" -not -path "$HENKIN_ROOT/vendor*" \
+    -not -path "$HENKIN_ROOT/_tmp/*" \
     -not -path "$HENKIN_ROOT/.git/*" -not -path "$HENKIN_ROOT/.claude/*" \
     -not -path '*/target/*' "$@" 2>/dev/null
 }
+# The home-module test is **anchored at `$HENKIN_ROOT`**, and the path is
+# escaped before it is used as a pattern.
+#
+# It used to be `grep -c "/${HENKIN_HOME}:"` — an unanchored regex against the
+# whole `path:line:content` string, which said "home" for three things it did
+# not mean: any file whose path merely *ends* in `derived/src/choice/epsilon.rs`
+# anywhere in the scanned tree (the `_tmp/` case above); a `.` matching any
+# character, since the dots were never escaped; and a *content* substring, since
+# the match could land past the `path:line:` prefix. Excluding `_tmp/` alone
+# would not have been enough — an unanchored match reclassifies a second copy as
+# the home module, and an anchored one without the exclusion would call it a
+# stray caller. Both halves are needed, so both are here.
+re_quote() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'; }
+HENKIN_HOME_RE="^$(re_quote "$HENKIN_ROOT")/$(re_quote "$HENKIN_HOME"):"
 # `-H` is load-bearing, not decoration: `grep` omits the filename when handed a
 # single file, so on a workspace with one candidate file both the comment filter
 # (which skips `path:line:`) and the home-module test (which matches on the path)
@@ -259,8 +284,8 @@ if ! grep -rIqE 'pub fn henkin\b' --include='*.rs' "$K/src" 2>/dev/null; then
 elif (( $(henkin_files -print | wc -l) < 1 )); then
   fail "rule 7 matched no .rs files under $HENKIN_ROOT — the single-caller scan would read nothing"
 else
-  henkin_home=$(henkin_calls | grep -c "/${HENKIN_HOME}:")
-  henkin_other=$(henkin_calls | grep -v "/${HENKIN_HOME}:")
+  henkin_home=$(henkin_calls | grep -cE "$HENKIN_HOME_RE")
+  henkin_other=$(henkin_calls | grep -vE "$HENKIN_HOME_RE")
   if [[ -n "$henkin_other" ]]; then
     fail "\`kernel::thm::henkin\` is called outside $HENKIN_HOME"
     printf '%s\n' "$henkin_other" >&2
@@ -520,7 +545,25 @@ fi
 # above, or by a named sibling script that exists and is run from ci/check.sh.
 declare -A COVERED_HERE=( [kernel]="rules 1-5" [derived]="R6' I1" [checker]="R6' I1/I3/I4" )
 declare -A COVERED_ELSEWHERE=()
-# Both overridable so ci/test-boundary.sh can point the coverage check at a
+# `COVERED_ELSEWHERE` is **empty today**, and that made the delegation branch
+# below unreachable: `mini` was its only entry, and `4e86d46` merged that crate
+# into `checker`. An unreachable branch whose self-test cell still claims to
+# watch it fire is this project's own failure mode — the cell
+# `a delegate ci/check.sh never runs` passed vacuously for exactly as long as
+# the branch was dead, and then went red when the tree noticed.
+#
+# The branch is worth keeping: the day a member is delegated to a sibling
+# script, "the delegate exists and ci/check.sh runs it" is the property that
+# makes the delegation coverage rather than a promise. So it is kept *and made
+# reachable*, by letting the map be populated from the environment. That is what
+# `ci/test-boundary.sh` uses to exercise all three of its outcomes; without it
+# the branch could only be tested by editing this file.
+#
+#     COVERED_ELSEWHERE_SPEC="mini=ci/check-mini-scope.sh other=ci/x.sh"
+for _kv in ${COVERED_ELSEWHERE_SPEC:-}; do
+  COVERED_ELSEWHERE["${_kv%%=*}"]="${_kv#*=}"
+done
+# Overridable so ci/test-boundary.sh can point the coverage check at a
 # fixture workspace and assert that an unscanned member is caught.
 WS_MANIFEST="${WS_MANIFEST:-$ROOT/Cargo.toml}"
 CHECK_SH="${CHECK_SH:-$ROOT/ci/check.sh}"

@@ -413,15 +413,46 @@ members = ["kernel", "derived", "checker", "mini", "newcrate"]
 EOF
 expect_fail_out "a workspace member no check scans" WS_MANIFEST="$TMP/ws-uncovered.toml"
 
+# `mini` was a member here until `4e86d46` merged it into `checker`. This
+# fixture kept listing it, so the cell asserted that a workspace containing an
+# **uncovered** member passes — the opposite of the rule — and it went red the
+# day the real `COVERED_ELSEWHERE` entry for `mini` was removed with the crate.
+# Corrected to the workspace that exists: the three members of the root
+# `Cargo.toml`, each covered by a scan in this file.
 cat > "$TMP/ws-ok.toml" <<'EOF'
 [workspace]
-members = ["kernel", "derived", "checker", "mini"]
+members = ["kernel", "derived", "checker"]
 EOF
 expect_pass_out "a fully covered workspace" WS_MANIFEST="$TMP/ws-ok.toml"
 
+# ── Delegation: three outcomes, and none of them was reachable ──────────────
+# `COVERED_ELSEWHERE` is empty on this tree, so the delegation branch was dead
+# code and the cell below — which pre-dates the merge — could not fail whatever
+# it was handed. It is restored by populating the map through
+# `COVERED_ELSEWHERE_SPEC`, which is the only reason that variable exists.
+#
+# Falsifier for all three: drop the `COVERED_ELSEWHERE_SPEC` loop from
+# ci/check-boundary.sh and every one of them reports 'member is scanned by no
+# hypothesis-discipline check' instead of the delegation message it pins.
+DELEGATED='mini=ci/check-mini-scope.sh'
+cat > "$TMP/ws-deleg.toml" <<'EOF'
+[workspace]
+members = ["kernel", "derived", "checker", "mini"]
+EOF
+expect_pass_out "a member delegated to a sibling script ci/check.sh runs" \
+  WS_MANIFEST="$TMP/ws-deleg.toml" COVERED_ELSEWHERE_SPEC="$DELEGATED"
+
 # Delegation is only coverage if the delegate is actually run.
 echo '#!/bin/sh' > "$TMP/empty-check.sh"; chmod +x "$TMP/empty-check.sh"
-expect_fail_out "a delegate ci/check.sh never runs" CHECK_SH="$TMP/empty-check.sh"
+expect_fail_because "a delegate ci/check.sh never runs" \
+  "which ci/check.sh does not run" \
+  WS_MANIFEST="$TMP/ws-deleg.toml" COVERED_ELSEWHERE_SPEC="$DELEGATED" \
+  CHECK_SH="$TMP/empty-check.sh"
+
+# …and a delegate that is not there at all.
+expect_fail_because "a delegate script that does not exist" \
+  "which is missing or not executable" \
+  WS_MANIFEST="$TMP/ws-deleg.toml" COVERED_ELSEWHERE_SPEC='mini=ci/no-such-check.sh'
 
 # ── The scans must find something to scan ──────────────────────────────────
 # Every cell above hands the checker a wrong input. These hand it *no* input,
@@ -578,6 +609,39 @@ mk_henkin "$TMP/hk-two" 2
 expect_fail_because "two Henkin calls in the home module" \
   "one seam, not two" \
   HENKIN_SCAN_ROOT="$TMP/hk-two"
+
+# ── A second checkout of this repository is not a second caller ────────────
+# `_tmp/` is gitignored and is where this project's handoff tells every seat to
+# put large temporaries, so a reference checkout lands there routinely. Two
+# seats hit the spurious red before this cell existed. Rule 7 is about the
+# tracked sources of *this* repository, and both halves of the fix are needed:
+#
+#   * without the `_tmp/` exclusion, the copy is a stray caller and rule 7 says
+#     "is called outside derived/src/choice/epsilon.rs" (measured);
+#   * without anchoring the home match at `$HENKIN_ROOT`, the copy is counted as
+#     the home module and rule 7 says "is called 2 times … one seam, not two"
+#     (measured — this is the message the two seats reported).
+#
+# Falsifier: delete either half in ci/check-boundary.sh and this cell reds with
+# the corresponding message above.
+mk_henkin "$TMP/hk-tmpcopy" 1
+mkdir -p "$TMP/hk-tmpcopy/_tmp/ref/derived/src/choice"
+cp "$TMP/hk-tmpcopy/derived/src/choice/epsilon.rs" \
+   "$TMP/hk-tmpcopy/_tmp/ref/derived/src/choice/epsilon.rs"
+expect_pass_out "a second checkout of the home module under the gitignored _tmp/" \
+  HENKIN_SCAN_ROOT="$TMP/hk-tmpcopy"
+
+# The other side of the anchoring: a copy at a path that merely *ends* in the
+# home path, but is not the home module, is a stray caller and must be caught.
+# Under the unanchored match this was silently counted as home — the scan read
+# two call sites and reported one seam.
+mk_henkin "$TMP/hk-lookalike" 1
+mkdir -p "$TMP/hk-lookalike/third_party/derived/src/choice"
+cp "$TMP/hk-lookalike/derived/src/choice/epsilon.rs" \
+   "$TMP/hk-lookalike/third_party/derived/src/choice/epsilon.rs"
+expect_fail_because "a lookalike path ending in the home module's path" \
+  "is called outside derived/src/choice/epsilon.rs" \
+  HENKIN_SCAN_ROOT="$TMP/hk-lookalike"
 
 # The one that matters on the day the rule is replaced: `epsilon.rs` rewritten
 # over a derived well-ordering leaves the primitive in the trusted base with
