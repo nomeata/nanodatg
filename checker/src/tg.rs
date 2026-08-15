@@ -4170,6 +4170,16 @@ enum Decline {
     /// backend's general path cannot state the declaration — the indexed
     /// construction lives in `derived::inductive::family` behind
     /// `IndexedDeclSpec` and is reached only through mini today.
+    ///
+    /// **This is not a statement that nothing about the family is typeable**,
+    /// and reading it as one has now cost three tranches. It says only that
+    /// *this file* builds no indexed carrier. Where mini has published an
+    /// `IndexedTranslation`, the type former's own typing
+    /// `⊢ ⟦T⟧ ∈ ⟦Π p⃗ x⃗. Sort ℓ⟧` is on the shared `ConstStore` and the ordinary
+    /// application rule types `T p⃗ x⃗` with nothing rebuilt — which is why
+    /// [`TgBackend::interpreted_shape`] answers `true` there despite this
+    /// decline. A caller reaching this variant should ask what it is about to
+    /// refuse, not assume the answer.
     Indices,
     /// A `mutual … end` block.
     Mutual,
