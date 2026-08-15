@@ -214,6 +214,19 @@ with a sub-tree over 300, ~20 % for one in the tens, and do not plan off
 was calibrated on the small populations and is pessimistic by 2× on the rows
 that now matter.
 
+### And a second ceiling nobody had named: `Δ` overprices a one-leg construction
+
+`Δ` deletes *the origin's own equation*. Where the checker reaches that origin
+through a **composite** — a reduction of the major premise, then the rule at the
+result — a construction that closes only one leg cannot assume the origin's
+equation; it can assume only its own leg's, and the other leg still has to
+derive. The two are not the same number and the gap is large: rank 1 is
+**−3 780** on the ι equation and **−2 630** on the numeral equation, a 30 %
+haircut, measured (2026-08-15). *Before pricing any tranche, ask which equation
+the construction actually concludes and delete that one.* The composite legs are
+visible in the code — `reduce_rec`'s `MajorStep` and `reduct::fully_ruled` — so
+this is checkable in advance rather than after building.
+
 ## Acquire shortfall, per row
 
 `admit_or_acquire` acquires only when `premask == 0 && ta != tb` and
