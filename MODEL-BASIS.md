@@ -1920,6 +1920,12 @@ step 2 rather than after, and it moves in the good direction on the escape ledge
 an antecedent that becomes a derivation is one fewer assumption travelling to the
 boundary.
 
+> **Read this with the answer below.** 669 is how many are *over a translated
+> structure*; it is **not** how many can be upgraded. `DeclProj::typed` needs a
+> premise, and after threading it the upgradable population is **222** —
+> see the end of this section. The 669 remains the
+> right count of the population; it is the wrong count of the prize.
+
 *A correction this measurement forced.* This section first quoted **417**
 successes, taken from the report row `by Proj: the field's own typing, acquired
 as an antecedent`. That row is `HtClause::Proj` — **`has_type_proj`, a different
@@ -1989,6 +1995,99 @@ fallback symbol** and not of `proj_of`'s spine; the sentence pre-dates
   do meet. It prices the step: the change at `ty_proj` is not "return
   `typed[i]` instead of `imp_refl`", it is **a bridge or a duplication**, and
   which one is a call for the owner rather than for this section.
+
+#### The answer is 222, and my recommendation is to retire this rather than build it
+
+*Measured 2026-08-15 at `02c8cbe`, probing before building, and it revises the
+number this section was scoped against.*
+
+`DeclProj::typed[j]` is `∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(p⃗, π⃗<ⱼ z))`, so
+using it costs **exactly one premise**: `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the subject's own
+typing. `TgBackend::ty_proj` is not handed it — and `TypeChecker::infer_proj`
+**computes it and discards it**, at `tc.rs:828`, four lines above the consumer
+that needs it. Not a `derived/` gap and not a missing construction: a premise
+dropped a few lines from where it would be used.
+
+Counted where it is dropped, over every `ty_proj` call:
+
+```
+…and the subject's own typing, which `DeclProj::typed` needs as its premise:
+    279 derived, 518 already a gap
+```
+
+279 + 518 = **797** = 126 + 671, so the counter covers the whole population and
+the split is exact rather than indicative. **At most 279 of the 669 can be
+upgraded** — 58 % below the figure above — and possibly fewer: the cross of
+"subject derived" against "carried *and* translated" is **not measured**, because
+measuring it needs the same signature change the upgrade does.
+
+**One offset in the other direction, so the record is not one-sided.**
+§9.5 of `SEAM-DESIGN.md` priced the driver as work TG would have to own. It does
+not: `TgBackend::projection_evidence` (`tg.rs:2424`) **already returns
+`(Rc<Translated>, Rc<DeclProj>)`**, memoised per `(T, σ)` and built through
+`mini::proj_data::build`. That half of the pricing was pessimistic.
+
+**The cross, measured after threading the premise:**
+
+```
+…of the carried-and-translated, the subject's typing is derived in 222
+   and a gap in 447 — 222 is the upgradable population
+```
+
+222 + 447 = 669 ✓, and 222 ≤ 279 ✓ (57 of the derived subjects sit outside the
+carried-and-translated bucket). **So the population is 222**, against the 669
+this section was scoped at and the 126 before that — the estimate has moved
+against the work twice under measurement, which is a pattern rather than noise.
+
+#### Recommendation: retire it, and here is what would revive it
+
+**Retire.** Three reasons, in order:
+
+1. **It closes zero gaps.** The 222 are already *carried* — conditional typings,
+   not gaps. Upgrading them moves `typings carried out of inference` by 222 from
+   "conditional on the ambient locals" to "derived", and moves no row of the gap
+   ledger at all.
+2. **The escape benefit is indirect and unmeasured.** `escaped()` is
+   `CONDITIONAL − CONSUMED − BOUNDARY_CLOSED` over *definitional-equality*
+   certificates; `ty_proj` produces a **typing**, so its antecedents reach that
+   ledger only through whatever consumes the typing. Whether any of the 222
+   actually survive to the boundary is not known, and the visible 1 199 is
+   dominated by beta domain obligations.
+3. **Step 2 subsumes it.** Once the routing gate translates the rest of the
+   structures, the whole `ty_proj` population changes shape and this would be
+   re-derived against different numbers anyway.
+
+**What would revive it, and it is one more probe.** Register a provenance on
+`ty_proj`'s antecedent — `crate::escapes::Prov::ProjField` already exists and
+`has_type_proj` already uses it (`tg.rs:14079`) — and read the escape census
+under `stepcount`. If a material fraction of the 222 reach the boundary, the
+upgrade buys real escape reduction and is worth the chain. If they are discharged
+at their binders, it buys 222 better-evidenced typings and nothing measurable,
+and should stay retired.
+
+#### The re-pricing pattern, for whoever re-opens this
+
+The population was priced four times and moved **in one direction every time**:
+
+| when | figure | what changed |
+| --- | ---: | --- |
+| task as scoped | 126 | the `ty_proj` decline count |
+| after the cause/translation census | 669 | the declines were the wrong target — the *carried* were the population |
+| after finding the premise | ≤ 279 | `DeclProj::typed` needs `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, derived for only 279 of 797 |
+| after threading it and crossing | **222** | of the carried-and-translated, 222 have a derived subject |
+
+**Four re-pricings, one direction.** Not noise: every step that made the
+population more precise made it smaller. And the two large moves — 669 and 279 —
+both came from asking *"what does the consumer actually need"* rather than
+*"how many of these are there"*. The first question is answerable by grep and
+gives the wrong number; the second needs reading the consumer, and gave a number
+three times smaller. Anyone re-opening this should expect the same shape and
+should ask the consumer question first.
+
+**What was kept regardless.** The premise is now threaded — `infer_proj` returns
+the subject's typing and `ty_proj` takes it — because that is what the cross
+needed and it is the prerequisite for any later attempt. **Every counter reads
+identically before and after**; the `Dropped::Probe` bump is deliberately kept.
 
 ## 9. Measurement log
 

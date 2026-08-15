@@ -950,10 +950,46 @@ or the stage-2 target is right and the criterion is too weak here. **Recorded
 rather than resolved** — it is a judgement for whoever runs stage 2, and it is
 one site.
 
+#### A second entry was wrong, and the way it was wrong is the lesson
+
+*Found 2026-08-15 by trying to **use** the evidence, not by re-reading.*
+
+`tc.rs:828` — `let structure_ty = self.infer_ty(structure, flag, Dropped::Probe)`
+in `infer_proj` — was never classified individually above. §6.2 partitioned the
+`infer_ty` family **by its `Dropped::` label**, and `Probe` reads as allowlist on
+the strength of `certify.rs`'s own doc for the variant:
+
+> *"a **shape probe** — inference run only to look at the result's head, with no
+> judgement drawn from it."*
+
+**At this site that is false.** The certificate it discards is
+`⊢ ⟦s⟧ ∈ ⟦S p⃗⟧` — the subject's own typing — which is *exactly* the single
+premise `derived::inductive::decl_proj::DeclProj::typed[j]` needs
+(`∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(…))`) to make `TgBackend::ty_proj` **derive**
+rather than assume. A judgement is drawn from it; it is drawn one function below,
+by a consumer that never receives it. So `tc.rs:828` belongs in §6.4, and the
+`Dropped::Probe` doc is corrected at the variant.
+
+**The general form, and it is the reason this took three passes to find:**
+
+> **An allowlist entry justified by a doc rather than by a use is exactly as
+> reliable as the doc.**
+
+Every other entry in §6.3 is justified by a *use* — `ensure_pi`'s certified
+sibling is taken when a consumer exists, `assert_def_eq_only`'s adapter is the
+criterion, the predicates have witness-returning counterparts that are threaded.
+This one was justified by a **description**, and the description had gone stale
+where it mattered. That is the third document sentence this week that was true
+when written and load-bearing after it stopped being true, and the first caught
+by *consuming* the thing it described rather than by reading it — which is the
+only method that would have caught it, because reading it is what produced the
+error.
+
 ### 6.4 Not on the allowlist — the shortcuts, with names
 
 | site(s) | what rests on the discarded value |
 | --- | --- |
+| **`infer_proj` (`tc.rs:828`)** — the subject's typing, mislabelled `Dropped::Probe` | `⊢ ⟦s⟧ ∈ ⟦S p⃗⟧`, which is the **single premise** `DeclProj::typed[j]` needs to make `ty_proj` derive instead of assume. Measured at `02c8cbe` on `init-prelude`: **279 derived, 518 already a gap** over all 797 `ty_proj` calls (279 + 518 = 126 + 671, so the counter covers every call). 279 is the ceiling; the **cross against carried-and-translated is 222**, which is the upgradable population — against 669 when the work was scoped and 126 before that. Recommended **retired** rather than built: it closes **zero gaps**, its escape benefit is indirect and unmeasured, and step 2 subsumes it. The premise is threaded regardless, since the cross needed it and every counter reads identically. See §6.3's second correction and `MODEL-BASIS.md` §8.8. |
 | `infer_proj` (`tc.rs:829,839,848,864`) | The field type this whnf-walk computes **is** the typing `infer_proj` returns. §1.2 already records the consequence: `TgBackend::ty_proj` re-derives it delta-only and *declines when whnf was needed*. This is threading debt with a design fork already stated in §1.2 — thread the walk, or keep the recompute-and-check as the honesty mechanism — and it is the largest single entry here. |
 | `try_eta_struct_aux` (`tc.rs:606, 610`) | Both certificates license `Admit::EtaStruct`. A conclusion rests on them by definition: the admit *is* the conclusion. §1.4 marks the fix blocked on interpreted structures (§3), not on threading. |
 | `def_eq_unit` (`tc.rs:660`) | `r.and_then(\|_\| self.admit(x, y, Admit::UnitLike))` — the equality is used and then dropped by the `\|_\|`. Same disposition as above: blocked on interpreted structures. |
@@ -1011,3 +1047,175 @@ is not one and has no binder domain to key against. And §1.3's own measurement
 already refutes the transport: of the never-checked raw hoists, **18 622 were
 never a typing rule's conclusion anywhere** — *"what is missing is not the
 transport of a fact but the fact."*
+
+---
+
+## 7. Method — the instrument is the thing least likely to be checked
+
+> **The thing that measures is also a thing that can be wrong, and it is the
+> thing least likely to be checked.**
+
+*Written 2026-08-15, at the end of an arc that refuted three scoped builds and
+corrected two of this document's own entries. Each case below is here because
+breaking it cost real time, and each names the incident that taught it. They are
+about **instruments and claims**, not about the checker.*
+
+**Six of the eight are one lesson with six faces**, and the header is that
+lesson. A check that cannot fail (§7.4); a count nobody asserts (§7.5); a probe
+that perturbs what it measures (§7.3); a citation that rots (§7.6); a
+justification that outlives the thing justifying it (§7.2); a failure nobody
+reproduces (§7.8). In every one the defect was in the **apparatus** — the check,
+the count, the probe, the pointer, the justification, the reproduction — and not
+in the checker it was pointed at. That is why none of them announced itself: the
+instrument is what everything else is checked against, so nothing is left to
+check it.
+
+Two directions, and both bite. An apparatus can **invent** a problem (§7.3's
+probe broke a run that was fine) or **hide** one (§7.8's gate had a real race in
+it the whole time, and the reproduction method is what said "noise"). The second
+is worse, because a wrong number gets argued with and a missing one does not.
+
+The other two (§7.1, §7.7) are about **scoping**, not instruments: what a
+consumer can receive, and pricing by what is needed rather than by what is there.
+
+*A reader who takes only the header has the useful thing. A reader who has just
+been bitten by a specific instrument should find the matching case below.*
+
+**On maintenance.** A lessons section that only grows becomes a place lessons go
+to be filed rather than learned. **Synthesising is maintenance, not decoration**
+— if a ninth case turns out to be a seventh face of the header, it belongs folded
+into an existing case, not appended as §7.9.
+
+### 7.1 Before threading evidence, ask what the consumer can receive
+
+> **Does the consumer have a rule that can receive the certificate?**
+
+Three builds were scoped on "this evidence is discarded and something downstream
+wants it", and all three were refuted by asking that question first:
+
+* **`infer_proj` → `ty_proj`** — the consumer exists and is *structurally
+  incapable of deriving*: `ty_proj`'s only success exit is
+  `typing(…, imp_refl(f), vec![f])`, never unconditional, because `proj` was an
+  axiom-free symbol. (§6.4.)
+* **`to_ctor_when_k`** — the consumer *does not exist*: `is_k` is a decline
+  condition in every backend ι path, and §1.5's own wording said so — *"the
+  evidence a **future** ι-K rule needs"*. "Future" was the whole sentence.
+* **interpreted structures** — the construction *already existed*, at the right
+  generality, already consumed (`MODEL-BASIS.md` §8.8).
+
+A consumer being **named** is not a consumer being **able to receive**. That
+phrase — "already named in §1.2 with a consumer identified" — is what made §6.4
+wrong on its first pass.
+
+### 7.2 An allowlist entry justified by a doc is exactly as reliable as the doc
+
+`tc.rs:828` was classified free-to-discard because `certify.rs` described
+`Dropped::Probe` as *"inference run only to look at the result's head, with no
+judgement drawn from it"*. At that site a judgement **is** drawn from it — one
+function below, by a consumer that never receives it. The doc was true when
+written and load-bearing after it stopped being true.
+
+Every other §6.3 entry is justified by a **use** — `ensure_pi`'s certified
+sibling is taken when a consumer exists; `assert_def_eq_only`'s adapter *is* the
+criterion; the predicates have witness-returning counterparts that are threaded.
+Those held. The one justified by a **description** did not, and it was caught by
+*consuming* the thing the description was about, which is the only method that
+could have caught it — reading it is what produced the error.
+
+### 7.3 A probe that mints is not a probe
+
+Instrumenting `ty_proj` by the key `(name, interpreted levels)` called
+`interp_levels`, whose `Param` arm **mints** into `Shared::param_syms`. Measured:
+that took `cargo test -p nanoda_lib` from 489 passed to 487 passed / 2 failed
+**while leaving the census numbers byte-identical**. An instrument that perturbs
+the run and still reports the right answer is the hardest shape there is to
+catch — the number looks right, so nothing points at the instrument.
+
+Prefer read-only keys even at a loss of precision: the fix was to scan by name,
+which cannot distinguish σ and did not need to.
+
+### 7.4 The general form of a shadowed check
+
+> **The check has to read a value the mutation would move, from a path the
+> mutation does not also move.**
+
+An exit code cannot distinguish "examined nothing" from "examined something and
+was happy" (`ci/check-test-inputs.sh` leg C). Three numbers printed from one
+local cannot disagree (`escaped_assumptions_are_reported_as_gaps`). Both are the
+same defect: the observable sits downstream of the thing being measured. §6 is
+the catalogue; this is the sentence.
+
+### 7.5 An arithmetic identity is worth nothing until something asserts it
+
+`69 + 1 + 26 + 1 + 2 = 99` and `893 + 10 386 = 11 279` were both true before
+anyone checked, and would have stayed true exactly until the next export was
+added. `every_good_export_is_named_by_exactly_one_ratchet` makes them fail
+loudly instead — on an export named by nothing, by two, or by a list entry
+naming a file that does not exist. **A count in prose is documentation; the same
+count as an assertion is a ratchet.**
+
+### 7.6 A line-number citation decays in hours
+
+Two sets of citations went stale in one day: six of this document's own, shifted
+by a comment edit **above them in the same file**, and two more when another
+seat's work moved `zoneb.rs`'s `class (P) above Prop` guard from `:1471` to
+`:1560`. With several seats live, **resolve every `file:line` against the file
+before citing it**, including your own from an hour ago. Prefer a symbol name
+and a quoted line over a bare number where the choice exists.
+
+### 7.7 Re-price by asking what is needed, not by counting what is there
+
+`MODEL-BASIS.md` §8.8 records the shape: 126 → 669 → 279 → 222, four
+re-pricings, **every one against the work**. The two large moves came from
+asking *"what does the consumer actually need"* rather than *"how many of these
+are there"*. The first question is answerable by grep and gives the wrong
+number.
+
+### 7.8 A failure you cannot reproduce is a hypothesis you have not tested
+
+> **"Didn't reproduce in three runs" is evidence about your reproduction method,
+> not about the failure.**
+
+Four gate anomalies were seen in one session. Three are now explained and the
+explanation was available from the first sighting:
+
+| # | symptom | verdict |
+| --- | --- | --- |
+| 1 | `9 targets, 378 passed, 1 failed`, on a **doc-only** tree, never named | the `corpus.rs` temp-path race, below |
+| 2 | `mini_envshare_cross::a_checker_minted_pi_is_upgraded_not_reminted`, once, green in isolation | **still unexplained** — different suite, deliberately *not* closed by association |
+| 3 | `487 passed / 2 failed` | real: an instrument that minted (§7.3) |
+| 4 | `488 passed / 1 failed`, not reproducing | the same race as #1 |
+
+**The race.** `corpus.rs::outcome` keyed its temp config on `process::id()` plus
+the export's *basename* — unique only while no two tests in one binary look at
+different files sharing a name. `tests/fixtures/declined/` broke that the day it
+landed: its two files are **copies** of `good/sparse-name-index.ndjson` and
+`good/level-index-out-of-order.ndjson`, so
+`declined_fixtures_are_declined_for_the_stated_reason` and `arena_corpus` — which
+cargo runs as parallel threads of one process — computed the same path, and
+`outcome` ends by `remove_file`ing it. One test deleted the other's config
+between the write and the spawned checker's read.
+
+**The symptom signature is the reusable part**, because it is diagnostic:
+
+> *One test; never the same one twice; always green in isolation.* That is a
+> shared-temp-path race, not flakiness.
+
+And the fix already existed in the same repository — `tg_tutorial.rs::tmp_cfg`
+carries process id **plus an atomic counter**. **A fix that exists elsewhere in
+the same tree is the strongest possible sign the pattern was known and not
+propagated**, which is a review question, not a debugging one.
+
+**Who discounted it, and why that matters here.** Sightings #1 and #4 were logged
+as "unattributed flake" and passed over — and that was a **coordination
+decision**, made explicitly ("one is noise, two is a bug"; "log and continue"),
+not a seat cutting a corner. It is recorded that way on purpose: the lesson a
+reader should take is about **the rule**, not about who should have pushed back.
+The rule that failed is the standing one — *a discounted number hides a defect* —
+and the defect was hiding in exactly the two sightings that were discounted.
+
+**What to do instead**, and it is cheap: before calling a gate failure noise,
+run the suite that failed **alone**, and diff the *set* of tests that ran against
+a green run. A race shows up as a different victim each time; a real regression
+shows up as the same one. Neither costs more than one gate cycle, and #1 would
+have been closed on the day it appeared.
