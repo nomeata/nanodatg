@@ -1047,7 +1047,9 @@ below — see "The probe, run: `Lean.Syntax` is np = 0 at every site".*
 * The **`np == 0` layer in `fire_dep`** is worth **−1 609** on its own (−1 892 with
   its `fire_list` sibling, 18 % of `init-prelude`). Twelve constructions, ten
   hard, seven previously unknown, **no partial credit** — the sub-tree migrates
-  intact across each wall rather than shrinking.
+  intact across each wall rather than shrinking. **And twelve is a floor**: all
+  twelve are `np`-shaped, and 243 of the 249 sites need plain-slot and arity
+  generality that no one of them supplies (below).
 * **`Lean.Syntax`'s translation** is worth **−1 162**, and it is the only tranche
   measured this week where **nothing migrates**: every other origin row is
   unchanged under the deletion (598→598, 249→249, 213→213), the exact opposite
