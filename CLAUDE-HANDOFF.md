@@ -1,20 +1,38 @@
 # Claude handoff
 
-Snapshot: 2026-08-14 UTC. This is a delta/update for Claude's imported
-conversation context, not a replacement for the design documents.
+Originally written 2026-08-14; **substantially rewritten 2026-08-15** after 94
+commits. This is a delta/update for Claude's imported conversation context, not
+a replacement for the design documents. Sections below marked as history are
+kept because the reasoning is still useful; the *current* numbers are all in
+"Current measured certification frontier" and the gate list.
+
+**The four documents that now carry the live scoping**, in the order a new
+reader should take them: `ORIGIN-RANKING.md` (every gap origin ranked by
+bitmask and deletion over both populations), `SEAM-DESIGN.md` (where the
+TG/mini seam belongs, plus §9's inventory of what crosses it and §10's
+`fire_dep` findings), `TEST-INVENTORY.md` (every suite's true status, the
+per-leg floors, and §4.5/§6 on structurally-untestable assertions), and
+`MEASUREMENTS.md` (append-only; the 2026-08-14/15 sections are this arc).
 
 ## Executive state
 
-The main checkout is on `master` at `b654c98`, and local `origin/master` is at
-the same commit. The worktree is clean except for the long-standing untracked
-`scripts/__pycache__/`; preserve it. Bacon, the only active Codex subagent, was
-explicitly stopped at the owner's request. Its worktree and branch are clean,
-with no interrupted changes to recover.
+Snapshot updated **2026-08-15**, 94 commits after the original handoff. The main
+checkout is on `master` at `d73c94f`. The worktree is clean except for the
+long-standing untracked `scripts/__pycache__/`; preserve it. **`git push` does
+not work in this environment** — `origin` is GitHub with no credentials, so every
+commit below is local. All seat branches are merged into `master`;
+`explore/level-poly-target` is deliberately separate.
 
-The main thrust has made substantial progress and remains the priority. The
-level-polymorphism tranche is complete on a separate branch but deliberately
-not integrated. Modelgen is being turned into a standalone repository/product
-elsewhere and is strictly out of scope here: do not modify it.
+**`init-prelude` now ACCEPTS.** It reached declaration 1 and declined this
+morning; it now reports `accept  1822 declarations`, certified prefix 152, pairs
+32, in ~39 s. What stops it is no longer acceptance but *interpretation debt* —
+see "The init-prelude frontier" below.
+
+**Modelgen is out of scope: do not modify it.** It is being turned into a
+standalone product elsewhere.
+
+The level-polymorphism branch is paused cleanly with its restart head, pick-up
+list and a *what-not-to-redo* list in `LEVELPOLY.md` §5.3.0.
 
 ## Owner decisions and non-negotiable architecture
 
@@ -90,42 +108,72 @@ not mistake that historical stage for the current architecture.
 
 ## Current measured certification frontier
 
-At `b654c98`, `proj_reduced_carrier.ndjson --verbose` reports:
+Measured on `master` `d73c94f`, verified independently rather than inherited.
 
-- `TOTAL gaps`: **16** (down from 139 before the recursive-constructor handoff);
-- dependent iota computations: **22**;
-- conditional derivations: **433 made, 0 copies, 417 consumed, 16 escaped**;
-- no `eq_cache` gap;
-- no iota-origin gap;
-- no `proj_reduce` gap;
-- no whnf-origin gap;
-- derived theorems: **1158**.
+### The two populations
 
-Other exact ratchets at this point:
+| fixture | gaps | | Lean's own exports |
+| --- | ---: | --- | --- |
+| `nat_char_equations` | 61 | | 91 exports, **16** carry gaps, **168** total |
+| `mutual_aux_encoding` | 49 | | `076_listRecReduction` 45 |
+| `ctor_abbrev_major` | 23 | | `077_RBTree.id_spec` 28 |
+| `proj_reduced_carrier` | 13 | | 74 exports are **fully certified** |
+| `quot_lift_reduction` | 12 | | |
+| `proj_stuck_subject` | 6 | | |
+| `proj_reduced_subject` | 2 | | |
+| `field_in_u0_by_carrier` | 0 | | |
 
-- `proj_reduced_subject`: **2** gaps;
-- `proj_stuck_subject`: **6** gaps;
-- `field_in_u0_by_carrier`: **0** gaps;
-- `nat_char_equations`: **152** gaps (the last checkpoint removed 12 parked
-  conditional copies but did not change the underlying proofs).
+**The exports are the completeness claim; the fixtures are the development
+signal.** Completeness is measured against Lean, never against fixtures we wrote.
+Where they disagree, believe the exports: `proj_reduce` was worth −74 on a
+fixture and **zero** on the exports.
 
-The last checkpoint's instruction impact versus `4fc2f25` was noise-scale:
+Movement over the 94 commits: exports **217 → 168**, `nat_char_equations`
+152 → 61, `mutual_aux_encoding` 96 → 49, `ctor_abbrev_major` 46 → 23,
+`proj_reduced_carrier` 16 → 13.
 
-- carrier fixture: **+0.00623%** `instructions:u`;
-- zero-gap control: **+0.00317%**.
+### The init-prelude frontier
 
-The most recent green validation was:
+`checker --verbose --mutual --nested vendor/arena-tests/good/init-prelude.ndjson`
+— **all three flags are needed**; under `--no-modelgen` it declines at
+declaration 1 on `Lean.Syntax`, and with modelgen but no gates it declines on the
+*mutual* inductive the nested splice emits.
 
-- `cargo test -p nanoda_lib --features tg --test unified_cli`: 5/5;
-- `cargo test -p nanoda_lib --features tg --test mini_designed`: 32/32;
-- `cargo check -p nanoda_lib --no-default-features --all-targets`: passed
-  (existing warnings only).
+    accept  1822 declarations
+    untranslated: 91 declarations, 10 eliminators
+    uncertified:  32 const typings, 29 type typings
+    tg gaps: 11909      prefix declarations=152 pairs=32      exit 4
 
-Those three counts are the record of that checkpoint and have since moved: on
-master `36106d2` they are **6/6**, **34/34** (`--features tg`; the same suite is
-32/32 in the plain build, which is a different set of tests — see
-`TEST-INVENTORY.md` §3.4) and 5 warnings. Read the gate list below, not this
-paragraph, for what to run.
+Of the 11 909 gaps, **6 683 are `trans over an admitted premise`** — relays, not
+origins. Exit 4 is correct: it is certification debt, not rejection.
+
+What stops it now is **interpretation debt**, in two named families:
+
+* **`type former spine`** — the heterogeneous-operator classes (`HAdd`, `HSub`,
+  `HMul`, `HPow`, `HAnd`, `HOr`, `HXor`, `HShiftLeft/Right`, `HAppend`,
+  `HAndThen`, `HOrElse`, `HDiv`, `HMod`, `HSMul`), the `Monad*` classes,
+  `Membership`, `EStateM.Backtrackable` — 2 each, `Trans` 4.
+* **`field type uninterpretable`** — the machine words `UInt8/16/32/64`,
+  `USize`, plus `Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Substring.Raw`,
+  `Hashable`, and the `Lean.*` syntax types.
+
+Plus recursor declines: `False` and `PEmpty` (class (S) eliminator, no
+constructors) and `HEq` (a result index is not a bare field).
+
+### Performance, for calibration
+
+`init-prelude` went **28.211 T → 0.507 T `instructions:u`** and **2126.7 s →
+38.7 s** across four changes, each with a byte-identical verdict and every
+`gap: <reason>` row unchanged across all fixtures and all 91 exports: a
+closed-pair `def_eq` decision cache, a persistent `infer_type` gap memo, a
+`whnf` reduction memo, and a five-line syntactic-equality shortcut. Separately,
+mimalloc was linked into the production `checker` binary (it had only ever been
+on `nanoda_bin`) for **−41 to −44 % task-clock**.
+
+**Two measurement rules follow from that work.** `instructions:u` *understates*
+allocation- or cache-shaped changes by 9–17 points — quote `task-clock`
+alongside it for those. And **report rows, not totals**: two ratchets drifted for
+134 commits because only a TOTAL was guarded.
 
 ## The gate list
 
@@ -226,7 +274,51 @@ The 134-commit gap is the measurement behind that sentence, and 13 of those
 commits have empty message bodies, so `git log` would not have recovered the
 attribution either.
 
-## Exact remaining main blocker
+## What is actually left, 2026-08-15
+
+The section below this one is **history** — it described the carrier fixture at
+16 gaps and the tranche that took it to 13. Read it for the reasoning, not the
+numbers. What remains now, in the order the measurements put it:
+
+1. **The escape population is the terminal wall.** A floor analysis found that
+   with every *hooked* origin closed, 89 % of what survived were escapes —
+   reachable by no origin tranche. Since then the **ambient-local** category was
+   exhausted corpus-wide (scope provenance) and the **raw-beta** category was
+   priced at **44 gaps tree-wide in the perfect limit**, across ten shape-groups
+   needing different constructions, and deliberately abandoned. Closure there is
+   brutally nonlinear: the largest single shape-group is 54 atoms present in 12
+   of 16 certificates and closes **one**.
+2. **`076_listRecReduction`'s −35 is behind a *layer*, not a wall.** `fire_dep`'s
+   parameterised path is a run of constructions each written for `np == 0`, and
+   the 37-gap sub-tree **migrates intact** across each rather than shrinking.
+   Three are named in `SEAM-DESIGN.md` §10, the third unexamined. The `np > 0`
+   type-former adoption was built, confirmed working end to end on `Prod` and
+   `List`, measured at **0**, and reverted. **Census the layer before building
+   anything there.**
+3. **`077_RBTree.id_spec`'s −19 is blocked on task #38** and is *not* a
+   consumption: `IndexedCtor::mem_lean`'s witness protocol demands closed,
+   prenex witnesses at `derived`'s own working variables, while every consumer
+   holds open-scope already-instantiated theorems whose scope assumptions are
+   live hypotheses and therefore cannot be generalised back.
+4. **The `Nat` bridge remains not worth building** — priced at −11 gaps and
+   **zero additional certified theorems**, because all 17 theorems in
+   `nat_char_equations` are `Eq.refl`, there are no numerals, and the `ble`/`beq`
+   theorems fail for the identical reason as the arithmetic ones.
+5. **`init-prelude`'s interpretation debt** — the `type former spine` and
+   `field type uninterpretable` families listed above. This is a different kind
+   of work from everything in this arc: *"what interprets a machine word and a
+   type-former spine"*, not *"why does it stop"*.
+
+**The pattern worth carrying forward**, found five times: *mini publishes the
+fact and TG declines for want of a rule it could have stood on.* Variants seen —
+published-and-unconsumed; published behind a guard whose own header says it is
+about cost; **three independent mints of one carrier in a single binary**; and
+published correctly but **consumed at the wrong arity**. `SEAM-DESIGN.md` §9 is
+the inventory, and its **meetability column** is the point: a zero-consumer row
+is a *question*, not a finding — one of the three that motivated it turned out
+not to be an opportunity at all.
+
+## History: the boundary blocker, as it stood at `b654c98`
 
 All 16 remaining carrier-fixture gaps are honest conditional certificates that
 reach a declaration boundary. Temporary classification instrumentation was
@@ -313,11 +405,21 @@ The clean branch `joachim/equality-scope-provenance` points at `b654c98`, as
 does its durable worktree
 `/home/joachim/nanodatg/.claude/worktrees/equality-scope-provenance`.
 
-## Main thrust after the boundary work
+## History: the Nat-equation plan, and why it was not taken
 
-Re-measure `nat_char_equations` after the scope/raw-beta tranches. The larger
-goal remains certification of the characteristic Nat equations, not merely a
-zero projection-origin row. The earlier measured plan was:
+**Superseded — do not execute this.** The four-step plan below was written
+before the census. Measured, the `Nat` bridge is worth **−11 gaps and zero
+additional certified theorems**, and `nat_char_equations`' real wall was
+`PProd` projection inside `brecOn` (closed, 152 → 65) and is now the escape
+population (61, of which 22 escapes and 32 relays). Steps 1–2 were also
+partly refuted on their own terms: `eq_cash`'s `cash`/`cash_stmt` do check
+rather than assume, but they use `Direct::eq_ax` and **not** `Props::eq_sound`
+as step 2 says; and a call from TG would not compile, because `TgBackend`
+holds no `mini::Environment` — the seam question that `SEAM-DESIGN.md` was
+written to settle. Kept because the reasoning about what the equations need is
+still sound.
+
+The earlier measured plan was:
 
 1. get the exact Eq-refl theorem declarations in the fixture certified by the
    nanoda/TG path;
