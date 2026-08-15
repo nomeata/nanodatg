@@ -1107,6 +1107,35 @@ A consumer being **named** is not a consumer being **able to receive**. That
 phrase — "already named in §1.2 with a consumer identified" — is what made §6.4
 wrong on its first pass.
 
+#### The sharp form, and the coarse form was right three times first
+
+A fourth case needed more, so the question grew a second clause:
+
+> **Can the consumer receive it — *and is what it would receive a derivation?***
+
+`proj_red`'s applied-redex decline (518 on `init-prelude`, ~94 % of
+`undecidability/`'s) passes the coarse test cleanly: congruence over an
+application spine **is** a rule, and it **would** fire. It was tried. It moved
+`redex=App(Proj,..)` from 518 to **0** and made the file **worse by 986 gaps**,
+because what congruence received at every one of those sites was an *admitted*
+premise — the projection still failed one test later — so it manufactured
+`congruence over an admitted premise` (523 → 1540) instead of derivations.
+
+**Three distinct ways for this to fail, and only the last needed the second
+clause:**
+
+| case | consumer exists? | would it fire? | what it receives |
+| --- | --- | --- | --- |
+| `infer_proj` | yes | — | *cannot derive at all* — `proj` was axiom-free |
+| `to_ctor_when_k` | **no** | — | — |
+| `proj_red` applied redex | yes | **yes** | **an admitted premise** → cascade, not derivation |
+
+So the coarse form was **right three times before it was wrong**, and it is
+still the question to ask first — it is cheaper and it settles most cases. The
+second clause is not a replacement; it is what to reach for when the first one
+says yes. **A "yes" from the coarse form is a reason to measure, not a reason to
+build.**
+
 ### 7.2 An allowlist entry justified by a doc is exactly as reliable as the doc
 
 `tc.rs:828` was classified free-to-discard because `certify.rs` described

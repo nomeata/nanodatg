@@ -2006,6 +2006,32 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                             let direct = reduct::proj_red(e_fun, proj.field, Some(subject));
                             if carry_subject { direct } else { reduct::cong(e, e1, direct) }
                         }
+                        // **Flat on purpose, and this was measured rather than
+                        // assumed.** The paragraph above explains why the `Some`
+                        // arm records at `e_fun` and lifts through the suffix,
+                        // and it reads like an oversight that this arm does not.
+                        // It is not. Tried on 2026-08-15: mirroring the lift
+                        // here — `one(Rule::ProjRed, e_fun, proj.field)` then
+                        // `cong(e, e1, ·)` — moved `redex=App(Proj,..)` from 518
+                        // to **0** on `init-prelude` and made the file **worse
+                        // by 986 gaps** (10 386 → 11 372), because
+                        // `congruence over an admitted premise` rose 523 → 1540.
+                        //
+                        // The 518 were failing *anyway*, one test later: after
+                        // the change `projection: the structure head is not a
+                        // constructor` went 164 → 682, exactly +518. Decomposing
+                        // the step does not make it derive — it makes the same
+                        // failure get counted by congruence as well. **One flat
+                        // node says "this step did not derive" once; the
+                        // decomposition says it three times.** That is not more
+                        // honest, and the ledger is the wrong direction.
+                        //
+                        // So the shape test was never the blocker. What is:
+                        // **the subject arrives without a reduction trace** —
+                        // this arm's own condition — which is why the head is
+                        // not a constructor when the rule looks. That is a
+                        // different question on a different rule, and is not
+                        // addressed by anything here.
                         None => reduct::one(Rule::ProjRed, e, e1),
                     };
                     let (r, rest) = self.whnf_no_unfolding_reduce(e1, cheap_proj);
