@@ -508,6 +508,64 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+/// **Why a step was taken on trust** — the two engines' vocabularies, carried
+/// side by side rather than flattened into one.
+///
+/// [`TgCert`] is the evidence type for both `tc.rs` and `mini`, and the two name
+/// their gaps differently. The checker's rules mint a static label, which
+/// [`merge_one`] keys straight into the run totals and [`origin_bit`] maps to an
+/// origin bit. `mini`'s rules mint a [`crate::mini::ev::Gap`], which is
+/// *structured* — a `Name`, a [`crate::mini::ev::Cause`], a rule discriminant —
+/// and `mini::ledger` keys its rows on that payload.
+///
+/// # Why not one vocabulary
+///
+/// Unifying the *type* is worth doing; unifying the *vocabulary* is not, and
+/// trying would be lossy in both directions. Collapsing a `Gap` to a
+/// `&'static str` discards the very payload `mini`'s rows are made of — the
+/// defect class this project has paid for most. Promoting the checker's ~30
+/// reason strings into `Gap` variants would put a mini-shaped `Name` on rules
+/// that have no declaration to name. So the sum stays a sum, and each ledger
+/// reads the arm it understands.
+///
+/// # Cost
+///
+/// None. `TgCert` is 64 bytes, sized by [`TgCert::Conditional`]'s
+/// `Thm` (40) + `Vec<Formula>` (24); `Gap` is 32 and this enum 40, so the
+/// `Admitted` arm still fits inside a variant that already existed. `Gap`'s
+/// `Name` is a `Copy` arena pointer and its `Cause` is fieldless, so 30 of its
+/// 31 variants clone by memcpy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reason {
+    /// The checker's vocabulary: a static label, counted by [`merge_one`].
+    Tag(&'static str),
+    /// `mini`'s vocabulary: a structured gap, counted by `mini::ledger`.
+    ///
+    /// Deliberately **not** routed through [`merge_one`]: a `mini` gap belongs
+    /// in `mini`'s ledger, and tallying it into the checker's `TOTAL gaps` too
+    /// would double-count it into a number three documents ratchet.
+    Gap(crate::mini::ev::Gap),
+}
+
+impl Reason {
+    /// The static label, when there is one. `None` for a structured gap, whose
+    /// row is `mini::ledger`'s to render.
+    pub fn tag(&self) -> Option<&'static str> {
+        match self {
+            Reason::Tag(t) => Some(t),
+            Reason::Gap(_) => None,
+        }
+    }
+
+    /// The structured gap, when there is one.
+    pub fn gap(&self) -> Option<&crate::mini::ev::Gap> {
+        match self {
+            Reason::Gap(g) => Some(g),
+            Reason::Tag(_) => None,
+        }
+    }
+}
+
 /// A certificate: a real kernel theorem, a real kernel theorem that still rests
 /// on assumptions, or a named gap.
 ///
@@ -550,7 +608,7 @@ pub enum TgCert {
     /// own. That distinction is the whole of [`origin_report`], and it is why
     /// the mask is on the certificate rather than in a side table: it has to
     /// travel with the gap through every rule that relays it.
-    Admitted(&'static str, u32),
+    Admitted(Reason, u32),
 }
 
 /// Cloning a conditional certificate creates a *second* obligation, and the
@@ -569,7 +627,7 @@ impl Clone for TgCert {
                 CONDITIONAL_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 TgCert::Conditional { thm: thm.clone(), hyps: hyps.clone() }
             }
-            TgCert::Admitted(r, m) => TgCert::Admitted(r, *m),
+            TgCert::Admitted(r, m) => TgCert::Admitted(r.clone(), *m),
         }
     }
 }
@@ -5393,7 +5451,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             premask
         };
-        TgCert::Admitted(reason, mask)
+        TgCert::Admitted(Reason::Tag(reason), mask)
     }
 
     /// [`Self::note_admit_m`], with the deletion measurement in front of it.

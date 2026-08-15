@@ -287,10 +287,19 @@ impl Obligation {
 ///
 /// **Every field is a `String` or a `Copy`**, and the report is rendered at
 /// construction rather than at `Display` time. That is not tidiness: mini
-/// checks each file on a 256 MB-stack worker thread, so an `Outcome` has to be
-/// `Send`, and `Gap`, `Name` and `Expr` are all `Rc`-backed. Rendering inside
-/// the worker — where the `Interp`, the gap and the trail are all still in
-/// hand — is what lets the report cross the join.
+/// checks each file on a 256 MB-stack worker thread, and the report has to
+/// cross the join.
+///
+/// The reason used to be stated as "`Gap`, `Name` and `Expr` are all
+/// `Rc`-backed", and that is no longer true of any of the three: `Name`
+/// (`crate::mini::expr::Name`) and `E` (`:363`) are `Copy` indices into the
+/// hash-consed arena, and `Gap` holds those plus a `Vec<u32>`. The conclusion
+/// is unchanged and the current reason is stronger. **The arena is
+/// thread-local** (`crate::mini::arena`), so an index carried across the join
+/// does not name the same node on the other side — it is not a `Send`
+/// violation the compiler would catch, it is a silently wrong lookup.
+/// Rendering inside the worker — where the `Interp`, the gap and the trail are
+/// all still in hand — is what makes that unrepresentable.
 #[derive(Debug, Clone)]
 pub struct Blocker {
     /// The export file, filled in by [`crate::mini::run`] once it knows it.
