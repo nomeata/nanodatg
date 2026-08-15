@@ -1515,11 +1515,61 @@ is why `ix_slot_bridge` is one function and not two. The conclusion moves in
 `beta_spine` as `adopted_lam_step`s (`ix_ctor_spine`), whose domain premises are
 the rung typings the walk has just produced.
 
+**`RBTree`'s wall is not this tranche's, and it is not the `Π` hole either.**
+`red` and `black` stop before any indexed machinery runs, at
+`obligations[np+1+i]` — the minor premise's own typing, which `nest_chain`
+could not produce. Measured on `077`: the miss is `HtMiss::Lam`, **"a lambda
+whose typing rule did not apply"** (20 bodies, 14 unshown, 12 raw fallbacks),
+i.e. `has_type_lam` declining on the minor's λ. It is *not* §8.4.1 item 1's
+missing `Expr::Pi` arm; `ht_shape` on a minor's declared **type** says "a Π"
+for any minor whatever, so that reading is tautological and was discarded.
+Two separate holes, and `RBTree`'s −19 is behind the `has_type_lam` one.
+
 **A fieldless constructor still takes the parameters' typings.** `⟦cᵢ p⃗⟧` is a
 nest over the parameters even with no fields at all, so `RBTree.leaf` — fieldless
 and parameterised at once — needs them to reach mini's own term. §8.3 did not
 flag this and the non-indexed row never meets it, because its nullary shortcut
 instantiates `ctor_abbrev` at `[]`.
+
+### 8.6 The composite lands — −70 of the −89, measured 2026-08-15
+
+`ctor_abbrev_major` 46 → **23** and `mutual_aux_encoding` 96 → **49**, both
+exactly what `NANODA_ASSUME` priced for `IDEP` against the current base. Every
+remaining gap on the two is an escaped assumption at the boundary; escapes went
+21 → 23 and 46 → 49, the written trade. `077` is unmoved at 28 and the corpus at
+172, for the reason in §8.5.
+
+**Two things were wrong in the surrounding machinery, and both were invisible
+until the tranche succeeded.**
+
+1. **The indexed nest was never marked `adopted`.** `interp` hands back *mini's*
+   term for a recursor mini has stored, so a nest built here started
+   `nest_chain` at a head the redex's own interpretation is not. Nothing
+   reported it: `derive_iota_core`'s only check is a final endpoint comparison
+   whose message says the equation does not match the reduction. `RecBottom::Dep`
+   had taken the adopted path since it landed; the indexed row simply was not
+   added to the `usable` match.
+2. **The readiness rows were emitted only on failure.** They lived inside
+   `origin_report`, which returns early when there are no gap origins — exactly
+   the state this tranche was trying to reach. The moment the ι rule started
+   certifying, every row vanished and the two tests reading them went red on
+   *success*. They are now `ix_readiness_report`.
+
+**`Hᵢ` was priced before it was built and is not the cost the sizing feared.**
+Every atom at a use site types conditionally on its own binder — the
+dischargeable kind — and the distance to `derived`'s set is a bridge
+`ix_slot_bridge` already had. The first pricing asked at `ind(p⃗, d⃗ᵢⱼ)` and every
+recursive field came back "a local, carried as an assumption, by design": a
+local has a typing at the type its *binder* declares and nowhere else, so asking
+at the derived set measures the bridge and not the typing.
+
+**One shape the minor premise's own walk never meets**: a use site writes a
+domain through its own `def` (`IxA`, not `Ix Tag.ta`), which is a nullary
+abbreviation symbol `target_head_step` has no head to step. The bridge takes a δ
+step from `abbrev_defs` first. The recursor's *declared* minor type never has
+that shape, which is why only the use-site walk needs it.
+
+---
 
 #### 8.4.1 Three findings that are not about indexed families
 
