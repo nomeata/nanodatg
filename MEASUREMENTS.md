@@ -10745,17 +10745,25 @@ refusal names:
 | 32 768 | 229 378 | 262 146 |
 | 65 536 | 196 610 | 262 146 |
 
-**Six bounds, one constant.** The weak-head recursion consumes exactly *one
-consecutive arena index per level*, and deeper levels carry **lower** indices —
-so the chain was allocated bottom-up and is being walked top-down. That is a
-genuine linear descent through distinct expressions: not a cycle, not a
-re-comparison blowup, and not 2 000 frames of anything recurring.
+**Six bounds, one constant.** The number the refusal prints is the **`Nat`
+literal being eliminated**, not an arena index — the message interpolates the
+*expression*, and at the deepest frame that expression is `NatLit 260146`. So
+the descent peels one `Nat.succ` per level off a numeral that starts at
+262 146, which is `Nat.rec` on a literal doing exactly what Lean's
+`nat_lit_to_constructor` does, one step at a time.
 
-Two things follow. Expression indices are non-negative and strictly decrease by
-one per level, so the recursion is **bounded by 262 146 levels** — it
-terminates. And the height on record is wrong by two orders of magnitude: the
-tower is ~**262 146** deep, not 2 047. 1 998 `Proj PProd.0` frames was only ever
-what fits under a 2 000 bound.
+*(This paragraph read "one consecutive arena index per level, so the chain was
+allocated bottom-up and is being walked top-down" and that was wrong — it took
+the printed number for an arena index. The correction is the same law with the
+right referent, and it matters: an arena chain would be a **syntactic** nest a
+spine peel could collapse, and a counting-down literal is not. See the section
+that tried the peel.)*
+
+The law still says what it said. The literal is non-negative and strictly
+decreases by one per level, so the recursion is **bounded by 262 146 levels** —
+it terminates. And the height on record is wrong by two orders of magnitude:
+the descent is ~**262 146** deep, not 2 047. 1 998 `Proj PProd.0` frames was
+only ever what fits under a 2 000 bound.
 
 So the wall is **legitimate depth**, the third of the three diagnoses the frame
 histogram was meant to separate, and the one that was ruled out. What it needs
@@ -10814,16 +10822,23 @@ sampling the work *at* maximum depth, not the descent to it:
 
 **The bottom is the descent, re-walking itself.** Not a second phase, not a
 different rule: `whnf` is 39.5 % of samples and the rest is the allocation that
-walk performs. The `Proj` arm reduces its *subject* at every level, and the
-subject is the tower one level down — so a 262 146-level tower is walked
-262 146 times. That is the quadratic term, and it is why full depth alone did
-not finish.
+walk performs. Each level reduces a subterm that is the next level down, so a
+262 146-level descent is walked many times over. That is the quadratic term,
+and it is why full depth alone did not finish.
 
-### The chain is projections, and the numeral is 262 144
+*(This attributed the re-walk to "the `Proj` arm reduces its subject at every
+level". That is not the recursion site — `#[track_caller]` on `whnf_conv` puts
+**1 994 of 2 000** frames at the **recursor arm's major premise**,
+`kernel.rs:1610`, and removing the `Proj` arm's recursion outright leaves the
+frame count unchanged. The memo's measured 3.0× does not depend on which arm
+re-walks; the *fix* does, and the section below is where that was found.)*
+
+### The frames are projections, and the numeral is 262 144
 
 At `NANODA_MAX_DEPTH=8192` the frame histogram is **8 186 `Proj PProd.0/1` of
-8 192 frames** — the chain is projections essentially all the way, which is what
-makes an iterative `Proj` walk able to remove it.
+8 192 frames** — the *expression at* almost every frame is a projection. That
+is not the same as the frames being *made by* the projection arm, and the two
+were conflated here; see the refutation below.
 
 And the outermost frame names the numeral:
 
@@ -10877,3 +10892,73 @@ memo cannot help the **first** descent, which visits 262 146 distinct
 expressions once each and is exactly what the 2 000-level ceiling stops. That
 is the iterative walk's job, and it is now the only thing between here and the
 declaration.
+
+## The iterative `Proj` walk is refuted — the recursion is at the major premise — 2026-08-15
+
+The construction the last two sections pointed at was built, twice, and neither
+version works. The frame histogram said the wall's frames are `Proj PProd.0/1`,
+and that was read as *the projection arm is the recursion*. It is not. This
+records the refutation, because the reasoning that produced it is the kind that
+gets re-derived.
+
+### What was built
+
+**Version 1, the spine peel.** The `Proj` arm, on the acceptance-only walk,
+collects the whole nest of projections into a `Vec`, reduces the base once, and
+applies them outward — one recursion for a nest of any depth. Instrumented, it
+fires **9 393 times with a maximum spine length of 3.** The nest is not
+syntactic. Instructions: 126 097 973 096 against the unchanged 126 153 544 074,
+which is noise.
+
+**Version 2, full reification.** Projection *and* the arguments waiting on it
+pushed onto a heap `Vec` — because the frame key is `Proj PProd.0/**1**`, a
+projection applied to one argument, so reifying the projection alone would lose
+the stack — with `done!` discharging them. Frames at the refusal: **still
+1 994**. Instructions: 135 775 650 267, **7.7 % worse**. Both reverted.
+
+### Where the recursion actually is
+
+`#[track_caller]` on `whnf_conv`, with the call site in the frame key, answers
+it in one run and should have been the first thing tried:
+
+```
+1994  Proj PProd.0/1 @checker/src/mini/kernel.rs:1612
+   1  Const HSub.hSub/6 @checker/src/mini/kernel.rs:4546
+   1  NatLit 260146/0   @checker/src/mini/kernel.rs:1612
+```
+
+**One site, and it is the recursor arm's major premise** — `let (major2, mconv)
+= self.whnf_conv(&major, major_tm, why)?`. Not the `Proj` arm at all. The
+expression *at* a frame being a projection and the frame being *made by* the
+projection arm are different claims, and the histogram only ever supported the
+first.
+
+The cycle is: `Nat.rec … major` where the major is
+`(π₀ (Nat.below (fun _ => Nat → Nat) (natLit n))) k`. To choose an ι rule the
+major must be in weak-head normal form; reducing it is another recursor
+application over another projection over `natLit (n−1)`. One `whnf_conv` per
+level, 262 146 levels.
+
+### What would actually fix it
+
+Not a change to one arm. Selecting an ι rule *requires* the major's normal
+form, so the nesting is genuine evaluation order, and the only way to make it
+iterative is to reify the whole thing: an explicit continuation stack for
+`whnf`, in the shape of an abstract machine, where "reduce this major, then
+resume this recursor application" is a heap frame. That is a rewrite of
+`whnf_conv_inner` rather than an edit to it, and it has to carry the
+certificate composition — which on the certified path is a `trans` chain
+composed along the recursion — through the same reification.
+
+Two properties any such rewrite must keep, both of which the current recursion
+gets for free: the depth ceiling must still **report** rather than exhaust
+memory, and the acceptance and certified walks must stay the same walk.
+
+### And depth still is not sufficient
+
+With the reduction memo in and the stack at 12 GB and `NANODA_MAX_DEPTH=400000`,
+the closure still produced no verdict after **17 minutes**. So even granting the
+descent all the room it needs, something at the bottom is not yet sized. The
+memo removed the quadratic re-walk *within* the 2 000-level bound; what happens
+across a 262 146-level descent has not been measured to completion, and no
+claim is made about it here.
