@@ -195,6 +195,40 @@ pub struct Pass {
     pub nested_models: usize,
 }
 
+/// Whether per-declaration progress is printed — `NANODA_DECL_PROGRESS`, read
+/// once. A diagnostic: it names each declaration as it is entered and prints
+/// the wall time it took on the way out, so a long run can be attributed to a
+/// declaration instead of to the file.
+pub fn decl_progress_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NANODA_DECL_PROGRESS").is_some())
+}
+
+/// Prints on the way out, however the step leaves — including the `return`s in
+/// the error arms, which is why this is a guard object and not two `eprintln!`s.
+struct DeclProgress {
+    name: String,
+    at: std::time::Instant,
+}
+
+impl DeclProgress {
+    fn new(name: String) -> Self {
+        eprintln!("decl-enter  {name}");
+        DeclProgress { name, at: std::time::Instant::now() }
+    }
+}
+
+impl Drop for DeclProgress {
+    fn drop(&mut self) {
+        // **A panic unwinds through here too**, and a `decl-leave` printed by
+        // an unwind reads exactly like one printed by a declaration that
+        // finished — which cost one wrong reading of this very measurement.
+        let how = if std::thread::panicking() { "PANIC" } else { "ok" };
+        eprintln!("decl-leave  {}  {:.3}s  {how}", self.name, self.at.elapsed().as_secs_f64());
+    }
+}
+
 impl Pass {
     pub fn new(
         decls: &[Declaration],
@@ -239,6 +273,11 @@ impl Pass {
 
     /// **The loop body.** Accept `d`, then certify it.
     pub(crate) fn step(&mut self, d: &Declaration, ip: &mut Interp, driver: &mut Driver) -> Step {
+        // **Where the time goes, per declaration** — `NANODA_DECL_PROGRESS`.
+        // A 34-minute witness that prints only its verdict cannot say whether
+        // the cost is one declaration or two thousand, and that is the first
+        // question any measurement of this file has to answer.
+        let _progress = decl_progress_on().then(|| DeclProgress::new(d.name().to_string()));
         let pick = match driver.accept(&mut self.env, d) {
             Ok(pick) => pick,
             Err(msg) => {
