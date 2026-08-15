@@ -180,10 +180,33 @@ the old aggregate green with every negative case gone.
 **`tg_tutorial::partially_derived_files_stay_within_their_budget`** —
 `076_listRecReduction: 9 gaps, budget 31 — an improvement; lower the budget`.
 The `GAP_BUDGET` table is a two-sided ratchet (it panics on `gaps < budget`
-too), so the file demands its own re-baseline. Gaps fell 31 → 9. **Left
-unmoved deliberately**: see §3.5 — I can measure the new value but not yet
-attribute it, and this project's rule is that a re-based ratchet has to say
-*why*.
+too), so the file demands its own re-baseline. Gaps fell 31 → 9.
+
+**Attributed 2026-08-15, and the answer is that it is not one commit** — which
+is why it resisted a targeted read. Measured on the same sweep as §3.5, on
+`nanoda_bin`:
+
+**Attributed and re-based.** It fell in **two** tranches, which is why a single
+attributing commit could not be found and why the previous seat was right to
+refuse to move it:
+
+| commit | 076 gaps | what moved |
+| --- | ---: | --- |
+| `3c4323b` … `9b691cb` | 31 | — |
+| **`cc5dfd5`** *(replay exact lazy delta evidence)* | **24** | derived 501 → **510**, conditional derivations 126 → 134 with all the extra accounted for by a rule, escapes flat at 17 |
+| `4fc2f25` … `1fe03a0` | 24 | — |
+| **`a29aad9`** *(equality-query scope provenance at the judgement boundary)* | **9** | **entirely escapes, 17 → 2**; conditional derivations byte-identical at 134 made / 0 copies / 117 by a rule |
+
+Nine more theorems and seven fewer gaps at the first; at the second the
+certificates were always being built and their `Γ` is now right, so fifteen
+assumptions that used to reach the boundary are discharged instead. On
+`init-prelude` `a29aad9` is the cleanest commit in the whole range — **no row
+rose**, and the entire −1 221 on the total is that one escape row.
+
+A previous seat's hypothesis that `5bf8342` ("the dependent arm takes the whole
+origin") closed it is **refuted**: 076 is still 31 at `73dcc53` and `6483199`,
+both of which are after `5bf8342`. The other three budgets are exact at master
+(075 = 3, 116 = 10, 081 = 1). **`tg_tutorial` is now 35/35.**
 
 **`mini_envshare_tg`** (2) and **`mini_route_tg`** (1) — all three are the same
 finding on the same fixtures, and all three are convergence rather than a
@@ -257,46 +280,147 @@ the build configuration. Fixed by gating `run_unified` and its two callers on
 named at the gate and the guard that holds it — `ci/check-test-inputs.sh` —
 named with it. Now 32/32 plain, 34/34 `tg`.
 
-### 3.5 Open, and deliberately not touched: two ratchets moved adversely
+### 3.5 Resolved: two ratchets moved adversely, and both are population changes
 
-**`tg_tutorial::projection_reduction_is_a_rule_fed_by_inference`** —
-`init-prelude: 678 proj_reduce gaps, ratchet 661`.
-**`tg_tutorial::the_declaration_typing_ledger_accounts_for_every_declaration`** —
-`1250 misses against a discarded typing, was 1244`.
+**Measured 2026-08-15.** Built at `3c4323b`, where both were last pinned, and at
+master `83a95cf`, and diffed **every row** of the gap ledger — the evidence
+`DECISIONS.md` requires and which had never been produced. Both runs are the
+same dev profile, the same `--features tg`, and the same binary; the ratchets
+are read off `nanoda_bin`, which has carried mimalloc since long before
+`00a9a92` (that commit added it to `checker.rs`, a *different* binary), so there
+is **no allocator asymmetry to correct for** — and gap counts are deterministic
+anyway. A run is 15 s, not the four minutes `report`'s doc comment claims.
 
-Both moved in the **adverse** direction. That is not automatically a regression:
-this exact ratchet was moved 630 → 661 once before with a written trade, on the
-grounds that new inference *reached* 31 projection redexes the run had never
-contracted, each an honest decline — "the population, not the rate".
+#### The whole-ledger diff
 
-The evidence available without further work points both ways, which is why it is
-being reported rather than resolved:
+`TOTAL gaps` **15 734 → 10 386**, escapes **2 232 → 1 199**, and of the ledger's
+**23 `gap:` rows exactly two rose**:
 
-* *For* a population change: `the_prelude_ledger_totals_are_ratcheted` **passes**
-  — `TOTAL gaps` is still within its `<= 11821` ratchet, and it was 15423 when
-  these rows were pinned. The tree improved overall by a wide margin while these
-  two rows rose.
-* *Against* assuming it: `DECISIONS.md`'s own rule for a loosened ratchet is that
-  the evidence is the diff of the whole gap ledger, and the sentence to be able
-  to write is **"no row rose"**. Here a row rose. That sentence cannot be
-  written, so the trade cannot be taken on the strength of the total alone.
+| row | 3c4323b | master |
+| --- | ---: | ---: |
+| `proj_reduce` | 659 | **678** |
+| `iota: the major premise is not a constructor` | 486 | **550** |
+| `trans over an admitted premise` | 8 457 | 5 370 |
+| `undischarged assumption … survived to the boundary` | 2 232 | 1 199 |
+| `pi congruence over an admitted body premise` | 1 147 | 722 |
+| `congruence over an admitted premise` | 636 | 523 |
+| `iota: this recursor has no curried interpretation` | 792 | *row closed* |
+| *`iota: no interpretation — a nested inductive`* | — | *100 (new)* |
+| *`iota: no interpretation — a K-like eliminator`* | — | *6 (new)* |
 
-The ratchets were last set at `43bac38` / `3c4323b`; a dozen commits have landed
-on the checker since, including the indexed dependent-iota integration and the
-equality-scope provenance work. **Nobody re-ran `tg_tutorial` across any of
-them, because it is not a gate.** That is the finding, and it is the same
-finding as the rest of this document.
+**"No row rose" cannot be written, and this is what replaces it**: two rows
+rose, +83 against −5 348 on the total, and the second of the two is already
+accounted for with its trade at the ι ratchet (the dependent arm closed 222 of
+286 sites; 64 acquired a *better reason* rather than a closure). So
+`proj_reduce` was the only unattributed gap-row rise in the tree.
 
-Resolving it needs the full ledger diff against `43bac38`, which means building
-at that commit, and it lands in `checker/src/tg.rs` and `checker/src/tc.rs` —
-both owned by live seats on other branches. Not this seat's to move.
+#### Each rise, attributed
 
-**The same reasoning is why §3.2's stale assertions were left unmoved.** They
-are stale in the improvement direction and the numbers are not in doubt, but
-re-basing them means writing the reason into the test, and the honest reason is
-"some commit between `43bac38` and `36106d2` merged these carriers" — which is a
-provenance marker, not a derivation. The next seat to touch `tg.rs` will know
-which commit, and should land the re-baseline with the trade written out.
+A ten-point sweep of the 103 first-parent commits. Both rows move **once**, and
+they move at **different commits** — the two questions genuinely had two answers.
+
+| checkpoint | proj_reduce | miss_cond | TOTAL | 076 |
+| --- | ---: | ---: | ---: | ---: |
+| `3c4323b` … `18212fc` | 659 | 1 244 | 15 734 → 11 821 | 31 |
+| `b654c98` | **678** | 1 244 | 11 607 | 24 |
+| `e23e9ac` | 678 | **1 250** | 11 607 | 24 |
+| `b747f80` … master | 678 | 1 250 | **10 386** | **9** |
+
+**`proj_reduce` +19 — population, and it is `b654c98` alone.** Every one of the
+ten commits in that block was measured; nine are inert on this row (659 at each,
+`TOTAL gaps` flat at 11 821) and the whole move is at **`b654c98` "checker: do
+not park conditional reduct certificates"**.
+
+**The mechanism is not the one the 630 → 661 move had**, and getting this right
+mattered. That was new inference *contracting* redexes nothing had contracted.
+This is the shape `the_prelude_ledger_totals_are_ratcheted` already records for
+its own 15 423 → 15 455 move: **the gaps were always there and something was
+hiding them.** In that one commit:
+
+| | `4fc2f25` | `b654c98` |
+| --- | ---: | ---: |
+| conditional derivations made | 33 171 | 32 938 |
+| …**of them copies** | **238** | **0** |
+| escapes | 2 657 | **2 420** |
+| `derived (real kernel Thm)` | 164 205 | **164 210** |
+| `gap: proj_reduce` | 659 | **678** |
+| `gap: trans over an admitted premise` | 5 366 | 5 370 |
+| `TOTAL gaps` | 11 821 | **11 607** |
+
+A parked conditional certificate was being re-served in place of the rule, and
+it was escaping debt — 238 copies go to zero and 237 escapes go with them. What
+it concealed is 19 projection reductions with no certificate, plus the 4 they
+relay into `trans`. **Nothing that was derived before is admitted now**: the two
+numbers that establish it are `derived` going **up** by 5 and escapes going
+**down** by 237, and a commit that had lost 19 real certificates would have moved
+both the other way. Corroborating, the four rows the test protects are
+byte-identical across the entire range — `threaded` **9**, proof shortcut **34**,
+proof λ's body clause **41**, admit fall-through **0** — and the origin bitmask
+agrees: own 659 → 678, relayed 1 840 → 1 844, that +4 being exactly the +4 on
+`trans`.
+
+**miss_cond +6 — population, and the test said so in advance.** Attributed to
+**`05f9bb6` "checker: type a redex subject at its contractum"** (`HtClause::
+SubjectBeta`), confirmed by measuring the commit against its own parent:
+`907984f` reads **1 244**, `05f9bb6` reads **1 250**, with `proj_reduce` already
+at 678 on both. The declaration-typing ledger is **identical at every other row** —
+`cond` 198, `gap` 2 667, `stored` 26, `hit` 1 326 all flat — while the store's
+*ask* traffic rose 29 131 → 30 420. The assertion's own comment declares this
+case ahead of time: *"A rise here with `cond` flat is attribution churn, not new
+discarding; a rise **with** `cond` is the regression this pin is for."* The
+rate fell, 4.27 % → 4.11 %. `05f9bb6` is the exact mirror of `43bac38`, the
+commit that *set* the 1 244 pin and moved this row 1 161 → 1 165 the same way.
+
+#### What was done
+
+Both ratchets re-based **with the trade written at the assertion**: 661 → 678
+and 1 244 → 1 250. Both whole-ledger totals **tightened**, which the symmetric
+half of the rule requires: `TOTAL gaps` 11 821 → **10 386** and escapes
+2 625 → **1 199**. Each had been carrying ~1 430 of slack, pinned at `1cbd603`
+and never re-read — a guard that could not have seen a 1 400-gap regression
+arrive, which is the standing task *"guards that assert a TOTAL are re-based by
+neighbours' traffic"* happening in front of us.
+
+#### The guard, and the one it is not
+
+A new test, `the_whole_gap_ledger_is_accounted_for_row_by_row`, pins all 23
+`gap:` rows and asserts (1) no row rose, (2) the table's rows are exactly the
+report's, and (3) they sum to `TOTAL gaps`. All three falsified and restored.
+Invariant (3) is the one that matters: over this very range a 792-gap row
+**vanished** and 106 gaps arrived under two labels that did not exist before, and
+against floors alone a rename banks itself as progress.
+
+**But per-row floors are not what was missing here, and saying so is the point.**
+`proj_reduce` *had* a per-row ratchet, and it fired correctly the first time it
+was run. So did miss_cond's. The guards worked; **the suite was not run** —
+`ci/check.sh`'s step `tests (tg backend)` covers `tg_tutorial`, and `ci/check.sh`
+is not on the four-command gate list any seat actually runs. The new table
+generalises the protection to the twenty-one rows that have *no* individual
+ratchet; it does not fix the reason these two went unobserved. **That fix is a
+gate-list change, and it is the finding of this whole document.**
+
+#### Two things this entry previously said that the measurement refuted
+
+Recorded because both were reasonable and both were wrong, and a seat reading
+the old entry would have planned the wrong work.
+
+* **"A dozen commits have landed on the checker since."** It is **134**
+  commits, 103 of them on first-parent. More importantly the interesting ones
+  are not the named tranches: the indexed dependent-ι integration, the
+  equality-scope provenance work and the ι gate's direct-clause arm are all
+  *after* both rises and moved neither. The rises are in a block of thirteen
+  consecutive commits (`4e86d46`…`b654c98`) that have **no commit message body
+  at all**, and that is why no amount of targeted reading could attribute them.
+* **"Resolving it lands in `checker/src/tg.rs` and `checker/src/tc.rs`, owned
+  by live seats."** It did not. The resolution is a measurement plus test-file
+  and document edits; **no production file was touched**. The diagnosis needed
+  neither owned file, and the previous seat's instinct to report rather than
+  reach into them was right for a reason that turned out not to apply.
+
+The `43bac38` / `3c4323b` pin was right, though, and worth stating: the
+baseline reproduces the pinned numbers **exactly** — `proj_reduce` 659,
+miss_cond 1 244, `TOTAL gaps` 15 734, escapes 2 232 — which is what makes the
+diff above evidence rather than an anecdote.
 
 ---
 
@@ -344,7 +468,23 @@ step, and that is worth more than 15.8 s. Recorded and left.
 
 1. **Per-leg counters in `check-test-guards.sh` and `check-test-inputs.sh`**
    (§2.1 items 4, 5), and a **cell counter** in `test-boundary.sh` (item 6).
-2. **The two adverse ratchets** (§3.5) — needs the ledger diff and the owning
-   seat.
-3. **The three stale crossing assertions and one gap budget** (§3.2) — needs the
-   attributing commit so the re-baseline can say why.
+2. ~~The two adverse ratchets~~ — **resolved 2026-08-15** (§3.5). Both are
+   population changes, both re-based with the trade written, both totals
+   tightened, and a per-row ledger guard added.
+3. **The three stale crossing assertions** (§3.2) — still open, and **two named
+   candidates are now refuted by measurement**. `mini_envshare_tg` was run at
+   `a29aad9^`, `a29aad9`, `887fa10^` and `887fa10`: it fails the same 2 at all
+   four, so neither commit is where those counters converged. The change is
+   earlier than `1fe03a0`. It could not be attributed from §3.5's ledger diff
+   because these are counters on the **unified** checker (`checker.rs`, mini
+   publication) and every number in §3.5 is `nanoda_bin`'s, which never runs
+   mini — so they need a measurement on their own binary. The remaining
+   suspects are the mini-unification commits `4e86d46`…`02ab90f`.
+4. ~~The `076_listRecReduction` budget~~ — **resolved 2026-08-15** (§3.2), two
+   tranches, both attributed, re-based 31 → 9 with the derivation written.
+5. **The gate list is the real finding, and it is not fixed.** §3.5's two
+   ratchets each fired correctly the first time they were run; nobody ran them
+   for four days. `ci/check.sh`'s step `tests (tg backend)` does cover
+   `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
+   itself is not on the short gate list seats actually run**. Every guard this
+   document adds is downstream of that.
