@@ -8382,7 +8382,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Answering `true` only lets a rule be *attempted*; whether the attempt
         // succeeds is still decided by `has_type_h`'s guard.
         if self.gen_scope(ctx, &ind, levels).is_err() {
-            return false
+            // **Unless mini published an indexed translation for it.**
+            // `gen_scope` returns `Decline::Indices` because *this file* builds
+            // no indexed carrier — but when mini has translated the family, the
+            // type former's own typing `⊢ ⟦T⟧ ∈ ⟦Π p⃗ x⃗. Sort ℓ⟧` is on the
+            // shared const store and [`Self::has_type_app`] can stand on it, so
+            // `T p⃗ x⃗ ∈ ⟦Sort ℓ⟧` is reachable by the ordinary application rule
+            // with nothing rebuilt. The gate is a **cost** guard (see
+            // [`Self::typeable_shape`]), so widening it where the evidence
+            // already exists costs one lookup and admits no new claim:
+            // `has_type_h`'s guard still decides every attempt. This is the one
+            // fact `ICOD`'s discharge needs and could not previously ask for —
+            // `INDEXED-DESIGN.md` §8.3 item 4.
+            return self
+                .const_key(ctx, ind, levels)
+                .is_some_and(|k| self.core.indexed_translation(&k).is_some())
         }
         // …unless the walk has already declined this declaration. Reading the
         // memo builds nothing and costs one lookup, and it keeps the gate from
@@ -11977,8 +11991,361 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // that silently stops measuring is worse than none.
             let _ = self.ix_index_census(ctx, _cfun_name, _cfun_levels);
         }
+
+        // ── `ICOD(⟦C⟧, T)`, the first conjunct of `PRE` ──────────────────────
+        //
+        // Derived here rather than adopted: `rec_ix_dep::icod_at_rung` is an
+        // *inference*, so the seam rule owes it a TG-native re-derivation, and
+        // this is that derivation over conditional theorems. What it stands on
+        // is mini's published *objects* only — the rung `mini` chose
+        // (`DepElim::target`), the skeleton `W` of the published translation,
+        // and the motive's own typing this nest already produced.
+        ICOD_ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut sub: Vec<(kernel::FreeVar, Term)> =
+            d.tr.base.params.iter().copied().zip(ps.iter().cloned()).collect();
+        sub.push((d.dr.motive, c.clone()));
+        for (v, t) in d.dr.minors.iter().zip(minors.iter()) {
+            sub.push((*v, t.clone()));
+        }
+        sub.push((d.dr.target, d.elim.target.clone()));
+        let w_at = derived::subst_term(&d.tr.base.wty, &sub);
+        let Some(rung) = (1..=64).find_map(|k| {
+            let r = self.pre.tower.at(k)?;
+            (r.set == d.elim.target).then_some(r)
+        }) else {
+            return Err("iota: mini's indexed target is no rung of this tower")
+        };
+        let Some((icod, icod_hyps)) =
+            self.ix_icod(ctx, d, np, ni, &c, &w_at, _doms, _dom_exprs, _obligations, &rung)
+        else {
+            return Err("iota: ICOD at the motive's own rung is not discharged")
+        };
+        // Against `derived`'s own formula, at this site's substitution — the
+        // check `rec_ix_dep::premise_at` makes, so a derivation that landed on
+        // some *other* two-conjunct membership statement is a decline.
+        if u_concl(&icod, conj_of(&icod_hyps).as_ref())
+            != Some(crate::mini::rec_dep::subst_f(&d.dr.guards.cod, &sub))
+        {
+            return Err("iota: the derived ICOD is not IndexedDepRecursor's")
+        }
+        ICOD_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if icod_hyps.is_empty() {
+            ICOD_UNCOND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let _ = ctx;
-        Err("iota: the indexed premise PRE = ICOD ∧ IDEP is not discharged")
+        Err("iota: ICOD is discharged; IDEP, the indexed minor premises, is not")
+    }
+
+    /// **`⊢ H → ICOD(⟦C⟧, T)`** — `crate::mini::rec_ix_dep`'s `icod_at_rung`
+    /// re-derived on this side of the seam, over conditional theorems.
+    ///
+    /// The rung is not a choice made here: `T` is a bound variable of
+    /// `IndexedDepRecursor::typing` constrained only by `ICOD`, mini picked the
+    /// rung the **motive's own type** inhabits, and `DepElim::target` is that
+    /// choice crossing the seam. Picking a second one would state a premise
+    /// about a different `T` than the rule instantiated at.
+    ///
+    /// The whole of the argument is that [`derived::tower::Rung::app`] —
+    /// `⊢ ∀f ∀x. (f ∈ Uₙ → app(f,x) ∈ Uₙ)` — is **unconditional in the
+    /// argument**, so `ICOV`'s `ni` *unbounded* index binders cost nothing and
+    /// no junk index is ever distinguished from a reachable one. What it needs
+    /// and this file did not have is `⊢ ⟦T p⃗ x⃗ → … → Sort u₁⟧ ∈ Uₙ`, the
+    /// motive's own type in the rung; that is [`Self::ty_in_rung`].
+    #[allow(clippy::too_many_arguments)]
+    fn ix_icod(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        np: usize,
+        ni: usize,
+        c: &Term,
+        w_at: &Term,
+        doms: &[Term],
+        dom_exprs: &[ExprPtr<'t>],
+        obligations: &[(Thm, Vec<Formula>)],
+        rung: &derived::tower::Rung,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        let _ = d;
+        let (m_thm, m_hyps) = obligations.get(np)?.clone();
+        let m_ty = doms.get(np)?.clone();
+        if u_concl(&m_thm, conj_of(&m_hyps).as_ref())? != Formula::mem(c.clone(), m_ty.clone()) {
+            return None
+        }
+        let (mty, mty_hyps) = self.ty_in_rung(ctx, *dom_exprs.get(np)?, rung, &[], 0)?;
+
+        let hyps = merge_hyps(&m_hyps, &mty_hyps);
+        let h = conj_of(&hyps);
+        let m_thm = reassume(&m_thm, &m_hyps, &hyps)?;
+        let mty = reassume(&mty, &mty_hyps, &hyps)?;
+
+        // `⟦C⟧ ∈ Uₙ`: the motive's type is in the rung and the rung is
+        // transitive. This is the one step the whole tranche waited on.
+        let trans = derived::inst_all(&rung.transitive, std::slice::from_ref(&m_ty))?;
+        let over = u_mp(&u_a1i(&trans, h.as_ref()), &mty, h.as_ref())?;
+        let mut cur = u_mp(&u_inst1(&over, c, h.as_ref())?, &m_thm, h.as_ref())?;
+
+        // The `ni` index binders, **unbounded** — `ICOV` does not restrict them
+        // and `Rung::app` does not need them restricted.
+        let mut xvs: Vec<kernel::FreeVar> = Vec::with_capacity(ni);
+        for _ in 0..ni {
+            let v = self.env_mut().fresh_var();
+            xvs.push(v);
+            cur = self.u_app_in_rung(&rung.app, &cur, &Term::var(v), h.as_ref())?;
+        }
+
+        // …then the two bounded ones, which are guards.
+        let z = self.env_mut().fresh_var();
+        let tz = Term::var(z);
+        let mut z_hyps = hyps.clone();
+        let zg = Formula::mem(tz.clone(), w_at.clone());
+        if !z_hyps.contains(&zg) {
+            z_hyps.push(zg);
+        }
+        let zh = conj_of(&z_hyps);
+        let cur = reassume(&cur, &hyps, &z_hyps)?;
+        let spine = self.u_app_in_rung(&rung.app, &cur, &tz, zh.as_ref())?;
+        let set = u_concl(&spine, zh.as_ref())?.as_mem()?.0;
+
+        let y = self.env_mut().fresh_var();
+        let ty = Term::var(y);
+        let mut y_hyps = z_hyps.clone();
+        y_hyps.push(Formula::mem(ty.clone(), set.clone()));
+        let yh = conj_of(&y_hyps);
+        let spine = reassume(&spine, &z_hyps, &y_hyps)?;
+        let trans = derived::inst_all(&rung.transitive, std::slice::from_ref(&set))?;
+        let over = u_mp(&u_a1i(&trans, yh.as_ref()), &spine, yh.as_ref())?;
+        let at_y = u_inst1(&over, &ty, yh.as_ref())?;
+        let y_in = self.assumed(&ty, &set, &y_hyps)?;
+        let inner = u_mp(&at_y, &y_in, yh.as_ref())?;
+
+        let want = Formula::mem(ty, rung.set.clone());
+        let (fam, after_y) = self.guard_and_generalise_at(&inner, &y_hyps, &want, y, &set)?;
+        if after_y != z_hyps {
+            return None
+        }
+        let fam_concl = u_concl(&fam, zh.as_ref())?;
+        let (covers, after_z) = self.guard_and_generalise_at(&fam, &z_hyps, &fam_concl, z, w_at)?;
+        if after_z != hyps {
+            return None
+        }
+        let covers = match h.as_ref() {
+            None => derived::gen_all(&xvs, &covers),
+            Some(hf) => gen_under(&covers, hf, &xvs)?,
+        };
+        let out = u_and_intro(&covers, &u_a1i(&rung.empty_mem, h.as_ref()), h.as_ref())?;
+        Some((out, hyps))
+    }
+
+    /// `⊢ H → app(f,a) ∈ Uₙ` from `⊢ H → f ∈ Uₙ` — [`derived::tower::Rung::app`],
+    /// which asks nothing of `a`.
+    fn u_app_in_rung(
+        &mut self,
+        rule: &Thm,
+        f_mem: &Thm,
+        a: &Term,
+        h: Option<&Formula>,
+    ) -> Option<Thm> {
+        let f = u_concl(f_mem, h)?.as_mem()?.0;
+        let at = derived::inst_all(rule, &[f.clone(), a.clone()])?;
+        let out = u_mp(&u_a1i(&at, h), f_mem, h)?;
+        let app = self.pre.ap.app;
+        let want = self.mk(app, vec![f, a.clone()]);
+        (u_concl(&out, h)?.as_mem()?.0 == want).then_some(out)
+    }
+
+    /// **`⊢ H → ⟦e⟧ ∈ Uₙ`** — a Lean *type* placed in a rung of the tower.
+    ///
+    /// Three clauses, in the order they are cheap:
+    ///
+    /// 1. whatever [`Self::has_type_a`] already discharges at this rung;
+    /// 2. `Π` — Lean's formation rule, [`Self::pi_in_rung`], which is the one
+    ///    `has_type_a` has never had (`HtMiss::Pi`, "needs `dprod_in_universe`");
+    /// 3. a leaf `has_type_a` places at a *lower* rung, lifted by
+    ///    cumulativity. `⟦Nat⟧ ∈ U₁` and mini's indexed carrier at its own
+    ///    resultant sort are both of this kind, and the motive's type is a `Π`
+    ///    over exactly those, one rung up.
+    ///
+    /// `depth` bounds the recursion the same way [`Self::has_type_a`]'s does.
+    fn ty_in_rung(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        rung: &derived::tower::Rung,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        if depth > 8 {
+            return None
+        }
+        if let Some(out) = self.has_type_a(ctx, e, &rung.set, assms, 0) {
+            return Some(out)
+        }
+        if let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(e) {
+            return self.pi_in_rung(
+                ctx,
+                e,
+                binder_name,
+                binder_style,
+                binder_type,
+                body,
+                rung,
+                assms,
+                depth,
+            )
+        }
+        for k in 1..rung.n {
+            let Some(below) = self.pre.tower.at(k) else { continue };
+            let Some((t, used)) = self.has_type_a(ctx, e, &below.set, assms, 0) else { continue };
+            let hh = conj_of(&used);
+            let subj = u_concl(&t, hh.as_ref())?.as_mem()?.0;
+            let lifted = self.lift_rung(&t, &subj, k, rung.n, hh.as_ref())?;
+            return Some((lifted, used))
+        }
+        None
+    }
+
+    /// `⊢ H → X ∈ U_to` from `⊢ H → X ∈ U_from` — **cumulativity**, one
+    /// [`derived::tower::Rung::transitive`] at the rung below per step.
+    ///
+    /// `Uₘ` is transitive and `U₍ₘ₋₁₎ ∈ Uₘ`, so `U₍ₘ₋₁₎ ⊆ Uₘ`; the chain of
+    /// those from `from` to `to` is the whole rule. Both endpoints are checked
+    /// against the rung's own terms, so a tower whose `mem_below` is not about
+    /// the rung below is a `None` rather than a step onto the wrong universe.
+    fn lift_rung(
+        &mut self,
+        thm: &Thm,
+        x: &Term,
+        from: usize,
+        to: usize,
+        h: Option<&Formula>,
+    ) -> Option<Thm> {
+        let mut cur = thm.clone();
+        for m in (from + 1)..=to {
+            let r = self.pre.tower.at(m)?;
+            let below = self.pre.tower.at(m - 1)?;
+            if r.mem_below.concl().as_mem()? != (below.set.clone(), r.set.clone()) {
+                return None
+            }
+            let at = derived::inst_all(&r.transitive, std::slice::from_ref(&below.set))?;
+            let step = Thm::mp(&at, &r.mem_below)?;
+            let at_x = derived::inst_all(&step, std::slice::from_ref(x))?;
+            cur = u_mp(&u_a1i(&at_x, h), &cur, h)?;
+        }
+        Some(cur)
+    }
+
+    /// **Lean's `Π` rule at a rung** — `dprod(q⃗,A) ∈ Uₙ` from `A ∈ Uₙ` and the
+    /// fibre pointwise over `A`.
+    ///
+    /// The rule is `crate::pi_store::Full::rule`,
+    /// `⊢ ∀q⃗ ∀c ∀A. ((A ∈ U(c) ∧ ∀x. (x ∈ A → b(q⃗,x) ∈ U(c))) → dprod(q⃗,A) ∈ U(c))`,
+    /// which is minted on the *shared* `Π` store the two engines already
+    /// agree on — this is `want_full = true` at a site the checker until now
+    /// only ever asked for the symbol. Nothing new is minted by asking: the
+    /// `dprod` symbol is the very one `interp_pi` built, and only the proofs
+    /// about it are added.
+    ///
+    /// The fibre conjunct is derived under the guard `x ∈ A` and then closed by
+    /// [`Self::guard_and_generalise_at`], which is what turns a body typed at
+    /// an *opened* binder into a statement about every point of the domain.
+    #[allow(clippy::too_many_arguments)]
+    fn pi_in_rung(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        binder_name: NamePtr<'t>,
+        binder_style: crate::expr::BinderStyle,
+        binder_type: ExprPtr<'t>,
+        body: ExprPtr<'t>,
+        rung: &derived::tower::Rung,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        let (key, holes, dom_t) = {
+            let site = self.pi_sites.get(&e)?;
+            (site.key.clone(), site.holes.clone(), site.dom.clone())
+        };
+        let pre = self.pre.clone();
+        let info = self.core.pi_site(
+            crate::lam_store::Minter::Checker,
+            &pre,
+            &key,
+            holes.len(),
+            false,
+            true,
+        )?;
+        let full = info.full.clone()?;
+        let fibre = info.fibre.clone()?;
+
+        // The domain.
+        let (dom_thm, used_a) = self.ty_in_rung(ctx, binder_type, rung, assms, depth + 1)?;
+        if u_concl(&dom_thm, conj_of(&used_a).as_ref())?
+            != Formula::mem(dom_t.clone(), rung.set.clone())
+        {
+            return None
+        }
+
+        // The binder, opened at the very variable `interp_pi` opened it at —
+        // `interp` is a function of the expression and memoised, so re-walking
+        // is idempotent and the fibre's `x` is the body's own.
+        let (v, body_open) = if ctx.num_loose_bvars(body) == 0 {
+            // A constant fibre: `b(h⃗,x) = h₀` whatever `x` is, and the guard
+            // below is vacuous. A fresh variable is the honest `x`.
+            (self.env_mut().fresh_var(), body)
+        } else {
+            let level = self.open_level(ctx, e);
+            let local = ctx.remake_dbj_level(binder_name, binder_style, binder_type, level);
+            let tlocal = self.interp(ctx, local);
+            let mut lfvs = Vec::new();
+            tlocal.free_vars(&mut lfvs);
+            let v = match lfvs.as_slice() {
+                [v] if tlocal == Term::var(*v) => *v,
+                _ => return None,
+            };
+            (v, ctx.inst(body, &[local]))
+        };
+
+        let guard = Formula::mem(Term::var(v), dom_t.clone());
+        let mut a2 = used_a.clone();
+        if !a2.contains(&guard) {
+            a2.push(guard);
+        }
+        let (b_thm, used_b) = self.ty_in_rung(ctx, body_open, rung, &a2, depth + 1)?;
+        let bh = conj_of(&used_b);
+        let bt = u_concl(&b_thm, bh.as_ref())?.as_mem()?.0;
+
+        // `⊢ b(h⃗,v) = ⟦body⟧`, and the membership moved onto the fibre symbol.
+        let mut bargs = holes.clone();
+        bargs.push(Term::var(v));
+        let bd = derived::inst_all(&fibre.b_def, &bargs)?;
+        let (b_at_v, rhs) = bd.concl().as_eq()?;
+        if rhs != bt {
+            return None
+        }
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(
+            bt.clone(),
+            b_at_v.clone(),
+            w,
+            Formula::mem(Term::var(w), rung.set.clone()),
+        );
+        let symm = u_eq_symm(&mut self.env_mut(), &bd, None)?;
+        let imp = Thm::mp(&leib, &symm)?;
+        let at_v = u_mp(&u_a1i(&imp, bh.as_ref()), &b_thm, bh.as_ref())?;
+
+        let want = Formula::mem(b_at_v, rung.set.clone());
+        let (fam, used) = self.guard_and_generalise_at(&at_v, &used_b, &want, v, &dom_t)?;
+        let h = conj_of(&used);
+        let dom_thm = reassume(&dom_thm, &used_a, &used)?;
+        let prem = u_and_intro(&dom_thm, &fam, h.as_ref())?;
+
+        let mut args = holes.clone();
+        args.push(rung.seed.clone());
+        args.push(dom_t);
+        let rule = derived::inst_all(&full.rule, &args)?;
+        let out = u_mp(&u_a1i(&rule, h.as_ref()), &prem, h.as_ref())?;
+        let te = self.interp(ctx, e);
+        (u_concl(&out, h.as_ref())? == Formula::mem(te, rung.set.clone())).then_some((out, used))
     }
 
     /// Mini's exact dependent recursor for the parameterless fieldless family
@@ -21931,6 +22298,17 @@ static IX_FIRE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 static IX_CENSUS_ROWS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
+/// **`ICOD`, the first conjunct of the indexed ι rule's premise: asked,
+/// discharged, and discharged with nothing owed.**
+///
+/// Not behind `stepcount`, for `IX_PUBLISHED`'s reason: a conjunct that is
+/// derived but *conditional* is an escape the tranche would inherit, and the
+/// difference between "discharged" and "discharged unconditionally" has to be
+/// visible on a plain build rather than inferred from one that counts steps.
+static ICOD_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ICOD_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ICOD_UNCOND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[cfg(feature = "stepcount")]
 fn note_ix_census_row(rec: &str, what: &str) {
     let mut m = IX_CENSUS_ROWS.lock().expect("ix_census_rows poisoned");
@@ -22140,6 +22518,14 @@ pub fn origin_report() -> String {
             s.push_str(&format!(
                 "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
                  translations {t}, eliminators {e}\n"
+            ));
+        }
+        let (a, dn, un) =
+            (ICOD_ASKED.load(Relaxed), ICOD_DONE.load(Relaxed), ICOD_UNCOND.load(Relaxed));
+        if a > 0 {
+            s.push_str(&format!(
+                "  indexed premise ICOD at the motive's own rung — asked {a}, \
+                 discharged {dn} ({un} owing nothing)\n"
             ));
         }
         // A routed run names every declaration off the export file, so this is
