@@ -857,3 +857,115 @@ Statuses re-checked 2026-08-09.
    are pre-stage-0 numbers; the run today is 15 423 / 2 138.
 9. **New**: `Admit::Cache`'s variant doc says the unconditional-only rule
    left "687 → 272" on init-prelude; the row is 260 today. Drift, not error.
+
+---
+
+## 6. Task #103 — the acceptance-only census, re-taken, and the allowlist
+
+*Taken 2026-08-15 at master `b41cda7`.*
+
+### 6.1 Method, and why both old numbers are dead
+
+An **acceptance-only** reduction is one the checker performs to decide that
+something type-checks and whose certificate is then discarded — *"a value
+computed at the bottom of a call whose site outlives nothing."* Unlike a gap,
+nothing counts it, which is what makes it the literal form of an implementation
+shortcut.
+
+Task #103's own figure of **27 sites is not recoverable**, and this document says
+so at §2: *"its site list was not readable from this tree and is not reproduced
+here (unchecked)."* A head grep giving 18 is not the census's method either —
+grep counts spellings, and the population is defined by *what consumes the
+value*. What §2 does supply, and what is used here, is the method:
+
+* **the criterion** — a site belongs on the allowlist **iff no
+  definitional-equality or typing conclusion rests on the value after the
+  enclosing decision returns** (shape probes, fail-fast rejections); it is
+  threading debt iff the value licenses something downstream;
+* **the population**, in four named groups — `whnf`'s callers (§1.3), the
+  `assert_def_eq_only` sites, the `infer_ty`-family discard sites in `tc.rs`, and
+  the `def_eq`-under-`.is_some()` sites inside §1.4's admit rows.
+
+**This census is scoped to *sites*, not to counts, and that is deliberate.** The
+splicer seat is about to open the dispatch route, which changes *which
+declarations are reached* and therefore every `(ip)` ledger number in this
+document. A site enumeration over `checker/src/` is invariant under that change;
+a population count would have to be re-taken the day it lands. No `(ip)` figure
+is quoted below, and none of the conclusions depends on one.
+
+### 6.2 The four populations at head
+
+| population | §2's count | head | what moved |
+| --- | ---: | ---: | --- |
+| `whnf` / `whnf_no_unfolding` callers that discard the equality | 28 | **25 sites, 26 calls** (`tc.rs` 15 lines / 16 calls, `inductive.rs` 10) | `ensure_pi` gained its certified sibling (`b7ec000`), so its evidence-bearing caller left this population |
+| `assert_def_eq_only` | 17 | **17** (`inductive.rs` 10, `quot.rs` 6, `tc.rs` 1) | unchanged |
+| `infer_ty`-family discards in `tc.rs` | 20 | **21 lines, 22 calls** (one line carries two) | one site added |
+| `def_eq` whose certificate is discarded | "the sites inside §1.4's admit rows" | **4** (`tc.rs:606, 610, 660, 2672`) | `tc.rs:2348` records one of these already converted — its doc says *"this used to be `assert!(self.def_eq(u, v).is_some())`"* |
+
+**The comment at `tc.rs:1365` had gone stale and is corrected with this census**;
+it read "so none of their 28 callers change" and the number is 26 calls at 25
+sites. It was accurate when §1.3 was re-taken, which is exactly how a count in a
+comment rots — nothing reads it. It now carries the figure, the date, and why the
+population shrank.
+
+**Two of the 25 are unreachable, and so is one counted discard.**
+`strong_reduce` (`tc.rs:1294`, `pub(crate)`) has **no caller outside itself** —
+searched tree-wide, every `strong_reduce` outside its own body is prose — so its
+two `whnf` sites (`:1304`, `:1348`) cannot run. `whnf_no_unfolding`
+(`tc.rs:1817`, `pub`) likewise has **zero callers**; the only other mentions are
+its own doc. Neither is an acceptance-only site; they are dead entry points, and
+counting them as debt would overstate the population by two.
+
+**The same dead function carries a `Dropped::Probe` bump** at `tc.rs:1296`, so
+one of the three `Probe` sites can never fire — and `Dropped::Probe`'s own doc
+(`certify.rs:573-583`) names *"`strong_reduce`'s"* among its live examples. A
+counted site with no reachable occupant is the shape `TEST-INVENTORY.md` §6.3
+records as instance 9: the count is not wrong, it is unfalsifiable. Left as a
+finding rather than fixed, because deleting `strong_reduce` is a judgement about
+whether a strong-normalisation entry point is wanted at all, and that is not this
+census's call.
+
+### 6.3 The allowlist — sites where discarding the certificate costs nothing
+
+Each entry states *why* nothing rests on the value after the call returns. An
+entry whose reason is "this has always been fine" is not an entry.
+
+| site(s) | why the discard is free |
+| --- | --- |
+| `ensure_pi` (`tc.rs:564`), reached only from `tc.rs:1094` | **The canonical entry, and it is by construction.** `infer_app` takes `ensure_pi_with_cert` when a derivation is live to consume the leg and this bare one otherwise — the `else` of `if let Some(so_far) = applied`. The certificate is not discarded; it is *not built*, precisely when nothing exists to receive it. `tc.rs:1082-1085` states the rule at the line. |
+| `ensure_sort` (`tc.rs:553`), reached from `tc.rs:475,546` and `inductive.rs:401,431` | A **shape probe with a fail-fast rejection**: the question is "is this a `Sort`", the answer licenses proceeding or rejecting, and the enclosing decision returns a level, not an equality. Its consumers are the `Dropped::BinderSort` sites, which §2 puts explicitly outside the staging order. |
+| `is_sort_zero` (`tc.rs:3381`), and the `Dropped::Predicate` discards (`tc.rs:3412,3437`) | The **stage-0 witnesses landed** (§1.6): the bool-returning predicates have witness-returning counterparts (`proposition_witness`, `proof_witness`) that are threaded, and these are the counted bool-only calls beside them. The discard is counted, the witness exists, and the caller that needs evidence takes the other function. |
+| the 10 `inductive.rs` telescope walks (`:363,378,392,396,416,422,426,688,1011,1026`) | **Environment admission.** These whnf a type cursor while walking an inductive's or constructor's telescope to decide whether the *declaration* is well-formed. The conclusion that leaves the enclosing call is admit-or-reject on the environment, not a defeq fact used in a later derivation. |
+| the 17 `assert_def_eq_only` sites | **The adapter is itself the allowlist, and it is already named and counted.** Its doc (`tc.rs:2363`) is the criterion verbatim — *"confirm `u ≡ v` where nothing downstream can use the certificate, naming the place that drops it so the discard is counted rather than invisible"* — and every call passes a `Dropped` site that `bump_dropped` records. 16 of the 17 compare a declaration the file supplies against the shape we expect (`inductive.rs` re-derived against imported, `quot.rs` the `Quot` axioms' declared types); the verdict is acceptance of the environment. |
+
+**One entry on this list disagrees with its own ledger label, and the
+disagreement is real.** `tc.rs:1280` — `infer_let` under `Check`, asserting the
+`let` annotation matches the value's inferred type — is allowlist by the
+criterion: the typing that leaves `infer_let` is the *expansion's*, derived
+independently after `inst`, so nothing rests on this equality once the call
+returns. But it is labelled `Dropped::DefEqSide`, and §2's stage 2 wants
+`DefEqSide` driven to ~0. Both are defensible and they cannot both be acted on:
+either the criterion admits it and the stage-2 target should exclude it by name,
+or the stage-2 target is right and the criterion is too weak here. **Recorded
+rather than resolved** — it is a judgement for whoever runs stage 2, and it is
+one site.
+
+### 6.4 Not on the allowlist — the shortcuts, with names
+
+| site(s) | what rests on the discarded value |
+| --- | --- |
+| `infer_proj` (`tc.rs:829,839,848,864`) | The field type this whnf-walk computes **is** the typing `infer_proj` returns. §1.2 already records the consequence: `TgBackend::ty_proj` re-derives it delta-only and *declines when whnf was needed*. This is threading debt with a design fork already stated in §1.2 — thread the walk, or keep the recompute-and-check as the honesty mechanism — and it is the largest single entry here. |
+| `try_eta_struct_aux` (`tc.rs:606, 610`) | Both certificates license `Admit::EtaStruct`. A conclusion rests on them by definition: the admit *is* the conclusion. §1.4 marks the fix blocked on interpreted structures (§3), not on threading. |
+| `def_eq_unit` (`tc.rs:660`) | `r.and_then(\|_\| self.admit(x, y, Admit::UnitLike))` — the equality is used and then dropped by the `\|_\|`. Same disposition as above: blocked on interpreted structures. |
+| `to_ctor_when_k` (`tc.rs:2672`) | The discarded equality licenses **replacing the major premise** for K-recursors, and §1.5 already names it: *"the discarded equality is exactly the evidence a future ι-K rule needs."* |
+| `do_nat_bin` (`tc.rs:666`, two calls), `try_reduce_nat` (`tc.rs:699`), `str_lit_to_ctor_reducing` (`tc.rs:622`) | Literal arithmetic and string-literal reduction, whose steps become `Admit::NatRed` with no backend rule. Debt, but **milestone 4**, not threading — the certificate has nowhere to go until the rule exists. |
+| `reduce_quot` (`tc.rs:2829,2832`) | `Admit::Quot`, which needs interpreted `Quot`. Blocked for the same reason, in §3's bucket rather than this one. |
+
+**What this partition says.** Of the sites that are live and genuinely
+acceptance-only, exactly **four groups are threading debt the project could act
+on today** — `infer_proj`'s four, and the three admit-licensing `def_eq`
+discards — and every one of them is already named in §1.2, §1.4 or §1.5 with a
+consumer identified. The rest are either allowlist with an argument, or blocked
+on an interpretation milestone that owns them. **No site in this population is
+unaccounted for**, which is the property task #103 was asking for and which
+neither the 27 nor the 18 could establish.

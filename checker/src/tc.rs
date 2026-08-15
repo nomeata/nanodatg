@@ -1363,7 +1363,12 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     // Weak-head normalisation, with evidence.
     //
     // The public entry points still return a bare `ExprPtr`, so none of their
-    // 28 callers change. Underneath, the reduction is split in two:
+    // callers change — **26 calls at 25 sites**, re-counted 2026-08-15 (this
+    // read "28 callers", which was accurate when `THREADING-CENSUS.md` §1.3 was
+    // taken; `ensure_pi` has since gained the certified sibling below and its
+    // evidence-bearing caller left the population). Two of the 25 are in
+    // `strong_reduce`, which nothing outside itself calls. Underneath, the
+    // reduction is split in two:
     //
     //   * `whnf_reduce` / `whnf_no_unfolding_reduce` reduce and **record what
     //     they did**, as a [`crate::reduct::Trace`] — the rules applied and
