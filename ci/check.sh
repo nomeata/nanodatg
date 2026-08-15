@@ -5,7 +5,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 fails=0
+ran=0
 declare -a skipped=()
+# ── A floor on the step list itself ─────────────────────────────────────────
+# Task #137: "one counter lets a healthy leg hide a dead one." Every step below
+# is judged individually, and that is the *right* granularity — but nothing was
+# counting the steps, so the list itself had no floor. Delete a `step` line, or
+# put one behind an `if` that stops being true, and this script prints "all
+# checks passed" having run fewer of them. That is the same defect the steps
+# guard against, one level up: `ci/check-modelgen.sh` exists because modelgen
+# "had no step at all and was 10 checks red for weeks", and nothing here would
+# have said so.
+#
+# So the number of steps that reached a verdict is counted and compared against
+# what this file schedules. It is an equality and not a `>= 1` floor: a `>= 1`
+# floor is cleared by any single surviving step, which is precisely the hiding
+# this is meant to stop. Adding or removing a step is a deliberate act, so
+# updating this number is part of it.
+#
+# SKIPs count as *scheduled and reached* — an unequipped machine legitimately
+# skips, and the summary already names those separately. What must not happen
+# is a step vanishing from the schedule without anyone noticing.
+EXPECTED_STEPS="${EXPECTED_STEPS:-29}"
 # Exit 77 is SKIP — the autotools convention — and it is **not** PASS. A step
 # that needs something the machine may not have (today: a Lean toolchain, for
 # `check-modelgen.sh`) must be able to say "I did not run" in a way the summary
@@ -14,6 +35,7 @@ declare -a skipped=()
 # because `modelgen` had no step at all and was 10 checks red for weeks.
 step() {
   local name="$1"; shift
+  ran=$((ran+1))
   echo
   echo "───── $name ─────"
   "$@"; local rc=$?
@@ -234,6 +256,14 @@ step "tests (cross-engine core)" cargo test -p nanoda_lib --features tg \
      --test mini_envshare_tg --test mini_route_tg --test unified_cli
 
 echo
+echo "$ran step(s) reached a verdict (expected $EXPECTED_STEPS)"
+if (( ran != EXPECTED_STEPS )); then
+  echo "BROKEN: this script scheduled $ran step(s) but is declared to have $EXPECTED_STEPS." >&2
+  echo "        A step was added or removed without updating EXPECTED_STEPS. If that was" >&2
+  echo "        deliberate, change the number at the top of this file; if it was not, a" >&2
+  echo "        check has silently stopped running and the summary below means nothing." >&2
+  fails=$((fails+1))
+fi
 if (( ${#skipped[@]} )); then
   echo "${#skipped[@]} step(s) SKIPPED and did not run: ${skipped[*]}" >&2
 fi
