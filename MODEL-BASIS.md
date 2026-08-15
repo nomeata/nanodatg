@@ -1042,15 +1042,22 @@ failure this project pays for most.
 
 ## 6. The 91 untranslated declarations
 
-`init-prelude` currently reports, with `--verbose --mutual --nested`
-(`CLAUDE-HANDOFF.md:142-151`):
+`init-prelude` reports, with `--verbose --mutual --nested` — **re-measured at
+master `b41cda7`**, where only the gap total has moved (it read 11 909 when this
+section was written):
 
 ```
 accept  1822 declarations
 untranslated: 91 declarations, 10 eliminators
 uncertified:  32 const typings, 29 type typings
-tg gaps: 11909      prefix declarations=152 pairs=32      exit 4
+tg gaps: 11556      prefix declarations=152 pairs=32      exit 4
 ```
+
+That is the **modelgen-on** configuration, which is the default. With
+`--no-modelgen` the same file is `accept 1774 declarations, untranslated: 89
+declarations, 10 eliminators` — the difference being the `Lean.Syntax` model our
+own filter splices. Both are the *raw* export; §6's correction below measures a
+**different file** and the two must not be compared directly.
 
 in two families: **`type former spine`** — the heterogeneous-operator classes
 (`HAdd`, `HSub`, `HMul`, `HPow`, `HAnd`, `HOr`, `HXor`, `HShiftLeft/Right`,
@@ -1111,15 +1118,23 @@ fire. And the models are exactly the declarations we refuse:
 | `type former spine` — `HAdd`, `HSub`, `HMul`, `HDiv`, `HMod`, `HPow`, `HAppend`, `Membership`, `Trans`, the `Monad*` classes | `model of 7 declarations` each |
 | the 10 **eliminator** declines — `False`, `PEmpty` (no constructors), `HEq` (result index not a bare field) | `model of 2`, `model of 2`, `model of 5` |
 
-**So the 91 untranslated declarations and the 10 untranslated eliminators go, all
-of them.** That is the largest single consequence of the pivot, it was
-unconsidered before this tranche, and it is now measured rather than inferred.
+**So a model exists for every one of the 91 untranslated declarations and all 10
+untranslated eliminators** — the tool declines none of them. That is the largest
+single consequence of the pivot, it was unconsidered before this tranche, and it
+is measured rather than inferred.
 
-#### The claim is **conditional on §4.1's step 2, and this section did not say so**
+**It does not follow that they go, and the next subsection is why.** A model
+existing and a model being *read* are two different things, and on this export
+they differ by 143 of 144. This sentence read "so the 91 untranslated
+declarations and the 10 untranslated eliminators go, all of them" until
+2026-08-15; that was a claim about the consumer inferred from a fact about the
+producer.
+
+#### The claim is **conditional on §4.1's step 2**
 
 *Corrected in place 2026-08-15, by running it. The modelling side of §6 above is
 confirmed exactly — 144 families, 0 declines, exit 0, and now also `output
-kernel check: accepted`. What was wrong is the sentence directly above.*
+kernel check: accepted`. What was wrong is the inference, corrected above.*
 
 `lean-inductive-models` was run over `init-prelude` **with output**, and our
 checker run over the result — `checker --verbose --mutual --nested
@@ -1133,13 +1148,13 @@ nested  seen=1  models=1  tool=1  legacy=0
 route   mode=Split  toMini=149  toChecker=2974  unclaimed=0
 ```
 
-**The count went from 91/10 to 109/17. It did not go to 0.** Every name §6
-lists is still refused, by the same reason string: all fourteen `H*` classes,
+**The count went from 91/10 to 109/17 at `236ba86`. It did not go to 0**, and it
+went *up* — the figures at the revision this was re-measured are just below.
+Every name §6 lists is still refused, by the same reason string: all fourteen
+`H*` classes,
 every `Monad*`, `Membership`, `Trans`, `EStateM.Backtrackable`, the machine
 words, `Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Hashable`, `Lean.Name`,
-`Lean.Syntax`, and the `False` / `PEmpty` / `HEq` eliminators. By reason: 60
-`type former spine`, 30 `field type uninterpretable`, 4 `parameter type
-uninterpretable`, over 62 distinct declarations.
+`Lean.Syntax`, and the `False` / `PEmpty` / `HEq` eliminators.
 
 **Why, and it is not a defect in the tool.** §6's mechanism is right —
 `zoneb::ensure` does return at the model route before `build`, so a declaration
@@ -1154,6 +1169,100 @@ be read as the payoff for opening the first gate rather than as something the
 models deliver on arrival. Its own §5 evidence is intact; only the tense was
 wrong.
 
+##### Re-measured at `b41cda7`, and attributed to blockers rather than reasons
+
+*The figures above are from `236ba86`. Re-run end to end at master `b41cda7` —
+the tool rebuilt from `vendor/` in a scratch copy, `vendor/lean-inductive-models`
+untouched at `5a9a70f` — reproducing the modelling side exactly (**144 families,
+0 declines, 3 exempt, exit 0**) and giving:*
+
+```
+init-prelude-lim.ndjson  accept 3123 declarations
+                         untranslated: 108 declarations, 14 eliminators
+                         uncertified: 43 const typings, 40 type typings
+```
+
+**Two populations, and they are not comparable.** Raw `init-prelude` is 1 774
+declarations (`--no-modelgen`); the tool's `init-prelude-lim` is a **different
+file** at 3 123. Measured on the same flags at the same revision, the untranslated
+population is 99 pairs on the raw file and **122 on the modelled one**. It
+**grew**. Models do not reduce this population on arrival, and the intuition that
+they would is what the paragraph above was correcting; the number now says so.
+
+By reason, over 122 pairs and 68 distinct declarations:
+
+| reason | pairs | declarations |
+| --- | ---: | ---: |
+| `type former spine` | 60 | 29 |
+| `field type uninterpretable` | 28 | 27 |
+| `class (P) above Prop` | 14 | **1** (`PSigma'`) |
+| `class (S) eliminator: no constructors` | 7 | 3 |
+| `class (S) indexed eliminator: a result index is not a bare field` | 7 | 2 |
+| `parameter type uninterpretable` | 4 | 4 |
+| `recursive argument telescope depth` | 1 | 1 (`_wcore.Acc`) |
+| `nested model not interpreted` | 1 | 1 |
+
+**But reason strings are where a declaration stopped, not what has to land.**
+Attributed by *blocker*:
+
+| blocker | pairs | share |
+| --- | ---: | ---: |
+| **§4.1 step 2** — drop the `nested::plan` gate, and change `nested_seen` from "is in `app.nested`" to "is a non-basis inductive" | **106** | **87 %** |
+| **`PSigma'`** — the `class (P) above Prop` guard at `zoneb.rs:1471`, whose replacement is `TruncCarrier::in_un` | **14** | **11 %** |
+| **neither** — `_wcore.Acc`'s `recursive argument telescope depth` (§8.3's cost, and step 2 does not touch it) and one `nested model not interpreted`, which is a declaration that *did* take the model route and whose model then failed to interpret | 2 | 2 % |
+
+##### The evidence that makes this attribution a fact rather than a reading
+
+One line of the same run:
+
+```
+nested   seen=1   models=1   tool=1   legacy=0
+```
+
+**The checker routed one model. The file carries 144 model families and 489
+`_model` name-table entries**, and the tool's own log names precisely the
+declarations that are refused — `HAdd: model of 7 declarations`, `MonadState:
+model of 11`, `String: model of 9`, `Char: model of 9`, `Fin: model of 9`,
+`BitVec: model of 7`, `False: model of 2`, `PEmpty: model of 2`, `HEq: model of
+5`. So **143 of 144 models sit in the file unread**, because `nested::plan` calls
+only `Lean.Syntax` nested and `app.nested` therefore has one entry. That single
+comparison is the whole argument: the models are present, checked by the
+producer's own three checks (`statements: 658 compared, 0 differ`; `levels: 3
+planner comparisons, 0 escapes`; `output check: 144 model families checked`), and
+ignored — and the only thing between them and the consumer is the routing gate.
+
+##### `PSigma'` reaches 11 % here, and that is not the whole of what it is worth
+
+The 14 pairs are `PSigma'` **itself**, at 14 σ — one declaration. The 154
+`proj_i` declarations the tool emits are in the file and appear nowhere in this
+census, **not because they pass but because they are never attempted**: the model
+route is shut for all but `Lean.Syntax`, so `PSigma'` is never asked about them.
+The `uncertified` population here is two unrelated declarations
+(`Lean.SourceInfo` 33, one `_auxCarrier` 10), not the projection family.
+
+So the 39 % of the public model surface that §8.2 records `PSigma'` gating, and
+the 11 % here, are **different populations and both correct**. "How much does
+`PSigma'` reach" has a different answer before and after step 2, which is why
+running only one of the two would have given the wrong sequencing.
+
+##### Sequencing — the conclusion this section exists to support
+
+**Step 2 is the prerequisite; `PSigma'` is required for the structure half of
+what step 2 exposes.** Neither is wasted, and the order changes what `PSigma'`
+is worth:
+
+* `PSigma'` first closes 11 % of the visible population — one declaration — and
+  unblocks nothing else, because the projections it serves cannot be reached.
+* Step 2 first closes 87 %, and *creates* the population `PSigma'` serves, at
+  which point `PSigma'` becomes the binding constraint rather than a parallel
+  one.
+
+*Caveat, stated because the distinction matters: this re-run passed
+`--no-type-check-output`, so **it did not re-confirm that Lean accepts the tool's
+output**. The corrected text above did (`output kernel check: accepted`) at
+`236ba86`. That property is therefore corroborated, not verified by this
+measurement.*
+
 Three further things the same run establishes, none of them previously measured:
 
 * **`--no-modelgen` no longer declines on `Lean.Syntax`.** `CLAUDE-HANDOFF.md`
@@ -1161,12 +1270,19 @@ Three further things the same run establishes, none of them previously measured:
   model and our recogniser reads it — `nested seen=1 models=1 tool=1 legacy=0`,
   which is §8.4's rename working on a real export rather than a fixture.
 * **§8.3's `Acc` cost is now a number.** `_wcore.Acc: recursive argument
-  telescope depth` = 3 and `_wcore.WellFounded: field type uninterpretable` = 3.
-  The `Classical.choice`-bearing `_wcore.*` prelude arrives as predicted and
-  its `Acc` is *not* translatable by the machinery that survives.
-* **§8.2's `PSigma'` red is the single largest untranslated family in the run** —
-  `ind-spec(PSigma': class (P) above Prop)` = 11 pairs, because the tool splices
-  `PSigma'` into every export that lacks it. It is not a fixture curiosity.
+  telescope depth` and `_wcore.WellFounded: field type uninterpretable`, **1 pair
+  each at `b41cda7`** (3 each at `236ba86`). The `Classical.choice`-bearing
+  `_wcore.*` prelude arrives as predicted and its `Acc` is *not* translatable by
+  the machinery that survives.
+* **§8.2's `PSigma'` red is real on a production export, and it is not the
+  largest family in the run.** `ind-spec(PSigma': class (P) above Prop)` = **14
+  pairs at `b41cda7`** (11 at `236ba86`), because the tool splices `PSigma'` into
+  every export that lacks it — so it is not a fixture curiosity. But it is one
+  declaration at 14 σ, against 60 pairs of `type former spine` over 29
+  declarations; *"the single largest untranslated family"*, as this bullet read,
+  was wrong. What makes `PSigma'` matter is not its size in this census but the
+  projection family it gates once step 2 opens the route — see the blocker
+  attribution and sequencing above.
 
 `route mode=Split toMini=149 toChecker=2974` confirms §1 at scale: 95% of the
 declarations go to nanoda.
