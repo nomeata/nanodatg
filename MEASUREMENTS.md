@@ -10434,6 +10434,24 @@ measures **24.0 M hits / 100.2 M misses** — a 19 % hit rate.
   `WellFounded` is defined. All 57 recursive constants in the cone are
   structural, through `.brecOn`/`.below`/`.rec`.
 
+### The depth is where it stops, not where the time goes
+
+Two things were assumed here and both are false, so they are recorded rather
+than left implied.
+
+* **Lowering the bound does not shorten the witness.** At
+  `NANODA_MAX_DEPTH=400` the file still had not reached the refusal after
+  fifteen minutes: the run grinds in `def_eq` at depth **40–80** — 300 000 000
+  calls deciding 1 378 distinct pairs — and walks the 1 998-deep `PProd` tower
+  only at the end of it. The knob shapes the refusal; it does not reach it.
+* **The trace is not free.** `NANODA_WHNF_TRACE` inserts into a `HashSet` on
+  every `assert_def_eq_as` call, which on this declaration is hundreds of
+  millions of inserts. A traced run of `init-prelude` is materially slower than
+  an untraced one and its wall time must not be compared with a clean run's.
+
+So the two defects are **coupled but separable**: the tower is what the verdict
+names, and the missing `def_eq` cache is where the half hour goes.
+
 ### Method note
 
 Diagnosis came from live `gdb -p` stack samples and `perf record --call-graph

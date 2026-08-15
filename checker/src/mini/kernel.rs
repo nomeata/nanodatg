@@ -553,9 +553,18 @@ pub const DEFEQ_MAX_DEPTH: u32 = 2_000;
 ///
 /// The bound's purpose is to turn a stack overflow into a verdict, and that
 /// purpose is served at any value; what the value buys is headroom. Lowering it
-/// makes the refusal — and the frame report beside it — reachable in seconds on
-/// a witness that otherwise takes half an hour to arrive at the same place,
-/// which is the difference between one measurement a day and one an hour.
+/// makes the refusal — and the frame report beside it — fire at a shallower
+/// tower, which is what a probe of *this* clause wants.
+///
+/// **It does not make `init-prelude`'s witness arrive sooner, and it was
+/// introduced believing it would.** Measured: at `NANODA_MAX_DEPTH=400` the
+/// file still does not reach the refusal in fifteen minutes, because the
+/// depth is not what the time is spent on — the run grinds in `def_eq` at
+/// depth 40–80 (300 000 000 calls deciding 1 378 distinct pairs) and only
+/// walks the deep `PProd` tower at the end of that. The bound is where the
+/// run *stops*, not where it *is*. Use `NANODA_DECL_PROGRESS` to find the
+/// declaration and the `defeq-census` rows to see the grinding; this knob is
+/// for shaping the refusal, not for reaching it.
 ///
 /// Read once. The default is [`DEFEQ_MAX_DEPTH`] exactly, so no run that does
 /// not set the variable can take a different branch than before.
