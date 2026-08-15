@@ -208,9 +208,23 @@ exports was discharged by a real kernel derivation.
 `ci/check.sh` runs all 29 steps and is the full check; it is not a per-commit
 gate because it builds three feature configurations and two release binaries
 (4.40 T `instructions:u`, 603 s of task-clock for the compiles alone —
-`TEST-INVENTORY.md` §4). Run it before a merge, not before a commit. It now
-fails if its own step count is not the declared 29, so a step can no longer
-vanish from the schedule in silence.
+`TEST-INVENTORY.md` §4). It now fails if its own step count is not the declared
+29, so a step can no longer vanish from the schedule in silence.
+
+**It is a merge gate, and that is the correction this section exists for.**
+`ci/check.sh` *does* cover `tg_tutorial`. When the two adverse ratchets were
+adjudicated it turned out **both had fired correctly the first time they were
+run** — nothing was missing from the assertions, and per-row floors were not
+what was needed. What was missing is that nobody ran `ci/check.sh` across 134
+commits, because it was on no list. So:
+
+* **before a commit** — the gate block above;
+* **before a merge to `master`** — `ci/check.sh`, in full.
+
+A suite that is correct and unrun is indistinguishable from one that is absent.
+The 134-commit gap is the measurement behind that sentence, and 13 of those
+commits have empty message bodies, so `git log` would not have recovered the
+attribution either.
 
 ## Exact remaining main blocker
 
