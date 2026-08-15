@@ -11512,6 +11512,231 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         None
     }
 
+    /// **Is `e` this indexed declaration applied to exactly `params`, and with
+    /// which index expressions?** — `crate::mini::zoneb::ind_spine_at` over
+    /// `ExprPtr` rather than over mini's `E`.
+    ///
+    /// The two are the *same* pointers (`mini::expr::E` is a newtype over
+    /// `ExprPtr` into the arena the routed driver installs once), so this is a
+    /// re-spelling and not a second recogniser: same syntactic match, same
+    /// caller-owns-the-frame contract. It is separate only because `E`'s
+    /// constructors are mini-private.
+    ///
+    /// **The caller owns the de Bruijn frame.** `e` and `params` must be stated
+    /// in the same context. Every caller here walks with *opened locals* rather
+    /// than under loose `BVar`s, so the parameters are `ExprPtr` locals and no
+    /// shifting arises — which is the one thing this spelling has easier than
+    /// mini's.
+    /// Gated with its only consumer today (the census). The route-(A)
+    /// discharge is its second and unconditional one.
+    #[cfg(feature = "stepcount")]
+    fn ix_spine_at(
+        &self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: &NamePtr<'t>,
+        e: ExprPtr<'t>,
+        params: &[ExprPtr<'t>],
+        ni: usize,
+    ) -> Option<Vec<ExprPtr<'t>>> {
+        let (head, args) = ctx.unfold_apps(e);
+        let Expr::Const { name: n, .. } = ctx.read_expr(head) else { return None };
+        if n != *ind_name || args.len() != params.len() + ni {
+            return None
+        }
+        if !args.iter().zip(params.iter()).all(|(a, p)| a == p) {
+            return None
+        }
+        Some(args[params.len()..].to_vec())
+    }
+
+    /// **The census the indexed dependent-ι tranche is priced on** — of the
+    /// index expressions a route-(A) `ix_dep_minor_typed` would have to type,
+    /// how many can TG type *for itself*, with `has_type_a` and no `Checker`?
+    ///
+    /// `SEAM-DESIGN.md` §6 establishes that the target set is computable in
+    /// advance at every one of `minor_ix`'s `infer_type` call sites — the
+    /// difference between synthesis and checking — and then marks the
+    /// consequent question **unverified**: `has_type_a` returns `Option`, and
+    /// its corpus discharge rate is far from total. Availability of the target
+    /// is not success. This measures the success.
+    ///
+    /// It walks exactly what the discharge would walk: each minor's declared
+    /// binder telescope, opened binder by binder into locals so the index
+    /// expressions are read in the frame they are stated in; at each recursive
+    /// slot `T p⃗ d⃗` it recovers `⟦Iₖ⟧` from mini's published
+    /// `IndexAx::indices[k]` — `⊢ ∀p⃗ ∀x⃗<ₖ. ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧` — and asks
+    /// `has_type_a` for `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧`, the one judgement
+    /// `crate::mini::ctor_ix::infer_indices` is the sole producer of today.
+    ///
+    /// A `Some` under an empty assumption list is the only outcome that counts
+    /// as reached: a conditional typing is an assumption that would have to be
+    /// discharged before the certificate reaches a boundary, so counting it as
+    /// a success is exactly the escape-ledger mistake this project keeps
+    /// paying for. The two are counted separately rather than summed.
+    ///
+    /// Measurement only — it derives nothing that is kept, and the site it
+    /// runs at is already declining. Behind `stepcount` for that reason.
+    #[cfg(feature = "stepcount")]
+    fn ix_index_census(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let Declar::Recursor(r) = self.decls.get_declar(&name)? else { return None };
+        // The true rank-1 population, and *only* it: `ORIGIN-RANKING.md` splits
+        // the "an indexed family" row into a genuine `IndexedDepRecursor` −89,
+        // a K-like `Eq.rec` −20 and an `Acc.rec` −8 that is a different engine.
+        // Testing `is_k` and the motive count here is what keeps this census
+        // measuring the tranche rather than the label.
+        if r.num_indices == 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return None
+        }
+        let rec_name = self.spell(ctx, name);
+        let (np, ni) = (r.num_params as usize, r.num_indices as usize);
+        let n = r.num_minors as usize;
+        let ind_name = r.all_inductives[0];
+        let given = ctx.read_levels(levels).to_vec();
+        let ind_levels = ctx.alloc_levels_slice(given.get(1..)?);
+
+        // Mini's own published translation, at the *inductive*'s ground key —
+        // never rebuilt. Its absence is the interesting negative, so it is
+        // counted rather than returned silently.
+        let ind_key = self.const_key(ctx, ind_name, ind_levels)?;
+        let Some(tr) = self.core.indexed_translation(&ind_key) else {
+            IX_CENSUS[0].fetch_add(1, Relaxed);
+            note_ix_census_row(&rec_name, "no published indexed translation");
+            return None
+        };
+        let rec_key = self.const_key(ctx, name, levels)?;
+        if self.core.ix_dep_elim(&rec_key).is_none() {
+            IX_CENSUS[1].fetch_add(1, Relaxed);
+            note_ix_census_row(&rec_name, "translation but no published ix dep elim");
+        }
+        if tr.ax.indices.len() != ni {
+            note_ix_census_row(&rec_name, "index axiom count is not num_indices");
+            return None
+        }
+
+        // ── open the recursor's own prefix: p⃗, the motive, then the minors ──
+        //
+        // The minors' binder types are what the discharge walks, and they are
+        // stated under the parameters, so the parameters must be opened first
+        // and kept — they are `ix_spine_at`'s frame.
+        let (uparams, ty) = (r.info.uparams, r.info.ty);
+        let mut cur = ctx.subst_expr_levels(ty, uparams, levels);
+        let mut param_locals: Vec<ExprPtr<'t>> = Vec::with_capacity(np);
+        let mut param_terms: Vec<Term> = Vec::with_capacity(np);
+        // Every kernel variable this walk opened a binder at — the frame an
+        // acquired assumption has to live in to be one the discharge already
+        // holds. See the conditional arm below.
+        let mut prefix_bound: Vec<kernel::FreeVar> = Vec::with_capacity(np + 1 + n);
+        let mut minor_doms: Vec<ExprPtr<'t>> = Vec::with_capacity(n);
+        for i in 0..(np + 1 + n) {
+            let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(cur)
+            else {
+                return None
+            };
+            if i >= np + 1 {
+                minor_doms.push(binder_type);
+            }
+            let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+            let lkey = unique_key(ctx, local)?;
+            let v = self.env_mut().fresh_var();
+            self.locals.insert(lkey, v);
+            prefix_bound.push(v);
+            if i < np {
+                param_locals.push(local);
+                param_terms.push(Term::var(v));
+            }
+            cur = ctx.inst(body, &[local]);
+        }
+
+        // ── each minor's telescope, and every recursive slot's indices ──────
+        for mdom in minor_doms {
+            let mut cur_e = mdom;
+            let mut bound = prefix_bound.clone();
+            while let Expr::Pi { binder_name, binder_style, binder_type, body, .. } =
+                ctx.read_expr(cur_e)
+            {
+                if let Some(ds) =
+                    self.ix_spine_at(ctx, &ind_name, binder_type, &param_locals, ni)
+                {
+                    // A recursive field `T p⃗ d⃗`. `⟦Iₖ⟧` is the right-hand side
+                    // of `ιₖ`'s defining axiom instantiated at the parameters
+                    // and the indices *before* `k` — the index domains are a
+                    // telescope, so `I₁` may mention `d₀`, and instantiating
+                    // them positionally is the whole of what makes this a
+                    // telescope rather than a list.
+                    let mut prefix = param_terms.clone();
+                    for (k, d) in ds.iter().enumerate() {
+                        let Some(ax) = tr.ax.indices.get(k) else { break };
+                        let Some(inst) = derived::inst_all(ax, &prefix) else {
+                            note_ix_census_row(&rec_name, "index axiom will not instantiate");
+                            break
+                        };
+                        let Some((_, iset)) = inst.concl().as_eq() else {
+                            note_ix_census_row(&rec_name, "index axiom is not an equation");
+                            break
+                        };
+                        IX_CENSUS[2].fetch_add(1, Relaxed);
+                        match self.has_type_a(ctx, *d, &iset, &[], 0) {
+                            Some((_, used)) if used.is_empty() => {
+                                IX_CENSUS[3].fetch_add(1, Relaxed);
+                                note_ix_census_row(&rec_name, "index typed unconditionally");
+                            }
+                            Some((_, used)) => {
+                                IX_CENSUS[4].fetch_add(1, Relaxed);
+                                // **Which assumptions?** decides whether this
+                                // is a risk or an accounting artefact. The
+                                // census walks the minor's telescope with the
+                                // binders merely *opened*; the discharge walks
+                                // it with a typing in hand per rung (that is
+                                // what `dep_minor_typed`'s `arg_thm` is). So an
+                                // assumption whose subject is one of the
+                                // binders this walk opened is one the real
+                                // discharge already holds and would discharge
+                                // on the spot, while any other subject is a
+                                // genuine escape the tranche would inherit.
+                                let own = used.iter().all(|f| {
+                                    f.as_mem().is_some_and(|(s, _)| {
+                                        bound.iter().any(|v| s == Term::var(*v))
+                                    })
+                                });
+                                if own {
+                                    IX_CENSUS[6].fetch_add(1, Relaxed);
+                                    note_ix_census_row(
+                                        &rec_name,
+                                        "index typed on its OWN binders' typings",
+                                    );
+                                } else {
+                                    IX_CENSUS[7].fetch_add(1, Relaxed);
+                                    note_ix_census_row(
+                                        &rec_name,
+                                        "index typed on a FOREIGN assumption",
+                                    );
+                                }
+                            }
+                            None => {
+                                IX_CENSUS[5].fetch_add(1, Relaxed);
+                                note_ix_census_row(&rec_name, "index NOT typed");
+                            }
+                        }
+                        prefix.push(self.interp(ctx, *d));
+                    }
+                }
+                let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+                let lkey = unique_key(ctx, local)?;
+                let v = self.env_mut().fresh_var();
+                self.locals.insert(lkey, v);
+                bound.push(v);
+                cur_e = ctx.inst(body, &[local]);
+            }
+        }
+        Some(())
+    }
+
     /// Mini's exact dependent recursor for the parameterless fieldless family
     /// and its narrow plain-recursive extension (`N.z` / `N.s n`).
     fn mini_dep_rec_bottom(
@@ -14744,6 +14969,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 nctors,
             };
             let why = iota_decline_label(shape);
+            #[cfg(feature = "stepcount")]
+            {
+                // The site is declining anyway; before it does, measure how
+                // much of the discharge that would stop it declining TG can
+                // already perform. See [`Self::ix_index_census`].
+                let _ = self.ix_index_census(ctx, name, levels);
+            }
             #[cfg(feature = "stepcount")]
             {
                 // Does the single constructor take fields? `t_policy` needs a
@@ -21422,6 +21654,34 @@ static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
 /// empty store and concludes the consumer is broken.
 static IX_PUBLISHED: [std::sync::atomic::AtomicU64; 2] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+/// **The indexed-ι census** — see [`TgBackend::ix_index_census`]. Index 0
+/// recursors with no published translation, 1 with a translation but no
+/// eliminator package, 2 index expressions asked of `has_type_a`, 3 typed
+/// unconditionally, 4 typed only under an assumption, 5 not typed.
+///
+/// 3 is the reachable prize's numerator and 4 is deliberately not added to it:
+/// a conditional typing is an escape waiting to be counted at the boundary.
+#[cfg(feature = "stepcount")]
+/// 6 and 7 split index 4: a conditional typing whose assumptions are the
+/// *walk's own binder typings* is one the discharge holds anyway, and one with
+/// any other subject is an escape the tranche would inherit.
+#[cfg(feature = "stepcount")]
+static IX_CENSUS: [std::sync::atomic::AtomicU64; 8] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+/// The census by recursor spelling, so the −89's three declarations
+/// (`Aux.rec`, `Ix.rec`, `RBTree.rec`) can be read apart rather than summed —
+/// the row-is-three-populations lesson applied to the measurement of its own
+/// remedy.
+#[cfg(feature = "stepcount")]
+static IX_CENSUS_ROWS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+#[cfg(feature = "stepcount")]
+fn note_ix_census_row(rec: &str, what: &str) {
+    let mut m = IX_CENSUS_ROWS.lock().expect("ix_census_rows poisoned");
+    *m.entry(format!("{rec}  —  {what}")).or_insert(0) += 1;
+}
+
 /// **Publications that could not be named** — a package mini was ready to hand
 /// over whose `Name` lives in a per-declaration `TcCtx` arena, so
 /// [`export_name_key`] gives it no cross-engine identity and nothing can cross.
@@ -21634,6 +21894,22 @@ pub fn origin_report() -> String {
             s.push_str(&format!(
                 "  publications SKIPPED for want of an export-name identity — {nk}\n"
             ));
+        }
+    }
+    #[cfg(feature = "stepcount")]
+    {
+        let c: Vec<u64> = IX_CENSUS.iter().map(|a| a.load(Relaxed)).collect();
+        if c.iter().any(|n| *n > 0) {
+            s.push_str(&format!(
+                "  indexed index-expression census — asked {}, typed {}, conditional {}, \
+                 not typed {}; no translation {}, no elim package {}\n\
+                 \x20   of the conditional: on their own binders {}, on a foreign assumption {}\n",
+                c[2], c[3], c[4], c[5], c[0], c[1], c[6], c[7]
+            ));
+            let m = IX_CENSUS_ROWS.lock().expect("ix_census_rows poisoned");
+            for (row, n) in m.iter() {
+                s.push_str(&format!("    {row:<86}  {n:>8}\n"));
+            }
         }
     }
     #[cfg(feature = "stepcount")]
