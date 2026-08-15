@@ -23996,12 +23996,15 @@ fn origin_mask(cs: &[&TgCert]) -> u32 {
 /// **The indexed tranche's readiness rows** — publication, `ICOD`, `IDEP`,
 /// `PRE`, and whether the rule fired.
 ///
-/// Kept out of [`origin_report`]'s body because that function returns early
-/// when there are no gap origins at all — which is *exactly* the state this
-/// tranche is trying to reach. The rows vanished the moment the indexed ι
-/// rule started certifying, and the two tests that read them went red on
-/// **success**. A readiness counter whose only witness is a failure is not a
-/// readiness counter.
+/// A separate function because [`origin_report`] used to `return` early when
+/// there were no gap origins at all — which is *exactly* the state this tranche
+/// is trying to reach. The rows vanished the moment the indexed ι rule started
+/// certifying, and the two tests that read them went red on **success**. A
+/// readiness counter whose only witness is a failure is not a readiness
+/// counter. That early return is gone now (`origin_report` gates only the table
+/// it computes from `ORIGINS`), so this is no longer load-bearing for these
+/// rows; it stays split out because the seam's readiness is a different
+/// question from gap provenance and reads better named.
 fn ix_readiness_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let mut seam = String::new();
@@ -24011,25 +24014,33 @@ fn ix_readiness_report() -> String {
     // one silence. See [`IX_PUBLISHED`].
     let (t, e) = (IX_PUBLISHED[0].load(Relaxed), IX_PUBLISHED[1].load(Relaxed));
     let nk = PUBLISH_NO_KEY.load(Relaxed);
-    if t > 0 || e > 0 || nk > 0 {
+    // **The gate for every row below is the *publication*, not the row's own
+    // count.** Gating `ICOD` on `ICOD_ASKED > 0` made the row exist if and only
+    // if `asked > 0`, so `mini_designed`'s `assert!(asked > 0)` was a
+    // restatement of the `contains(…)` above it and no mutation could separate
+    // them — `TEST-INVENTORY.md` §6.4, "the `asked > 0` guards under a `> 0`
+    // report gate". Hung off the seam instead, "mini handed us indexed
+    // evidence and the consumer never asked for ICOD" prints as `asked 0`
+    // rather than as silence, which is the observation this block was written
+    // for in the first place and the one an assertion can fail on.
+    let published = t > 0 || e > 0;
+    if published || nk > 0 {
         seam.push_str(&format!(
             "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
              translations {t}, eliminators {e}\n"
         ));
     }
-    let (a, dn, un) =
-        (ICOD_ASKED.load(Relaxed), ICOD_DONE.load(Relaxed), ICOD_UNCOND.load(Relaxed));
-    if a > 0 {
+    if published {
+        let (a, dn, un) =
+            (ICOD_ASKED.load(Relaxed), ICOD_DONE.load(Relaxed), ICOD_UNCOND.load(Relaxed));
         seam.push_str(&format!(
             "  indexed premise ICOD at the motive's own rung — asked {a}, \
              discharged {dn} ({un} owing nothing)\n"
         ));
-    }
-    let ia = IDEP_ASKED.load(Relaxed);
-    if ia > 0 {
         seam.push_str(&format!(
-            "  indexed premise IDEP, by CONSTRUCTOR — asked {ia}, declarations complete {}; \
+            "  indexed premise IDEP, by CONSTRUCTOR — asked {}, declarations complete {}; \
              fieldless {}, with fields {}\n",
+            IDEP_ASKED.load(Relaxed),
             IDEP_DONE.load(Relaxed),
             IDEP_NULLARY.load(Relaxed),
             IDEP_FIELDED.load(Relaxed),
@@ -24052,48 +24063,83 @@ fn ix_readiness_report() -> String {
     seam
 }
 
+/// The gap provenance report: the origin table, and the censuses taken beside
+/// it.
+///
+/// **One row is about `ORIGINS`; the rest are not, and the gate is drawn there.**
+/// The table below — `origin` / `own` / `relayed` / `SUBTREE`, its `TOTAL` and
+/// its `MULTI` line — is computed *from* `ORIGINS`, so an empty ledger makes it
+/// genuinely empty and it is printed only when there is something in it. Every
+/// other block in this function reads a counter incremented at a site that does
+/// not decide whether an origin is recorded, and each already carries its own
+/// `> 0` guard, so they are emitted whatever the ledger says.
+///
+/// This function used to `return` early on an empty `ORIGINS`, which lost all of
+/// them at once, and it is the same defect `ix_readiness_report` was extracted
+/// to fix — see that function, and `TEST-INVENTORY.md` §6.3 instance 2. The two
+/// counters it cost most are worth naming, because both lose their whole
+/// population in exactly the state they are meant to describe:
+///
+/// * `equations ACQUIRED` counts gaps that `admit_or_acquire` turned into
+///   antecedents *instead of* reporting, so every increment of it is an origin
+///   row that did **not** happen — anti-correlated with `ORIGINS` by
+///   construction, and reported under a gate that needs `ORIGINS` non-empty.
+///   (Not measured at an empty ledger: `NANODA_ASSUME='*'` acquires only where
+///   `premask == 0 && ta != tb` and a `CondEq` builds, so on the fixtures tried
+///   here enough gaps still reach `note_admit_m` to keep the ledger non-empty.
+///   The mis-gating is structural; what is unmeasured is how often it bites.)
+/// * the indexed ι rows are populated on the rule's *success* path. **Measured**
+///   on this tree: `mutual_aux_encoding` and `ctor_abbrev_major`, the two
+///   fixtures that exercise the rule, both leave `ORIGINS` empty, so `indexed
+///   iota rule REACHED` and the whole index-expression census were invisible on
+///   precisely the two inputs that produce them, with no environment variable
+///   involved. They print again with the gate moved — census `asked 9, typed 9`
+///   and `asked 2, typed 2` respectively.
+///
+/// *A readiness counter whose only witness is a failure is not a readiness
+/// counter.*
 pub fn origin_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let v = ORIGINS.lock().expect("tg origins poisoned").clone();
-    if v.is_empty() {
-        return ix_readiness_report()
+    let mut s = String::new();
+    if !v.is_empty() {
+        let mut rows: Vec<(u64, u64, u64, &'static str)> = v
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let (o, t) = (ORIGINATED[i].load(Relaxed), SUBTREE[i].load(Relaxed));
+                (o + t, o, t, *r)
+            })
+            .filter(|(n, _, _, _)| *n > 0)
+            .collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        let (mut so, mut st) = (0u64, 0u64);
+        for (_, o, t, _) in &rows {
+            so += o;
+            st += t;
+        }
+        let multi = SUBTREE_MULTI.load(Relaxed);
+        s.push_str("gap provenance: which clause ORIGINATES, and the sub-tree it feeds\n");
+        s.push_str(&format!(
+            "  {:<78}  {:>8} {:>8} {:>8}\n",
+            "origin", "own", "relayed", "SUBTREE"
+        ));
+        for (n, o, t, r) in &rows {
+            s.push_str(&format!("  {r:<78}  {o:>8} {t:>8} {n:>8}\n"));
+        }
+        s.push_str(&format!(
+            "  {:<78}  {:>8} {:>8} {:>8}\n",
+            "TOTAL originated / solely attributed",
+            so,
+            st,
+            so + st
+        ));
+        s.push_str(&format!(
+            "  {:<78}  {:>8} {:>8} {:>8}\n",
+            "relayed gaps naming TWO OR MORE origins — no single closure removes these",
+            "", "", multi
+        ));
     }
-    let mut rows: Vec<(u64, u64, u64, &'static str)> = v
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let (o, t) = (ORIGINATED[i].load(Relaxed), SUBTREE[i].load(Relaxed));
-            (o + t, o, t, *r)
-        })
-        .filter(|(n, _, _, _)| *n > 0)
-        .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    let (mut so, mut st) = (0u64, 0u64);
-    for (_, o, t, _) in &rows {
-        so += o;
-        st += t;
-    }
-    let multi = SUBTREE_MULTI.load(Relaxed);
-    let mut s = String::from("gap provenance: which clause ORIGINATES, and the sub-tree it feeds\n");
-    s.push_str(&format!(
-        "  {:<78}  {:>8} {:>8} {:>8}\n",
-        "origin", "own", "relayed", "SUBTREE"
-    ));
-    for (n, o, t, r) in &rows {
-        s.push_str(&format!("  {r:<78}  {o:>8} {t:>8} {n:>8}\n"));
-    }
-    s.push_str(&format!(
-        "  {:<78}  {:>8} {:>8} {:>8}\n",
-        "TOTAL originated / solely attributed",
-        so,
-        st,
-        so + st
-    ));
-    s.push_str(&format!(
-        "  {:<78}  {:>8} {:>8} {:>8}\n",
-        "relayed gaps naming TWO OR MORE origins — no single closure removes these",
-        "", "", multi
-    ));
     #[cfg(feature = "stepcount")]
     {
         let n = IOTA_ACQUIRED.load(Relaxed);
@@ -24118,13 +24164,20 @@ pub fn origin_report() -> String {
             }
         }
     }
-        s.push_str(&ix_readiness_report());
+    s.push_str(&ix_readiness_report());
     #[cfg(feature = "stepcount")]
     {
         let fired = IX_FIRE.load(Relaxed);
         if fired > 0 {
             s.push_str(&format!(
-                "  indexed iota rule REACHED at a use site, premise outstanding — {fired}\n"
+                // `IX_FIRE` is bumped where the rule instantiates, *before* any
+                // of the premise work, so it names "reached", not "left
+                // owing" — the row read `premise outstanding` while sitting
+                // directly under a `PRE … discharged` row carrying the same
+                // number, which is `TEST-INVENTORY.md` §4.5 instance 3's
+                // disease (a counter labelled with an event it does not count).
+                // Against `PRE`, the informative reading is the difference.
+                "  indexed iota rule REACHED at a use site, before its premise — {fired}\n"
             ));
         }
         let c: Vec<u64> = IX_CENSUS.iter().map(|a| a.load(Relaxed)).collect();
