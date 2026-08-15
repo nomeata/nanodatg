@@ -237,6 +237,30 @@ pub fn frame_cache() -> FrameCache {
     })
 }
 
+// ─────────────────────────── the def_eq decision cache's census ──
+
+thread_local! {
+    static DEFEQ_CACHE: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Hits and misses of `Checker::defeq_cache`, summed over the whole run. Same
+/// shape and same reason as [`note_frame_cache`]: the cache is per-`Checker`
+/// and the interesting number is the process total, because the question it
+/// answers is how much of the 120 M-call `def_eq` population is re-decision.
+pub fn note_defeq_cache(hit: bool) {
+    DEFEQ_CACHE.with(|c| {
+        let (h, m) = c.get();
+        c.set(if hit { (h + 1, m) } else { (h, m + 1) });
+    })
+}
+
+pub fn defeq_cache() -> FrameCache {
+    DEFEQ_CACHE.with(|c| {
+        let (hits, misses) = c.get();
+        FrameCache { hits, misses }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
