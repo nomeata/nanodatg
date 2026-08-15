@@ -12042,8 +12042,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if icod_hyps.is_empty() {
             ICOD_UNCOND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+
+        // ── `IDEP(⟦C⟧, ⟦S⃗⟧)`, one conjunct per constructor ──────────────────
+        //
+        // Every conjunct or none: `PRE` is their conjunction with `ICOD`, so a
+        // declaration moves only when all `n` are in hand. The per-constructor
+        // outcome is counted so that a partial clause is visible as a
+        // population rather than as one silent decline.
+        IDEP_ASKED.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        let mut parts: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(n);
+        for i in 0..n {
+            match self.ix_dep_minor_typed(ctx, d, _doms, _obligations, &ps, &c, &minors, &sub, i) {
+                Ok(p) => parts.push(p),
+                Err(e) => return Err(e),
+            }
+        }
+        IDEP_DONE.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        let _ = parts;
         let _ = ctx;
-        Err("iota: ICOD is discharged; IDEP, the indexed minor premises, is not")
+        Err("iota: IDEP's conjuncts are discharged; the rule is not yet fired")
     }
 
     /// **`⊢ H → ICOD(⟦C⟧, T)`** — `crate::mini::rec_ix_dep`'s `icod_at_rung`
@@ -12144,6 +12161,252 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         let out = u_and_intro(&covers, &u_a1i(&rung.empty_mem, h.as_ref()), h.as_ref())?;
         Some((out, hyps))
+    }
+
+    /// **`⊢ H → IDEPᵢ(⟦C⟧, ⟦Sᵢ⟧)`** — one indexed dependent minor premise.
+    ///
+    /// The statement is not rebuilt here: it is
+    /// `subst_f(&dr.guards.dep_parts[i], sub)`, `derived`'s own formula at this
+    /// site's substitution, and the derivation is held against it. That is
+    /// `rec_ix_dep::premise_at`'s discipline and it is what makes a walk that
+    /// typed *something* about *some* constructor a decline rather than a
+    /// wrong `Proved`.
+    ///
+    /// # What differs from [`Self::dep_minor_typed`], and it is not arity
+    ///
+    /// The conclusion moves in `ni + 1` positions of one spine rather than one:
+    /// `app(C, ⟦cᵢ p⃗ f⃗⟧)` becomes `app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,t⃗))`, so the
+    /// constructor bridge is joined by the `ni` result-index axioms
+    /// `tr.ax.ctors[i].result[k]`. A recursive slot's atom is
+    /// `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` at the child's **own** index vector rather than
+    /// `tⱼ ∈ W` at one carrier moved along one bridge, and its induction
+    /// hypothesis is `vⱼ ∈ app(m, d⃗ᵢⱼ, tⱼ)`.
+    ///
+    /// **This clause is staged.** It discharges a constructor with no fields
+    /// today and declines the rest **by name**, so that the population it does
+    /// not yet serve is counted rather than absorbed into one label — the
+    /// row-is-three-populations rule applied to its own increments.
+    #[allow(clippy::too_many_arguments)]
+    fn ix_dep_minor_typed(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        doms: &[Term],
+        obligations: &[(Thm, Vec<Formula>)],
+        ps: &[Term],
+        c: &Term,
+        minors: &[Term],
+        sub: &[(kernel::FreeVar, Term)],
+        i: usize,
+    ) -> Result<(Thm, Vec<Formula>), &'static str> {
+        let spec = &d.tr.ii.spec;
+        let ctor = spec.base.ctors.get(i).ok_or("iota: IDEP at no constructor")?.clone();
+        let (k, m) = (ctor.args.len(), ctor.recs);
+        let (np, ni) = (ps.len(), spec.num_indices());
+        let su = minors.get(i).ok_or("iota: IDEP at no minor")?.clone();
+
+        // `derived`'s own statement, at this site's terms. Everything below is
+        // held against it.
+        let want = crate::mini::rec_dep::subst_f(
+            d.dr.guards.dep_parts.get(i).ok_or("iota: IDEP has no conjunct here")?,
+            sub,
+        );
+
+        if k + m != 0 {
+            IDEP_FIELDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err("iota: IDEP undischargeable — a constructor with fields")
+        }
+
+        // ── A constructor with no fields ────────────────────────────────────
+        //
+        // No binders and no antecedent, so `IDEPᵢ` is one membership and the
+        // whole of the work is the conclusion move.
+        let (minor_ty, hs) = obligations
+            .get(np + 1 + i)
+            .ok_or("iota: the nest paid for no typing at this minor")?
+            .clone();
+        let h = conj_of(&hs);
+        let mdom = doms.get(np + 1 + i).ok_or("iota: the nest has no domain at this minor")?;
+        if u_concl(&minor_ty, h.as_ref()) != Some(Formula::mem(su.clone(), mdom.clone())) {
+            return Err("iota: IDEP undischargeable — a nullary minor has no typing")
+        }
+        let (subj, target) =
+            want.as_mem().ok_or("iota: IDEP at a nullary constructor is not a membership")?;
+        if subj != su {
+            return Err("iota: IDEP's nullary conjunct is about another minor")
+        }
+
+        // `⟦m e⃗ᵢ cᵢ⟧` and `app(m, e⃗ᵢ, ctorᵢ)` are one spine `ni + 1` deep, and
+        // every position may be spelled through an abbreviation — which is what
+        // `ctor_abbrev_major` exists to say. Bridge them position by position.
+        let (mhead, margs) = self
+            .app_spine(mdom, ni + 1)
+            .ok_or("iota: the nullary minor's codomain is not the motive's spine")?;
+        let (whead, wargs) = self
+            .app_spine(&target, ni + 1)
+            .ok_or("iota: IDEP's conclusion is not the motive's spine")?;
+        if mhead != *c || whead != *c {
+            return Err("iota: the nullary minor's codomain is not headed by this motive")
+        }
+        let mut cs: Vec<CondEq> = Vec::with_capacity(2);
+        let mut acc = CondEq::refl(mhead);
+        for (pos, (from, to)) in margs.iter().zip(wargs.iter()).enumerate() {
+            // The `ni` index positions are `derived`'s own symbols and the
+            // axiom relating each to the interpretation is published:
+            // `⊢ ∀p⃗∀y⃗. (eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧)`. The last position is the
+            // constructor, whose bridge is `IndexedTranslation::ctor_abbrev`.
+            // In both cases the *published* end is `to` and the walk's end is
+            // `from`, so the axiom is used right-to-left.
+            let pub_eq = if pos < ni {
+                let ax = d
+                    .tr
+                    .ax
+                    .ctors
+                    .get(i)
+                    .and_then(|cx| cx.result.get(pos))
+                    .ok_or("iota: mini published no result-index axiom for this constructor")?;
+                derived::inst_all(ax, ps)
+                    .ok_or("iota: instantiating a result-index axiom at these parameters failed")?
+            } else {
+                let (_, ax) = d
+                    .tr
+                    .ctor_abbrev
+                    .get(i)
+                    .ok_or("iota: mini published no constructor abbreviation")?;
+                derived::inst_all(ax, ps)
+                    .ok_or("iota: instantiating the constructor abbreviation failed")?
+            };
+            let (lhs, rhs) = pub_eq
+                .concl()
+                .as_eq()
+                .ok_or("iota: a published conclusion axiom is not an equation")?;
+            // **The two axioms point opposite ways, and neither direction is a
+            // free choice.** A result index is published as
+            // `⊢ eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧` — `derived`'s symbol on the left — while a
+            // constructor is published as `⊢ cᵢ(f⃗) = ctorᵢ(y⃗,r⃗)`, mini's
+            // abbreviation on the left. So the end that `derived` states the
+            // conclusion at is the left one in the first case and the right one
+            // in the second; both are accepted here and the *other* end is what
+            // the walk has to reach.
+            let (near, back) = if rhs == *to {
+                (lhs, u_a1i(&pub_eq, None))
+            } else if lhs == *to {
+                let s = u_eq_symm(&mut self.env_mut(), &pub_eq, None)
+                    .ok_or("iota: reversing a published conclusion axiom failed")?;
+                (rhs, s)
+            } else {
+                return Err("iota: a published conclusion axiom is about another symbol")
+            };
+            // `⊢ from = near`, then `⊢ near = to`, then compose.
+            let head = self.ix_arg_bridge(ctx, from, &near, &hs).ok_or(if pos < ni {
+                "iota: an index position of the conclusion has no bridge"
+            } else {
+                "iota: the constructor position of the conclusion has no bridge"
+            })?;
+            let hh = conj_of(&head.hyps);
+            let joined = self
+                .u_eq_trans(&head.thm, &u_a1i(&back, hh.as_ref()), hh.as_ref())
+                .ok_or("iota: composing a conclusion position's two equations failed")?;
+            let step = CondEq::new(joined, head.hyps)
+                .ok_or("iota: a conclusion position's bridge is not an equation")?;
+            cs.clear();
+            cs.push(acc);
+            cs.push(step);
+            acc = self
+                .ceq_congr(self.pre.ap.app, &cs)
+                .ok_or("iota: congruence along the motive's spine refused")?;
+        }
+        if !acc.proves(mdom, &target) {
+            return Err("iota: the conclusion bridge does not join the two spines")
+        }
+        let out_hyps = merge_hyps(&hs, &acc.hyps);
+        let minor_ty = reassume(&minor_ty, &hs, &out_hyps)
+            .ok_or("iota: restating the nullary minor's typing failed")?;
+        let bridge = reassume(&acc.thm, &acc.hyps, &out_hyps)
+            .ok_or("iota: restating the conclusion bridge failed")?;
+        let oh = conj_of(&out_hyps);
+        let moved = self
+            .uu_mem_along(&minor_ty, &bridge, oh.as_ref())
+            .ok_or("iota: retargeting the nullary minor onto IDEP's conclusion failed")?;
+        if u_concl(&moved, oh.as_ref()) != Some(want) {
+            return Err("iota: the derived nullary IDEP is not IndexedDepRecursor's")
+        }
+        IDEP_NULLARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok((moved, out_hyps))
+    }
+
+    /// Take `t` apart as `app(…app(head, a₀)…, a_{depth-1})`.
+    ///
+    /// Read off the **term**, not out of [`Self::parts`]: `target_head_step`'s
+    /// lesson is that the side table's absence is not a fact about the term,
+    /// and a motive spine reached through a congruence was never in it.
+    fn app_spine(&self, t: &Term, depth: usize) -> Option<(Term, Vec<Term>)> {
+        let app = self.pre.ap.app;
+        let mut args: Vec<Term> = Vec::with_capacity(depth);
+        let mut cur = t.clone();
+        for _ in 0..depth {
+            let (f, xs) = cur.as_app()?;
+            if f != app || xs.len() != 2 {
+                return None
+            }
+            args.push(xs[1].clone());
+            cur = xs[0].clone();
+        }
+        args.reverse();
+        Some((cur, args))
+    }
+
+    /// `⊢ from = to` for two spellings of one set — the abbreviation chain in
+    /// either direction, then the δ/ι contraction `dep_minor_typed` uses on a
+    /// field's declared domain.
+    ///
+    /// Both directions of `unfolds_to` are tried because which side is the
+    /// abbreviation is not a fact this caller knows: a minor stated at
+    /// `m Tag.ta ixa` has `⟦ixa⟧` on the *left* of the equation `derived`
+    /// wants, while a result index written `Tag.ta` is already `⟦eₖ⟧` and needs
+    /// nothing. `ctor_abbrev_major` is the fixture that has both.
+    fn ix_arg_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        from: &Term,
+        to: &Term,
+        hyps: &[Formula],
+    ) -> Option<CondEq> {
+        if from == to {
+            return Some(CondEq::refl(from.clone()))
+        }
+        if let Some(t) = self.unfolds_to(from, to) {
+            return CondEq::plain(t)
+        }
+        if let Some(t) = self.unfolds_to(to, from) {
+            let back = u_eq_symm(&mut self.env_mut(), &t, None)?;
+            return CondEq::plain(back)
+        }
+        // The contraction loop, `dep_minor_typed`'s: step the head and require
+        // that no step acquires an assumption the caller does not already hold.
+        let mut acc: Option<Thm> = None;
+        let mut cur = from.clone();
+        for _ in 0..DELTA_FUEL {
+            self.record_shape(&cur);
+            let (step, next, used) = self.target_head_step(ctx, &cur, hyps, 0)?;
+            if used != hyps {
+                return None
+            }
+            acc = Some(match acc {
+                None => step,
+                Some(a) => self.u_eq_trans(&a, &step, conj_of(hyps).as_ref())?,
+            });
+            cur = next;
+            if cur == *to {
+                return CondEq::new(acc?, hyps.to_vec())
+            }
+            if let Some(t) = self.unfolds_to(&cur, to) {
+                let a = acc?;
+                let joined = self.u_eq_trans(&a, &u_a1i(&t, conj_of(hyps).as_ref()), conj_of(hyps).as_ref())?;
+                return CondEq::new(joined, hyps.to_vec())
+            }
+        }
+        None
     }
 
     /// `⊢ H → app(f,a) ∈ Uₙ` from `⊢ H → f ∈ Uₙ` — [`derived::tower::Rung::app`],
@@ -22319,6 +22582,19 @@ static ICOD_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 static ICOD_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ICOD_UNCOND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// **`IDEP`, by constructor**: conjuncts asked, conjuncts discharged, and the
+/// two populations the clause does not yet serve, counted apart.
+///
+/// `IDEP` is a conjunction over every constructor, so a declaration moves only
+/// when all `n` conjuncts are in hand and a per-*declaration* counter would
+/// read zero all the way to the end. Counting per conjunct is what makes the
+/// staging measurable: `IDEP_NULLARY` is what the fieldless clause serves and
+/// `IDEP_FIELDED` is what is left, by name rather than by one label.
+static IDEP_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static IDEP_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static IDEP_NULLARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static IDEP_FIELDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[cfg(feature = "stepcount")]
 fn note_ix_census_row(rec: &str, what: &str) {
     let mut m = IX_CENSUS_ROWS.lock().expect("ix_census_rows poisoned");
@@ -22536,6 +22812,16 @@ pub fn origin_report() -> String {
             s.push_str(&format!(
                 "  indexed premise ICOD at the motive's own rung — asked {a}, \
                  discharged {dn} ({un} owing nothing)\n"
+            ));
+        }
+        let ia = IDEP_ASKED.load(Relaxed);
+        if ia > 0 {
+            s.push_str(&format!(
+                "  indexed premise IDEP, by CONSTRUCTOR — asked {ia}, declarations complete {}; \
+                 fieldless {}, with fields {}\n",
+                IDEP_DONE.load(Relaxed),
+                IDEP_NULLARY.load(Relaxed),
+                IDEP_FIELDED.load(Relaxed),
             ));
         }
         // A routed run names every declaration off the export file, so this is

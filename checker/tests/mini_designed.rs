@@ -3108,12 +3108,18 @@ fn icod_counts(row: &str) -> (u64, u64) {
 fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
     for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
         let out = run_unified(name);
+        // **`IDEP`, not a particular label.** The decline moves inward as the
+        // clause is staged — it has already been `PRE = ICOD ∧ IDEP`, then
+        // `ICOD is discharged; IDEP … is not`, then a named sub-population of
+        // `IDEP` — and a test that pinned the spelling would go red on every
+        // increment while measuring nothing. What must hold is that the site
+        // reaches the rule and declines on the *remaining conjunct by name*.
         assert!(
-            out.contains("iota: ICOD is discharged; IDEP, the indexed minor premises, is not"),
-            "{name}: TG did not reach mini's indexed iota rule with `ICOD` in hand. The rule \
-             is published and `IndexedDepRecursor::iota` concludes it; not reaching it means \
-             the nest, not the premise discharge, is the wall — which is a different \
-             tranche.\n{out}"
+            out.contains("iota: IDEP"),
+            "{name}: TG did not reach mini's indexed iota rule with `ICOD` in hand and decline \
+             on `IDEP`. The rule is published and `IndexedDepRecursor::iota` concludes it; not \
+             reaching it means the nest, not the premise discharge, is the wall — which is a \
+             different tranche.\n{out}"
         );
         // The conjunct itself, from the readiness row: a decline that named
         // `IDEP` while `ICOD` silently stopped being derived would read exactly
@@ -3131,6 +3137,25 @@ fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
         assert_eq!(
             done, asked,
             "{name}: ICOD is no longer discharged at every firing of the rule: {row}"
+        );
+        // And the conjunct that is being staged: a fieldless constructor's
+        // `IDEP` is derived, so the row must show a non-zero fieldless column.
+        // Asserted as `> 0` rather than at a number, because the number is the
+        // constructor count times the firing count and both fixtures would
+        // have to be re-counted on any change to either.
+        let idep = out
+            .lines()
+            .find(|l| l.contains("indexed premise IDEP, by CONSTRUCTOR"))
+            .unwrap_or_else(|| panic!("{name}: no IDEP readiness row\n{out}"));
+        let n: Vec<u64> = idep
+            .split(|ch: char| !ch.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().expect("digits"))
+            .collect();
+        assert_eq!(n.len(), 4, "{name}: the IDEP readiness row changed shape: {idep}");
+        assert!(
+            n[2] > 0,
+            "{name}: no fieldless IDEP conjunct is discharged any more: {idep}"
         );
         assert!(
             !out.contains("iota: no interpretation — an indexed family"),
