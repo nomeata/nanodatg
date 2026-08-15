@@ -121,9 +121,96 @@ The most recent green validation was:
 - `cargo check -p nanoda_lib --no-default-features --all-targets`: passed
   (existing warnings only).
 
-A full no-default unit-test run is not a gate: it exposed four pre-existing
-Mini-test failures and one unrelated test running longer than 60 seconds, so it
-was stopped. The no-default all-target *check* above is the established gate.
+Those three counts are the record of that checkpoint and have since moved: on
+master `36106d2` they are **6/6**, **34/34** (`--features tg`; the same suite is
+32/32 in the plain build, which is a different set of tests — see
+`TEST-INVENTORY.md` §3.4) and 5 warnings. Read the gate list below, not this
+paragraph, for what to run.
+
+## The gate list
+
+**Corrected 2026-08-15 against a measured inventory of every test target and
+every `ci/` step; see `TEST-INVENTORY.md` for the table and the method.**
+
+The previous wording here said a full no-default unit-test run "is not a gate"
+because it "exposed four pre-existing Mini-test failures and one unrelated test
+running longer than 60 seconds, so it was stopped". Every clause of that
+sentence was load-bearing and three of them were wrong:
+
+* the four failures were not pre-existing noise. They had **one root cause** —
+  the publication helpers read `joint_key(&key).is_some_and(…)` as "divergent
+  shared evidence" when `joint_key` returns `None` for a `Name` in a
+  per-declaration `TcCtx` arena, which cannot cross the seam at all. One fix
+  took the suite to **244/244**;
+* "one unrelated test" was never named, so nobody could weigh it. It is
+  `checker/tests/mini_nested.rs` at ~175 s, of which two tests are individually
+  over 60 s. A full `--features tg` run of every target is ~8 minutes;
+* and a sentence that tells the next reader a red number is expected is how a
+  real defect stays hidden. It did: the suite was carried as "four known
+  failures" long enough that nobody re-counted, and the fifth was never noticed.
+
+So the rule is now stated the other way round. **A suite is either a gate or it
+has a written reason, with a measurement, for not being one.** "Not a gate" must
+never again be readable as "unimportant" or as "expected to be red".
+
+### Gates — all of these must be green before a commit
+
+```bash
+cargo test -p nanoda_lib --no-default-features --lib            # 244/244
+cargo test -p nanoda_lib --features tg --lib                    # 292/292
+cargo test -p kernel -p derived                                 # 1047/1047, 109 targets
+cargo check -p nanoda_lib --no-default-features --all-targets   # 5 existing warnings only
+ci/check-boundary.sh                                            # OK
+ci/test-boundary.sh                                             # OK
+```
+
+`kernel` and `derived` are on the list because they were on no list at all,
+and `kernel` is the entire trusted computing base — the only component that
+must be correct for soundness. They are 1047 tests, all green, and they run in
+seconds. There was never a reason to exclude them; nobody had looked.
+
+`ci/test-boundary.sh` is on the list because it was **red on master** when this
+inventory was taken, and it is the file that proves the boundary check can
+fail.
+
+Before any corpus test, in a worktree: **`ci/corpus-dir.sh --link`**. `vendor/`
+is gitignored, so a worktree otherwise reports `ok … 0.00s` having checked
+nothing.
+
+### Ratchets — green, but exact, so run them when you touch the checker
+
+```bash
+cargo test -p nanoda_lib --features tg --test unified_cli       # 6/6
+cargo test -p nanoda_lib --features tg --test mini_designed     # 34/34
+```
+
+### Currently red, with the reason — do not treat these as noise
+
+`tg_tutorial` (3), `mini_envshare_tg` (2) and `mini_route_tg` (1) are red on
+master and are **not** gates *yet*, for a reason that is written down rather
+than assumed. Three of the six are stale assertions in the improvement
+direction (carriers that used to differ now converge, with the offer
+populations conserved); two are ratchets that moved *adversely* and need a
+whole-ledger diff to adjudicate; one is a gap budget that improved 31 → 9.
+`TEST-INVENTORY.md` §3 has the evidence for each, including why the adverse
+pair cannot be re-based on the strength of the passing totals ratchet alone.
+
+They are excluded because **nobody can currently say which commit moved them** —
+the ratchets were last set at `43bac38`/`3c4323b` and a dozen checker commits
+have landed since with nothing re-running these suites. That is a debt with an
+owner and a next step, not a standing exemption. The moment the attribution
+exists, they become gates: they are the strongest property in the tree, since
+`tg_tutorial` asserts that *every* definitional-equality step on the listed
+exports was discharged by a real kernel derivation.
+
+### Everything else in `ci/`
+
+`ci/check.sh` runs all 29 steps and is the full check; it is not a per-commit
+gate because it builds three feature configurations and two release binaries
+(4.40 T `instructions:u`, 603 s of task-clock for the compiles alone —
+`TEST-INVENTORY.md` §4). Run it before a merge, not before a commit. It now
+fails if its own step count is not the declared 29, so a step can no longer
+vanish from the schedule in silence.
 
 ## Exact remaining main blocker
 
