@@ -1355,32 +1355,62 @@ fn a_polymorphic_declarations_model_is_keyed_at_every_instantiation() {
 /// and filtered with `lean-inductive-models --nested --simple --no-mutual
 /// --no-basic`.
 ///
-/// # What it pins
+/// # Three states, and this file has been through all of them
 ///
-/// Before this change the run read `accept 35 declarations`, `untranslated: 2`
-/// — both `PSigma'`, neither `Wrap` — with `proj(Wrap)=2` in the ledger row.
-/// `Wrap` had a carrier, constructors, a recursor and its ι rules; only the two
-/// projections out of it were uncertified, and they were filed as *conversion
-/// debt* under a declaration whose own verdict said translated.
+/// *Renamed and re-pinned 2026-08-15, when `zoneb::per_sigma_carrier` closed
+/// `PSigma'`. Each step is kept because the sequence is the point: a decline
+/// was made loud **before** the thing that replaces it existed, and only
+/// removed when it did.*
 ///
-/// **The last assertion is the one that stops this passing vacuously.** A
-/// change that stopped recognising `Wrap` at all would also remove `proj(Wrap)`
-/// and would still produce a decline — a different one, for the opposite
-/// reason. So the model must still be recognised: `models=1 tool=1`.
+/// 1. **Debt under a green declaration.** `accept 35 declarations`,
+///    `untranslated: 2` — both `PSigma'`, neither `Wrap` — with `proj(Wrap)=2`
+///    in the ledger row. `Wrap` had a carrier, constructors, a recursor and its
+///    ι rules and read as complete; the two projections out of it were
+///    uncertified, filed as *conversion debt* under a declaration whose own
+///    verdict said translated.
+/// 2. **A decline by name.** `zoneb::model_route_untranslated` moved it to
+///    `untranslated: 3` with
+///    `notrans:ind-spec(Wrap: model projection table not recognised)=1`.
+///    Strictly worse-looking and strictly more honest.
+/// 3. **Certified**, which is what this now pins: `untranslated: 0`, and the
+///    ledger `typesOk = valuesOk = pairs = 61` where it read `47` and `51`.
+///
+/// Nothing in `proj_data` changed between 2 and 3. What changed is that the
+/// producer's `Wrap._model.proj_0` and `proj_0.iota` — whose *own* typings were
+/// waiting on `ind-spec(PSigma': class (P) above Prop)` — began to interpret.
+///
+/// # What stops this passing vacuously
+///
+/// A run that stopped recognising `Wrap`, or stopped demanding its
+/// projections, would also reach `untranslated: 0` — by doing nothing. So the
+/// model must still be recognised (`models=1 tool=1`), and the two positive
+/// ledger identities are asserted rather than the absence of a reason string:
+/// **every** scheduled pair must carry a typing and a value, which no
+/// skipped-work path can produce.
 #[test]
-fn a_model_route_projection_declines_by_name_instead_of_filing_debt() {
+fn a_model_route_projection_certifies_once_its_declarations_interpret() {
     let (_, out) = run("tool_nested_proj", &["--mutual", "--nested", "--verbose"]);
     assert!(
-        out.contains("notrans:ind-spec(Wrap: model projection table not recognised)"),
-        "the declaration must be untranslated by name; got:\n{out}",
+        out.contains("untranslated\tdeclarations=0"),
+        "nothing may be untranslated here any more; got:\n{out}",
     );
-    assert!(
-        !out.contains("proj(Wrap)"),
-        "the projection must not be filed as conversion debt; got:\n{out}",
-    );
+    for absent in [
+        "proj(Wrap)",
+        "model projection table not recognised",
+        "model projection reduction not recognised",
+    ] {
+        assert!(!out.contains(absent), "`{absent}` must be gone; got:\n{out}");
+    }
     assert!(
         out.contains("nested\tseen=1\tmodels=1\ttool=1\tlegacy=0"),
-        "and the model must still be recognised, or this passes for the wrong reason; got:\n{out}",
+        "the model must still be recognised, or this passes for the wrong reason; got:\n{out}",
+    );
+    // The positive half: every scheduled pair certified, which is what
+    // distinguishes "the projection works" from "the projection is no longer
+    // asked for".
+    assert!(
+        out.contains("pairs=61\ttypesOk=61\tvaluesOk=61/61"),
+        "every pair must carry a typing and a value; got:\n{out}",
     );
 }
 

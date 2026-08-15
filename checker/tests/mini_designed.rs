@@ -920,30 +920,45 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
 /// already public through `Interp::raise_in_gamma`, and already in the path at
 /// `zoneb.rs:2953`.
 ///
-/// # This test pins a decline, and pins that it is not a new one
+/// # This test pinned a decline; the decline is closed and it now pins the fix
 ///
-/// `PSigma'` derives at `(0,0)` and declines at the other **three** σ with one
-/// reason, `ind-spec(PSigma': class (P) above Prop)` — `build_trunc` refusing a
-/// nonzero ground resultant level, the same site `Squash.{1}` reaches above.
-/// Mixed σ is therefore *not* a second, harder gap beside `(1,1)`: one
-/// classification decision covers all three, and closing it closes all three.
-/// That is the load-bearing negative result, and it is why the expectations
-/// below are the current behaviour, decline and all.
+/// *Re-pinned 2026-08-15, when `zoneb::per_sigma_carrier` landed. The
+/// prediction this file was written around held exactly and is quoted at the
+/// end of this header: the three declining σ moved to the control's carrier and
+/// nothing else moved.*
 ///
-/// **The class must not be "fixed" by reading σ.** A `large_eliminating` that
-/// read the substituted sort would see `Sort 1` at three of `PSigma'`'s four σ,
-/// call it provably nonzero, and hand a possibly-`Prop` declaration a W-type —
-/// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3, pinned by
+/// `PSigma'` used to derive at `(0,0)` and decline at the other **three** σ
+/// with one reason, `ind-spec(PSigma': class (P) above Prop)` — `build_trunc`
+/// refusing a nonzero ground resultant level, the same site `Squash.{1}`
+/// reaches above. Mixed σ was therefore *not* a second, harder gap beside
+/// `(1,1)`: one classification decision covered all three, and closing it
+/// closed all three. **It did**, in one commit and with no new `derived/`
+/// construction, which is the load-bearing result this file was built to
+/// measure.
+///
+/// **The class must still not be "fixed" by reading σ, and the fix that landed
+/// does not.** A `large_eliminating` that read the substituted sort would see
+/// `Sort 1` at three of `PSigma'`'s four σ, call it provably nonzero, and hand
+/// a possibly-`Prop` declaration a W-type — `LEVEL-POLYMORPHIC-INDUCTIVES.md`
+/// §3.3, pinned by
 /// `zoneb::tests::a_possibly_prop_declaration_never_acquires_a_w_type`. Such a
 /// checker reports `computed=true` for `PSigma'` here and disagrees with Lean's
 /// own exported recursor, which is the first assertion below.
 ///
+/// `zoneb::per_sigma_carrier` is **not** that change and the first assertion is
+/// what says so: `large_eliminating` is untouched, the licence is name-keyed to
+/// one basis member, and it moves only which *carrier* `build`'s trichotomy
+/// admits. `PSigma'`'s `elim` row still reads `(false, false)` after it — the
+/// checker still agrees with Lean that `PSigma'` is small-eliminating — and a
+/// licence that had leaked into the eliminator classification, or out to a
+/// second name, would move it.
+///
 /// # Why the rows and not the counts
 ///
-/// `constEv = 5` against `waiting = 3` splits the eight `def`s, and it is a
-/// real oracle — `tight01` and `tight10` are on the blocked side while
-/// `wide01` and `wide10` are on the derived side, which no count of a single
-/// declaration could say. But it cannot tell `(0,1)` from `(1,0)`, and those
+/// `constEv` against `waiting` splits the eight `def`s. It used to read `5`
+/// against `3` — `tight01` and `tight10` on the blocked side, `wide01` and
+/// `wide10` on the derived side — and now reads **8 against 0**, which is the
+/// whole finding. But a count cannot tell `(0,1)` from `(1,0)`, and those
 /// are **not interchangeable**: at `(0,1)` the first component is the
 /// proposition and the fibre is data, at `(1,0)` it is the other way round. A
 /// checker that sorted, `max`-ed or otherwise normalised σ would collapse the
@@ -954,16 +969,32 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
 ///
 /// The headers also carry the answer to "which carrier does each mixed σ get?"
 /// in the dump's own vocabulary — `inductive` is the general data carrier,
-/// `class-(P)` the truncation — so the day a basis clause gives `PSigma'` the
-/// per-σ licence, the two mixed rows move from the untranslated list to
-/// `inductive PSigma' σ = [0, 1]` / `σ = [1, 0]` and this test is what shows
-/// they landed on the carrier the control already validates.
+/// `class-(P)` the truncation. This file predicted, in these words, that "the
+/// day a basis clause gives `PSigma'` the per-σ licence, the two mixed rows
+/// move from the untranslated list to `inductive PSigma' σ = [0, 1]` /
+/// `σ = [1, 0]` and this test is what shows they landed on the carrier the
+/// control already validates." **They did, and it does** — those two headers
+/// are asserted below beside `inductive PSigma' σ = [1, 1]`, against a
+/// `class-(P) PSigma' σ = [0, 0]` that did not move, and the untranslated list
+/// is empty.
 ///
 /// # Falsifiers (`TEST-INVENTORY.md` §6)
 ///
 /// Four mutants of `psigma_mixed_sigma.lean`, each re-exported through
 /// `scripts/export-fixture.sh` and run against this test. Each died at its own
-/// assertion and at no earlier one — measured, not predicted:
+/// assertion and at no earlier one — measured, not predicted.
+///
+/// **These four were measured against the *pre-licence* expectations and have
+/// not been re-run since** (2026-08-15). The mutations are unchanged and each
+/// still removes the demand it names, but the "died at" column refers to
+/// assertion values that have since moved — `constEv` 5 → 8, `waiting` 3 → 0,
+/// three headers added, `untranslated_rows` → empty — so the *cells* are
+/// history and only the *inputs* transfer. Re-running them needs `lean` and
+/// the export script. What **is** re-measured is the mutation that matters for
+/// the change that moved them: forcing `zoneb::per_sigma_carrier` to `false`
+/// restores every old value and fails this test at `constEv`, 5 where 8 is
+/// wanted — so the licence, and not some other drift, is what these
+/// expectations now rest on.
 ///
 /// | mutation | died at |
 /// | --- | --- |
@@ -1014,15 +1045,15 @@ fn psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop() {
 
     let ev = evidence(&out);
     assert_eq!(ev.get("pairs"), Some(&8), "the pair population changed:\n{out}");
-    // The five that derive: `tight00`, and all four `wide*` — including both
-    // mixed ones, which is the positive half of the finding.
-    assert_eq!(ev.get("constEv"), Some(&5), "the derived population changed:\n{out}");
-    let expected: BTreeMap<String, u64> =
-        [("ind-spec(PSigma': class (P) above Prop)".to_string(), 3)].into();
+    // **All eight**, since `zoneb::per_sigma_carrier` landed: `tight00` on the
+    // truncation, `tight01`/`tight10`/`tight11` on the general data carrier,
+    // and all four `wide*` on the control's. It read 5 while the three tight
+    // mixed-and-above σ declined.
+    assert_eq!(ev.get("constEv"), Some(&8), "the derived population changed:\n{out}");
     assert_eq!(
         waiting(&out),
-        expected,
-        "the PSigma' frontier moved — re-read the fixture header:\n{out}"
+        BTreeMap::new(),
+        "nothing may wait here any more — re-read the fixture header:\n{out}"
     );
 
     // Which carrier each (declaration, σ) pair got, per σ and in the dump's own
@@ -1035,21 +1066,23 @@ fn psigma_at_mixed_sigma_declines_only_where_the_declared_sort_may_be_prop() {
             "inductive PSigma σ = [0, 1]",
             "inductive PSigma σ = [1, 0]",
             "inductive PSigma σ = [1, 1]",
+            // The three the licence moved, onto the control's own carrier.
+            "inductive PSigma' σ = [0, 1]",
+            "inductive PSigma' σ = [1, 0]",
+            "inductive PSigma' σ = [1, 1]",
+            // And the one it did not: at `max 0 0 = 0` the truncation is still
+            // the only admissible carrier, and a licence that had become
+            // "always read σ" would move this row too.
             "class-(P) PSigma' σ = [0, 0]",
         ],
         "the carriers moved:\n{d}"
     );
-    // …and the three that got none. `PSigma' σ=[0, 0]` is absent because it
-    // derived, and no `PSigma` row is here at any σ; both absences are the
-    // point and both are pinned by the equality.
-    let why = "declaration not translated: ind-spec(PSigma': class (P) above Prop)";
+    // …and **none** now gets nothing. This held three rows, one per σ where
+    // `build_trunc` refused a nonzero ground resultant level; the equality is
+    // kept rather than deleted because an empty list is the assertion.
     assert_eq!(
         untranslated_rows(&d),
-        vec![
-            format!("PSigma' σ=[0, 1] ({why})"),
-            format!("PSigma' σ=[1, 0] ({why})"),
-            format!("PSigma' σ=[1, 1] ({why})"),
-        ],
+        Vec::<String>::new(),
         "the untranslated pairs moved:\n{d}"
     );
 }
