@@ -719,6 +719,20 @@ reduction**; `proj_reduce` is the label of the rule that noticed.
 line already declines, with mini's reason attached.** Those are the mini
 translation frontier, not a `proj_reduce` tranche.
 
+> **Corrected 2026-08-15 by the census below, "The untranslated frontier".
+> Naming a declaration on the `untranslated:` list is *co-location*, and this
+> row's 63 % is the same figure the whole goal population produces (63.2 %) for
+> the same reason.** The matched controls are decisive: `List.brecOn.eq` is
+> **translated** and carries 24 `proj_reduce`; `Lean.Name.brecOn.eq` is
+> untranslated and carries 37. The tree's own `PROJ_STRUCTS` census agrees —
+> of the 152 declines that record the structure projected, **131 are `PProd`**
+> (translated, the `brecOn` tower), 6 `PULift` and 2 `Array`, and only
+> **13** (`Fin` 7, `Char` 6) project an untranslated structure. `proj_reduce`'s
+> reachable share of the translation frontier is **0**, not 146. The sentence
+> at the end of "What I would not do" — *"the honest way to price those 146
+> gaps is against `untranslated:`"* — is right about the method and wrong about
+> the answer: priced against `untranslated:`, they are worth zero too.
+
 ### The downstream gate, checked in advance
 
 The rank-2 trap does not repeat in its exact form — `wants_proj_red_subject`
@@ -752,6 +766,142 @@ TG backend, **no mini dispatch** — while Ranking B's 213 is the unified
 `checker`. The 3× is mini's published class-(T) packages, not modelgen. The
 ratchet is one-sided (`<= 678`), so the divergence never surfaced.
 
+## The untranslated frontier, censused: 63 % is co-location, 1 333 is reachable, and it is one chain
+
+*Measured 2026-08-15 on `joachim/untranslated-frontier` at master `d979adb`.
+Full numbers in `MEASUREMENTS.md`, "The untranslated frontier, censused". Three
+temporary censuses added, measured, and **reverted**; `git diff` is empty. Both
+populations quoted: `--nested --no-modelgen` (1 774 declarations, 89
+untranslated, **10 262** gaps) and, using the `modelgen` built at the repo root,
+`--verbose --mutual --nested --modelgen=…` (1 822, 91, **11 556** gaps).*
+
+**This is the sixth tranche in a row to be declined, and it is the first one
+declined for a reason that is not "the construction cannot reach the number".**
+
+### The attribution, and the control that undoes most of it
+
+A per-declaration gap ledger keyed on `TgBackend::seq` reproduces
+`origin_report` to the digit (own **1 456**, relay **7 732** = 7 247 + 485; the
+residue 10 262 − 9 188 = **1 074** is the escape ledger, which raises no
+`note_admit`). **All 384 gap-bearing seqs are named** — every gap in the goal
+population is raised inside a `Definition`/`Theorem`/`Opaque`.
+
+| | `--no-modelgen` | modelgen |
+| --- | ---: | ---: |
+| admit-gaps | 9 188 | 10 339 |
+| in a declaration that **is** `X` or `X.*` for an untranslated `X` | **5 380 (58.6 %)** | **6 531 (63.2 %)** |
+| untranslated declarations with **zero** gaps in their own family | **41 of 57** | **43 of 59** |
+
+A permutation null makes the enrichment real (200 random 56-subsets of the 188
+translated inductives with generated machinery: median **14.6 %**, p95 26.8 %).
+**Three matched controls make it a size effect.** `X.ctorElim` normalised by
+constructor count and σ gives 1.00–2.00 own/ctor/σ on **both** sides of the
+classifier, and the pairs are exact: `Bool` and `Nat` (translated) and
+`Lean.Syntax.Preresolved` and `Lean.Macro.Exception` (untranslated) all carry
+**28 gaps / 4 own**. On the `brecOn` tower `List.brecOn.go` (translated) and
+`Lean.Name.brecOn.go` (untranslated) both carry **36 `eq_cache`**. And **52 of
+the 56 untranslated-base `noConfusion` declarations carry zero gaps** — `Fin`,
+`Char`, `String`, every machine word, every `H*` and every `Monad*`.
+
+**Rank 1 is the whole of the excess.** 3 303 of its 3 910 sub-tree gaps sit in
+untranslated families, and its own head census names `Nat.ble` 466, `Nat.decEq`
+46, `OfNat.ofNat` 18, `Nat.decLt` 16, `Nat.beq` 14: **563 of 577 firings are Nat
+arithmetic and not one is a `Lean.*` constructor.** The Nat wall, located inside
+`Lean.*.ctorElim` bodies.
+
+### Ranking B-U — the untranslated declarations, by gaps downstream
+
+`reachable` counts only origins that fire **exclusively** in untranslated
+families and whose reason string *is* "mini published no interpretation".
+
+| untranslated declaration | co-located | **reachable** | obstruction, named at the decline site |
+| --- | ---: | ---: | --- |
+| `Lean.ParserDescr` | 2 805 | **0** | field `Lean.Name` |
+| **`Lean.Syntax`** | 2 561 | **1 307** | `nested model not interpreted`; `_model.0._auxCarrier` declines on field `Lean.SourceInfo` |
+| `Lean.Name` | 372 | 0 | field `String` |
+| `Lean.SourceInfo` | 305 | 0 | field `Substring.Raw` |
+| `Char` | 152 | 0 | field `UInt32` |
+| `USize` | 94 | 0 | field `BitVec System.Platform.numBits` |
+| `Lean.Macro.Exception` / `Lean.Syntax.Preresolved` | 52 each | 0 | field `Lean.Syntax` / `Lean.Name` |
+| `String` | 41 | **26** | field `ByteArray` |
+| `UInt8/16/32/64` | 17 each | 0 | field `BitVec 8/16/32/64` |
+| `Trans` | 14 | 0 | `type former spine`, 4 σ |
+| `BitVec` | 8 | 0 | field `Fin (2^w)` |
+| **`Fin`** | **7** | **0** | field `i < n` = `LT.lt.{0} Nat instLTNat #0 #1` — **no interpretation for `Nat.lt`/`Nat.le`**; the run's own `elim Nat.le computed=false oracle=false` |
+| the other 43 | 0 | 0 | — |
+| **total** | **6 531** | **1 333** | |
+
+**One declaration is 1 307 of the 1 333.**
+
+### `Fin`, answered: it gates everything and it pays nothing
+
+The decline sites name the field, so the chain is fact, not inference:
+
+    Nat.lt / Nat.le → Fin → BitVec → UInt8 → ByteArray (Array UInt8)
+      → String → Substring.Raw → Lean.SourceInfo → Lean.Syntax's nested model
+
+with `UInt16/32/64`, `USize`, `Char` off `BitVec`/`UInt32`; `Lean.Name` off
+`String`; `Lean.ParserDescr`, `Lean.Syntax.Preresolved` off `Lean.Name`;
+`Lean.Macro.*` off `Lean.Syntax`.
+
+**The brief's hypothesis is structurally right and numerically inverted.** `Fin`
+does not pay five times — it gates the whole `field type uninterpretable`
+family, 24 of the 59 untranslated declarations and all four that carry gaps.
+But **the first eight links carry a reachable prize of 0 between them and the
+ninth carries 1 307.** No partial credit anywhere in it: the same shape as
+question (b)'s layer, one link longer.
+
+### The deletion is −1 162 and **nothing migrates** — the one thing this road has that the last five did not
+
+`NANODA_ASSUME` on the five reachable origins together, modelgen run: 11 556 →
+**10 394**, escapes 1 217 → 1 388, ACQUIRED 354. **−1 162 against a `SUBTREE`
+of 1 333, 13 % over.** On `--no-modelgen`, `nested inductive` alone reproduces
+rank 5 exactly (10 262 → 9 737, **−525**).
+
+**Every other origin row is unchanged**: `major premise is not a constructor`
+598 → 598, `domain is not this inductive` 249 → 249, `proj_reduce` 213 → 213,
+`eq_cache` 171 → 171, `nat_eq` 44 → 44, `nat_reduce` 32 → 32. The five deleted
+rows go to zero and only the relays fall with them. **This is the exact opposite
+of rank 1**, whose simulation moved 577 → 106 straight onto `nat_reduce`
+32 → 503 for +942. Rule 4's "read the next gate" check comes back empty.
+
+### And rule 3 does not bite in the form that killed rank 1
+
+`NANODA_ASSUME`'s acquisition is `CondEq::new(derived::imp_refl(f), vec![f])`
+(`tg.rs:5415–5423`) — it makes the equation an **antecedent**, which is exactly
+what the escape ledger charges for. A landed translation publishes mini's ι as
+an unconditional `Thm` and mints no antecedent, so **the +171 is the
+instrument's artifact and the deletion overstates the take-back**, where for
+ranks 1–3 it understated the obstruction. *This is the first road in the census
+whose price is not eaten by the escape ledger.*
+
+**The positive control is real but partial, and it is where the residual risk
+is.** `Nat`, fully translated with native support, carries **zero** gaps on
+`Nat.brecOn.go` and `Nat.brecOn.eq`. `List`, also fully translated, carries
+76 + 27 on the same two — 36 `eq_cache` and 40 `…at this parameter` on `.go`,
+24 `proj_reduce` on `.eq`. **Translation alone does not certify the generated
+machinery**; a translated `Lean.Syntax` would still meet `List`'s residue, which
+is the `np > 0` layer measured at 0 reachable. Unpriced, and the one thing that
+could take −1 162 down.
+
+### Disposition
+
+**Declined, and for a new reason.** The prize is genuinely reachable — the
+construction concludes exactly the equation the deletion assumes, nothing
+migrates, and the escape ledger does not take it back. What declines it is the
+**shape**: 1 307 of 1 333 sit behind a nine-link chain rooted at an
+interpretation for `Nat.lt`/`Nat.le`, whose first eight links are measured at
+zero. A seat that cannot commit to the whole chain should not start it, and a
+seat that can should price the `List` residue first, because a translated
+`Lean.Syntax` inherits it.
+
+**The cheapest useful act if anyone touches this anyway** is the root and only
+the root: **an interpretation for `Nat.le`** (`elim Nat.le computed=false
+oracle=false` in every run of the goal population). It is worth **0 gaps** by
+itself and it is the single precondition of all nine links — so it is the one
+sub-question here with an answer shorter than the whole tranche, and it should
+be taken as a feasibility probe, not as a tranche.
+
 ## Construction reachability, per row
 
 `Δ` prices *the equations being true*; a construction has to *derive* them.
@@ -761,7 +911,9 @@ ratchet is one-sided (`<= 678`), so the divergence never surfaced.
 | `major premise is not a constructor` (−3 780) | **No — measured at 0, 2026-08-15.** The route's own ceiling is **−2 630** (the numeral equation, not the ι equation), and nothing reaches it: the numeral step has no backend rule to certify, and `Nat.ble`'s three clauses escape with 16/23/24 raw-beta atoms in the program that owns the ledger, so `ble_transfer` returns a conditional equation. Declined. |
 | `…domain is not this inductive` (−1 609) | **No — measured at 0, 2026-08-15.** All 249 firings are `gen_ty_bridge`'s `np > 0` arm, so the row *is* the layer of question (b), and the construction that concludes its equation is the whole layer. The one-leg construction (wall #1, the `gen_ty_nest` carrier adoption) reaches **0 of 249**: the next gate, `mini_ctor_spine_bridge`, tests the same `param_vars.is_empty()` predicate. See "Rank 2, censused". |
 | `proj_reduce` (−890) | **No — measured at 12 of 213, 2026-08-15.** Every one of the 231 declines is at the rule's first four lines; the projection composition produces **zero** declines and succeeds whenever it is reached with its premises. 146 of 231 need mini to translate a declaration named in the run's own `untranslated:` census, 46 need `Eq.rec` (rank 9's own origin), 27 are the readiness gate over-promising, and **12** are the `3eab691` shape — behind `derive_iota`'s `usable`, which rejects `RecBottom::List`. See "`proj_reduce`, refuted inside its own rule". |
-| `eq_cache` (−511) / `nested inductive` (−525) | Partly. 23 % / 11 % over; both mid-chain at scale. |
+| `eq_cache` (−511) | Partly. 23 % over; mid-chain at scale. **Not the translation frontier** — `List.brecOn.go` is translated and carries 36 of it, exactly as `Lean.Name.brecOn.go` does. |
+| `nested inductive` (−525) | **Yes — the only row in the census where a construction concludes the deleted equation, nothing migrates, and the escape ledger does not take the price back.** It is `Lean.Syntax` at every firing. Declined only on shape: with its four siblings it is −1 162, and 1 307 of that 1 333 sits behind a **nine-link** translation chain rooted at `Nat.lt`/`Nat.le` whose first eight links are measured at **0**. See "The untranslated frontier, censused". |
+| the untranslated frontier as a whole (−1 162) | **Co-location, mostly.** 63 % of the goal population's gaps are raised inside an untranslated declaration and **1 333 of them are reachable**; the rest is rank 1's Nat wall and the `brecOn` tower, both of which a matched translated control carries at the same rate. |
 | `…at this parameter` (−35 small / −283 goal) | **No on the small population — measured at −1**, `SEAM-DESIGN.md` §10, and behind the ten-wall layer above. The goal population's −283 is the same cause and inherits the same obstruction. |
 | `IDEP undischargeable` (−19) | Priced at `INDEXED-DESIGN.md` §8.7; the wall is a constructor typing for an indexed family and `mem_lean`'s protocol **cannot** be met from a use site (task #38). Not reachable as scoped. |
 | `nat_eq` (−11 / −62, both LB) | Small on the small populations. On the goal population it is the same family as rank 1 and should be taken with it, not separately. |
@@ -802,6 +954,21 @@ this document is net of it.
   *prediction*, and it already over-promises at 27 of this origin's 231 sites.
   Any new arm needs the matching arm in `derive_iota`'s `usable` first, or it
   trades a projection gap for an ι one — `proj_reduced_carrier` 13 → 169.
+* **Price a tranche by which declarations its gaps are raised in.** Measured
+  and declined, 2026-08-15. 63 % of `init-prelude`'s gaps are raised inside a
+  declaration the same run's `untranslated:` line names, and **1 333 of 10 339
+  are reachable**; the rest is rank 1's Nat wall and the `brecOn` tower sitting
+  in `Lean.*` bodies. The matched control is the whole argument: a
+  2-constructor *translated* `ctorElim` (`Bool`, `Nat`) and a 2-constructor
+  *untranslated* one (`Lean.Syntax.Preresolved`, `Lean.Macro.Exception`) both
+  carry 28 gaps / 4 own. This retroactively corrects rank 3's 146 of 231.
+* **Start the `Fin` chain for the machine words.** `Fin` gates `BitVec`, five
+  machine words, `Char`, `ByteArray`, `String`, `Substring.Raw`, `Lean.Name`,
+  `Lean.ParserDescr`, `Lean.SourceInfo` and `Lean.Syntax`'s nested model — nine
+  links — and **the first eight are worth 0 gaps between them**. `Fin` itself
+  is worth 7, all `proof_irrel`; the five machine words 162, all `<multi>` /
+  `nat_reduce` / `proj_reduce`. One construction paying seven times, and seven
+  of the seven pay nothing.
 * **Bundle tranches.** Excess over the sum is 2.5–4 %.
 * **Plan anything off the `SUBTREE` column alone**, or off the old 10 %/30 %
   bands — they are 2× pessimistic on the rows that now matter.

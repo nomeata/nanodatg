@@ -11405,3 +11405,192 @@ Gates after the revert: `unified_cli` 6/6, `mini_designed` 34/34,
 `cargo check --no-default-features --all-targets` 10 warnings (existing),
 `ci/check-boundary.sh` OK. No ratchet moved; `init-prelude` 10 262, the 14
 gap-bearing fixtures 215, the exports 16 files / 168.
+
+## The untranslated frontier, censused: 63 % co-located, 13 % reachable, and it is one chain — 2026-08-15
+
+*Measured on `joachim/untranslated-frontier` at master `d979adb`, release binary
+`cargo build -p nanoda_lib --features tg,stepcount --release --bin checker` kept
+at `_tmp/census_checker` so the gates could not overwrite it
+(`ORIGIN-RANKING.md` defect 3), `ci/corpus-dir.sh --link` run first. Three
+temporary censuses were added — a per-declaration gap ledger keyed on
+`TgBackend::seq` in `note_admit_m`, the declaration's **type** added to
+`dump_decl`'s dependency list, and one `eprintln!` at each of mini's three
+`ind-spec` decline sites naming the offending field/parameter/spine — measured,
+and **reverted**; `git diff` is empty and no file under `checker/`, `kernel/`,
+`derived/` or `modelgen/` is modified.*
+
+**Both populations are quoted.** `--nested --no-modelgen` (the ratchet: 1 774
+declarations, 89 untranslated, **10 262** gaps) and, because a built `modelgen`
+exists at the repo root, `--verbose --mutual --nested --modelgen=…` (1 822
+declarations, 91 untranslated, **11 556** gaps, escapes 1 217). The two agree in
+shape; the modelgen run is the more complete population and every conclusion
+below was checked on both.
+
+### The census is exact against the mechanisms already in the tree
+
+The per-seq ledger reproduces `origin_report` to the digit on both runs:
+own **1 456**, relay **7 732** = 7 247 + 485 multi, and every `own` row matches
+its `gap:` row (`major premise is not a constructor` 577, `domain is not this
+inductive` 249, `proj_reduce` 213, `eq_cache` 163, …). 10 262 − 9 188 = **1 074**,
+the escape ledger, which raises no `note_admit`. **All 384 gap-bearing backend
+seqs are named** — every gap in the goal population is raised while checking a
+`Definition`/`Theorem`/`Opaque`, so there is no unattributed bucket.
+
+### 1. Attribution: 58.6 % / 63.2 %, and the control says most of it is co-location
+
+A gap is attributed to untranslated declaration `X` when the declaration being
+checked is `X` or `X.*`.
+
+| | `--no-modelgen` | modelgen |
+| --- | ---: | ---: |
+| admit-gaps | 9 188 | 10 339 |
+| in an untranslated family | **5 380 (58.6 %)** | **6 531 (63.2 %)** |
+| own / relay share | 69.4 % / 68.6 % | — |
+| untranslated declarations with **zero** gaps in their own family | **41 of 57** | **43 of 59** |
+
+**A permutation null says the enrichment is real.** 200 random 56-subsets of the
+188 *translated* inductives that have generated machinery in this run pick up a
+median of **1 338 gaps (14.6 %)**, p95 2 463; the 56 untranslated ones pick up
+5 380 (58.6 %).
+
+**Three matched controls say the enrichment is a size effect, not an upstream
+effect.** Normalising `X.ctorElim` by constructor count and σ:
+
+| base | ctors | σ | gaps | own | own/ctor/σ | translated? |
+| --- | ---: | ---: | ---: | ---: | ---: | :-: |
+| `Lean.ParserDescr` | 13 | 3 | 1 029 | 147 | 3.77 | **no** |
+| `Lean.Syntax` | 4 | 3 | 303 | 36 | 3.00 | **no** |
+| `Lean.Name` / `Lean.SourceInfo` | 3 | 3 | 105 | 15 | 1.67 | **no** |
+| `List` / `Except` / `Option` / `EStateM.Result` | 2 | 2 | 66–72 | 8 | 2.00 | yes |
+| `Bool` / `Nat` | 2 | 2 | **28** | **4** | 1.00 | yes |
+| `Lean.Syntax.Preresolved` / `Lean.Macro.Exception` | 2 | 2 | **28** | **4** | 1.00 | **no** |
+
+**A 2-constructor untranslated inductive's `ctorElim` carries exactly the same
+28 gaps / 4 own as a 2-constructor translated one.** The same holds on the
+`brecOn` tower — `List.brecOn.go` (translated) 36 `eq_cache`, `Lean.Name.brecOn.go`
+(untranslated) **36 `eq_cache`**; `List.brecOn.eq` 24 `proj_reduce`,
+`Lean.Name.brecOn.eq` 37 — and on `noConfusion`, where **52 of the 56
+untranslated-base `noConfusion` declarations carry zero gaps** (`Fin`, `Char`,
+`String`, the machine words, every `H*` and every `Monad*`), while 188
+translated ones carry 1 664 between them.
+
+**Rank 1 is the whole of the excess and it is co-location.** 3 303 of its 3 910
+sub-tree gaps sit in untranslated families, but its own head census names
+`Nat.ble` 466, `Nat.decEq` 46, `OfNat.ofNat` 18, `Nat.decLt` 16, `Nat.beq` 14 —
+**563 of 577 firings are Nat arithmetic and not one is a `Lean.*` constructor.**
+They are the already-refuted Nat wall located inside `Lean.*.ctorElim` bodies,
+and the matched pair above proves it: `Bool.ctorElim` is translated and gets the
+same gaps.
+
+### 2. The ranking, and the reachable column
+
+`reachable` counts only the origins that fire **exclusively** in untranslated
+families and whose reason string *is* "mini published no interpretation":
+`iota: no interpretation — {a nested inductive, a mutual block, an indexed
+family}`, `iota: the constructor's bridge is not about this spine`, and
+`pi congruence: one Π of undetermined sort and one decided`. Modelgen run.
+
+| untranslated declaration | co-located | **reachable** | the obstruction, named at the decline site |
+| --- | ---: | ---: | --- |
+| `Lean.ParserDescr` | 2 805 | **0** | field `Lean.Name` |
+| **`Lean.Syntax`** | 2 561 | **1 307** | `nested model not interpreted`; its `_model.0._auxCarrier` declines on field `Lean.SourceInfo` |
+| `Lean.Name` | 372 | 0 | field `String` |
+| `Lean.SourceInfo` | 305 | 0 | field `Substring.Raw` |
+| `Char` | 152 | 0 | field `UInt32` |
+| `USize` | 94 | 0 | field `BitVec System.Platform.numBits` |
+| `Lean.Macro.Exception` | 52 | 0 | field `Lean.Syntax` |
+| `Lean.Syntax.Preresolved` | 52 | 0 | field `Lean.Name` |
+| `String` | 41 | **26** | field `ByteArray` |
+| `UInt8/16/32/64` | 17 each | 0 | field `BitVec 8/16/32/64` |
+| `Trans` | 14 | 0 | `type former spine`, 4 σ |
+| `BitVec` | 8 | 0 | field `Fin (2^w)` |
+| `Fin` | **7** | **0** | field `i < n`, i.e. `LT.lt.{0} Nat instLTNat #0 #1` — no interpretation for `Nat.lt`/`Nat.le` (the run's own `elim Nat.le computed=false oracle=false`) |
+| the other 43 | 0 | 0 | — |
+| **total** | **6 531** | **1 333** | |
+
+**One declaration is 1 307 of the 1 333.** Every other untranslated declaration's
+reachable prize is zero or 26.
+
+### 3. It is one chain, and `Fin` is at its root — nine links
+
+The decline sites name the field, so the dependency graph is direct fact rather
+than inference:
+
+    Nat.lt / Nat.le  →  Fin  →  BitVec  →  UInt8  →  ByteArray (Array UInt8)
+      →  String  →  Substring.Raw  →  Lean.SourceInfo  →  Lean.Syntax's nested model
+
+with `UInt16/32/64`, `USize` and `Char` hanging off `BitVec`/`UInt32`, and
+`Lean.Name` ← `String`, `Lean.ParserDescr` / `Lean.Syntax.Preresolved` ←
+`Lean.Name`, `Lean.Macro.*` ← `Lean.Syntax`.
+
+**So the brief's `Fin` hypothesis is structurally right and numerically
+inverted.** `Fin` does not pay five times, it gates *the entire `field type
+uninterpretable` family* — 24 of the 59 untranslated declarations, including all
+four that carry gaps. But the first **eight** links of the chain carry a
+reachable prize of **0** between them, and the ninth carries 1 307. There is no
+partial credit anywhere in it, which is the same shape as question (b)'s layer.
+
+### 4. The deletion: −1 162, and **nothing migrates**
+
+`NANODA_ASSUME` on the five reachable origins together, modelgen run:
+
+| | baseline | deleted | Δ |
+| --- | ---: | ---: | ---: |
+| tg gaps | 11 556 | **10 394** | **−1 162** |
+| escaping certificates | 1 217 | 1 388 | +171 |
+| equations ACQUIRED | — | 354 | |
+
+−1 162 against a `SUBTREE` of 1 333 — **13 % over, the mid-size band**, and on
+the `--no-modelgen` run `nested inductive` alone reproduces `ORIGIN-RANKING`'s
+rank 5 exactly (10 262 → 9 737, **−525**, escapes 1 074 → 1 142).
+
+**Row by row, every other origin is unchanged.** `major premise is not a
+constructor` 598 → 598, `domain is not this inductive` 249 → 249, `proj_reduce`
+213 → 213, `eq_cache` 171 → 171, `nat_eq` 44 → 44, `nat_reduce` 32 → 32. The
+five deleted rows go to 0 and the relay rows fall with them (`trans over an
+admitted premise` −704, `pi congruence over an admitted body premise` −154,
+`congruence` −88, `symm` −21). **This is the exact opposite of rank 1**, whose
+simulation moved the origin 577 → 106 and reappeared entire on `nat_reduce`
+32 → 503 for **+942**. There is no counter-origin waiting downstream of this
+one, and rule 4's "read the next gate" check comes back empty.
+
+### 5. Does a translation create evidence rather than an escape?
+
+**On this measurement, yes — and the +171 is an artifact of the instrument, not
+a prediction.** `NANODA_ASSUME`'s acquisition is
+`CondEq::new(derived::imp_refl(f), vec![f])` (`tg.rs:5415–5423`): it makes the
+equation an *antecedent*, which is precisely what the escape ledger charges for.
+A landed translation publishes mini's ι as an unconditional `Thm`, so it mints
+no antecedent. The deletion therefore **overstates** the escape take-back for a
+translation, where for ranks 1–3 it understated the obstruction.
+
+**The positive control is real but partial.** `Nat`, fully translated with
+native support, carries **zero** gaps on `Nat.brecOn.go` and `Nat.brecOn.eq`.
+But `List`, also fully translated, carries 76 + 27 on the same two — 36
+`eq_cache` and 40 `…at this parameter` on `.go`, 24 `proj_reduce` on `.eq`.
+**Translation alone does not certify the generated machinery**: a translated
+`Lean.Syntax` would still meet `List`'s residue, which is the `np > 0` layer
+(Ranking B rank 2, measured at 0 reachable). That risk is unpriced here and is
+the one thing that could take −1 162 down.
+
+### Falsification
+
+* The classifier is not a tautology and it emits both values: the split is
+  5 380 / 3 808, and **43 of 59** untranslated declarations receive zero.
+* **Removing a predicate changes the split.** Dropping the `X.*` family rule and
+  matching declaration names exactly takes the attribution from 6 531 (63.2 %)
+  to **0** — the whole classification is carried by that rule and nothing else.
+* Two independent instrumentations agree: the per-seq `own` column reproduces
+  every one of `origin_report`'s 15 rows, and `own + relay + escapes` reproduces
+  the verdict line's `tg gaps` on both populations.
+* `NANODA_ASSUME` moved the instrumented binary (−525 and −1 162), so defect 3
+  did not bite.
+* The matched controls are the falsification of the *finding*, not of the
+  instrument: the attribution's own headline number is refuted by them.
+
+Gates after the revert: `unified_cli` 6/6, `mini_designed` 34/34,
+`tg_tutorial` 36/36, `--no-default-features --lib` 251/251,
+`cargo check --no-default-features --all-targets` 10 warnings (existing),
+`ci/check-boundary.sh` OK. No ratchet moved; `init-prelude` **10 262**, the 14
+gap-bearing fixtures **215** (61/49/23/13/12/11/11/11/6/6/4/4/2/2, verified row
+by row), the exports 16 files / 168.
