@@ -1,0 +1,13 @@
+{"meta":{"exporter":{"name":"lean4export","version":"3.1.0"},"format":{"version":"3.1.0"},"lean":{"githash":"f72c35b3f637c8c6571d353742168ab66cc22c00","version":"4.29.1"}}}
+{"in":1,"str":{"pre":0,"str":"u"}}
+{"in":2,"str":{"pre":0,"str":"Foo"}}
+{"in":3,"str":{"pre":2,"str":"_model"}}
+{"il":1,"param":1}
+{"il":2,"succ":1}
+{"il":3,"succ":2}
+{"ie":0,"sort":1}
+{"ie":1,"sort":2}
+{"ie":2,"sort":3}
+{"ie":3,"const":{"name":2,"us":[2]}}
+{"def":{"all":[2],"hints":"opaque","levelParams":[1],"name":2,"safety":"safe","type":1,"value":0}}
+{"def":{"all":[3],"hints":"opaque","levelParams":[1],"name":3,"safety":"safe","type":2,"value":3}}
