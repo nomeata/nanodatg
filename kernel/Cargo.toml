@@ -16,9 +16,15 @@ publish = false
 #
 # No `[features]` table, deliberately. The crate had one — `null-certifier` —
 # gating a `NullCertifier` that no longer lives here. It was on by default and
-# nothing ever turned it off, so it gated nothing. The obligation it stood for,
-# that the null backend be unreachable in a release build once the real one
-# exists, is now enforced rather than intended: `NullCertifier` sits in
-# `checker/src/certify.rs` behind `cfg(not(feature = "tg"))`, so a
-# `--features tg` build does not compile it at all.
+# nothing ever turned it off, so it gated nothing.
+#
+# The obligation it stood for was that the null backend be unreachable in a
+# release build once the real one exists. That obligation is now discharged by
+# construction rather than by a cfg: `NullCertifier` and the `Certifier` trait
+# were both retired, and the `tg` feature with them, so there is one backend and
+# one build configuration. A thing that does not exist needs no gate.
+#
+# Nothing here is conditional, and nothing about the TCB should be. A feature
+# table on this crate would mean the trusted base differs between builds, which
+# is precisely what must not be true of it.
 [dependencies]
