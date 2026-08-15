@@ -698,6 +698,17 @@ pub struct IndApparatus {
     /// answered from anywhere else would be a computation rule for a model
     /// nothing checked.
     pub model_iota: HashMap<(ConstKey, Name), Name>,
+    /// **The intrinsic projections a recognised model carries**, filled by
+    /// [`crate::mini::nested_splice::recognise`] beside [`IndApparatus::model_of`]:
+    /// `((T, σ), field index) ↦ (the model's projection def, its reduction
+    /// theorem)`.
+    ///
+    /// Read by `crate::mini::proj_data::typing`. An entry here is what lets a
+    /// declaration whose interpretation is a model alias answer a projection at
+    /// all: `zoneb::build` never ran for it, so there is no
+    /// [`IndApparatus::decls`] package to project out of, and without this the
+    /// declaration declines through `zoneb::model_route_untranslated`.
+    pub model_proj: HashMap<(ConstKey, u32), (Name, Name)>,
     /// Every nested declaration the splice saw, by its own name — see
     /// [`crate::mini::nested_splice::NestedRecord`].
     ///
@@ -1048,6 +1059,7 @@ impl IndApparatus {
             rec_untranslated: HashMap::new(),
             model_of: HashMap::new(),
             model_iota: HashMap::new(),
+            model_proj: HashMap::new(),
             nested: HashMap::new(),
             acc: None,
             acc_failed: false,

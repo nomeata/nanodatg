@@ -383,8 +383,13 @@ pub(crate) fn model_route_untranslated(
     Some(g)
 }
 
-/// The reason [`model_route_untranslated`] files for a projection.
+/// The reasons [`model_route_untranslated`] files, **one per family**, so the
+/// census names which of the producer's slots is unread rather than saying
+/// "projections" three times. `Naming.lean` emits them as three separate
+/// declarations and they fail independently.
 pub(crate) const NO_PROJECTION_MODEL: &str = "model projection table not recognised";
+pub(crate) const NO_PROJECTION_IOTA: &str = "model projection reduction not recognised";
+pub(crate) const NO_STRUCTURE_ETA: &str = "model structure-eta not recognised";
 
 /// File a decline under the table [`recorded_reason`] will read it from — the
 /// declaration's, the constructor's or the recursor's, by what the constant is.

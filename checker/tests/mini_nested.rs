@@ -1384,6 +1384,37 @@ fn a_model_route_projection_declines_by_name_instead_of_filing_debt() {
     );
 }
 
+/// **The intrinsic projection family is recognised and keyed.**
+///
+/// The producer emits `T._model.proj_i` and `T._model.proj_i.iota` for a
+/// one-constructor owner whose fields the kernel can project — a fifth and
+/// sixth family beside carrier / constructor / recursor / ι, and the first two
+/// this module reads that model **no source declaration at all**
+/// (`Naming.lean:93-97`), so there is no export constant whose statement says
+/// how many there should be.
+///
+/// `Wrap` has one field, so exactly one projection and one rule.
+#[test]
+fn the_projection_family_is_recognised_and_keyed() {
+    let (_, r) = recognised("tool_nested_proj");
+    assert_eq!((r.seen, r.modelled_tool), (1, 1));
+    let mut got: Vec<(u32, String, String)> = r
+        .model_proj
+        .iter()
+        .filter(|((k, _), _)| k.0 == Name::simple("Wrap"))
+        .map(|((_, i), (p, q))| (*i, p.to_string(), q.to_string()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![(
+            0,
+            "Wrap._model.proj_0".to_string(),
+            "Wrap._model.proj_0.iota".to_string()
+        )],
+    );
+}
+
 /// **The legacy tower is still read, and this says which fixtures read it.**
 ///
 /// The companion to [`the_recognition_reads_the_external_tools_names`], and it

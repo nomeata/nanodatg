@@ -364,6 +364,98 @@ pub(crate) fn build(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option<De
 /// an element built by the second constructor carries `Inj₁`. The statement is
 /// **false** there, not merely unproved, so this declines rather than reaching
 /// for another route.
+/// **The model's projection for `(T, σ, i)`, if a recognised model carries
+/// one** — the def and its reduction theorem, as
+/// [`crate::mini::nested_splice::Recognised::model_proj`] keyed them.
+fn model_proj_of(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    inst: &[u32],
+    idx: u32,
+) -> Option<(Name, Name)> {
+    let app = c.interp()?.ind_apparatus()?;
+    app.model_proj.get(&((*ind, inst.to_vec()), idx)).cloned()
+}
+
+/// **A projection out of a model-route declaration, by interpreting the
+/// application the model already defines.**
+///
+/// `⟦proj[T,i] x⟧ := ⟦T._model.proj_i p⃗ ι⃗ x⟧`. There is no second projection
+/// apparatus and no new evidence combinator: `T._model.proj_i` is an ordinary
+/// `def` of the file, so building the application and handing it to
+/// [`Checker::infer_type`] reuses the `Const` and `App` clauses and comes back
+/// with the term and the certificate already assembled.
+///
+/// # Why the two types being different is not a problem
+///
+/// The application's declared type is `βᵢ` over `T._model` where the caller
+/// owes `βᵢ` over `T`, and those are **not** definitionally equal — that is
+/// exactly why [`crate::mini::zoneb::model_alias`] refuses to carry the model's
+/// defining equation across. They do not need to be. `⟦T⟧` and `⟦T._model⟧` are
+/// *one stored term* — `model_alias` publishes the model's own interpretation
+/// under the export's key — and interpretation is compositional, so
+/// `⟦βᵢ[T]⟧` and `⟦βᵢ[T._model]⟧` are the same term and the theorem returned
+/// here is a proof of the statement the caller owes. This is `model_alias`'s
+/// own justification applied one level down, and if it ever fails the answer is
+/// not a second `DeclProj` — it is that the two carriers stopped being one
+/// term, which is a much bigger thing to have gone wrong.
+///
+/// The argument order is the producer's: the owner's **full** telescope,
+/// params and indices together, then the subject
+/// (`vendor/lean-inductive-models/src/InductiveModels/Check.lean:1310-1326`).
+///
+/// # This does not fire yet, and the reason is measured rather than guessed
+///
+/// [`Checker::infer_type`] **type-checks** the application it is handed, and
+/// its `Expr::App` clause retargets the argument's membership *along a
+/// definitional equality between the argument's inferred type and the
+/// function's domain*. The argument here has type `T` and the domain is
+/// `T._model`, and those are deliberately not definitionally equal — the model
+/// is a transparent `def` over the specialised block, so it δ-unfolds away from
+/// the primitive inductive. Measured on `tool_nested_proj`:
+///
+/// ```text
+/// Expected definitional equality between
+///   (Wrap._model._impl.0._auxCarrier Wrap._model._impl.0._auxTag.t.0)
+/// and Wrap, but they differ.
+/// ```
+///
+/// **The interpretation argument above is untouched by this** and is still what
+/// makes the route right: the two carriers are one *stored term*, so no
+/// retargeting is needed at the set level at all. What stands in the way is
+/// only mini's syntactic check on the way there, and the fix is to apply at the
+/// evidence level — `Checker::app_evidence` over `Interp::dprod_app`, with the
+/// domain conversion discharged by the two interpretations being identical
+/// rather than by `assert_def_eq`. That helper is in `kernel.rs`.
+///
+/// **What must not be done instead** is to teach `def_eq` that `T ≡ T._model`.
+/// `zoneb::model_alias` refuses to carry the model's defining equation across
+/// for exactly this reason: `T` is a primitive inductive with no δ step, and
+/// offering one would be offering a reduction Lean does not have.
+fn model_typing(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    proj: &Name,
+    us: &std::rc::Rc<[crate::mini::expr::Level]>,
+    args: &[E],
+    s: &E,
+) -> Result<(Term, Thm), Gap> {
+    let mut e = crate::mini::expr::konst(*proj, us.clone());
+    for a in args {
+        e = crate::mini::expr::app(e, *a);
+    }
+    e = crate::mini::expr::app(e, *s);
+    let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
+    let fallback = Gap::StructProj(*ind);
+    match (t.tm, t.ev) {
+        (Some(tm), crate::mini::ev::Ev::Proved(thm)) => Ok((tm, thm)),
+        // The model's own declaration did not certify. Forward *its* reason
+        // rather than stamping `proj(T)` on it: the projection is not what is
+        // wrong, and §0.4's rule is that the first reason wins.
+        (_, ev) => Err(ev.reason(fallback)),
+    }
+}
+
 pub(crate) fn typing(
     c: &mut Checker<'_, '_>,
     ind: &Name,
@@ -420,11 +512,24 @@ pub(crate) fn typing(
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
         app.decls.get(&key).cloned()
     };
-    // A model-route declaration never gets a `Translated`; that is a decline by
-    // name, not `proj(T)` debt. See `zoneb::model_route_untranslated`.
+    // A model-route declaration never gets a `Translated`. If its model carries
+    // the projection family, that is where the answer comes from; if it does
+    // not, the declaration is untranslated by name rather than `proj(T)` debt.
+    // See `zoneb::model_route_untranslated`.
     let dt = match dt {
         Some(dt) => dt,
         None => {
+            // **Attempted, and it falls through today — see `model_typing`.**
+            // Falling through rather than returning its error is deliberate:
+            // its failure is "the route is not built yet", and reporting that
+            // as `Gap::Classifier` would replace a decline that names the
+            // declaration with one that names nothing. The loud decline stays
+            // until the replacement works.
+            if let Some((proj, _)) = model_proj_of(c, ind, &key.1, idx) {
+                if let Ok(done) = model_typing(c, ind, &proj, us, &args, s) {
+                    return Ok(done)
+                }
+            }
             return Err(crate::mini::zoneb::model_route_untranslated(
                 c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
             )
@@ -585,7 +690,7 @@ pub(crate) fn iota(
         Some(dt) => dt,
         None => {
             return Err(crate::mini::zoneb::model_route_untranslated(
-                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_IOTA,
             )
             .unwrap_or_else(|| miss!()))
         }
@@ -740,7 +845,7 @@ pub(crate) fn structure_eta(
         Some(dt) => dt,
         None => {
             return Err(crate::mini::zoneb::model_route_untranslated(
-                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+                c, ind, &key.1, crate::mini::zoneb::NO_STRUCTURE_ETA,
             )
             .unwrap_or_else(|| miss!()))
         }
