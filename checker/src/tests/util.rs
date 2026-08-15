@@ -106,24 +106,58 @@ pub(crate) fn rand_string<'t>(rng: &mut ThreadRng, size: usize) -> CowStr<'t> {
     CowStr::Owned(rand_string)
 }
 
+/// Hash-consing is injective on literals: two allocations of equal content are
+/// the same pointer and hash alike.
+///
+/// **This test ran 20 000 iterations of `None == None`.** It used
+/// `test_export_file(None, …)`, whose inline `Config` sets `nat_extension:
+/// false` and `string_extension: false`, and both `mk_string_lit_quick` and
+/// `mk_nat_lit_quick` open with `if !…extension { return None }`
+/// (`util.rs:687`, `:696`). There is no `unwrap`, so `l` and `r` were `None`
+/// for every one of the 20 000 rounds and every assertion compared two `None`s.
+/// No mutation to hash-consing, `Ptr::get_hash` or literal allocation could
+/// have failed it.
+///
+/// Two changes, and the second is the one that keeps it fixed:
+///
+/// * it runs against `test_resources/EmptyLits/config.json` — the same empty
+///   export, with both extensions on — so the constructors actually allocate;
+/// * **`is_some()` is asserted first.** A test whose subject can silently
+///   become unrepresentable must say so at the point it would go vacuous,
+///   which is `ci/skip-guard.rs`'s rule ("a check that examined nothing
+///   reports success") applied to an assertion rather than to an input. Flip
+///   either extension back to `false` and this test now fails instead of
+///   passing in 20 000 vacuous rounds.
+///
+/// See TEST-INVENTORY.md §6.
 #[test]
 fn hash_test0() -> Result<(), Box<dyn Error>> {
     use crate::hash64;
     use num_bigint::RandBigInt;
     use rand::thread_rng;
-    test_export_file(None, |export| {
+    test_export_file(Some(Path::new("test_resources/EmptyLits/config.json")), |export| {
         let mut rng = thread_rng();
         export.with_ctx(|ctx| {
             for size in 0..100 {
                 for _ in 0..100 {
                     let s = rand_string(&mut rng, size);
                     let (l, r) = (ctx.mk_string_lit_quick(s.clone()), ctx.mk_string_lit_quick(s));
+                    assert!(
+                        l.is_some(),
+                        "the string extension is off, so every assertion below compares two \
+                         `None`s — this test measures nothing in that configuration"
+                    );
                     assert_eq!(hash64!(l), hash64!(r));
                     assert_eq!(l, r)
                 }
                 for _ in 0..100 {
                     let s = rng.gen_biguint(size as u64);
                     let (l, r) = (ctx.mk_nat_lit_quick(s.clone()), ctx.mk_nat_lit_quick(s));
+                    assert!(
+                        l.is_some(),
+                        "the nat extension is off, so every assertion below compares two \
+                         `None`s — this test measures nothing in that configuration"
+                    );
                     assert_eq!(hash64!(l), hash64!(r));
                     assert_eq!(l, r)
                 }

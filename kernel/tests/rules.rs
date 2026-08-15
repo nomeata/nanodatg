@@ -150,6 +150,50 @@ fn opair_description_mentions_both_components() {
     assert!(f.occurs_free(p) && f.occurs_free(a) && f.occurs_free(b));
 }
 
+/// **The description is of an *ordered* pair — which `occurs_free` cannot say.**
+///
+/// [`opair_description_mentions_both_components`] asserts
+/// `f.occurs_free(a) && f.occurs_free(b)`, and that predicate is **symmetric in
+/// `a` and `b`**: it holds of `⟨a,b⟩` and of `⟨b,a⟩ `alike. So it cannot pin the
+/// property its name and doc claim, and the ordering of the Kuratowski pair —
+/// the whole reason `is_opair` is not `is_upair` — was asserted nowhere in the
+/// trusted base.
+///
+/// Measured: `thm.rs:818`, `is_singleton(env, tq.clone(), a.clone())` →
+/// `is_singleton(env, tq.clone(), b.clone())`, which builds `{{b},{a,b}}` —
+/// i.e. `⟨b,a⟩` under the name `⟨a,b⟩` — leaves **every test in this file
+/// green**.
+///
+/// **`assert_ne!(is_opair(p,a,b), is_opair(p,b,a))` is *not* enough**, and this
+/// is the trap: `is_upair` is symmetric in meaning but not in *syntax*
+/// (`q = a ∨ q = b` versus `q = b ∨ q = a`), so the two descriptions differ
+/// structurally under the swapped rule as well and such an assertion stays
+/// green. What separates them is rebuilding the intended formula from the
+/// constructors — the style `tarski.rs` and `choice.rs` use, and which this
+/// file's own header calls the strong guard.
+#[test]
+fn the_opair_description_is_ordered() {
+    let mut env = Env::new();
+    let (p, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tp, ta, tb) = (Term::var(p), Term::var(a), Term::var(b));
+
+    // `∀q. (q ∈ p ↔ (q = {a} ∨ q = {a,b}))`, built here rather than read back:
+    // the singleton half names the **first** component and that is the entire
+    // asymmetry of the Kuratowski encoding.
+    let q = env.fresh_var();
+    let tq = Term::var(q);
+    let left = kernel::thm::is_singleton(&mut env, tq.clone(), ta.clone());
+    let right = kernel::thm::is_upair(&mut env, tq.clone(), ta.clone(), tb.clone());
+    let want =
+        Formula::forall(q, Formula::iff(Formula::mem(tq, tp.clone()), Formula::or(left, right)));
+
+    assert_eq!(
+        kernel::thm::is_opair(&mut env, tp, ta, tb),
+        want,
+        "the singleton half of ⟨a,b⟩ must name `a`; naming `b` describes ⟨b,a⟩"
+    );
+}
+
 /// There is **no** empty-set axiom, and there must not be one again.
 ///
 /// `Thm::ax_empty` was deleted on 2026-07-31 once `ax_tarski`'s transitivity

@@ -36,6 +36,49 @@ fn leq_test2() -> Result<(), Box<dyn Error>> {
     })
 }
 
+/// **`eq_antisymm` needs a pair where the order is strict — every other call
+/// in this file asserts it *true*, and `true` does not need antisymmetry.**
+///
+/// `eq_antisymm` is `leq(l, r) && leq(r, l)` (`level.rs`). Before this test,
+/// all five assertions about it in this file (`leq_test0`, `leq_test1`,
+/// `leq_test_max_param`, `leq_test_succ`, and the `_many` case) asserted a pair
+/// that is genuinely equal, so both conjuncts hold and the conjunction carries
+/// no information about which conjuncts were consulted. **Measured: rewriting
+/// the body as `self.leq(l, r) && self.leq(l, r)` — dropping antisymmetry
+/// outright — leaves the whole `--no-default-features --lib` suite at 246/246.**
+///
+/// That is not a cosmetic loss. `eq_antisymm` decides sort defeq
+/// (`tc.rs`, `Sort l` against `Sort r`) and constructor level agreement
+/// (`inductive.rs`). Degenerated to `leq(l, r)` it accepts `Sort u ≡ Sort v`
+/// whenever `u ≤ v` — an *acceptance* the checker is not entitled to, which is
+/// the unsound direction.
+///
+/// **Both orientations, deliberately.** One witness catches only one of the two
+/// ways the conjunction can degenerate: `!eq_antisymm(z, s)` goes red under
+/// `leq(l, r) && leq(l, r)` and stays green under `leq(r, l) && leq(r, l)`, and
+/// the reversed witness does the opposite. Each projection needs its own
+/// witness, exactly as `LocalKey`'s three-local fixture does.
+///
+/// The equal pair is kept as the positive control, so that an `eq_antisymm`
+/// rewritten to `false` — which would satisfy both negative assertions — is
+/// caught here too rather than only in `leq_test0`.
+#[test]
+fn eq_antisymm_is_antisymmetric_and_a_strict_order_separates_it() -> Result<(), Box<dyn Error>> {
+    test_ctx(None, |ctx| {
+        let z = ctx.zero();
+        let s = ctx.succ(z);
+        // The order is strict: `0 ≤ 1` and not conversely.
+        assert!(ctx.leq(z, s), "0 ≤ 1");
+        assert!(!ctx.leq(s, z), "1 ≰ 0");
+        // …so the two levels are not equal, in either argument order.
+        assert!(!ctx.eq_antisymm(z, s), "0 and 1 are not the same level");
+        assert!(!ctx.eq_antisymm(s, z), "…and that does not depend on the argument order");
+        // The positive control: equal but not syntactically identical.
+        let m = ctx.max(s, s);
+        assert!(ctx.eq_antisymm(s, m), "`max 1 1` and `1` are the same level");
+    })
+}
+
 #[test]
 fn leq_test_imax_imax() -> Result<(), Box<dyn Error>> {
     test_ctx(None, |ctx| {

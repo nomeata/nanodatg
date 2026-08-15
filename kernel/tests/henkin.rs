@@ -81,6 +81,61 @@ fn it_mints_a_constant_and_asserts_phi_at_it() {
     assert!(fvs.is_empty(), "the axiom must be closed, found {fvs:?}");
 }
 
+/// **The axiom is φ at the constant — asserted at a φ that can tell the
+/// difference.**
+///
+/// [`it_mints_a_constant_and_asserts_phi_at_it`] pins this same property and
+/// **cannot fail**. Its fixture is [`closed_witness`], which fixes φ := `y = y`,
+/// so `φ[c/y]` *is* `c = c`: the assertion "the axiom is φ at the constant" is
+/// the reflexivity assertion on the line above it, restated at the one
+/// instantiation where the two readings agree. Its closedness assertion
+/// follows for the same reason — `c = c` is closed whatever φ was.
+///
+/// Measured: replacing the axiom's formula in `kernel/src/thm.rs::henkin` with
+/// `Formula::eq(Term::apply(c, Vec::new()), Term::apply(c, Vec::new()))` — a
+/// rule that ignores φ outright — leaves **all 8 tests in this file green**,
+/// and the whole `-p kernel` suite green. The rule's entire content was
+/// untested from inside the trusted base.
+///
+/// Here φ := `y = d` for a second, independently minted 0-ary constant, so
+/// `φ[c/y]` is `c = d` and the two readings separate. `d` is a *constant* and
+/// not a variable, so `FV(φ)` is still `{y}` and the free-variable guard
+/// accepts exactly as before — the guard tests are unaffected and keep using
+/// [`closed_witness`].
+#[test]
+fn the_axiom_is_phi_at_the_constant_and_not_merely_reflexivity() {
+    let mut env = Env::new();
+    let y = env.fresh_var();
+    let d = Term::apply(env.declare(0), vec![]);
+    let (phi, w) = exists_eq(y, &d);
+    assert_eq!(
+        *w.concl(),
+        Formula::exists(y, phi.clone()),
+        "the witness must prove the existential"
+    );
+    assert!(w.hyps().is_empty(), "the witness must be unconditional");
+
+    let (c, ax) = henkin(&mut env, y, phi.clone(), &w).expect("a closed witness is accepted");
+    let ct = Term::apply(c, vec![]);
+    assert_eq!(*ax.concl(), phi.subst(y, &ct), "the axiom is φ at the constant");
+    // …and φ at the constant is a *different formula* from reflexivity at the
+    // constant. This is the line the `y = y` fixture cannot state.
+    assert_eq!(*ax.concl(), Formula::eq(ct.clone(), d), "φ at the constant is `c = d`");
+    assert_ne!(
+        *ax.concl(),
+        Formula::eq(ct.clone(), ct),
+        "a rule returning reflexivity at its own constant would satisfy the `y = y` fixture"
+    );
+    assert!(ax.hyps().is_empty(), "the axiom is unconditional");
+
+    // Closedness, now a real assertion: `c = d` is closed because `henkin`
+    // substituted the constant for the *only* free variable, not because the
+    // formula was reflexivity all along.
+    let mut fvs = Vec::new();
+    ax.concl().free_vars(&mut fvs);
+    assert!(fvs.is_empty(), "the axiom must be closed, found {fvs:?}");
+}
+
 /// **Each mint is a different constant.** Two calls on the *same* witness must
 /// not collapse: `φ(c₁)` and `φ(c₂)` are two conservative expansions, and a
 /// shared symbol would silently assert `c₁ = c₂`.
