@@ -562,17 +562,19 @@ part.
    `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
    itself is not on the short gate list seats actually run**. Every guard this
    document adds is downstream of that.
-6. **Shadowed assertions (§6), the unfixed remainder.** Six were fixed; two
-   groups were not, and both need a file this branch does not own, or a
-   measurement it did not take:
-   * `origin_report()`'s surviving early return and the `if asked > 0` report
-     gates, both in `checker/src/tg.rs` — §6.4. Neither is read by a test today;
-     the second makes a live `mini_designed.rs` assertion unfalsifiable.
-   * `tg_tutorial.rs:721`'s `assert_eq!(counted, n)` compares two printings of
-     one local (`escapes`, `global_report`), so it is `escapes == escapes`. The
-     independent observation that *would* separate it exists and is unused:
-     `escapes::report_from` recomputes the total from the `made`/`taken`/`closed`
-     census rather than from the counter.
+6. ~~**Shadowed assertions (§6), the unfixed remainder.**~~ — **resolved
+   2026-08-15** on `joachim/shadowed-residue`; see §6.4 for the measurements.
+   `origin_report()`'s early return is gone, the `if asked > 0` report gates hang
+   off the seam publication instead, and `escaped_count` is pinned per fixture at
+   `028` 0 / `029` 0 / `075` 3. **One lead in the old entry was not taken**, and
+   it is still worth taking: `escapes::report_from` recomputes the escape total
+   from the `made`/`taken`/`closed` census rather than from the counter, so
+   asserting the gap row against *that* would make the ledger-balance check an
+   independent observation instead of one number read twice. Pinning the count
+   per fixture makes the test behavioural without it — a mutation leaking an
+   assumption now fails — so this would strengthen a passing test rather than
+   fix a broken one, which is why it was left. It is the right next step for
+   this test if anyone returns to it.
 7. **729 of `derived/`'s 952 tests are unaudited for §6's pattern**, with named
    candidates carrying named surviving mutations — the fibre-lift rung pair
    (every call site in the repo passes `(1, 2)`, so `n` is never observed), and
@@ -704,38 +706,91 @@ at the point it would go vacuous. That is `ci/skip-guard.rs`'s rule ("a check
 that examined nothing reports success") applied one level in: to an assertion
 rather than to an input.
 
-**Reported rather than fixed.** The first two need `checker/src/tg.rs`, which
-another seat owns; the third needs a measurement this branch did not take.
+**Reported rather than fixed — all three now fixed**, on `joachim/shadowed-residue`
+(2026-08-15), branched from master `4c6426a`. Kept here with what each one
+actually cost, because two of the three turned out to be worse than reported.
 
-* **Instance 2's residue.** `origin_report()`'s early return survives, and now
-  returns `ix_readiness_report()` — so the indexed readiness rows are safe in
-  both branches. Everything *after* that point in `origin_report`'s body still
-  vanishes when `ORIGINS` is empty: the `equations ACQUIRED` line, `indexed iota
-  rule REACHED`, the indexed census, and `the top origin, by recursor` rows.
-  **Verified: no test in the tree reads any of them**, so this is a measurement
-  hazard and not a test hazard — `ORIGIN-RANKING.md` §2 already records it
-  biting a measurement. The fix, if wanted, is the same one instance 2 got:
-  emit unconditionally.
-* **The `asked > 0` guards under a `> 0` report gate.** `mini_designed.rs`'s
-  `tg_discharges_the_indexed_iota_rules_premise` asserts `asked > 0` off the
-  `ICOD` and `IDEP` readiness rows, and `ix_readiness_report` emits each row
-  only `if asked > 0`. The row exists iff the assertion holds, so the
-  `contains(…)`/`unwrap_or_else(panic!)` above it catches the only state that
-  would trip it. Separating it needs the *gate* changed, in `tg.rs`.
-* **`tg_tutorial.rs::escaped_assumptions_are_reported_as_gaps` is two
-  tautologies.** `assert_eq!(counted, n)` and `assert!(total >= n)` read three
-  numbers that `global_report` prints from **one local**: `let escapes =
-  escaped()` feeds the `gap: undischarged assumption` row, the `TOTAL gaps` sum,
-  and the `… {} escaped` line alike. So the first is `escapes == escapes` and
-  the second is "a sum of non-negatives ≥ one of its terms". No behavioural
-  mutation — no assumption actually leaking to the boundary — can trip either.
-  **The fix is available and is not a `tg.rs` change**: the test's own header
-  already states the property that is asserted nowhere — *"`028` discharges
-  every one of its conditional derivations, `029` leaves one over"* — and the
-  `match escaped { 0 => …, n => … }` accepts either outcome for either file.
-  Pinning `escaped_count` per fixture makes it a behavioural claim. Not done
-  here only because it needs the two current values measured first, and a new
-  ratchet must not be guessed.
+> **Sequencing.** The `tg.rs` half of this (commit `57bfb8c`, instances 2 and
+> the `asked > 0` gates) landed on `joachim/shadowed-residue` **before** the
+> owner parked it behind the `joachim/retire-certifier` refactor, which rewrites
+> `impl Certifier for TgBackend` wholesale. It is one isolated commit touching
+> **only** `checker/src/tg.rs`, and only the two free reporting functions at the
+> file's tail — `ix_readiness_report` and `origin_report`, around lines
+> 24000–24180. It touches **no** `Certifier` method, so it should rebase or
+> cherry-pick over that refactor cleanly; if it does not, the measurements above
+> are what need reproducing, not the diff. The `tg_tutorial` and `derived/`
+> commits are independent of it.
+
+* **Instance 2's residue — fixed.** `origin_report()`'s early return is gone.
+  The gate is drawn at the one block that is genuinely about origins: the table
+  computed *from* `ORIGINS` (`own`/`relayed`/`SUBTREE`, its `TOTAL`, its `MULTI`
+  line), which an empty ledger makes genuinely empty. Every other block reads a
+  counter incremented at a site that does not decide whether an origin is
+  recorded, and each already carried its own `> 0` guard, so they are emitted
+  whatever the ledger says. **The report above understated it.** It reads as a
+  hazard that needs `NANODA_ASSUME` to bite; measured, it was biting at
+  baseline. `mutual_aux_encoding` and `ctor_abbrev_major` — the two fixtures
+  that exercise the indexed ι rule — both leave `ORIGINS` **empty**, so `indexed
+  iota rule REACHED` and the whole index-expression census were invisible on
+  precisely the two inputs that produce them, with no environment variable
+  involved. They print again: census `asked 9, typed 9` and `asked 2, typed 2`.
+  Still a measurement hazard and not a test one — every rescued row is
+  `stepcount`-gated, so a plain `--features tg` build emits byte-identical text
+  and **no gate in §2 can observe this half**. It was verified by direct
+  measurement instead, and that is the honest status: adding a `stepcount`-only
+  test would have been a check outside the gate list, which is the disease at
+  the top of this document.
+* **The `asked > 0` guards — fixed**, by changing the gate as this entry said it
+  would need. `ix_readiness_report`'s `ICOD`/`IDEP`/`PRE` rows now hang off the
+  *seam publication* (`IX_PUBLISHED`) rather than off each row's own count, so
+  "mini handed us indexed evidence and the consumer never asked for `ICOD`"
+  prints as `asked 0` instead of as silence — which is the observation that
+  block's own doc comment was written for. Separated and watched in **both**
+  directions, which is what makes the shadow a measurement rather than a
+  reading:
+
+  | mutation | pre-fix death | post-fix death |
+  | --- | --- | --- |
+  | zero `ICOD_ASKED` | `mini_designed.rs:3138`, "no ICOD readiness row" | `:3147`, "ICOD was never asked for: … asked 0, discharged 2" |
+  | zero `IDEP_ASKED` | `:3160`, "no IDEP readiness row" | `:3167`, "… asked 0, declarations complete 8" |
+
+  `PRE`'s `pn[0] > 0` was **not** shadowed and was left alone: its gate is
+  `IDEP_ASKED`, its value is `PRE_DONE`, and the two are independent. The
+  original entry was right to name only `ICOD` and `IDEP`.
+* **`escaped_assumptions_are_reported_as_gaps` — fixed**, and the diagnosis
+  above is confirmed exactly: `global_report` computes `let escapes = escaped()`
+  once (`tg.rs:26801`) and prints it as the gap row, as a term of the `TOTAL
+  gaps` sum, and as the `… {} escaped` field. Measured, then pinned per fixture:
+
+  | file | escaped | conditional derivations |
+  | --- | --- | --- |
+  | `028_peano2` | **0** | 20 made, 20 accounted for by a rule |
+  | `029_peano3` | **0** | 48 made, 48 accounted for |
+  | `075_nRecReduction` | **3** | 95 made, 92 accounted for |
+
+  Separating mutation, watched: `consume` skipping `note_consumed()` when
+  `hyps.len() == 1` leaks exactly one assumption to the boundary on
+  `028_peano2`. **The old test passed under it — run, green, 1/1** — and the new
+  one dies at `tg_tutorial.rs:742` reading `left: 1  right: 0`. That is the
+  tautology demonstrated rather than argued.
+
+  **And the header this entry proposed to assert was itself wrong.** It said
+  *"`028` discharges every one of its conditional derivations, `029` leaves one
+  over"*. `029` leaves **nothing** over; the file with a residue is `075`, at 3.
+  Had the values been guessed from the header rather than measured, the new
+  ratchet would have been wrong on landing — which is the whole reason this
+  entry refused to guess them, and the reason it was right to refuse. The two
+  ledger-balance assertions are kept, with their honest status written at the
+  line: they separate a *reporting* regression (row dropped, renamed, or left
+  out of the sum, read back through three independent subprocess runs), which is
+  a different subject from the one the test is named for.
+
+Also corrected while there, being the same disease one file over: the row
+`indexed iota rule REACHED at a use site, **premise outstanding**` was renamed
+`… before its premise`. `IX_FIRE` is bumped where the rule instantiates, ahead
+of any premise work, so the old label named an event it does not count — §4.5
+instance 3 — and it sat directly beneath a `PRE … discharged` row carrying the
+same number.
 
 ### 6.5 One claim this audit refuted
 
