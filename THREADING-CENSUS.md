@@ -900,7 +900,7 @@ is quoted below, and none of the conclusions depends on one.
 | `whnf` / `whnf_no_unfolding` callers that discard the equality | 28 | **25 sites, 26 calls** (`tc.rs` 15 lines / 16 calls, `inductive.rs` 10) | `ensure_pi` gained its certified sibling (`b7ec000`), so its evidence-bearing caller left this population |
 | `assert_def_eq_only` | 17 | **17** (`inductive.rs` 10, `quot.rs` 6, `tc.rs` 1) | unchanged |
 | `infer_ty`-family discards in `tc.rs` | 20 | **21 lines, 22 calls** (one line carries two) | one site added |
-| `def_eq` whose certificate is discarded | "the sites inside §1.4's admit rows" | **4** (`tc.rs:606, 610, 660, 2672`) | `tc.rs:2348` records one of these already converted — its doc says *"this used to be `assert!(self.def_eq(u, v).is_some())`"* |
+| `def_eq` whose certificate is discarded | "the sites inside §1.4's admit rows" | **4** (`tc.rs:606, 610, 660, 2672`) | `tc.rs:2353` records one of these already converted — its doc says *"this used to be `assert!(self.def_eq(u, v).is_some())`"* |
 
 **The comment at `tc.rs:1365` had gone stale and is corrected with this census**;
 it read "so none of their 28 callers change" and the number is 26 calls at 25
@@ -934,9 +934,9 @@ entry whose reason is "this has always been fine" is not an entry.
 | --- | --- |
 | `ensure_pi` (`tc.rs:564`), reached only from `tc.rs:1094` | **The canonical entry, and it is by construction.** `infer_app` takes `ensure_pi_with_cert` when a derivation is live to consume the leg and this bare one otherwise — the `else` of `if let Some(so_far) = applied`. The certificate is not discarded; it is *not built*, precisely when nothing exists to receive it. `tc.rs:1082-1085` states the rule at the line. |
 | `ensure_sort` (`tc.rs:553`), reached from `tc.rs:475,546` and `inductive.rs:401,431` | A **shape probe with a fail-fast rejection**: the question is "is this a `Sort`", the answer licenses proceeding or rejecting, and the enclosing decision returns a level, not an equality. Its consumers are the `Dropped::BinderSort` sites, which §2 puts explicitly outside the staging order. |
-| `is_sort_zero` (`tc.rs:3381`), and the `Dropped::Predicate` discards (`tc.rs:3412,3437`) | The **stage-0 witnesses landed** (§1.6): the bool-returning predicates have witness-returning counterparts (`proposition_witness`, `proof_witness`) that are threaded, and these are the counted bool-only calls beside them. The discard is counted, the witness exists, and the caller that needs evidence takes the other function. |
+| `is_sort_zero` (`tc.rs:3386`), and the `Dropped::Predicate` discards (`tc.rs:3417,3437`) | The **stage-0 witnesses landed** (§1.6): the bool-returning predicates have witness-returning counterparts (`proposition_witness`, `proof_witness`) that are threaded, and these are the counted bool-only calls beside them. The discard is counted, the witness exists, and the caller that needs evidence takes the other function. |
 | the 10 `inductive.rs` telescope walks (`:363,378,392,396,416,422,426,688,1011,1026`) | **Environment admission.** These whnf a type cursor while walking an inductive's or constructor's telescope to decide whether the *declaration* is well-formed. The conclusion that leaves the enclosing call is admit-or-reject on the environment, not a defeq fact used in a later derivation. |
-| the 17 `assert_def_eq_only` sites | **The adapter is itself the allowlist, and it is already named and counted.** Its doc (`tc.rs:2363`) is the criterion verbatim — *"confirm `u ≡ v` where nothing downstream can use the certificate, naming the place that drops it so the discard is counted rather than invisible"* — and every call passes a `Dropped` site that `bump_dropped` records. 16 of the 17 compare a declaration the file supplies against the shape we expect (`inductive.rs` re-derived against imported, `quot.rs` the `Quot` axioms' declared types); the verdict is acceptance of the environment. |
+| the 17 `assert_def_eq_only` sites | **The adapter is itself the allowlist, and it is already named and counted.** Its doc (`tc.rs:2368`) is the criterion verbatim — *"confirm `u ≡ v` where nothing downstream can use the certificate, naming the place that drops it so the discard is counted rather than invisible"* — and every call passes a `Dropped` site that `bump_dropped` records. 16 of the 17 compare a declaration the file supplies against the shape we expect (`inductive.rs` re-derived against imported, `quot.rs` the `Quot` axioms' declared types); the verdict is acceptance of the environment. |
 
 **One entry on this list disagrees with its own ledger label, and the
 disagreement is real.** `tc.rs:1280` — `infer_let` under `Check`, asserting the
@@ -957,15 +957,49 @@ one site.
 | `infer_proj` (`tc.rs:829,839,848,864`) | The field type this whnf-walk computes **is** the typing `infer_proj` returns. §1.2 already records the consequence: `TgBackend::ty_proj` re-derives it delta-only and *declines when whnf was needed*. This is threading debt with a design fork already stated in §1.2 — thread the walk, or keep the recompute-and-check as the honesty mechanism — and it is the largest single entry here. |
 | `try_eta_struct_aux` (`tc.rs:606, 610`) | Both certificates license `Admit::EtaStruct`. A conclusion rests on them by definition: the admit *is* the conclusion. §1.4 marks the fix blocked on interpreted structures (§3), not on threading. |
 | `def_eq_unit` (`tc.rs:660`) | `r.and_then(\|_\| self.admit(x, y, Admit::UnitLike))` — the equality is used and then dropped by the `\|_\|`. Same disposition as above: blocked on interpreted structures. |
-| `to_ctor_when_k` (`tc.rs:2672`) | The discarded equality licenses **replacing the major premise** for K-recursors, and §1.5 already names it: *"the discarded equality is exactly the evidence a future ι-K rule needs."* |
+| `to_ctor_when_k` (`tc.rs:2677`) | The discarded equality licenses **replacing the major premise** for K-recursors, and §1.5 already names it: *"the discarded equality is exactly the evidence a future ι-K rule needs."* |
 | `do_nat_bin` (`tc.rs:666`, two calls), `try_reduce_nat` (`tc.rs:699`), `str_lit_to_ctor_reducing` (`tc.rs:622`) | Literal arithmetic and string-literal reduction, whose steps become `Admit::NatRed` with no backend rule. Debt, but **milestone 4**, not threading — the certificate has nowhere to go until the rule exists. |
-| `reduce_quot` (`tc.rs:2829,2832`) | `Admit::Quot`, which needs interpreted `Quot`. Blocked for the same reason, in §3's bucket rather than this one. |
+| `reduce_quot` (`tc.rs:2834,2832`) | `Admit::Quot`, which needs interpreted `Quot`. Blocked for the same reason, in §3's bucket rather than this one. |
 
-**What this partition says.** Of the sites that are live and genuinely
-acceptance-only, exactly **four groups are threading debt the project could act
-on today** — `infer_proj`'s four, and the three admit-licensing `def_eq`
-discards — and every one of them is already named in §1.2, §1.4 or §1.5 with a
-consumer identified. The rest are either allowlist with an argument, or blocked
-on an interpretation milestone that owns them. **No site in this population is
-unaccounted for**, which is the property task #103 was asking for and which
-neither the 27 nor the 18 could establish.
+**What this partition says.** Every site in this population is accounted for —
+allowlist with an argument, or debt with a name — which is the property task #103
+was asking for and which neither the 27 nor the 18 could establish. **No site is
+unattributed.**
+
+#### None of the debt is actionable today, and this sentence used to say four groups were
+
+*Corrected 2026-08-15 at `ab2c201`, by trying two of them. This read: "exactly
+four groups are threading debt the project could act on today — `infer_proj`'s
+four, and the three admit-licensing `def_eq` discards — and every one of them is
+already named in §1.2, §1.4 or §1.5 **with a consumer identified**." The phrase
+doing the unearned work is the last one: a consumer being **named** is not a
+consumer being **able to receive**. The right test is*
+
+> **does the consumer have a rule that can receive the certificate?**
+
+*and applied to all four, the answer is no.*
+
+| group | why the certificate has nowhere to land |
+| --- | --- |
+| `infer_proj` (`tc.rs:829,839,848,864`) | The consumer exists and is **structurally incapable of deriving**. `ty_proj` has four `ty_miss` exits and one success, and that success is `typing(…, thm = imp_refl(f), hyps = vec![f])` — `hyps` is never empty, so it never produces an unconditional typing. `has_type_proj`'s doc is the authority: `proj` is an **axiom-free** symbol, *"nothing at all is provable about it… no rule can make it one"*. Threading converts declines into antecedents. Measured at `ab2c201` on `init-prelude`: **126** `no evidence: ty_proj` against **417** already *"acquired as an antecedent"*, and **0** gaps closable. The 126 is an **upper bound**, not the prize — the four exits share one `TyGap::Proj` and the split is **uninstrumented**. Blocked on **interpreted structures**. |
+| `to_ctor_when_k` (`tc.rs:2677`) | The consumer **does not exist**. `is_k` is a *decline condition* in every backend ι path — `tg.rs:4459` makes it the label `"iota: no interpretation — a K-like eliminator"`, and the recogniser guards at `tg.rs:7412,7437,7513,7608,7704,7850` all bail on `r.is_k`. §1.5's sentence is accurate and correctly hedged — *"the evidence a **future** ι-K rule needs"* — and "future" is the whole of it. Measured at `ab2c201` on `init-prelude`: the row named for it, `iota: no interpretation — a K-like eliminator`, is **6 gaps** (60 with sub-tree) — that is the population of K ι sites the backend *reached and declined*, not every K-related gap, since a `to_ctor_when_k` that fails its own `def_eq` leaves the major non-constructor and lands in a different row. Either way, closing them needs **a rule, not a certificate**. |
+| `try_eta_struct_aux` ×2, `def_eq_unit` | §1.4 already said *"blocked on interpreted structures (§3)"*. Listing them as actionable contradicted the section this row cites. That was an error in the sentence above, not a change in the tree. |
+
+**So all four are blocked on interpretation, not on threading** — and **three of
+the four on the same milestone**, interpreted structures (`infer_proj`,
+`try_eta_struct_aux`, `def_eq_unit`), with `to_ctor_when_k` alone waiting on an
+ι-K rule. The acceptance-only debt that remains in this
+population is **interpretation debt wearing threading's clothes** — which is worth
+more as a finding than any of the four would have been as a fix, and is why the
+`ty_proj` and `to_ctor_when_k` attempts were stopped before either was built.
+
+*A second, weaker lead was checked and also fails.* `to_ctor_when_k` discards a
+**typing** as well as an equality (`infer_ty(new_ctor_app)`, `tc.rs:2676`), and
+§1.3 records that the beta rule's raw hoists include *"`Eq.refl`/`HEq.refl`
+constructor apps built by `to_ctor_when_k`'s K-shortcut"* — so there appears to be
+a live consumer. There is not. `arg_mems` is keyed `(arg, ⟦dom⟧)` and filled only
+from an **application check** (`app_arg_checked`, `tg.rs:22626`); `to_ctor_when_k`
+is not one and has no binder domain to key against. And §1.3's own measurement
+already refutes the transport: of the never-checked raw hoists, **18 622 were
+never a typing rule's conclusion anywhere** — *"what is missing is not the
+transport of a fact but the fact."*
