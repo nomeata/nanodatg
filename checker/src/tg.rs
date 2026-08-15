@@ -26599,9 +26599,32 @@ fn inst_report() -> String {
     if st.extension_seeds > 0 {
         row(&mut s, "seeded for literal expansion, not present in the file".into(), st.extension_seeds as u64);
     }
+    // **The one edge class no expression carries**, printed only where there is
+    // one: `instantiations::model_edges` fires on a file a model filter has
+    // spliced a `T._model` tower into and on no other, so a row at zero would
+    // appear on every export in the corpus to say nothing. When it *is*
+    // nonzero it is the number to read beside a moved pair count — a
+    // modelgen'd file's schedule grows because the tower stopped being
+    // defaulted, and this says by how many arcs.
+    if st.model_edges > 0 {
+        row(&mut s, "…edges added from a declaration to its spliced model".into(), st.model_edges as u64);
+    }
     if st.nonground_edges > 0 {
         row(&mut s, "constant uses whose levels did not evaluate to numerals".into(), st.nonground_edges as u64);
     }
+    // **Printed at zero, on purpose, and for the same reason the miss row
+    // below is.** `instantiations::MAX_INSTANTIATION_LEVEL` is what makes the
+    // fixpoint terminate on a file whose mention graph has a level-increasing
+    // cycle; a zero here is the claim that the closure ran to completion and
+    // refused nothing, and a claim that only appears when it fails is not a
+    // claim anyone reads. A nonzero reading says the schedule is **incomplete**
+    // — the pairs it dropped are pairs the walk may still enter, which is
+    // exactly what the unpredicted-instantiation row below would then see.
+    row(
+        &mut s,
+        format!("edges refused above σ = {}", crate::instantiations::MAX_INSTANTIATION_LEVEL),
+        st.level_cap_drops as u64,
+    );
     for a in InstAudit::ALL {
         let n = INST_AUDIT[a as usize].load(Relaxed);
         // The miss row is printed at zero too: "the pre-pass predicted
