@@ -14,11 +14,25 @@ fn eq_symm_derives() {
     let (a, b) = (env.fresh_var(), env.fresh_var());
     let (ta, tb) = (Term::var(a), Term::var(b));
 
-    // Manufacture a proof of `f(a) = f(a)`, then check symm gives the same
-    // thing back (a = b with a syntactically equal to b).
+    // **The equation is asymmetric, and that is what makes this a test of
+    // `symm`.** It used to run only at `f(a) = f(a)` — the comment said so
+    // outright, "a = b with a syntactically equal to b" — where the conclusion
+    // is its own converse, so an `eq_symm` that returned its input untouched
+    // passed. `Thm::assume` gives `{a = b} ⊢ a = b` with the two sides
+    // syntactically different, and symm must hand back `{a = b} ⊢ b = a`.
+    let asym = Thm::assume(Formula::eq(ta.clone(), tb.clone()));
+    let sym = derived::eq_symm(&mut env, &asym).expect("symm failed on an assumed equation");
+    assert_eq!(*sym.concl(), Formula::eq(tb.clone(), ta.clone()), "symm did not swap the sides");
+    assert_eq!(sym.hyps(), asym.hyps(), "symm did not carry the assumption through");
+
+    // …and it still handles the reflexive case, where the converse is the same
+    // formula. Kept as a case, not as the whole test.
     let refl = Thm::eq_refl(Term::apply(f, vec![ta.clone()]));
-    let sym = derived::eq_symm(&mut env, &refl).expect("symm failed on reflexivity");
-    assert_eq!(*sym.concl(), Formula::eq(Term::apply(f, vec![ta]), Term::apply(f, vec![Term::var(a)])));
+    let sym_refl = derived::eq_symm(&mut env, &refl).expect("symm failed on reflexivity");
+    assert_eq!(
+        *sym_refl.concl(),
+        Formula::eq(Term::apply(f, vec![ta.clone()]), Term::apply(f, vec![ta]))
+    );
 
     // symm must refuse a non-equation.
     let k = Thm::ax_k(Formula::eq(Term::var(a), tb.clone()), Formula::false_());

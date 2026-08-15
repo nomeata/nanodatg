@@ -2264,12 +2264,28 @@ fn a_projection_certifies_when_its_subject_reduces_and_stays_stuck() {
     let convs = row(&out, "convs");
     assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
     // The claim the fixture exists to make, checked rather than asserted.
+    //
+    // **Not `split_whitespace()`, and that spelling was the whole guard until
+    // 2026-08-15.** An export line is one unbroken JSON object with no interior
+    // whitespace — measured, this file is 432 lines and 432 whitespace tokens —
+    // so `split_whitespace()` yields *whole lines* and no token can ever equal a
+    // bare name. `any(|w| w == "Nat")` was unfalsifiable whatever the fixture
+    // held. Names live in the export's name table as `"str":"NAME"`, which is
+    // also the form that tells the name `Nat` from the substring in `nat_lit`.
     let text = std::fs::read_to_string(fixture("proj_stuck_subject.ndjson")).expect("read");
-    assert!(
-        !text.split_whitespace().any(|w| w == "Nat" || w == "PProd"),
-        "`Nat` or `PProd` reached the export; the fixture no longer shows the defect is \
-         about neither"
-    );
+    let named = |n: &str| text.contains(&format!(r#""str":"{n}""#));
+    // **The predicate is proved live in place.** `Tri` is the structure this
+    // fixture declares and projects out of, so the same reader that reports
+    // `Nat` absent reports `Tri` present. Under the old tokenisation this line
+    // fails, which is the shortest statement of what was wrong with it.
+    assert!(named("Tri"), "the name-table reader matched nothing — it is not reading names");
+    for n in ["Nat", "PProd"] {
+        assert!(
+            !named(n),
+            "`{n}` is in this export's name table; the fixture no longer shows the defect \
+             is about neither"
+        );
+    }
 }
 
 /// **A projection whose structure has to be computed** — the `brecOn` nest,
@@ -2336,11 +2352,24 @@ fn a_projection_certifies_when_its_carrier_has_to_be_computed() {
     all_derived(&out, 24);
     let convs = row(&out, "convs");
     assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
-    // The claim the fixture exists to make, checked rather than asserted.
+    // The claim the fixture exists to make, checked rather than asserted. See
+    // the sibling test for why this is a name-table read and not
+    // `split_whitespace()`, which could not fail.
+    //
+    // **`PProd` is deliberately not named here, and that is the answer to a
+    // question the broken guard hid.** This fixture's whole subject *is*
+    // `PProd` — the waiting rows in the table above are `proj(PProd) = 10 → 7
+    // → 3` — so `PProd` is in its name table on purpose and must stay. Only
+    // `Nat` is the claim: the defect is not the Nat bridge. The sibling fixture
+    // is the one that must contain neither, and its header says so. The two
+    // guards differ because the fixtures differ, not by oversight.
     let text = std::fs::read_to_string(fixture("proj_reduced_carrier.ndjson")).expect("read");
+    let named = |n: &str| text.contains(&format!(r#""str":"{n}""#));
+    // Live in place, and the control is the subject itself.
+    assert!(named("PProd"), "`PProd` left this fixture — it is what the fixture is about");
     assert!(
-        !text.split_whitespace().any(|w| w == "Nat"),
-        "`Nat` reached the export; the fixture no longer shows the defect is Nat-free"
+        !named("Nat"),
+        "`Nat` is in this export's name table; the fixture no longer shows the defect is Nat-free"
     );
 }
 

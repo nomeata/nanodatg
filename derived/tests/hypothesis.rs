@@ -81,18 +81,42 @@ fn conjunction_under_hypothesis() {
     assert_eq!(*got.concl(), expected);
 }
 
-/// Biconditional projections under a hypothesis.
+/// Biconditional projections under a hypothesis, at a **genuine** `p ↔ q`.
+///
+/// This was built at `p ↔ p` and then asserted both projections equal to one
+/// `expected` — the same formula, written twice. Two degeneracies at once: the
+/// biconditional could not tell its halves apart, and the two assertions were
+/// the identical predicate. A `hyp_iff_mpr` that returned the forward half
+/// passed, which is the direction that matters, since these are what a
+/// hypothesis-carrying rewrite uses to pick a side.
+///
+/// Distinct atoms, and both provable, so the `↔` is derivable without an axiom
+/// — see `propositional.rs::biconditional_projections` for the construction.
 #[test]
 fn iff_projections_under_hypothesis() {
     let mut env = Env::new();
-    let (h, p, _) = atoms(&mut env);
-    let pp = derived::imp_refl(p.clone());
-    let iff = derived::and_intro(&pp, &pp); // ⊢ p ↔ p
+    let (h, _, _) = atoms(&mut env);
+    let (x, y) = (env.fresh_var(), env.fresh_var());
+    let (p, q) = (
+        Formula::eq(Term::var(x), Term::var(x)),
+        Formula::eq(Term::var(y), Term::var(y)),
+    );
+    let fwd_i = derived::a1i(&Thm::eq_refl(Term::var(y)), p.clone());
+    let bwd_i = derived::a1i(&Thm::eq_refl(Term::var(x)), q.clone());
+    let iff = derived::and_intro(&fwd_i, &bwd_i); // ⊢ p ↔ q
     let h_iff = derived::a1i(&iff, h.clone());
 
     let fwd = derived::hyp_iff_mp(&h_iff).expect("hyp_iff_mp");
     let bwd = derived::hyp_iff_mpr(&h_iff).expect("hyp_iff_mpr");
-    let expected = Formula::imp(h, Formula::imp(p.clone(), p));
-    assert_eq!(*fwd.concl(), expected);
-    assert_eq!(*bwd.concl(), expected);
+    assert_eq!(
+        *fwd.concl(),
+        Formula::imp(h.clone(), Formula::imp(p.clone(), q.clone())),
+        "hyp_iff_mp is not the forward half"
+    );
+    assert_eq!(
+        *bwd.concl(),
+        Formula::imp(h, Formula::imp(q, p)),
+        "hyp_iff_mpr is not the backward half"
+    );
+    assert_ne!(fwd.concl(), bwd.concl(), "the two halves agree — the fixture cannot see a swap");
 }

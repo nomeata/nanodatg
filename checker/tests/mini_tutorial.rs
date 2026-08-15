@@ -2072,10 +2072,24 @@ fn tutorial_evidence_ledger() {
     // And the rolled-up spelling is gone rather than merely empty: a bare
     // `indexed-family(X)` with no construction named is the label this split
     // removed, and it must not come back.
-    assert!(
-        !totals.keys().any(|k| k.starts_with("waiting:indexed-family(") && !k.contains(':')),
-        "an indexed-family row without a named construction reappeared"
-    );
+    //
+    // **The conjunction this replaces was unsatisfiable.** It read
+    // `k.starts_with("waiting:indexed-family(") && !k.contains(':')` — and the
+    // prefix *itself* carries a `:` at index 7, so no key in the universe could
+    // satisfy both halves. Dead a second time over at the producer: the sole
+    // constructor is `Gap::IndexedFamily(n, w)` rendering as
+    // `format!("indexed-family({n}: {w})")` (`mini/ledger.rs:584`), a two-field
+    // variant that always interpolates the separator, so the bare spelling has
+    // no way to be built. The question the guard means to ask is about the
+    // payload, not the whole key: strip the prefix, then look for the separator
+    // in what is left.
+    let bare: Vec<&String> = totals
+        .keys()
+        .filter(|k| {
+            k.strip_prefix("waiting:indexed-family(").is_some_and(|rest| !rest.contains(": "))
+        })
+        .collect();
+    assert!(bare.is_empty(), "an indexed-family row without a named construction reappeared: {bare:?}");
     // **The class-(P) row is closed.** `Gap::PropInductive` is no longer
     // reachable: every `Prop`-valued, small-eliminating declaration now gets
     // the truncation carrier, and what remains on those declarations is a
@@ -2148,17 +2162,38 @@ fn tutorial_evidence_ledger() {
         ("waiting:recursor(PProd: dependent motive)", 0),
         ("waiting:recursor(N: dependent motive)", 0),
         ("waiting:recursor(List: dependent motive)", 0),
-        // Pinned at zero for the same reason the six above are, and the reason
-        // is sharper here: the *string* still exists in
-        // `mini/src/recursor.rs`'s vocabulary as the prefix of
-        // `CLASS_S_EMPTY`, so "the row is not emitted" and "the row is zero"
-        // are genuinely different statements and this asserts the second.
-        ("waiting:recursor(And: class (S) eliminator)", 0),
-        ("waiting:recursor(PUnit: class (S) eliminator)", 0),
-        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // **The class-(S) rows, and a correction to what this block used to claim.**
+    //
+    // Three more keys were pinned here by exact lookup —
+    // `waiting:recursor(And: class (S) eliminator)` and the same for `PUnit`
+    // and `ProjDataIndex` — under a comment saying the string survives in
+    // `checker/src/mini/recursor.rs` as the prefix of `CLASS_S_EMPTY`, so that
+    // *"'the row is not emitted' and 'the row is zero' are genuinely different
+    // statements and this asserts the second."*
+    //
+    // **Both halves of that are false, and the three lookups were dead.**
+    // `Ledger::note_missing` (`mini/ledger.rs:613`) is
+    // `*entry(key).or_insert(0) += 1`, so a key that is present holds at least
+    // one and *no key can ever hold zero*: "not emitted" and "zero" are the
+    // same statement, not different ones, and `unwrap_or(0) == 0` can only ever
+    // be testing absence. Worse, absence of those three was guaranteed:
+    // `CLASS_S_EMPTY` is `"class (S) eliminator: no constructors"` and the key
+    // is `format!("recursor({n}: {w})")`, so the producible key carries the
+    // `: no constructors` suffix and the bare spelling above has no producer at
+    // all. Three assertions that could not fail, describing themselves as the
+    // one thing they were not doing.
+    //
+    // **Deleted rather than restated, because the correct guard already exists.**
+    // The `starts_with("waiting:recursor(") && contains("class (S)")` assertion
+    // earlier in this same test is prefix-based, so it matches the producible
+    // key including its `: no constructors` suffix and every other spelling in
+    // `mini/rec_prop.rs` (`: arity`, `: the type former's spine`, …). The three
+    // exact lookups were not merely dead, they were dead *and* redundant with a
+    // working guard five hundred lines above them. Nothing is lost by removing
+    // them and a false claim goes with them.
     // The dependent-motive rows are pinned at **zero** rather than deleted: a
     // reason string that comes back is a regression, and a row that silently
     // stops being emitted is indistinguishable from one that was never
@@ -3228,19 +3263,28 @@ fn tutorial_conversion_split() {
     // Asserted as an absence per rule rather than as a total, because a total
     // cannot tell 0-and-0 from 600-and-337 — and because the mismatch rows in
     // particular held at zero only while the walk stopped short of them.
-    for r in [
-        "dprod_ext_n",
-        "cond_ext_n",
-        "lam_ext_n",
-        "fs_cong",
-        "clauses differ: dprod vs fs",
-        "clauses differ: fs vs dprod",
-    ] {
-        assert!(
-            !reasons.contains_key(&format!("binder-congruence({r})")),
-            "a binder congruence is now genuinely wanted ({r}); the row has split"
-        );
-    }
+    // **Read off the producer's stable prefix, not off a list of payloads.**
+    // The list this replaces named six labels and *three of them had no
+    // producer*: `BinderRule::tag` (`mini/ev.rs:81`) ranges over `dprod_ext_n`,
+    // `cond_ext_n`, `lam_ext_n` and `clauses differ: {a} vs {b}` where the two
+    // are `BinderClause`, a **two**-variant enum tagging only `dprod` and
+    // `cond`. So `fs_cong`, `dprod vs fs` and `fs vs dprod` could not be
+    // emitted, and `fs_cong` is not a `BinderRule` at all — it is a derived
+    // prelude theorem. `grep fs_cong checker/src/mini/` is empty. Half the loop
+    // was watching for labels the code cannot produce.
+    //
+    // Enumerating payloads is what rotted: the payload set moved when the `Fs`
+    // clause went and the list did not. The prefix cannot rot the same way, it
+    // covers every present and future rule including ones nobody remembers to
+    // add here, and naming the offenders in the message is strictly more than
+    // the old form could report. The comment above still holds — this is an
+    // absence per rule, not a total; it just gets the rules from the producer.
+    let binders: Vec<&String> =
+        reasons.keys().filter(|k| k.starts_with("binder-congruence(")).collect();
+    assert!(
+        binders.is_empty(),
+        "a binder congruence is now genuinely wanted; the row has split: {binders:?}"
+    );
     assert_eq!(
         reasons.values().sum::<u64>(),
         g("gapped"),

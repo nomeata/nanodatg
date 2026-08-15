@@ -2999,6 +2999,24 @@ fn the_translated_row_measures_the_goals_population_and_may_not_narrow() {
         eligible, seen,
         "the pre-pass scheduled {eligible} value-carrying pairs but the walk saw {seen}"
     );
+    // **This one is a reporting check, and its honest status is written here
+    // rather than left to be discovered.** `global_report` computes
+    // `let population = scheduled.saturating_sub(skipped)` one line below the
+    // two it is made of (`tg.rs:26516-26517`), so **no behavioural mutation can
+    // separate it** — a change to what is scheduled or what is skipped moves all
+    // three together. It is not the guard the two identities above are: those
+    // read counters bumped at genuinely different sites (`DT[Dt::Seen]` against
+    // `st.value_pairs`, `reached + collapsed` against `scheduled`) and the
+    // report emits its own bug-report line when either fails.
+    //
+    // What it *does* separate is the **printer**: all three numbers here are
+    // parsed back out of the report text by label, so a row printed in the wrong
+    // place, a label transposed, or a format change that makes `row()` pick up a
+    // neighbouring line fails this and nothing else in the file. Kept for that,
+    // labelled as that. Same disposition, and for the same reason, as the two
+    // ledger-balance assertions in
+    // `escaped_assumptions_are_reported_as_gaps` — a different subject from the
+    // one this test is named for, asserted rather than assumed.
     assert_eq!(population, scheduled - skipped, "population is not scheduled − skipped");
 
     // **The floor under the denominator.** Everything else in this file is a
