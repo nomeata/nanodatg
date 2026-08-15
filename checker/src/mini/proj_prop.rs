@@ -136,14 +136,19 @@ pub(crate) fn typing(
         return trunc_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &tt)
     }
     let Some(cs) = cs else {
-        // As in `proj_data`: a model-route declaration has no `Translated` and
-        // never will, so it is untranslated by name rather than `proj(T)` debt.
-        let Some(dt) = dt else {
-            return Err(crate::mini::zoneb::model_route_untranslated(
-                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
-            )
-            .unwrap_or_else(|| miss!()))
-        };
+        // **A model-route declaration is not filed as untranslated here**, and
+        // that is deliberate rather than an omission. This route runs *first*
+        // (`kernel.rs`'s `Expr::Proj` clause) and answers only for a
+        // `Prop`-valued field; a data field is `proj_data`'s. Filing the
+        // declaration-level verdict here recorded it as a side effect before
+        // the route that owes the answer had run, so a projection `proj_data`
+        // went on to certify *still* left its declaration in the untranslated
+        // census. Measured on `tool_nested_proj`: `typesOk` rose by one while
+        // `notrans:ind-spec(Wrap: …)` stayed. One filer, and it is the general
+        // route, which runs second — see `zoneb::model_route_untranslated`.
+        // `miss!()` is `Gap::StructProj`, which is exactly what `first_reason`
+        // treats as "no reason of my own" and replaces with `proj_data`'s.
+        let dt = dt.ok_or_else(|| miss!())?;
         return decl_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &dt)
     };
     let spec = cs.spec.base.ctors.first().ok_or_else(|| miss!())?;

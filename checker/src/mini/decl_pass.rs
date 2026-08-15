@@ -450,6 +450,7 @@ impl Pass {
         let Some(app) = ip.ind_apparatus() else { return };
         app.model_of = self.nested.model_of.clone();
         app.model_iota = self.nested.model_iota.clone();
+        app.model_proj = self.nested.model_proj.clone();
         app.nested = self.nested.nested.clone();
         self.nested_seen = self.nested.seen;
         self.nested_models = self.nested.modelled;

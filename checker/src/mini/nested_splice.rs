@@ -210,13 +210,25 @@
 //! `_impl.0` / `_auxCarrier` / `_auxTag` chain under it.
 //!
 //! So [`Recogniser::decl_sigmas`]'s propagation is **necessary and not
-//! sufficient**: it puts `{2}` on `PTree._model`'s schedule entry, but the
-//! demand closure that would carry `{2}` down to what `PTree._model` *mentions*
-//! was taken by the pre-pass before this module ran and is not re-taken.
+//! sufficient**: it puts `{2}` on `PTree._model`'s schedule entry, and what
+//! `PTree._model` itself *mentions* is still at `[0]` and `[1]`.
 //! `ind-spec(PTree: nested model not keyed here)` — the keying defect — is
-//! gone; `ind-spec(PTree: nested model not interpreted)` at the one σ past
-//! `DEFAULT_LEVELS` is what is left, and closing it is
-//! `checker::instantiations`' business rather than this module's.
+//! this module's and is gone; `ind-spec(PTree: nested model not interpreted)`
+//! at the one σ past `DEFAULT_LEVELS` was `checker::instantiations`'.
+//!
+//! **That second half is closed, and the sentence this paragraph used to end
+//! with was wrong about how.** It said the pre-pass's closure "is not
+//! re-taken", which has the mechanism right and the fix wrong, and it is
+//! corrected here rather than appended because a seat could be briefed off it.
+//! **No closure is re-taken and none needed to be.** The model is *in the
+//! file*, so every one of its declarations is already a node of
+//! `instantiations`' graph with its own outgoing edges; the single thing
+//! missing was the arc **into** the tower, `T ⟶ T._model`, which no expression
+//! can carry because nothing mentions a model constant. `instantiations::
+//! model_edges` adds exactly that arc before the existing fixpoint, keyed at
+//! the subject's own parameters so it evaluates to σ, and the ordinary closure
+//! then carries `{2}` down the tower unaided. The propagation here and that
+//! arc are the two halves of one fix and neither is sufficient alone.
 //!
 //! What is **not** free is that the model's recursors and ι theorems are
 //! interpreted at **two** σ rather than one. That is real. The obvious reading
@@ -345,6 +357,16 @@ pub enum Missing {
     /// about. Distinct from [`Missing::Iota`]: the theorem is there and states
     /// something, and it is not this rule.
     IotaRule,
+    /// A `T._model.proj_i` is present and is not a `def` over `T._model`'s
+    /// telescope, or its `T._model.proj_i.iota` is absent or is not an
+    /// equation about it at the constructor.
+    ///
+    /// **Absence of the whole family is not this** — it is not a `Missing` at
+    /// all. A declaration with no intrinsic projections emits none, and a
+    /// legacy tower emits none ever; [`shape`] records an empty list and the
+    /// declaration is keyed as normal. This fires only for a family that is
+    /// there and malformed, or half there.
+    Proj,
 }
 
 impl Missing {
@@ -357,6 +379,7 @@ impl Missing {
             Missing::Rec => "nested model recursor does not state the export's",
             Missing::Iota => "nested model iota rule is not an equation about the model recursor",
             Missing::IotaRule => "nested model has no iota rule for a constructor the export's recursor reduces on",
+            Missing::Proj => "nested model projection does not state the field's, or has no reduction rule",
         }
     }
 }
@@ -379,6 +402,15 @@ pub struct Recognised {
     /// there, by name; there is no name rule and no fall-through, for
     /// [`Recognised::model_of`]'s reason.
     pub model_iota: HashMap<(ModelKey, Name), Name>,
+    /// **The projections.** `((T, σ), field index) ↦ (the model's projection,
+    /// its reduction rule)`, for exactly the fields this pass recognised.
+    ///
+    /// Keyed at the *declaration's* σ, like the carrier and the constructors
+    /// and unlike a recursor: a projection binds no motive universe. The
+    /// consumer holding this key is `crate::mini::proj_data::typing`, which has
+    /// the declaration, the ground σ read off the subject's type, and the field
+    /// index, and nothing else.
+    pub model_proj: HashMap<(ModelKey, u32), (Name, Name)>,
     /// Every nested declaration this pass saw, by its own name.
     pub nested: HashMap<Name, NestedRecord>,
     /// Nested declarations seen, and models recognised. `modelled ≤ seen`, and
@@ -457,6 +489,27 @@ impl Scheme {
         }
     }
 
+    /// **Field `i`'s intrinsic projection, and its reduction rule.**
+    ///
+    /// `None` under [`Scheme::Legacy`]: `modelgen` has no projection family at
+    /// all, so a legacy tower answers "no projections" rather than "projections
+    /// missing", and [`shape`] must not require of it what it never emits.
+    ///
+    /// This is the third slot the tool keys off the *type former* rather than
+    /// off a source declaration, and `Naming.lean:93-97` says why in terms: a
+    /// projection "does not model a source constant", so there is no name to
+    /// suffix and `i` is the field's position in the unique constructor's
+    /// telescope.
+    fn proj(self, t: &Name, i: usize) -> Option<(Name, Name)> {
+        match self {
+            Scheme::Tool => {
+                let p = Name::str(&model_suffix(t), &format!("proj_{i}"));
+                Some((p, Name::str(&p, "iota")))
+            }
+            Scheme::Legacy => None,
+        }
+    }
+
     /// Rule `j` of recursor `k`, whose own exported name is `r`.
     ///
     /// A rule is a *field* of a recursor and has no exported declaration of its
@@ -502,6 +555,7 @@ pub fn recognise(
         schedule: sched,
         model_of: r.model_of,
         model_iota: r.model_iota,
+        model_proj: r.model_proj,
         nested: r.nested,
         seen: r.seen,
         modelled: r.modelled,
@@ -546,6 +600,8 @@ pub struct Recogniser {
     pub model_of: HashMap<ModelKey, Name>,
     /// [`Recognised::model_iota`].
     pub model_iota: HashMap<(ModelKey, Name), Name>,
+    /// [`Recognised::model_proj`].
+    pub model_proj: HashMap<(ModelKey, u32), (Name, Name)>,
     /// [`Recognised::nested`].
     pub nested: HashMap<Name, NestedRecord>,
     pub seen: usize,
@@ -573,6 +629,7 @@ impl Recogniser {
         Recogniser {
             model_of: HashMap::new(),
             model_iota: HashMap::new(),
+            model_proj: HashMap::new(),
             nested: HashMap::new(),
             seen: 0,
             modelled: 0,
@@ -700,6 +757,12 @@ struct Model {
     recs: Vec<(Name, Name)>,
     /// `(export recursor, the rule's constructor, the model's ι theorem)`.
     iotas: Vec<(Name, Name, Name)>,
+    /// `(field index, the model's projection, its reduction rule)`, in field
+    /// order and contiguous from 0.
+    ///
+    /// Empty for a declaration that has no intrinsic projections — every
+    /// multi-constructor one, and every legacy tower.
+    projs: Vec<(u32, Name, Name)>,
 }
 
 impl Recogniser {
@@ -784,6 +847,16 @@ impl Recogniser {
             }
             demand(schedule, model, &mono_sigmas);
             constants.push(*export);
+        }
+        // A projection binds no motive universe, so it is keyed at the
+        // declaration's σ — the same set the type former and the constructors
+        // take — and its two constants are demanded there.
+        for (fi, pn, pi) in &m.projs {
+            for sig in &mono_sigmas {
+                self.model_proj.insert(((*name, sig.clone()), *fi), (*pn, *pi));
+            }
+            demand(schedule, pn, &mono_sigmas);
+            demand(schedule, pi, &mono_sigmas);
         }
         // **A recursor is keyed at every σ the run will ask for it at**, and
         // the same σ are propagated onto the model — the header's "any
@@ -972,7 +1045,86 @@ fn shape(
         }
         out_recs.push((*r, m));
     }
-    Ok(Model { mono, recs: out_recs, iotas })
+    // ── the intrinsic projections ───────────────────────────────────────────
+    //
+    // **Enumerated until absent, and absence is not a decline.** The producer
+    // emits `T._model.proj_i` only for a one-constructor owner whose fields the
+    // kernel can project, and `Naming.lean:93-97` says the family models no
+    // source declaration — so unlike the carrier, the constructors and the
+    // recursors there is no export constant whose statement says how many there
+    // should be. What there *is* is the constructor's telescope, and the
+    // producer's own checker builds the expected type from exactly that
+    // (`Check.lean:1300-1326`), so a missing `proj_i` in the middle of a
+    // telescope shows up as the enumeration stopping early and the fields past
+    // it never being keyed — which declines at the consumer, by name, rather
+    // than here.
+    let mut projs: Vec<(u32, Name, Name)> = Vec::new();
+    if ctors.len() == 1 {
+        // `∀p⃗ ι⃗ (self : T._model p⃗ ι⃗), βᵢ` — the owner's whole telescope, then
+        // the subject. Read off `T`'s own type rather than from `num_params`,
+        // because the producer applies the *full* arity and indices are part of
+        // it (`Check.lean:1310-1313`'s `ownerArgs`).
+        let arity = forall_arity(t_ci.ty());
+        for fi in 0.. {
+            let Some((pn, pi)) = scheme.proj(t, fi) else { break };
+            let Ok(p_ci) = model_const(env, pos, &pn, i, Missing::Proj) else { break };
+            if p_ci.lparams().len() != t_ci.lparams().len()
+                || !projection_shape(p_ci.ty(), arity, &self_n)
+            {
+                return Err(Missing::Proj)
+            }
+            // The rule is **required** once the projection is there. A keyed
+            // projection whose reduction is unread would type `⟦T.proj i x⟧`
+            // and then silently fail to fire on `⟦T.proj i (mk a⃗)⟧`, which is
+            // the same accept-and-skip this module's consumers were just taught
+            // not to do.
+            let r_ci = model_const(env, pos, &pi, i, Missing::Proj)?;
+            if r_ci.lparams().len() != t_ci.lparams().len() {
+                return Err(Missing::Proj)
+            }
+            let Some(about) = iota_key(r_ci.ty(), &pn, &back) else { return Err(Missing::Proj) };
+            if about != ctors[0].0 {
+                return Err(Missing::Proj)
+            }
+            projs.push((fi as u32, pn, pi));
+        }
+    }
+
+    Ok(Model { mono, recs: out_recs, iotas, projs })
+}
+
+/// How many `∀` binders a declared type opens with — the owner's arity, params
+/// and indices together.
+fn forall_arity(ty: &E) -> usize {
+    let mut n = 0;
+    let mut body = *ty;
+    while let Expr::Forall { body: b, .. } = body.view() {
+        n += 1;
+        body = b;
+    }
+    n
+}
+
+/// **Is this `∀p⃗ ι⃗ (self : carrier p⃗ ι⃗), _`?** — the producer's
+/// `Check.lean:1310-1326` expected type, checked as far as its *shape* goes.
+///
+/// Deliberately not the full expected type: rebuilding `βᵢ` with the earlier
+/// fields replaced by the earlier projections is the producer's own job and
+/// duplicating it here would be a second implementation of
+/// `Check.lean:1316-1322` with no independent authority. What this rules out is
+/// a constant of the right name that is not a projection at all — a squatter,
+/// or a field index that ran past the telescope — which is what the reason
+/// string has to be able to say. The module header's "the shape check is a
+/// diagnostic" applies here exactly as it does to the carrier.
+fn projection_shape(ty: &E, arity: usize, carrier: &Name) -> bool {
+    let mut body = *ty;
+    for _ in 0..arity {
+        let Expr::Forall { body: b, .. } = body.view() else { return false };
+        body = b;
+    }
+    let Expr::Forall { ty: subject, .. } = body.view() else { return false };
+    let (head, args) = get_app(&subject);
+    matches!(head.view(), Expr::Const(n, _) if n == *carrier) && args.len() == arity
 }
 
 /// **The carrier of `T`'s model in `scheme`, checked against `T`'s own type.**

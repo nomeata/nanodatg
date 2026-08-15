@@ -831,6 +831,53 @@ catch it either; a projection census would.
 open the first gate. Doing (3) first produces a green run that has quietly
 stopped certifying 85% of the file's structures.
 
+#### Item 2 is built, and it is gated on `PSigma'` — 2026-08-15
+
+*(1) landed at `8dba64c`. The loud decline landed at `4e3b28b`. Recognition of
+`proj_i`/`proj_i.iota` landed at `2acee10` and the consumer at `4b0d042`. What
+follows is the measurement that came out of building it, and it changes what
+§8.2 is worth rather than what §4.3 costs.*
+
+**The route is smaller than this section priced and it is complete.** It is not
+a second `DeclProj` and it is not `infer_type` either — that was the first
+attempt and it cannot work, because `infer_type` type-checks the application and
+retargets the argument along a *definitional* equality between its type `T` and
+the domain `T._model`, which are deliberately not defeq. Measured:
+`Expected definitional equality between (Wrap._model._impl.0._auxCarrier …) and
+Wrap, but they differ.` **No retargeting is needed at all** — `⟦T⟧` and
+`⟦T._model⟧` are one stored term, so the argument's membership already *is* a
+membership in the domain — and applying at the evidence level over
+`Interp::as_pi` / `Interp::dprod_app` spends exactly that and asks `def_eq`
+nothing.
+
+**And it still certifies nothing, because the producer's projection
+declarations do not themselves interpret.** Their values go through the basis Σ:
+
+```text
+Wrap._model.proj_0        typing (waiting on ind-spec(PSigma': class (P) above Prop))
+Dep._model.proj_0  {0,0}  typing (waiting on ind-spec(PSigma': class (P) above Prop))
+Dep._model.proj_0  {1,1}  typing (waiting on ind-spec(PSigma': class (P) above Prop))
+```
+
+while `Wrap.mk._model` — the same tower, a different family — certifies.
+Established with the recognition gate opened experimentally and reverted, so it
+covers the population §4.3 is about and not only the nested one: `Wrap` is
+nested, `Dep` and `SortFields` are ordinary structures, and all three reach the
+same wall at every σ.
+
+**So §8.2 is not one red basis member. It is the gate on the structure half of
+the whole pivot.** 153 `proj_i` + 153 `proj_i.iota` + 104 `eta` on
+`init-prelude` — 39% of the public model surface — and 107 of 126 declarations
+are single-constructor. None of it can certify until `PSigma'` translates above
+`Prop`. That reframes §8.2's priority: it is not a basis tidy-up scheduled
+beside the pivot, it is **on the pivot's critical path**, and §3.6 already
+establishes that closing it needs no new `derived/` construction — only a
+classification in `checker/`.
+
+**Nothing here waits on the recognition gate**, which is the one piece of good
+news in it: the moment `PSigma'` lands, `proj_data::model_typing` starts
+returning `Ok` with no further change, and only then is opening the gate safe.
+
 ## 5. The retirement, in lines
 
 `checker/src/mini/*.rs` is **55 255 lines** across 60 files. Of the 32 358 lines
