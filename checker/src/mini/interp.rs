@@ -253,6 +253,9 @@ pub struct Interp {
     /// Seeded once; the per-site symbols stay numbered, because a lambda body
     /// shape has no better name than its number.
     sym_labels: HashMap<FnSym, &'static str>,
+    /// **How many times the constant store has been written**, counting
+    /// *replacements* and not only growth. See [`Interp::generation`].
+    puts: u64,
 }
 
 /// **How many conversions are hypothesis-free** — the measurement §0.3 asked
@@ -1644,6 +1647,7 @@ impl Interp {
             labels: HashMap::new(),
             labels_on: false,
             sym_labels: HashMap::new(),
+            puts: 0,
         };
         ip.sym_labels.insert(ip.prelude.ap.app, "app");
         ip.sym_labels.insert(ip.prelude.fs_sym(), "fs");
@@ -3121,10 +3125,41 @@ impl Interp {
                 c.defeq.clone(),
             );
         }
+        self.puts += 1;
         self.consts.insert(key, c);
     }
 
     pub fn const_count(&self) -> usize { self.consts.len() }
+
+    /// **A stamp that changes whenever an interpretation could have improved.**
+    ///
+    /// `crate::mini::kernel`'s `infer_type` memo needs to cache a `Typing`
+    /// whose evidence is a [`Gap`], and the standing objection to that — stated
+    /// at `Checker::frame_put` — is that the `Interp` **grows** inside a
+    /// frame's lifetime: an inference that gaps at `no-interp(T)` now can
+    /// succeed later, once `⟦T⟧` lands. A cached `Gap` would freeze a reason
+    /// that has stopped being true.
+    ///
+    /// This is the counterpart of `Frame::scopes_len`: rather than audit every
+    /// site that may publish, record a number and let any disagreement empty
+    /// the memo. Three components, each covering a different way a gap can
+    /// stop being true:
+    ///
+    /// * **`puts`** — every [`Interp::put_const`], counted rather than
+    ///   `consts.len()`, because that method **replaces** an existing key as
+    ///   readily as it adds one and an entry whose `typing` went from `Err` to
+    ///   `Ok` is exactly an improvement a length cannot see.
+    /// * **[`Interp::site_count`]** — the λ, Π and conditional-singleton
+    ///   stores, which grow on demand as shapes are first met.
+    /// * **whether the inductive apparatus has been built** —
+    ///   [`Interp::ind_apparatus`] constructs on first use, and `ind_opt`
+    ///   observes it without constructing.
+    ///
+    /// Conservative in the safe direction: a stamp that changes when nothing
+    /// relevant did costs hits, never correctness.
+    pub fn generation(&self) -> (u64, usize, bool) {
+        (self.puts, self.site_count(), self.ind.is_some())
+    }
 
     /// Every key in the constant store, **unsorted**.
     ///

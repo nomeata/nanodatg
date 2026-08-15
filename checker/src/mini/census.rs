@@ -254,6 +254,25 @@ pub fn note_defeq_cache(hit: bool) {
     })
 }
 
+thread_local! {
+    static GAP_TYPES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Hits and misses of `Checker::gap_types`, the persistent `infer_type` memo.
+pub fn note_gap_types(hit: bool) {
+    GAP_TYPES.with(|c| {
+        let (h, m) = c.get();
+        c.set(if hit { (h + 1, m) } else { (h, m + 1) });
+    })
+}
+
+pub fn gap_types() -> FrameCache {
+    GAP_TYPES.with(|c| {
+        let (hits, misses) = c.get();
+        FrameCache { hits, misses }
+    })
+}
+
 pub fn defeq_cache() -> FrameCache {
     DEFEQ_CACHE.with(|c| {
         let (hits, misses) = c.get();
