@@ -777,6 +777,46 @@ this is the common case and not an edge. Those three tool families
 (`proj_i`, `proj_i.iota`, `eta`) are precisely the replacements for
 `DeclProj::typed[j]`, `decl_proj::computes` and `DeclProj::eta`.
 
+**Loudness landed first, 2026-08-15.** `zoneb::model_route_untranslated` turns
+that soft failure into a decline by name: a declaration whose interpretation is
+a model alias, and which a projection route then asks for a `Translated`,
+is filed into `IndApparatus::untranslated` and reported as
+`ind-spec(T: model projection table not recognised)` instead of accruing
+`proj(T)` in the debt column. Measured on `tool_nested_proj`, written for this
+because no existing fixture had all three of *nested* (so it takes the model
+route with the gate still closed), *structure-like* (so Lean mints an
+`Expr::proj`) and *actually projected*: `untranslated` 2 → 3, `proj(Wrap)=2`
+→ `notrans:ind-spec(Wrap: model projection table not recognised)=1`. It stops
+firing when the family is recognised; it is the guard, not the repair.
+
+**The repair, designed and de-risked but not built: rewrite rather than
+construct.** The obvious reading of item 2 is that a whole second projection
+apparatus has to be derived from the model's theorems, parallel to `DeclProj`.
+It does not. `T._model.proj_i` is an ordinary `def` and
+`T._model.proj_i.iota` an ordinary theorem, so the two consumer sites can
+*rewrite* rather than build:
+
+* `Checker::infer_type`'s `Expr::Proj` clause (`kernel.rs:2989-3006`) can
+  interpret the application `T._model.proj_i p⃗ s` in place of `proj[T,i] s`,
+  reusing the `Const` and `App` combinators and producing a `Typing` with its
+  term and evidence already assembled — no new evidence construction at all;
+* `whnf`'s proj-of-constructor step takes the `proj_i.iota` equation through
+  `eq_cash`, which is exactly what `iota_model` already does for a recursor's
+  ι rule.
+
+**Why the types being different does not break it, and the argument is already
+in the tree.** The rewritten expression has type `βᵢ` over `T._model` where the
+clause owes `βᵢ` over `T`, and those are *not* definitionally equal — that is
+precisely why `model_alias` refuses to carry the model's defining equation
+across (`zoneb.rs:294-298`). But they have the same **interpretation**:
+`⟦T⟧` and `⟦T._model⟧` are one stored term, interpretation is compositional, so
+`⟦βᵢ[T]⟧` and `⟦βᵢ[T._model]⟧` are the same term and the two typings are the
+same statement. That is `model_alias`'s own justification, applied one level
+down.
+
+So item 2's cost is two rewrite sites plus the recogniser tables and shape
+checks for a fifth and sixth family, rather than a second `DeclProj`.
+
 **And it fails soft, which is the part to be careful about.** `kernel.rs:4860`
 records that the structure-η *probe* decides acceptance and the certificate is
 separate, and `proj_data::iota` returning a gap leaves `whnf` reducing with
