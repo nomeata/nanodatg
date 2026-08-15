@@ -1,4 +1,4 @@
-//! The Tarski–Grothendieck proof backend: real [`kernel::Thm`] certificates.
+//! The Tarski–Grothendieck proof backend: real [`Thm`] certificates.
 //!
 //! # What this does and does not claim
 //!
@@ -67,7 +67,7 @@
 //! rather than baking it into `⟦·⟧`.
 //!
 //! With those in place [`derived::funcs::beta_conditional`] applies, and
-//! [`Certifier::beta`] is a real derivation rather than an admit — modulo one
+//! [`TgBackend::beta`] is a real derivation rather than an admit — modulo one
 //! premise it cannot always discharge, discussed under "What beta still costs".
 //!
 //! # Lambdas: how the body becomes a function symbol
@@ -166,7 +166,7 @@
 //! The obligation at a *declaration* is not like that. `check_declar` infers
 //! `val`'s type, and the whole point of instrumenting inference is that the
 //! recursion which computes the type can carry the derivation that the term
-//! inhabits it. So [`Certifier`]'s typing methods — `ty_sort`, `ty_const`,
+//! inhabits it. So [`TgBackend`]'s typing methods — `ty_sort`, `ty_const`,
 //! `ty_local`, `ty_conv`, `ty_app`, `ty_lam`, `ty_proj`, `ty_let` — are the same
 //! rules with the search removed: each is handed the premises inference has already
 //! computed, does no recursion of its own, and either composes them or reports a
@@ -232,10 +232,10 @@
 //! # Honesty
 //!
 //! **Every rule that concludes something about two specific terms is handed
-//! those terms and checks its result against them.** [`Certifier::beta`],
-//! [`Certifier::delta`], [`Certifier::zeta`], [`Certifier::lam_cong`],
-//! [`Certifier::pi_cong`], [`Certifier::app_cong`], [`Certifier::trans`] and
-//! [`Certifier::symm`] — the rules that build a chain rather than read one off —
+//! those terms and checks its result against them.** [`TgBackend::beta`],
+//! [`TgBackend::delta`], [`TgBackend::zeta`], [`TgBackend::lam_cong`],
+//! [`TgBackend::pi_cong`], [`TgBackend::app_cong`], [`TgBackend::trans`] and
+//! [`TgBackend::symm`] — the rules that build a chain rather than read one off —
 //! check before returning [`TgCert::Proved`] that the theorem they hold is
 //! literally `⟦a⟧ = ⟦b⟧` for the `a`, `b` the checker claimed equal; `refl`,
 //! `sort` and `const_eq` compare the two interpretations directly.
@@ -300,7 +300,7 @@
 //! certificates arriving at a binder are about the terms the checker claimed, so
 //! `app_cong` was not the reason `pi_cong` could not use them.
 //!
-//! [`Certifier::pi_cong`] is handed both terms and checks, and has two routes
+//! [`TgBackend::pi_cong`] is handed both terms and checks, and has two routes
 //! to a derivation — congruence and Extensionality. What each buys is stated
 //! plainly next.
 //!
@@ -502,7 +502,6 @@ use crate::expr::Expr;
 use crate::level::Level;
 use derived::funcs::Apply;
 use derived::inductive::{CtorSpec, DeclSpec, Slot};
-use crate::certify::Certifier;
 use crate::sealed::Sealed;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use std::collections::HashMap;
@@ -3292,7 +3291,7 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Argument typings the checker itself established, `⊢ conj(hyps) →
     /// ⟦arg⟧ ∈ dom`, keyed by the argument's node and the interpreted domain.
     ///
-    /// Written by [`Certifier::app_arg_checked`] — `infer_app`'s `ty_conv`
+    /// Written by [`TgBackend::app_arg_checked`] — `infer_app`'s `ty_conv`
     /// composition, the argument's inferred typing converted along the very
     /// `assert_def_eq` the checker had to run — and read by
     /// [`TgBackend::domain_obligation`] *before* any search: a beta
@@ -3304,7 +3303,7 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// The hypotheses stored are ambient-local memberships, confined to locals
     /// occurring in the argument itself — the same written argument that makes
     /// the checker's `infer_cache_*` safe to key on the `ExprPtr` alone
-    /// (`certify::Certifier::typing_is_confined`), inherited here because
+    /// (`TgBackend::typing_is_confined`), inherited here because
     /// every entry *is* a copy of what those memos carry, restated at the
     /// binder's domain. Same lifetime as [`TgBackend::has_types`]: per
     /// declaration, dying with the backend.
@@ -4974,7 +4973,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Take a certificate handed to a rule, as a conditional equation.
     ///
-    /// Every [`Certifier`] method that receives certificates calls this on each
+    /// Every [`TgBackend`] method that receives certificates calls this on each
     /// of them, whatever it then does with them — that is what keeps the escape
     /// ledger exact (see [`escape_report`]): a conditional certificate is
     /// accounted for the moment a rule takes it, so the ones left over are
@@ -5308,7 +5307,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// This is the whole of the derivation; everything above it is the question
     /// of where the two premises come from. Factored out because there are two
     /// answers to that — the checker hands them over
-    /// ([`Certifier::proof_irrel`]), or they are searched for — and only the
+    /// ([`TgBackend::proof_irrel`]), or they are searched for — and only the
     /// first is the design's.
     fn point_from_premises(
         &mut self,
@@ -16197,7 +16196,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Threaded, before any search: the checker typed this very argument at
         // this very domain when the application it stood in was checked —
         // `infer_app`'s `ty_conv` composition, handed over by
-        // [`Certifier::app_arg_checked`] instead of being discarded. A
+        // [`TgBackend::app_arg_checked`] instead of being discarded. A
         // recalled entry is checked against the claim being made now, like
         // every recall in this file; a mismatch falls through to the search
         // and is counted, because at one backend instance the interpretation
@@ -16784,7 +16783,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Consume mini's constructor projection computation rule, optionally
     /// after the checker's certified subject reduction. The latter is the
-    /// authoritative whnf trace handed through `Certifier::proj_red`; this
+    /// authoritative whnf trace handed through `TgBackend::proj_red`; this
     /// method performs no Lean reduction and never re-enters the checker.
     fn derive_projection_computation(
         &mut self,
@@ -21897,7 +21896,7 @@ fn unique_key<'t, 'p>(ctx: &TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<LocalKey> {
 /// an unjustified typing propagates visibly instead of being forged or
 /// refused — with one difference. There is no separate `Proved`/`Conditional`
 /// split: a typing's assumptions are always memberships about the ambient
-/// locals, they are discharged by exactly one rule ([`Certifier::ty_lam`]), and
+/// locals, they are discharged by exactly one rule ([`TgBackend::ty_lam`]), and
 /// the only place the difference matters is whether the declaration typing may
 /// be stored. So `hyps.is_empty()` carries that distinction and nothing else
 /// needs to branch on it.
@@ -22124,11 +22123,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 }
 
-impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
-    type Cert = TgCert;
-    type Typing = TgTyping;
-
-    fn ty_gap(
+impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
+    /// **No evidence** for `⟦e⟧ ∈ ⟦ty⟧`, tagged with why — see [`crate::certify::TyGap`].
+    ///
+    /// This is the typing judgement's counterpart to [`TgBackend::admit`], and
+    /// it means the same thing: a hole. It is deliberately not silent.
+    pub(crate) fn ty_gap(
         &mut self,
         _ctx: &mut TcCtx<'t, 'p>,
         _e: ExprPtr<'t>,
@@ -22139,11 +22139,33 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         TgTyping::Gap(reason)
     }
 
+    /// **The premise `TcCache::infer_cache_*` rests on**, as a question the
+    /// backend can answer: are every free variable of `t`'s assumptions, and of
+    /// its conclusion, among the free variables of `⟦e⟧` and `⟦ty⟧`?
+    ///
+    /// The two inference memos are keyed on the `ExprPtr` alone and they
+    /// deliberately store *conditional* typings, on the written argument that
+    /// "a typing's hypotheses are always about locals occurring in the very
+    /// expression the entry is keyed on, so a hit under a different context asks
+    /// about the same locals or does not mention them at all". That argument is
+    /// what makes the omission of the context from the key safe, and it has
+    /// never been enforced — while `ty_conv` merges the *equation's* hypotheses
+    /// into the typing's, and an equation's hypotheses are not confined to the
+    /// subject's locals in the way a typing's are.
+    ///
+    /// So the premise is checked, under `debug_assert`, at the one insertion
+    /// point. It is a diagnostic and not a guard: a release build does not call
+    /// it, and if it ever fires the fix is to key or refuse, not to weaken the
+    /// assertion. The default is `true` for the null backend, which stores no
+    /// evidence and therefore has no premise to violate.
+    ///
+    /// # In this backend
+    ///
     /// Are the typing's hypotheses and conclusion confined to the free variables
     /// of `⟦e⟧` and `⟦ty⟧`?
     ///
     /// The premise the two inference memos are keyed on. See
-    /// [`Certifier::typing_is_confined`] for why it is asked and why the answer
+    /// [`TgBackend::typing_is_confined`] for why it is asked and why the answer
     /// is only consumed by a `debug_assert`.
     ///
     /// A `Gap` carries nothing, so it is confined vacuously and — importantly —
@@ -22151,7 +22173,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// definitional extension gets built. A `Derived` typing has already had
     /// both `⟦e⟧` and `⟦ty⟧` built by the rule that produced it, so the two
     /// `interp` calls below are memo hits.
-    fn typing_is_confined(
+    pub(crate) fn typing_is_confined(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
@@ -22172,6 +22194,14 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         seen.iter().all(|v| allowed.contains(v))
     }
 
+    /// `Π A B : Sort (imax u v)` — the universe a `Π` lands in.
+    ///
+    /// `which` is [`TyGap::Pi`] or [`TyGap::PiProp`] according to whether
+    /// `imax u v` simplified to zero; the backend needs it because the two are
+    /// different clauses of the interpretation, not two instances of one.
+    ///
+    /// # In this backend
+    ///
     /// `⟦Π A B⟧ ∈ ⟦Sort (imax u v)⟧`, as far as the *term-level* facts reach.
     ///
     /// Deliberately **not** the `has_type` search. Interpreting a `Π` builds a
@@ -22181,7 +22211,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// do, which cost 36% of the run for 12 hits. So this asks
     /// [`Self::domain_premise`], which is closed, term-level and non-recursive,
     /// and reports an honest gap otherwise.
-    fn ty_pi(
+    pub(crate) fn ty_pi(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
@@ -22206,9 +22236,14 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// `Sort u : Sort (u+1)` — the interpretation makes `⟦Sort (u+1)⟧` the
+    /// universe over `⟦Sort u⟧`, so this is `∀x. x ∈ U(x)` at one instance.
+    ///
+    /// # In this backend
+    ///
     /// `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, which the interpretation makes
     /// `x ∈ U(x)` — [`Self::domain_premise`]'s first branch, at one instance.
-    fn ty_sort(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
+    pub(crate) fn ty_sort(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
         let (te, tt) = (self.interp(ctx, e), self.interp(ctx, ty));
         match self.domain_premise(&te, &tt) {
             Some(t) => self.typing(crate::certify::TyGap::Sort, &te, &tt, t, Vec::new()),
@@ -22216,6 +22251,12 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// `c.{us} : ty`, the declared type — a **lookup** in whatever the backend
+    /// stored when the declaration was checked, not a walk down the delta
+    /// graph.
+    ///
+    /// # In this backend
+    ///
     /// A constant's typing: **a lookup** in the store filled when the
     /// declaration was checked. Not a walk down the delta graph — a constant's
     /// typing does not depend on where it is used, so deriving it per use was
@@ -22224,7 +22265,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// The stored theorem is about the *declared* type. Inference asks at
     /// exactly the declared type, so the two line up by construction — and the
     /// guard checks it rather than assuming it.
-    fn ty_const(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
+    pub(crate) fn ty_const(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
         let Expr::Const { name, levels, .. } = ctx.read_expr(e) else {
             return self.ty_miss(crate::certify::TyGap::Const)
         };
@@ -22292,6 +22333,11 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         out
     }
 
+    /// `x : A` for a context local — the ambient hypothesis, acquired as an
+    /// antecedent, to be discharged at the binder that introduced it.
+    ///
+    /// # In this backend
+    ///
     /// A context local: its own declared typing, **acquired as an antecedent**.
     ///
     /// `Γ ⊢ w : A` for a local is carried as an **antecedent inside the
@@ -22299,15 +22345,25 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// (Not because the kernel lacks a context — it has one, `Thm` is a
     /// sequent — but because an antecedent travels with the formula and a
     /// sequent hypothesis does not; see [`Self::has_type_local`].) That discharge is
-    /// [`Certifier::ty_lam`]'s, and it is the same `gen` + `ax_dist` move
+    /// [`TgBackend::ty_lam`]'s, and it is the same `gen` + `ax_dist` move
     /// [`Self::has_type_local`] relies on.
-    fn ty_local(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
+    pub(crate) fn ty_local(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
         let (te, tt) = (self.interp(ctx, e), self.interp(ctx, ty));
         let f = Formula::mem(te.clone(), tt.clone());
         let thm = derived::imp_refl(f.clone());
         self.typing(crate::certify::TyGap::Local, &te, &tt, thm, vec![f])
     }
 
+    /// **Projection**: `s.i : F`, where `F` is the `i`-th binder of the
+    /// structure's single constructor, with the parameters instantiated at the
+    /// structure type's arguments and the earlier fields at projections of `s`.
+    ///
+    /// `structure` is the subject `s`, passed so the rule can check `e` really
+    /// is a projection out of it and recompute `F` for itself rather than
+    /// taking the checker's word for the claim.
+    ///
+    /// # In this backend
+    ///
     /// A **structure projection**: its own field typing, acquired as an
     /// antecedent. [`Self::has_type_proj`] driven by inference instead of
     /// searched for, and that method's doc comment is where the reason it is
@@ -22323,7 +22379,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// term. So an antecedent is only ever acquired at Lean's own judgement for
     /// this projection, and an obligation stated at something merely
     /// definitionally equal to it is a counted gap.
-    fn ty_proj(
+    pub(crate) fn ty_proj(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
@@ -22353,6 +22409,21 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.typing(crate::certify::TyGap::Proj, &te, &tt, thm, vec![f])
     }
 
+    /// **Conversion**: from `⟦e⟧ ∈ ⟦from⟧` and a certificate relating `from` and
+    /// `to`, conclude `⟦e⟧ ∈ ⟦to⟧`.
+    ///
+    /// This is the rule that consumes the definitional-equality certificate the
+    /// checker used to discard: `assert_def_eq` confirmed one existed and threw
+    /// it away, at every application, every `let`, and at the top of every
+    /// declaration.
+    ///
+    /// `eq` is borrowed, not taken. A conditional certificate handed to a rule
+    /// is *accounted for* by the escape ledger, and folding one into a typing
+    /// would account for it against a ledger it is not in; borrowing leaves the
+    /// ledger's over-report in the safe direction.
+    ///
+    /// # In this backend
+    ///
     /// **Conversion.** From `⟦e⟧ ∈ ⟦from⟧` and a definitional-equality
     /// certificate relating `from` and `to`, conclude `⟦e⟧ ∈ ⟦to⟧` by Leibniz.
     ///
@@ -22362,7 +22433,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// `binder_type ≡ arg_type` and the rule needs `arg_type = binder_type` —
     /// so both are accepted and the wrong one is turned round with a real
     /// `eq_symm`. Anything that is not about these two types is a gap.
-    fn ty_conv(
+    pub(crate) fn ty_conv(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
@@ -22427,8 +22498,30 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Would a typing for this argument be worth inferring?** — asked by
+    /// `whnf` before it pays for one.
+    ///
+    /// [`Self::app_arg_checked`] is fed by `infer_app`, which only ever visits
+    /// the applications *written in the term*. A beta redex the reduction
+    /// itself builds — a minor premise entering by delta, a constructor
+    /// application from `to_ctor_when_k`'s K-shortcut — was never at an
+    /// application check, so the store has nothing for it and the beta rule
+    /// hoists its domain obligation raw. Measured on `init-prelude`: 18 656 of
+    /// the 20 328 raw hoists, and none of the four transports reaches them
+    /// (`THREADING-CENSUS.md` §2) because the fact was never derived anywhere
+    /// at any generality. The only route left is to *derive* it, and the one
+    /// place with both the term and a `TypeChecker` in hand is `whnf` itself.
+    ///
+    /// This is the gate that keeps that from being paid for nothing.
+    /// Inference is not free and beta is 81 % of all reduction steps, so `whnf`
+    /// asks first and infers only when the answer is yes. A backend with no
+    /// store answers `false` and pays nothing, which is why this defaults to
+    /// `false` rather than `true`.
+    ///
+    /// # In this backend
+    ///
     /// **The handoff into [`TgBackend::arg_mems`].** The composition arriving
-    /// here is [`Certifier::ty_conv`]'s output for this very `(arg, dom)`
+    /// here is [`TgBackend::ty_conv`]'s output for this very `(arg, dom)`
     /// pair, so its conclusion is `⟦arg⟧ ∈ ⟦dom⟧` — but that is *checked*, not
     /// assumed: the entry is admitted only if the theorem literally
     /// establishes the membership under exactly the advertised hypotheses,
@@ -22443,11 +22536,31 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// visit, so re-inferring it here would be re-doing the check's work. The
     /// 32 raw hoists whose cause is `RawStoredElsewhere` are exactly the
     /// population this coarseness gives up, against 18 656 it is aimed at.
-    fn wants_arg_typing(&mut self, _ctx: &mut TcCtx<'t, 'p>, arg: ExprPtr<'t>) -> bool {
+    pub(crate) fn wants_arg_typing(&mut self, _ctx: &mut TcCtx<'t, 'p>, arg: ExprPtr<'t>) -> bool {
         !self.arg_stored.contains(&arg) && !self.arg_gapped.contains(&arg)
     }
 
-    fn app_arg_checked(
+    /// **An application's argument was checked at the binder's domain** — the
+    /// handoff that lets a later beta contraction of that very argument take
+    /// its domain obligation from the check instead of searching for it.
+    ///
+    /// `infer_app` establishes `⟦arg⟧ ∈ ⟦dom⟧` for every argument of every
+    /// checked application: the argument's own typing converted along the
+    /// `assert_def_eq` certificate ([`TgBackend::ty_conv`]). Until this method
+    /// existed that composition had exactly one consumer — the application
+    /// rule — and was built only when the *head's* derivation was still alive,
+    /// so for the majority of applications (any whose head is an
+    /// evidence-less constant) the argument's typing was established and
+    /// thrown away. The beta rule then re-discovered the same fact per redex
+    /// by `has_type` search, and hoisted the membership as an assumption when
+    /// the search failed — `THREADING-CENSUS.md` §1.3's largest re-discovery
+    /// site.
+    ///
+    /// A backend that keeps a store reads it back in its beta rule, checked
+    /// against the claim like every recall. The default does nothing, which is
+    /// correct for the null backend: its typings carry no information, so
+    /// there is nothing to hand off.
+    pub(crate) fn app_arg_checked(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         arg: ExprPtr<'t>,
@@ -22473,11 +22586,21 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Application**: from `⟦f⟧ ∈ ⟦Π x:A. B⟧` and `⟦a⟧ ∈ ⟦A⟧` conclude
+    /// `⟦f a⟧ ∈ ⟦B[a/x]⟧`.
+    ///
+    /// `fun_ty` is the `Π` inference read off `f`, passed explicitly so the rule
+    /// need not go looking for it, and `ty` is `B[a/x]` — the claim, so the rule
+    /// can check its result against it.
+    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # In this backend
+    ///
     /// **Application.** The premises are inference's own: the function's typing
     /// at the `Π` it eliminates, and the argument's typing at that `Π`'s domain
     /// — the latter obtained by converting along the very equality the checker
     /// had to establish anyway.
-    fn ty_app(
+    pub(crate) fn ty_app(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         app: ExprPtr<'t>,
@@ -22526,6 +22649,16 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Lambda**: from `⟦b⟧ ∈ ⟦B⟧` under the hypothesis `⟦x⟧ ∈ ⟦A⟧` conclude
+    /// `⟦λx:A. b⟧ ∈ ⟦Π x:A. B⟧`.
+    ///
+    /// `local` is the checker's own free variable standing for `x` and `body`
+    /// the body opened at it, so the rule can see exactly which hypothesis it is
+    /// discharging rather than having to open the binder its own way.
+    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # In this backend
+    ///
     /// **Lambda.** From the body's typing under the binder's hypothesis,
     /// conclude the lambda's — by [`lam_in_funspace_n`] when the target is a
     /// function space over the binder's domain and [`lam_in_dprod_n`] when it is
@@ -22536,7 +22669,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// because that is the variable the body's derivation already speaks of; the
     /// skeleton is re-instantiated at it and checked to unfold to the
     /// interpretation of the body, so nothing is assumed about the two agreeing.
-    fn ty_lam(
+    pub(crate) fn ty_lam(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         lam: ExprPtr<'t>,
@@ -22663,12 +22796,18 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Let**: a `let` denotes its expansion, and the interpretation introduces
+    /// it as an explicit definition of exactly that, so the typing of the
+    /// expansion carries across the defining equation.
+    ///
+    /// # In this backend
+    ///
     /// **Let.** A `let` is interpreted as an explicit definition of its
     /// expansion, so the expansion's typing carries across that defining
     /// equation by Leibniz — the same move [`Self::has_type_const`] makes for a
     /// constant, and for the same reason: the equation is a real theorem, not
     /// the interpretation quietly substituting.
-    fn ty_let(
+    pub(crate) fn ty_let(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
@@ -22703,11 +22842,24 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
-    fn refl(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>) -> TgCert {
+    /// `a ≡ a`.
+    pub(crate) fn refl(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>) -> TgCert {
         let t = self.interp(ctx, a);
         self.proved(Thm::eq_refl(t))
     }
 
+    /// Conclude `a ≡ b` from a certificate for `b ≡ a`.
+    ///
+    /// `a` and `b` are the endpoints of the **conclusion**, not of the premise;
+    /// the premise runs the other way. They are passed for the reason spelled
+    /// out on [`TgBackend::lam_cong`]: a rule handed only a sub-certificate
+    /// cannot check what it is being asked to prove. Symmetry looks like the
+    /// safest rule there is — it merely turns an equation around — but the
+    /// equation it is handed need not be the one the checker claimed, and
+    /// without `a` and `b` the backend has no way to notice.
+    ///
+    /// # In this backend
+    ///
     /// Symmetry, **guarded**.
     ///
     /// Turning an equation around is the least a rule can do, and it was still
@@ -22717,7 +22869,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// `⟦a⟧ = ⟦b⟧` — through [`CondEq::proves`], which reads the equation out
     /// from under the assumption list, so a conditional premise is checked on
     /// the same terms as an unconditional one — and anything else is a gap.
-    fn symm(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, c: TgCert) -> TgCert {
+    pub(crate) fn symm(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, c: TgCert) -> TgCert {
         let premask = origin_mask(&[&c]);
         let cc = self.consume(&c);
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
@@ -22741,6 +22893,19 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
+    /// Conclude `a ≡ b` from `a ≡ m` and `m ≡ b`.
+    ///
+    /// `a` and `b` are the endpoints the composite is claimed to relate. The
+    /// midpoint `m` is deliberately *not* a parameter: it is whatever the two
+    /// premises agree on, and if they do not agree the rule fails — that is
+    /// transitivity's own business. What the rule cannot discover for itself is
+    /// the claim, so, as for [`TgBackend::lam_cong`], it is handed it. A
+    /// transitivity that composed two certificates about some *other* pair of
+    /// terms and returned the result as a proof of `a ≡ b` would be exactly the
+    /// silent lie this trait exists to make impossible.
+    ///
+    /// # In this backend
+    ///
     /// Transitivity, **guarded**.
     ///
     /// `ceq_trans` already refuses two premises that do not meet in the middle,
@@ -22749,7 +22914,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// composite was then returned as a proof of whatever the checker happened
     /// to be claiming. `a` and `b` are that claim, and the composite is matched
     /// against `⟦a⟧ = ⟦b⟧` before it counts.
-    fn trans(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, ab: TgCert, bc: TgCert) -> TgCert {
+    pub(crate) fn trans(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, ab: TgCert, bc: TgCert) -> TgCert {
         // Both are taken before either is inspected: a premise the rule cannot
         // use is still a premise the rule has *received*, and the escape ledger
         // counts receipt.
@@ -22773,6 +22938,24 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
+    /// Congruence for application: from `f ≡ f'` and `x ≡ x'` conclude `a ≡ b`,
+    /// where `a` is `f x` and `b` is `f' x'`.
+    ///
+    /// The two applications are passed explicitly for the reason given on
+    /// [`TgBackend::lam_cong`]. Without them this rule could only assume its
+    /// sub-certificates were about the function and argument positions of the
+    /// terms in question; a certificate about something else propagated upwards
+    /// unchallenged, and the rules above — which do check — were left reporting
+    /// a gap for a claim that had been bent out of shape several levels below.
+    /// The backend measures how often that happened, and the answer is worth
+    /// recording: on the checker's own corpora it is rare (single digits), and
+    /// rarer still for [`TgBackend::trans`] and [`TgBackend::symm`], which never
+    /// missed at all. A rule is not given its conclusion because the failure is
+    /// frequent; it is given it because a rule that cannot check is one whose
+    /// output nobody can audit.
+    ///
+    /// # In this backend
+    ///
     /// Congruence for application, **guarded**.
     ///
     /// `⟦f x⟧` is `app(⟦f⟧, ⟦x⟧)`, so this is ordinary congruence over the
@@ -22793,7 +22976,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// reporting as `the body certificate is not the fibres' pointwise
     /// equation`, which drops from 12 to 3. It was *not* the cause of the 621
     /// bridge failures, as the module docs used to claim; those are unchanged.
-    fn app_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, f: TgCert, arg: TgCert) -> TgCert {
+    pub(crate) fn app_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, f: TgCert, arg: TgCert) -> TgCert {
         let s = self.pre.ap.app;
         let premask = origin_mask(&[&f, &arg]);
         let (cf, cx) = (self.consume(&f), self.consume(&arg));
@@ -22829,6 +23012,19 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
+    /// Congruence for `λ`: from `t ≡ t'` (domains) and `b ≡ b'` (bodies,
+    /// compared under the binder) conclude `a ≡ b`, where `a` and `b` are the
+    /// two lambdas themselves.
+    ///
+    /// The two terms are passed explicitly, and that is not incidental: without
+    /// them a backend receives only sub-certificates and **cannot check what it
+    /// is being asked to prove**. A rule that cannot compare its result against
+    /// the claim can only guess, and a wrong guess returned as a proof is worse
+    /// than an honest gap. Every rule here that concludes something about two
+    /// specific terms is given those terms for exactly this reason.
+    ///
+    /// # In this backend
+    ///
     /// Congruence for `λ`, by **graph extensionality**, and guarded.
     ///
     /// `⟦λx:A. b⟧` is a function *graph* `lam_C(s⃗, ⟦A⟧)` whose head symbol
@@ -22875,7 +23071,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// to the *same* graph, reflexivity proves the claim outright, with no
     /// premise needed. That is a complete proof, not a shortcut — and it is
     /// still what closes the chains the derivation cannot reach.
-    fn lam_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
+    pub(crate) fn lam_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
         let premask = origin_mask(&[&dom, &body]);
         let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
@@ -22891,6 +23087,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
+    /// Congruence for `∀`/`Π`: as [`TgBackend::lam_cong`] but for the pi former.
+    ///
+    /// # In this backend
+    ///
     /// Congruence for `Π`, **guarded**.
     ///
     /// `⟦Π x:A. B⟧` is `fs(⟦A⟧,⟦B⟧)` when the body ignores the binder and the
@@ -22911,7 +23111,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// The reflexivity fallback covers the case where both sides interpret
     /// identically — a complete proof of the claim, needing no premise at all,
     /// and on this corpus by far the commonest way a `Π` congruence is settled.
-    fn pi_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
+    pub(crate) fn pi_cong(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, dom: TgCert, body: TgCert) -> TgCert {
         let premask = origin_mask(&[&dom, &body]);
         let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
@@ -22926,9 +23126,34 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.admit_or_acquire(ctx, why, premask, &ta, &tb)
     }
 
+    /// One iota step: a recursor applied to a constructor application, reduced
+    /// to the matching minor premise re-applied to the recursor's arguments.
+    ///
+    /// The checker passes the redex and the reduct **it actually computed** —
+    /// not the reduct a backend might expect — for the reason spelled out on
+    /// [`TgBackend::lam_cong`]: a rule that cannot compare its result against
+    /// the claim can only guess.
+    ///
+    /// ## Why this is a trait method and not `admit(_, _, "iota")`
+    ///
+    /// [`TgBackend::admit`]'s contract is "I cannot justify this". A backend
+    /// that recognised the reason string and returned a real derivation would
+    /// be reading a diagnostic label as an instruction, and the count of
+    /// surviving `admit` sites — the project's honest measure of how much is
+    /// still taken on trust — would stop meaning what it says.
+    ///
+    /// Adding a method to this trait adds **no proving power**: the trait is an
+    /// interface, [`Thm`] still has no public constructor, and a backend
+    /// can only answer this by producing a certificate the way it produces every
+    /// other one. The default implementation delegates to [`TgBackend::admit`],
+    /// so a backend that has nothing to say about iota keeps reporting a gap and
+    /// needs no change at all.
+    ///
+    /// # In this backend
+    ///
     /// One iota contraction, derived rather than admitted where the recursor
     /// is one this backend interprets. See [`TgBackend::derive_iota`].
-    fn iota(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
+    pub(crate) fn iota(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
         if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
@@ -22941,7 +23166,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
-    fn beta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
+    /// One beta step: `(λx:t. b) a ≡ b[a/x]`. The checker passes the redex and
+    /// the already-computed reduct.
+    pub(crate) fn beta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
         // §6.2's `Prop` clause: a proof application is `•`, and a contraction
         // does not change a term's type and so does not change its sort — the
         // contractum is `•` too and the step is reflexivity. There is no spine
@@ -22958,11 +23185,15 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// One zeta step: `let x := v; b ≡ b[v/x]`.
+    ///
+    /// # In this backend
+    ///
     /// Zeta: `let x := v; b ≡ b[v/x]`.
     ///
     /// Discharged by the `Let`'s defining equation, guarded against the claim in
     /// the same way as `delta` and `beta`.
-    fn zeta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
+    pub(crate) fn zeta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
         if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
@@ -22976,7 +23207,8 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.check_against(ctx, eq, redex, reduct, "zeta")
     }
 
-    fn delta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
+    /// One delta step: unfolding a definition to its value.
+    pub(crate) fn delta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
         // `redex` is `c a₁ … aₙ` and `reduct` is `value a₁ … aₙ`. Interpreting
         // the head constant registers its defining equation `⊢ ⟦c⟧ = ⟦value⟧`;
         // folding `app_cong` over the argument spine lifts that to the whole
@@ -23010,6 +23242,20 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.proved(acc)
     }
 
+    /// One eta step relating `a` and `b` where one is the eta-expansion of the
+    /// other (`λx. f x ≡ f`).
+    ///
+    /// `expansion` is the term `λz. b z` the checker built, and `expanded` the
+    /// certificate for `a ≡ expansion` that the recursive comparison produced.
+    /// The rule takes both because the conclusion is a composite — `a ≡ λz. b z`
+    /// then `λz. b z ≡ b` — and only the second half is eta proper. Handing the
+    /// first half over rather than dropping it is what keeps a backend from
+    /// being asked for the whole of `a ≡ b` with nothing to build it from; a
+    /// backend that still cannot do the eta step reports one gap, not one gap
+    /// and a transitivity over it.
+    ///
+    /// # In this backend
+    ///
     /// Eta. The half the checker settled arrives as `expanded`; the half that
     /// needs a function-extensionality lemma is what is still missing.
     ///
@@ -23019,7 +23265,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// report an assumption as having escaped when in fact it was handed over.
     /// Once `λz. b z = b` is derivable, the composition happens here and both
     /// halves are already in hand.
-    fn eta(
+    pub(crate) fn eta(
         &mut self,
         _ctx: &mut TcCtx<'t, 'p>,
         _a: ExprPtr<'t>,
@@ -23031,7 +23277,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.note_admit("eta (needs a function-extensionality lemma)")
     }
 
-    fn sort(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> TgCert {
+    /// `Sort u ≡ Sort v` when the universe levels `u` and `v` are equal. Sort
+    /// (and, with levels, const) equality is where the level algebra enters the
+    /// definitional-equality certificate.
+    pub(crate) fn sort(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> TgCert {
         // The checker only calls this when the two levels are equal under its
         // own level algebra. When that makes the interpretations syntactically
         // identical, reflexivity settles it outright. When it does not — say
@@ -23046,7 +23295,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
-    fn const_eq(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> TgCert {
+    /// Two constant occurrences `c.{us} ≡ c.{vs}` with pointwise-equal universe
+    /// levels.
+    pub(crate) fn const_eq(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> TgCert {
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         if ta == tb {
             self.proved(Thm::eq_refl(ta))
@@ -23055,6 +23306,20 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Congruence for projection**: from `s ≡ s'` conclude `s.i ≡ s'.i`.
+    ///
+    /// A rule rather than an admission because it needs no axiom: a projection
+    /// interprets as a signature symbol applied to the structure's
+    /// interpretation, so this is congruence over that symbol and nothing more.
+    /// `a` and `b` are the two projections, passed for the reason on
+    /// [`TgBackend::lam_cong`] — the rule has to be able to check that the
+    /// premise really is about the two subjects it is claimed to be about.
+    ///
+    /// The default delegates to [`TgBackend::admit`], so a backend with no
+    /// interpretation of projections keeps reporting the same gap it did.
+    ///
+    /// # In this backend
+    ///
     /// **Projection congruence**, and it needs no axiom about projections.
     ///
     /// `⟦s.i⟧` is `proj(i, ⟦s⟧)` over a signature symbol, so `s ≡ s'` lifts to
@@ -23062,7 +23327,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// position. Everything is checked: `a` and `b` really are projections at
     /// one index, the premise really is about the two structures, and the result
     /// really is the claim.
-    fn proj_cong(
+    pub(crate) fn proj_cong(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         a: ExprPtr<'t>,
@@ -23114,6 +23379,31 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.cert(ctx, out)
     }
 
+    /// **Two locals with one id**: from a certificate that the declared types
+    /// are definitionally equal, conclude `a ≡ b` for two `Local`s carrying the
+    /// same de Bruijn level.
+    ///
+    /// A rule rather than an admission because the common case needs no axiom:
+    /// the TG backend keys a level-local's kernel variable by its level **and
+    /// its interpreted declared type** (`LocalKey`), so two same-level locals
+    /// whose types interpret to the same term *are* one variable and the
+    /// equation is reflexivity. The residue — same level, types definitionally
+    /// equal but interpreting to different terms — is two distinct variables,
+    /// and no rule relates them; a backend reports that residue as its own gap.
+    ///
+    /// `ty_eq` is the checker's certificate for the two declared types. It is
+    /// the evidence `def_eq_local` used to establish and throw away
+    /// (`THREADING-CENSUS.md`, `def_eq_local` row); it is handed over rather
+    /// than dropped so the rule can consume it — the escape ledger counts
+    /// receipt — and so the residue case has the premise in hand if a
+    /// two-variable bridge ever exists.
+    ///
+    /// The default delegates to [`TgBackend::admit`] under `def_eq_local`, so a
+    /// backend that does not key variables this way keeps reporting the gap the
+    /// checker used to report.
+    ///
+    /// # In this backend
+    ///
     /// **Two locals with one id**, decided by [`LocalKey`]'s own grain.
     ///
     /// A level-local's kernel variable is keyed by level **and** interpreted
@@ -23132,7 +23422,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// def-eq class of types) could supply. That choice is exactly what
     /// [`LocalKey`] rejects — a memo key must not depend on a definitional
     /// equality judgement — so the gap is genuine and stays counted.
-    fn local_eq(
+    pub(crate) fn local_eq(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         a: ExprPtr<'t>,
@@ -23156,6 +23446,28 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.note_admit(crate::certify::Admit::Local.name())
     }
 
+    /// **Proof irrelevance**: `a ≡ b` because both are proofs, of propositions
+    /// the checker has just shown definitionally equal.
+    ///
+    /// Every premise is handed over, because the checker holds every one of
+    /// them at the moment it asks:
+    ///
+    /// * `a_mem` / `b_mem` — `⟦a⟧ ∈ ⟦a_ty⟧` and `⟦b⟧ ∈ ⟦b_ty⟧`, from `infer`;
+    /// * `a_prop` / `b_prop` — `⟦a_ty⟧ ∈ U₀` and `⟦b_ty⟧ ∈ U₀`, from the same
+    ///   inference one level up (`⟦Sort 0⟧` *is* `U₀`, so no new derivation is
+    ///   involved — only not discarding one);
+    /// * `ty_eq` — `⟦a_ty⟧ = ⟦b_ty⟧`, the side condition, which is not idle: it
+    ///   carries either side's `∈ U₀` across to the other when only one of the
+    ///   two was derivable.
+    ///
+    /// Those are exactly the premises of Carneiro's Theorem 6.7, and the whole
+    /// point of the method is that they arrive rather than being searched for.
+    /// The default delegates to [`TgBackend::admit`], as every other rule that
+    /// a backend may have nothing to say about does.
+    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # In this backend
+    ///
     /// **Proof irrelevance**, from the premises the checker handed over.
     ///
     /// Carneiro's Theorem 6.7 on each side — a proposition denotes a subset of
@@ -23172,7 +23484,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// equal, so Leibniz carries whichever one exists across to the side that
     /// lacks it.
     #[allow(clippy::too_many_arguments)]
-    fn proof_irrel(
+    pub(crate) fn proof_irrel(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         a: ExprPtr<'t>,
@@ -23209,6 +23521,60 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Projection reduction**: `(mk a₁ … aₙ).i a⃗ ≡ aⱼ a⃗`, one step of
+    /// weak-head normalisation.
+    ///
+    /// A rule and not an [`crate::certify::Admit`] because there is something to ask, and until
+    /// this method existed there was not. `whnf` recorded the step as
+    /// `Rule::Admitted(Admit::ProjRed)`, so the *only* thing that ever saw the
+    /// step was [`TgBackend::admit`] — and what `admit` did with it, for as long
+    /// as it had an optimistic fall-through, was rediscover on its own that both
+    /// endpoints were proofs and pass the step off as derived. Twenty steps a
+    /// run, filed under the label of the funnel that noticed rather than the
+    /// label of the reduction. Deleting the fall-through made those twenty
+    /// visible; this method is where they are supposed to be answered.
+    ///
+    /// ## Subject reduction evidence
+    ///
+    /// `reduced_subject` is the subject constructor exposed by the checker's
+    /// own whnf pass together with that pass's certificate. It is handed over,
+    /// never recomputed by the backend. `wants_proj_red_subject` is the cheap
+    /// readiness query which keeps recording from exposing a trace to a backend
+    /// that cannot consume it; its default is false, so other backends retain
+    /// the old cost and behaviour.
+    ///
+    /// ## What the proof premises are, and why they are these
+    ///
+    /// A backend with an authoritative structure interpretation can use the
+    /// constructor's computation rule and needs none of the proof parameters
+    /// below. A backend without one still has the independent proof route: if
+    /// both endpoints are proofs then each interprets to `•` by Carneiro's
+    /// Theorem 6.7 and the step is those two equations composed. `redex_proof`
+    /// and `reduct_proof` are exactly Theorem 6.7's
+    /// premises per side — `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` — and `None` means the
+    /// checker's own inference does not make that side a proof.
+    ///
+    /// They are *computed forward by the checker* and handed over, not looked
+    /// for. That distinction is the whole of the design (`MINI-DESIGN.md` §0):
+    /// the backend may not re-enter the checker, so a backend asking this
+    /// question for itself has to answer it with `syn_type`'s delta-only shadow
+    /// walk and two `has_type_a` searches, whereas the checker can simply infer.
+    ///
+    /// **No type equality is passed, and none is needed.** Theorem 6.7 points
+    /// each side at `•` from that side's own premises alone; the two endpoints
+    /// of a reduction do have definitionally equal types, but reaching for that
+    /// fact would mean calling `def_eq` from inside the certification of a whnf
+    /// step, which is the one thing the reduction path must not do.
+    /// [`TgBackend::proof_irrel`] takes a `ty_eq` because it is *given* one —
+    /// there it is a side condition the checker had to establish anyway — and
+    /// it puts it to a use that does not arise here (`share_prop`).
+    ///
+    /// The default delegates to [`TgBackend::admit`] under `proj_reduce`, so a
+    /// backend with nothing to say reports the gap it always reported, under the
+    /// name of the reduction rather than the name of the site that noticed.
+    ///
+    /// # In this backend
+    ///
     /// **Projection reduction**, through mini's authoritative class-(T)
     /// package when one exists and through proof irrelevance otherwise.
     ///
@@ -23239,7 +23605,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// — the reduction's own name. This method is the site that noticed *and*
     /// the site that is at fault, which is the property `admit`'s deleted
     /// fall-through did not have.
-    fn wants_proj_red_subject(
+    pub(crate) fn wants_proj_red_subject(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         ty_name: NamePtr<'t>,
@@ -23251,7 +23617,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
             .is_some_and(|key| self.core.has_projection_translation(&key))
     }
 
-    fn wants_proj_red_iota(
+    /// Whether an iota step inside a projection subject has authoritative
+    /// evidence ready for this backend. This is a readiness query only: it
+    /// must not re-run reduction or eagerly build a recursor package.
+    pub(crate) fn wants_proj_red_iota(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
@@ -23279,7 +23648,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
                 .is_some_and(|key| self.core.has_dep_elim(&key))
     }
 
-    fn proj_red(
+    pub(crate) fn proj_red(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
@@ -23373,6 +23742,32 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// An equality the checker believes but cannot yet justify to the backend.
+    ///
+    /// **This is a hole in the proof.** It exists so that certificate plumbing
+    /// can be introduced incrementally across a 1300-line type checker without
+    /// a flag day, and so that the places still lacking a real justification are
+    /// *named in the type system* rather than hidden behind a `bool`.
+    ///
+    /// `reason` is a static string identifying the call site — see [`crate::certify::Admit`],
+    /// which enumerates them. The count of surviving `admit` sites is the honest
+    /// measure of how far the milestone-3 work has to go, and it must reach zero
+    /// before the TG backend can be trusted.
+    ///
+    /// **A backend must not try to prove the claim here.** This method is
+    /// reached only when the checker concluded by a rule it cannot justify, and
+    /// a backend that goes looking for a derivation anyway is optimising the
+    /// wrong number: when the search succeeds it converts a specific, fixable
+    /// defect — the *rule* that concluded the step should have asked for a
+    /// certificate — into a green tick at the funnel that noticed. The TG
+    /// backend did exactly that, and it was hiding 20 uncertified projection
+    /// reductions a run on `init-prelude`. A backend that can justify a class of
+    /// steps says so by implementing the rule for them, as
+    /// [`TgBackend::iota`], [`TgBackend::proj_cong`] and
+    /// [`TgBackend::proof_irrel`] do.
+    ///
+    /// # In this backend
+    ///
     /// A step the *checker* took on trust. **A gap, and nothing else.**
     ///
     /// This used to try [`TgBackend::proof_eq`] first, and rescue the step when
@@ -23385,9 +23780,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// > that is hiding a problem under the rug.
     ///
     /// `admit`'s contract is "I cannot justify this". A rule that *can* justify
-    /// its conclusion says so by being a rule: [`Certifier::proof_irrel`] takes
+    /// its conclusion says so by being a rule: [`TgBackend::proof_irrel`] takes
     /// the two memberships and the two `∈ U₀` witnesses as parameters and
-    /// derives from them, [`Certifier::iota`], `beta`, `zeta` and `delta` each
+    /// derives from them, [`TgBackend::iota`], `beta`, `zeta` and `delta` each
     /// derive their own claim, and every one of them reports its own gap under
     /// its own name when it cannot. What was left for the fallback was the
     /// *other* sites — `Whnf`, `Cache`, `UnitLike`, `EtaStruct`, `StringLit`,
@@ -23406,13 +23801,13 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// **Measured on `init-prelude`: 20 steps, every one of them
     /// `Admit::ProjRed`** — so `gap: proj_reduce` rose 630 → 650 when the
     /// fall-through went, and the total rose with it. Those twenty are back at
-    /// 630, and they are back the right way round: [`Certifier::proj_red`] is a
+    /// 630, and they are back the right way round: [`TgBackend::proj_red`] is a
     /// rule, `whnf` records `Rule::ProjRed` rather than an admission, and the
     /// checker infers both endpoints and hands the rule its premises. What that
     /// took is recorded on `TypeChecker`'s `PropAt` — the rescue had been
     /// *right* about those steps for a reason the checker could not restate,
     /// because the backend reads universe levels under σ and inference does not.
-    fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> TgCert {
+    pub(crate) fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> TgCert {
         // The endpoints are interpreted **only** when a deletion is armed: this
         // is the checker's own "I cannot justify this", it is on the hot path,
         // and interpreting two expressions to produce a gap would be a cost
@@ -23426,6 +23821,32 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.note_admit(reason)
     }
 
+    // ── Equality-query scope ─────────────────────────────────────────────────
+    //
+    // A certificate a rule builds is a statement about the context it was built
+    // in, and the two kinds of local in that context are not interchangeable.
+    // One the checker already had open when the equality query started belongs
+    // to the *ambient* context `Γ`, and Carneiro's Theorem 6.7 reads
+    // `Γ ⊢ a ≡ b` as "for every `γ ∈ ⟦Γ⟧`, `⟦a⟧γ = ⟦b⟧γ`" — so a derivation
+    // conditional on precisely those locals' own typings **is** the judgement.
+    // One the query itself opened is not in `Γ`, and its typing premise has to
+    // be discharged by the binder rule that opened it before the query returns.
+    //
+    // The backend cannot tell the two apart from a certificate alone: they are
+    // both `Expr::Local`s and both interpret to a kernel variable. The pair of
+    // hooks below is what supplies the missing bit. `def_eq` brackets its whole
+    // body with them, so a backend that wants the distinction can snapshot
+    // whatever it needs at entry and act on it at exit; the depth is the
+    // backend's to track, because only the *outermost* entry marks the
+    // judgement boundary.
+    // `TgBackend` implements both.
+    /// One definitional-equality query is starting.
+    ///
+    /// Called on **every** `def_eq`, nested ones included. A backend that wants
+    /// the outermost entry counts the depth itself.
+    ///
+    /// # In this backend
+    ///
     /// Snapshot the baseline, once, at the outermost query.
     ///
     /// `TcCtx::open_dbj_levels` at this moment *is* the `Γ` the judgement about
@@ -23435,7 +23856,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// one's — a local `def_eq_binder_aux` pushes after this snapshot is
     /// absent from it, whichever depth pushed it, which is the safety-critical
     /// direction.
-    fn eq_query_enter(&mut self, ctx: &mut TcCtx<'t, 'p>) {
+    pub(crate) fn eq_query_enter(&mut self, ctx: &mut TcCtx<'t, 'p>) {
         if self.eq_depth == 0 {
             self.eq_ambient.clear();
             self.eq_ambient.extend_from_slice(ctx.open_dbj_levels());
@@ -23443,7 +23864,12 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.eq_depth += 1;
     }
 
-    fn eq_query_exit(&mut self, ctx: &mut TcCtx<'t, 'p>, c: Option<TgCert>) -> Option<TgCert> {
+    /// The query started by the matching [`TgBackend::eq_query_enter`] is
+    /// returning `c`.
+    ///
+    /// Called on every exit, whether or not the query concluded anything, and
+    /// exactly once per entry. The certificate is passed through by default.
+    pub(crate) fn eq_query_exit(&mut self, ctx: &mut TcCtx<'t, 'p>, c: Option<TgCert>) -> Option<TgCert> {
         self.eq_depth = self.eq_depth.saturating_sub(1);
         if self.eq_depth > 0 {
             return c
@@ -23451,7 +23877,26 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         c.map(|c| self.close_at_boundary(ctx, c))
     }
 
-    fn declar_checked(
+    /// **The declaration has been checked**: `val` inhabits `ty` at the
+    /// universe parameters `uparams`, and the checker is about to admit the
+    /// constant `name` to the environment.
+    ///
+    /// This is the one hook that is not about a definitional equality. It exists
+    /// because a constant's *typing* is established exactly once — here, where
+    /// `check_declar` does the work — and was previously thrown away, forcing
+    /// every later use of the constant to re-derive it by recursing into the
+    /// constant's value and, transitively, down the whole delta graph. That
+    /// recursion is what `TgBackend::MAX_TYPE_DEPTH` existed to bound.
+    ///
+    /// A backend that can form `⟦name.{uparams}⟧ ∈ ⟦ty⟧` from this may store it;
+    /// one that cannot does nothing, which is the default.
+    ///
+    /// `typing` is the evidence inference itself produced for `⟦val⟧ ∈ ⟦ty⟧` —
+    /// the composition of the derivation `infer` built for `⟦val⟧ ∈ ⟦T'⟧` with
+    /// the conversion along `⟦T'⟧ = ⟦T⟧`. It is handed over rather than
+    /// re-derived because re-deriving it is what the whole typing search used to
+    /// be, and the search is the thing this parameter exists to remove.
+    pub(crate) fn declar_checked(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         name: crate::util::NamePtr<'t>,
@@ -23533,7 +23978,7 @@ fn note_unmatched(r: Rule) { UNMATCHED[r as usize].fetch_add(1, std::sync::atomi
 // The difference is exactly the number of copies that no rule ever received —
 // the ones the checker consumed as a verdict, plus any left in its caches. Those
 // are the escapes, and they are reported as gaps. `TgBackend::consume` is the
-// single funnel for the second counter, and every `Certifier` method that takes
+// single funnel for the second counter, and every rule of the backend boundary that takes
 // a certificate calls it on every argument, whatever it then does.
 //
 // The direction of the residual error matters and is stated plainly: a copy
@@ -26135,18 +26580,18 @@ enum Pop {
     Unfold,
     /// From premises the **checker handed in**. No search.
     Threaded,
-    /// …asked by proof irrelevance (`Certifier::proof_irrel`).
+    /// …asked by proof irrelevance (`TgBackend::proof_irrel`).
     ThreadIrrel,
-    /// …asked by projection reduction (`Certifier::proj_red`).
+    /// …asked by projection reduction (`TgBackend::proj_red`).
     ThreadProjRed,
     /// From premises found by `has_type_a`. The number this project is trying
     /// to drive to zero.
     Searched,
-    /// …asked by proof irrelevance (`Certifier::proof_irrel`).
+    /// …asked by proof irrelevance (`TgBackend::proof_irrel`).
     SearchIrrel,
     /// …asked by a proof `λ`'s body clause (`point_the_subject`).
     SearchLam,
-    /// …asked by the `admit` fall-through (`Certifier::admit`'s implementation).
+    /// …asked by the `admit` fall-through (`TgBackend::admit`'s implementation).
     SearchAdmit,
     /// …asked by a *reduction rule*'s proof shortcut — `beta`, `zeta`, `delta`,
     /// `iota`. Kept apart from [`Pop::SearchAdmit`] because the two are
@@ -27452,7 +27897,7 @@ mod tests {
     /// **A beta contraction's domain obligation arrives from the application's
     /// own check.** `infer_app` establishes `⟦arg⟧ ∈ ⟦dom⟧` for every argument
     /// it checks (`ty_conv` over the `assert_def_eq` it ran anyway); the
-    /// handoff ([`Certifier::app_arg_checked`] → [`TgBackend::arg_mems`]) keeps
+    /// handoff ([`TgBackend::app_arg_checked`] → [`TgBackend::arg_mems`]) keeps
     /// it, and [`TgBackend::domain_obligation`] reads it back *before any
     /// search* — so the beta step is discharged outright where it used to
     /// hoist `⟦arg⟧ ∈ ⟦dom⟧` as a raw assumption.

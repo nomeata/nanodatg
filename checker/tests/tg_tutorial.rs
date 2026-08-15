@@ -6,8 +6,9 @@
 //! property the whole project exists to establish, so it is worth a test that
 //! fails the moment a step silently starts being taken on trust.
 //!
-//! Only meaningful with `--features tg`; otherwise the backend is
-//! `NullCertifier` and there is nothing to check.
+//! There is one backend, so this suite runs in every build. It used to open
+//! `#![cfg(feature = "tg")]` and be *absent* — not skipped — without the
+//! feature; see `TEST-INVENTORY.md` §1.2.
 //!
 //! # How a guard in this file goes quiet, and the four rules against it
 //!
@@ -193,7 +194,7 @@ const HAS_GAPS: &[&str] = &["075_nRecReduction", "076_listRecReduction"];
 /// the 72 are the ι rule.
 ///
 /// `073` and `116` moved again when **iota** stopped being an admission and
-/// became a rule with a derivation behind it (`Certifier::iota`): `073` from 12
+/// became a rule with a derivation behind it (`TgBackend::iota`): `073` from 12
 /// to 10 and `116` from 23 to 18. On `073` the two iota gaps closed and two of
 /// the ten cascade gaps followed, but two *escapes* appeared in their place —
 /// the certificate is conditional on the typings of `motive`, `falseVal` and
@@ -367,7 +368,7 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     // visible: 8 gaps / 0 escapes became 1 / 1.
     ("081_PSigma.snd", 1),
     // **Two files whose numbers went up when `admit` stopped guessing, and both
-    // were always this high.** `Certifier::admit`'s implementation used to try
+    // were always this high.** `TgBackend::admit`'s implementation used to try
     // `proof_eq` first and pass the step off as derived whenever both sides
     // interpreted to `•`. `125_quotIndReduction` reported *zero* gaps that way
     // and is really at two: `Quot.ind`'s computation rule is an `Admit::Quot`
@@ -400,7 +401,7 @@ const RECURSOR_DERIVED: &[&str] = &["073_boolRecEqns"];
 /// established `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` on both sides and threw both away,
 /// the step was admitted, and the admission's rescue path then went looking for
 /// exactly those two facts with `has_type`. The facts are handed to
-/// `Certifier::proof_irrel` instead. One gap closed, and the four congruences
+/// `TgBackend::proof_irrel` instead. One gap closed, and the four congruences
 /// stacked above it closed with it — which is why a file with one proof
 /// irrelevance in it moved by five.
 ///
@@ -1364,7 +1365,7 @@ fn gap_reasons(export: &Path) -> Vec<String> {
 /// arm. There are therefore two paths to pin, because they are two different
 /// mechanisms and either could quietly stop firing without the other noticing:
 ///
-/// * **inference-driven** — `Certifier::ty_proj`, composed from the premises
+/// * **inference-driven** — `TgBackend::ty_proj`, composed from the premises
 ///   `infer` already has. Counted as `by ty_proj`, and its absence as
 ///   `no evidence: ty_proj`, so the two together are a fixed population and
 ///   asserting the first is high *and* the second is zero pins the rule rather
@@ -2098,7 +2099,7 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // `is_proof` establishes `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀`; those are exactly the
     // two premises `derive_point_of_proof` used to look for with `has_type_a`,
     // one rule later, having watched them be thrown away. They are handed to
-    // `Certifier::proof_irrel` now, and this row is what says so. It is an
+    // `TgBackend::proof_irrel` now, and this row is what says so. It is an
     // **equality, not a ratchet**: a single search here is a threading leak,
     // and a leak that is allowed to be "no worse than before" is one nobody
     // finds.
@@ -2359,7 +2360,7 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // there.
     //
     // **15455 → 15423, and it is the same 20 steps, now derived under the
-    // reduction's own name.** `Certifier::proj_red` exists, `whnf` records
+    // reduction's own name.** `TgBackend::proj_red` exists, `whnf` records
     // `Rule::ProjRed` rather than an admission, and the checker infers both
     // endpoints and hands the rule Carneiro's Theorem 6.7 premises. See
     // [`projection_reduction_is_a_rule_fed_by_inference`] for what closes and
@@ -2371,7 +2372,7 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // silently dropped leg; stage 2's first slice). A leg with a beta step
     // carries that step's domain obligation as an antecedent, and the leg is
     // handed to `ty_conv` *borrowed* — deliberately unconsumed, see
-    // `Certifier::ty_conv`'s doc — so every conditional leg is counted at the
+    // `TgBackend::ty_conv`'s doc — so every conditional leg is counted at the
     // boundary: +119 in `gap: undischarged assumption … survived to the
     // boundary`, and nowhere else (every other gap row is flat or falls;
     // `ty_app` holes fall 481 → 418). Before this, the same reductions
@@ -2471,7 +2472,7 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // deliberately rather than silently: a *further* rise with no gap movement
     // is still a regression and still fails here.
     // 2153 → 2138 with threading stage 0, in the *right* direction and for a
-    // reason worth recording: `Certifier::eta` and `Certifier::proj_cong` now
+    // reason worth recording: `TgBackend::eta` and `TgBackend::proj_cong` now
     // **take** the certificates their call sites used to drop, and a
     // conditional certificate a rule takes is accounted for rather than
     // escaping. 2138 → 2102 when `admit` stopped guessing — see the gap ratchet
@@ -3024,11 +3025,11 @@ fn the_translated_row_measures_the_goals_population_and_may_not_narrow() {
 /// numbers that say so are not the same number.
 ///
 /// `whnf` used to record a projection contraction as `Rule::Admitted`, so the
-/// only thing that ever saw the step was `Certifier::admit`. While `admit` had
+/// only thing that ever saw the step was `TgBackend::admit`. While `admit` had
 /// an optimistic fall-through it rediscovered, by itself, that both endpoints
 /// were proofs, and passed 20 steps a run off as derived under the label of the
 /// funnel rather than of the reduction. The fall-through is gone;
-/// `Certifier::proj_red` is where those steps are answered now.
+/// `TgBackend::proj_red` is where those steps are answered now.
 ///
 /// # What is pinned, and why each row
 ///

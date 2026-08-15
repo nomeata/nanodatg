@@ -89,7 +89,7 @@ pub(crate) enum Rule {
     /// A projection of a constructor application, reduced to the field.
     ///
     /// A rule rather than [`Rule::Admitted`] since it acquired a backend method
-    /// ([`crate::certify::Certifier::proj_red`]). The distinction the enum draws
+    /// ([`crate::tg::TgBackend::proj_red`]). The distinction the enum draws
     /// is "there is somewhere to ask" versus "there is not"; a step whose gap is
     /// reported *by the rule that was asked* belongs on this side of it.
     ProjRed,

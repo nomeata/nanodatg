@@ -8,7 +8,7 @@ use crate::util::{
     LevelsPtr, NamePtr, TcCache, TcCtx, StringPtr
 };
 use crate::certify::{
-    typing_is_gap, Admit, Backend, Cert, Certifier, DefEq, Dropped, TyGap, Typing,
+    typing_is_gap, Admit, Backend, Cert, DefEq, Dropped, TyGap, Typing,
 };
 use crate::reduct::{self, EqRecipe, Node, Reduct, Rule, Trace, TracePtr};
 use std::rc::Rc;
@@ -107,7 +107,7 @@ pub(crate) enum DeltaResult<'t, C> {
 /// runtime and re-established, per declaration, exactly what inference had just
 /// worked out.
 ///
-/// `cert` is not an `Option`. "No evidence" is a *value* — [`Certifier::ty_gap`]
+/// `cert` is not an `Option`. "No evidence" is a *value* — [`crate::tg::TgBackend::ty_gap`]
 /// — so that a rule handed an unjustified premise still has something to
 /// propagate, and so that the place the evidence ran out is named and counted
 /// rather than silently absent.
@@ -154,7 +154,7 @@ impl<'t, Y> Typed<'t, Y> {
 /// would leave `'p` unused. [`ProofOf`] is the instance every caller means.
 ///
 /// `pub` rather than `pub(crate)` only because it appears in the signature of
-/// [`Certifier::proj_red`], which is a method of a public trait.
+/// [`crate::tg::TgBackend::proj_red`], which is public.
 pub struct Proof<'t, Y> {
     /// The proposition `e` proves, as inference computed it.
     pub ty: ExprPtr<'t>,
@@ -336,7 +336,7 @@ impl<'p> ExportFile<'p> {
                     // The declaration is checked: `val : ty`. Hand the backend
                     // the evidence, so that the constant's typing theorem is
                     // *composed* once here rather than re-derived at every use.
-                    // See `Certifier::declar_checked`.
+                    // See `crate::tg::TgBackend::declar_checked`.
                     tc.certifier.declar_checked(tc.ctx, info.name, info.uparams, info.ty, *val, typing);
                 }),
             Constructor(ctor_data) => {
@@ -878,7 +878,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     ///
     /// The evidence is threaded through every rule below. Where a rule cannot
     /// justify its conclusion the result is a named, counted gap
-    /// ([`Certifier::ty_gap`]) rather than silence — the same discipline
+    /// ([`crate::tg::TgBackend::ty_gap`]) rather than silence — the same discipline
     /// `def_eq` follows, applied to the typing judgement.
     pub(crate) fn infer(&mut self, e: ExprPtr<'t>, flag: InferFlag) -> Inferred<'t, 'p> {
         if let Some((ty, cert)) = self.tc_cache.infer_cache_check.get(&e).cloned() {
@@ -1370,7 +1370,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     //     their endpoints, three words a step and no backend call. The trace is
     //     memoised in the same entry as the reduct.
     //   * `whnf_no_unfolding_aux_with_cert` turns that record into a
-    //     certificate for `e ≡ whnf(e)` — `Certifier::beta` for a beta
+    //     certificate for `e ≡ whnf(e)` — `crate::tg::TgBackend::beta` for a beta
     //     contraction, `zeta` for a let, `delta` for a definition unfolding,
     //     `iota` for a recursor, and an `Admit` for the rules the backend has no
     //     method for yet (quotient, projection, native arithmetic) — and stores
@@ -1673,11 +1673,12 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 crate::certify::bump_certified();
                 Some(self.certifier.sort(self.ctx, a, b))
             }
-            // Not an `admit`: `admit`'s contract is "I cannot justify this", and
-            // a backend that answered it by recognising the reason string would
-            // be reading a diagnostic as an instruction. Backends with nothing
-            // to say about iota inherit `Certifier::iota`'s default, which
-            // admits.
+            // Not an `admit`: `admit`'s contract is "I cannot justify this",
+            // and a rule that answered it by recognising the reason string
+            // would be reading a diagnostic as an instruction. Asking the ι
+            // rule instead is what lets it report *what* stopped it — see
+            // `crate::tg::TgBackend::iota`, which mints seven distinct reasons
+            // and never the bare label `iota`.
             Rule::Iota => self.iota_step(a, b),
             Rule::ProjRed => self.proj_red_step(a, b, None),
             Rule::Admitted(site) => self.admit(a, b, site),
@@ -1839,7 +1840,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// **Derive the domain obligation of a beta contraction, at the one place
     /// the term and a `TypeChecker` are in the same hand.**
     ///
-    /// `Certifier::app_arg_checked`'s store is filled by `infer_app`, which
+    /// `crate::tg::TgBackend::app_arg_checked`'s store is filled by `infer_app`, which
     /// visits only the applications *written in the term*. A beta redex the
     /// reduction itself builds was never at an application check, so the store
     /// has nothing and the beta rule hoists `⟦a⟧ ∈ ⟦A⟧` raw — 18 656 of the
@@ -1958,7 +1959,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     crate::stepcount::bump(crate::stepcount::Kind::Proj);
                     let carry_subject = args.is_empty();
                     let e1 = self.ctx.foldl_apps(proj.field, args.into_iter());
-                    // A backend rule, not an admission: `Certifier::proj_red` is
+                    // A backend rule, not an admission: `crate::tg::TgBackend::proj_red` is
                     // asked, and reports its own gap when it cannot answer. The
                     // premises it may want are gathered in `proj_red_step`, at
                     // certification time — not here, where most callers want the
@@ -2250,7 +2251,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// equal.
     ///
     /// The side condition's certificate used to be established and dropped and
-    /// the conclusion admitted. It is now handed to [`Certifier::local_eq`],
+    /// the conclusion admitted. It is now handed to [`crate::tg::TgBackend::local_eq`],
     /// which can settle the common case with no axiom at all: the TG backend
     /// identifies a level-local's kernel variable by level **and** interpreted
     /// declared type (`LocalKey`), so when the two types interpret to the same
@@ -2378,9 +2379,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     ///
     /// Counted as a real rule for the same reason `beta`, `zeta` and `delta`
     /// are: the *checker* is no longer taking the step on trust, it is asking a
-    /// rule. Whether the backend can answer is the backend's ledger to keep —
-    /// [`Certifier::iota`]'s default implementation admits, so a backend that
-    /// has nothing to say still reports a gap under the reason `iota`.
+    /// rule. Whether the backend can answer is the backend's ledger to keep:
+    /// [`crate::tg::TgBackend::iota`] derives the step where it interprets the
+    /// recursor and otherwise reports the specific obstruction — never a
+    /// generic admission under the label of the step.
     fn iota_step(&mut self, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> DefEq<'t, 'p> {
         crate::certify::bump_certified();
         Some(self.certifier.iota(self.ctx, redex, reduct))
@@ -2389,7 +2391,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// One recorded **projection reduction**, asked of the backend with the
     /// premises the backend cannot get for itself.
     ///
-    /// [`Certifier::proj_red`] says what those premises are: the already-recorded
+    /// [`crate::tg::TgBackend::proj_red`] says what those premises are: the already-recorded
     /// subject trace when one is ready, plus the independent per-side proof
     /// witnesses. What belongs here is why they are gathered *now* rather than
     /// when the step was recorded: certifying the trace and
@@ -2442,8 +2444,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// even if — for now — much of that evidence is an `admit` naming a hole
     /// still to be closed.
     ///
-    /// The body is bracketed by [`Certifier::eq_query_enter`] and
-    /// [`Certifier::eq_query_exit`], which is what gives the backend **scope
+    /// The body is bracketed by [`crate::tg::TgBackend::eq_query_enter`] and
+    /// [`crate::tg::TgBackend::eq_query_exit`], which is what gives the backend **scope
     /// provenance**: which locals were already open when this query started, and
     /// which the query opened for itself. That distinction cannot be recovered
     /// from a certificate afterwards — `def_eq_binder_aux` opens its own locals
@@ -2861,7 +2863,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// For an expression already known to be an applied definition, unfold
     /// the definition and perform cheap reduction on the unfolded result.
     ///
-    /// Returns the certificate too: the unfolding itself is `Certifier::delta`
+    /// Returns the certificate too: the unfolding itself is `crate::tg::TgBackend::delta`
     /// (the backend has a defining equation for the head constant and folds
     /// congruence over the argument spine), composed with whatever the cheap
     /// reduction of the result needed.
