@@ -2706,17 +2706,18 @@ struct Shared {
     /// `Option` is "has it been attempted", the inner one "did it succeed".
     inds: Option<Option<Rc<Inductives>>>,
     /// `⊢ T ∈ U(ω)` for each interpreted inductive **type** `T` that provably
-    /// lies in `⟦Type 0⟧`, keyed by the W-type term itself: `⟦N⟧`'s
-    /// `W(1+1,B,U(1+1))` from [`derived::cumul::NatMem::over`], and the three
-    /// enumerations' `W(A,∅,U(A))` from [`derived::cumul::enum_in_u1`].
+    /// lies in `⟦Type 0⟧`, keyed by the interpreted body itself: `⟦Nat⟧`'s `ω`
+    /// from [`derived::tower::Rung::omega_mem`], and the three enumerations'
+    /// `W(A,∅,U(A))` from [`derived::cumul::enum_in_u1`].
     ///
     /// Kept here rather than on the backend because every entry is stated at
     /// *closed* terms over the per-thread signature, so one derivation serves
     /// every declaration; the per-declaration part is only the Leibniz step onto
     /// that declaration's abbreviation, which is three kernel rules. The chain
-    /// underneath — `bounded`, `tower_closed`, `Inside`, `WMem` — is the single
-    /// most expensive thing in `derived` after the recursor, and a development
-    /// that never asks `⟦T⟧ : Type 0` must not pay for it.
+    /// the three enumerations need — `bounded`, `tower_closed`, `Inside`,
+    /// `WMem` — is the single most expensive thing in `derived` after the
+    /// recursor, and a development that never asks `⟦T⟧ : Type 0` must not pay
+    /// for it. `ω` needs none of it: see [`TgBackend::ind_ty_u1`].
     ind_ty_u1: Option<Rc<Vec<(Term, Sealed)>>>,
     /// The W-recursor and its two consequences, derived on first use —
     /// separately from [`Shared::inds`], because it is the most expensive
@@ -6625,11 +6626,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// [`Self::interp_sort`] sends `Type 0` to. Built at most once per thread;
     /// see [`Shared::ind_ty_u1`].
     ///
-    /// Four entries: `N` ([`derived::cumul::NatMem`]) and the three
-    /// enumerations `enum(0)`, `enum(1)`, `enum(1+1)`
-    /// ([`derived::cumul::enum_in_u1`]) — Lean's `Empty`, `Unit` and `Bool`.
-    /// They share one chain, and `Bool`'s tag-set obligation `(1+1) ∈ U₁` is
-    /// literally `N`'s, taken off the same derivation rather than repeated.
+    /// Four entries: `⟦Nat⟧ = ω` ([`derived::tower::Rung::omega_mem`], which
+    /// needs no chain at all) and the three enumerations `enum(0)`, `enum(1)`,
+    /// `enum(1+1)` ([`derived::cumul::enum_in_u1`]) — Lean's `Empty`, `Unit`
+    /// and `Bool`. The three enumerations share one chain, and `Bool`'s tag-set
+    /// obligation `(1+1) ∈ U₁` comes off it through
+    /// [`derived::cumul::bool_tags_in_u1`].
     ///
     /// # Why this needs `Chain::over` and not `Chain::new`
     ///
@@ -6639,9 +6641,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// that the chain's mathematics never inspects where its signature came
     /// from, so `Chain::over` takes the prelude's [`derived::tower::Tower`] and
     /// the [`Inductives`]' own `Wtype` and `Bound` and derives the same six
-    /// lemmas over them. `derived::cumul::NatMem::over` is then the witness
-    /// argument at a **caller-supplied** `N`, which matters because
-    /// `derived::sums::Cases::new` mints a fresh `rec₊`: a second `Nat` would
+    /// lemmas over them. [`derived::cumul::enum_in_u1`] is then the witness
+    /// argument at a **caller-supplied** tag set, which matters because
+    /// `derived::sums::Cases::new` mints a fresh `rec₊`: a second tower would
     /// have a different fibre family, hence a different `W`, hence a theorem
     /// about a set no rule here speaks of.
     ///
@@ -6676,13 +6678,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     }
                 };
                 let s = &inds.wt.sums;
-                // **`⊢ ω ∈ U₁` is free.** `derived::cumul::NatMem` used to
+                // **`⊢ ω ∈ U₁` is free.** `cumul::witness`'s `NatMem` used to
                 // climb the cumulative hierarchy to place the W-type `N` in
                 // `U₁`; `ω` is the rung-1 tower's own witness
                 // (`derived::tower::Rung::omega_mem`) and needs no chain at
-                // all. What `NatMem` is still consulted for is `(1+1) ∈ U₁`,
-                // below — `Bool`'s tag set, which was proved *on the way* to
-                // `N ∈ U₁` and has nothing to do with `Nat`.
+                // all. That module is gone (there is one `⟦Nat⟧`, and it is
+                // `ω`), and the one thing it proved that was never about `Nat`
+                // — `(1+1) ∈ U₁`, `Bool`'s tag set, which fell out *on the way*
+                // to `N ∈ U₁` — is now `derived::cumul::bool_tags_in_u1`,
+                // called below beside its only consumer.
                 add(
                     &inds.nat.ty,
                     Some(inds.nat.clause.nat.omega_mem().clone()),
@@ -6714,20 +6718,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     /// `⊢ te ∈ ty` when `te` is an interpreted inductive **type** and `ty` the
-    /// universe it provably lives in — at present `⟦N⟧`, `⟦Bool⟧`, `⟦Unit⟧` and
-    /// `⟦Empty⟧`, each at `⟦Type 0⟧`.
+    /// universe it provably lives in — at present `⟦Nat⟧`, `⟦Bool⟧`, `⟦Unit⟧`
+    /// and `⟦Empty⟧`, each at `⟦Type 0⟧`.
     ///
     /// The lookup is ordered cheapest-first, because the overwhelmingly common
     /// answer is "no": the target must be `U₁` on the nose, the subject must be
     /// an abbreviation this backend introduced, and its body must be one of the
-    /// four W-types the `Inductives` built. Only then is the chain built — which
-    /// is why the body is compared against terms already in hand rather than
-    /// against the table, whose construction is the expensive step.
+    /// four bodies the `Inductives` built — `ω` and the three enumerations'
+    /// W-types. Only then is the chain built — which is why the body is
+    /// compared against terms already in hand rather than against the table,
+    /// whose construction is the expensive step.
     ///
     /// # What is guarded, and why it is not the head symbol
     ///
-    /// `⟦N⟧` is a fresh nullary symbol per declaration, so the shared theorem is
-    /// about the *body* `W(1+1,B,U(1+1))` and has to be carried onto the
+    /// `⟦Nat⟧` is a fresh nullary symbol per declaration, so the shared theorem
+    /// is about the *body* `ω` and has to be carried onto the
     /// abbreviation by Leibniz along its own defining equation. The guard is
     /// therefore on the **conclusion**: what is returned is registered only if
     /// it literally says `te ∈ ty` for the pair asked about. Recognising the
