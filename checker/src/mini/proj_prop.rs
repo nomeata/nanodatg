@@ -136,7 +136,14 @@ pub(crate) fn typing(
         return trunc_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &tt)
     }
     let Some(cs) = cs else {
-        let dt = dt.ok_or_else(|| miss!())?;
+        // As in `proj_data`: a model-route declaration has no `Translated` and
+        // never will, so it is untranslated by name rather than `proj(T)` debt.
+        let Some(dt) = dt else {
+            return Err(crate::mini::zoneb::model_route_untranslated(
+                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+            )
+            .unwrap_or_else(|| miss!()))
+        };
         return decl_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &dt)
     };
     let spec = cs.spec.base.ctors.first().ok_or_else(|| miss!())?;

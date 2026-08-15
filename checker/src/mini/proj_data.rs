@@ -418,7 +418,18 @@ pub(crate) fn typing(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
+        app.decls.get(&key).cloned()
+    };
+    // A model-route declaration never gets a `Translated`; that is a decline by
+    // name, not `proj(T)` debt. See `zoneb::model_route_untranslated`.
+    let dt = match dt {
+        Some(dt) => dt,
+        None => {
+            return Err(crate::mini::zoneb::model_route_untranslated(
+                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+            )
+            .unwrap_or_else(|| miss!()))
+        }
     };
     let spec = dt.ind.spec.ctors.first().ok_or_else(|| miss!())?;
     if dt.ind.spec.ctors.len() != 1 || j >= spec.args.len() || dt.ind.params.len() != np {
@@ -566,7 +577,18 @@ pub(crate) fn iota(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
+        app.decls.get(&key).cloned()
+    };
+    // A model-route declaration never gets a `Translated`; that is a decline by
+    // name, not `proj(T)` debt. See `zoneb::model_route_untranslated`.
+    let dt = match dt {
+        Some(dt) => dt,
+        None => {
+            return Err(crate::mini::zoneb::model_route_untranslated(
+                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+            )
+            .unwrap_or_else(|| miss!()))
+        }
     };
     if dt.ind.spec.ctors.len() != 1 || dt.ind.params.len() != np {
         return Err(miss!())
@@ -710,7 +732,18 @@ pub(crate) fn structure_eta(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
+        app.decls.get(&key).cloned()
+    };
+    // A model-route declaration never gets a `Translated`; that is a decline by
+    // name, not `proj(T)` debt. See `zoneb::model_route_untranslated`.
+    let dt = match dt {
+        Some(dt) => dt,
+        None => {
+            return Err(crate::mini::zoneb::model_route_untranslated(
+                c, ind, &key.1, crate::mini::zoneb::NO_PROJECTION_MODEL,
+            )
+            .unwrap_or_else(|| miss!()))
+        }
     };
     if dt.ind.spec.ctors.len() != 1 || dt.ind.params.len() != np {
         return Err(miss!())
