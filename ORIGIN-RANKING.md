@@ -1,390 +1,549 @@
-# The definitive tranche ordering: all admit-origins, both populations
+# The definitive tranche ordering: all admit-origins, all three populations
 
 Companion to `NAT-CHAR-CENSUS.md`, which censused one fixture. This ranks
-**every** admit-origin across both gap-bearing populations by measured closure.
+**every** admit-origin across every gap-bearing population by measured closure.
 
-Taken at `17384f6` in the `natchar` worktree, `ci/corpus-dir.sh --link` run
-first. Binary:
+*Re-taken in full on **2026-08-15** at master `d73c94f`, in the `recensus`
+worktree, `ci/corpus-dir.sh --link` run first. The previous ranking was taken at
+`17384f6` over a tree that no longer exists — six of its thirteen rows have
+closed, moved, or split, and its headline recommendation is superseded. No row
+below is carried forward unmeasured.*
+
+Binary:
 
 ```sh
-cargo build -p nanoda_lib --features tg,stepcount --bin checker
-./target/debug/checker --no-modelgen --verbose <file>
+cargo build -p nanoda_lib --features tg,stepcount --release --bin checker
+./target/release/checker --no-modelgen --verbose <file>
+./target/release/checker --nested --no-modelgen --verbose <init-prelude>
 ```
 
 `stepcount` remains mandatory: without it `NANODA_ASSUME` is compiled out and
-every deletion silently reports the baseline.
+every deletion silently reports the baseline. **Release and debug were
+cross-checked and agree to the digit** (`076_listRecReduction` 45 baseline,
+10 under rank 1, 4 under `*`, on both). Release is ~20× faster and makes the
+full three-population sweep a 15-minute job rather than a five-hour one.
 
-## The two populations
+> **New measurement hazard, and it bit this tranche.** Running the verification
+> gates *after* building the census binary silently destroys it: `cargo test
+> --features tg` rebuilds `target/debug/checker` **without** `stepcount` and
+> overwrites the hardlink. The result is a binary that runs, accepts, prints
+> gap counts — and ignores `NANODA_ASSUME` completely. This is the third member
+> of the family recorded in "Two defects in the measurement machinery" below,
+> and the only one that produces a *stale* rather than an absent reading.
+> Check that some deletion moves some number before trusting a sweep.
+
+## The three populations
 
 | population | files with gaps | gaps | own | relayed | multi | escaped |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `checker/tests/fixtures/` | 15 | 383 | 37 | 199 | 13 | 134 |
-| `vendor/arena-tests/good/tutorial/` | 17 of 91 | 217 | 30 | 113 | 5 | 69 |
-| **both** | **32** | **600** | **67** | **312** | **18** | **203** |
+| `checker/tests/fixtures/` | 14 | 215 | 16 | 65 | 0 | 134 |
+| `vendor/arena-tests/good/tutorial/` | 16 of 91 | 168 | 30 | 113 | 5 | 20 |
+| **the two small populations** | **30** | **383** | **46** | **178** | **5** | **154** |
+| `vendor/arena-tests/good/init-prelude.ndjson` | 1 | **10 262** | **1 456** | **7 247** | **485** | **1 074** |
+| **all three** | **31** | **10 645** | **1 502** | **7 425** | **490** | **1 228** |
 
-Every row sums to its total. Both populations independently confirm the
-three-category partition from `NAT-CHAR-CENSUS.md`: escapes carry no origin bit
+Every row sums to its total. The three-category partition from
+`NAT-CHAR-CENSUS.md` holds on all three populations: escapes carry no origin bit
 and are neither origins nor relays.
 
-## The ranking
+**`budget_decline` is excluded**, as it was from the previous census: 2 102 gaps,
+one per `succ`, a pathology fixture rather than a certification target
+(`MEASUREMENTS.md:10134`).
 
-Sorted by `SUBTREE`, both populations combined. `Δ` is the **measured** fall in
-total gaps when that origin alone is deleted with `NANODA_ASSUME`.
+### Two corrections to the population figures everyone has been quoting
+
+* **The fixture population is 215, not 166.** Fourteen fixtures carry gaps, not
+  the eight usually listed. The seven routinely omitted are
+  `delta_inside_a_proof` 11, `nested_roundtrip` 11,
+  `transport_through_eq_rec` 11, `whnf_of_a_proof` 6,
+  `ground_unit_subsingleton` 4, `mono_prefix` 4, `reducible_ctor_binders` 2 —
+  **49 gaps, 23 % of the population**, and two of them (`nested_roundtrip`,
+  `transport_through_eq_rec`) carry origins nothing else in the tree carries.
+  `stuck_recursor_major` has gone 4 → 0 and leaves the population.
+* **The small-population total is 383, not 334.** By coincidence that is exactly
+  the previous ranking's *fixture-only* figure, which is a good way to get
+  confused; the split is now 215 + 168 where it was 383 + 217.
+
+## Ranking A — the two small populations (383 gaps)
+
+Sorted by `SUBTREE`. `Δ` is the **measured** fall in total gaps across both
+populations when that origin alone is deleted with `NANODA_ASSUME`.
 
 | # | origin cause | own | relay | SUBTREE | Δ measured | over | acquired | fixtures Δ | exports Δ |
 | --: | --- | --: | --: | --: | --: | --: | :-: | --: | --: |
-| 1 | `iota: no interpretation — an indexed family` † | 12 | 117 | 129 | **−117** | 9 % | 12/12 | −83 | −34 |
-| 2 | `proj_reduce` | 14 | 71 | 85 | **−74** | 13 % | 14/14 | −74 | **0** |
-| 3 | `iota: the major premise's domain is not this inductive at this parameter` | 5 | 32 | 37 | **−35** | 5 % | 5/5 | 0 | −35 |
-| 4 | `nat_eq` | 9 | 16 | 25 | −7 ⚠ | — | **5/9** | −6 | −1 |
-| 5 | `quot` | 6 | 18 | 24 | −18 ⚠ | — | **2/6** | −10 | −8 |
+| 1 | `iota: the major premise's domain is not this inductive at this parameter` | 5 | 32 | 37 | **−35** | 5 % | 5/5 | 0 | −35 |
+| 2 | `nat_eq` | 9 | 25 | 34 | −11 ⚠ | 68 % | **5/9** | −10 | −1 |
+| 3 | `quot` | 6 | 18 | 24 | −18 ⚠ | 25 % | **2/6** | −10 | −8 |
+| 4 | `iota: no interpretation — a K-like eliminator` | 3 | 20 | 23 | **−20** | 13 % | 3/3 | −13 | −7 |
+| 5 | `iota: IDEP undischargeable — a minor premise has no typing to rest on` | 3 | 19 | 22 | **−19** | 14 % | 3/3 | 0 | −19 |
 | 6 | `unit_like` | 5 | 15 | 20 | −15 | 25 % | 5/5 | −6 | −9 |
-| 7 | `eq_cache` | 5 | 9 | 14 | −10 | 29 % | 5/5 | −6 | −4 |
-| 8 | `iota: the constructor's bridge is not about this spine` | 1 | 9 | 10 | −9 | 10 % | 1/1 | 0 | −9 |
-| 9 | `eta (needs a function-extensionality lemma)` | 2 | 8 | 10 | **0 ✗** | — | **no hook** | 0 | 0 |
-| 10 | `iota: no interpretation — several constructors` | 1 | 7 | 8 | −7 | 13 % | 1/1 | 0 | −7 |
-| 11 | `pi congruence: one Π of undetermined sort and one decided` | 3 | 4 | 7 | −4 | 43 % | 3/3 | −4 | 0 |
-| 12 | `nat_reduce` | 2 | 4 | 6 | −5 | 17 % | 2/2 | −5 | 0 |
-| 13 | `eta_struct` | 2 | 2 | 4 | −2 | 50 % | 2/2 | 0 | −2 |
-| | **total** | **67** | **312** | **379** | | | | | |
+| 7 | `iota: the major premise's domain is not this inductive` | 1 | 9 | 10 | −9 | 10 % | 1/1 | 0 | −9 |
+| 8 | `eta (needs a function-extensionality lemma)` | 2 | 8 | 10 | **0 ✗** | — | **no hook** | 0 | 0 |
+| 9 | `nat_reduce` | 2 | 8 | 10 | −8 | 20 % | 2/2 | −8 | 0 |
+| 10 | `iota: no interpretation — an indexed family` | 1 | 8 | 9 | −8 | 11 % | 1/1 | 0 | −8 |
+| 11 | `iota: no interpretation — several constructors` | 1 | 7 | 8 | −7 | 12 % | 1/1 | 0 | −7 |
+| 12 | `pi congruence: one Π of undetermined sort and one decided` | 3 | 4 | 7 | −4 | 43 % | 3/3 | −4 | 0 |
+| 13 | `eq_cache` | 3 | 3 | 6 | −4 | 33 % | 3/3 | 0 | −4 |
+| 14 | `eta_struct` | 2 | 2 | 4 | −2 | 50 % | 2/2 | 0 | −2 |
+| | **total** | **46** | **178** | **224** | | | | | |
 
-⚠ = the deletion is **partial**, so `Δ` is a lower bound (see below).
+⚠ = the deletion is **partial**, so `Δ` is a lower bound.
 ✗ = the origin has **no deletion hook at all**, so `Δ` is not a measurement.
-† = **this label covers three different causes**; only **−89** of its −117 is an
-indexed-family problem. See "rank 1 is three causes wearing one label".
 
-### `SUBTREE` is a ceiling in every measurable row — confirmed, and the band is wider
+**Rows 1 and 7 are prefix-nested**: `NANODA_ASSUME` matches by substring, so the
+shorter pattern deletes both. They were separated by running the shorter pattern
+and reading the per-file split — they live on disjoint files, `076` and `074`,
+and the joint −44 is exactly −35 + −9. Anyone re-running this must do the same
+or will double-count row 7.
 
-Thirteen rows, twelve of them measurable: **`Δ ≤ SUBTREE` without exception.**
-The recorded bands (terminal 7–14 %, mid-chain 32–34 %) hold in shape but need
-widening at both ends:
+**What changed from the previous ranking.** `iota: no interpretation — an
+indexed family` has gone from rank 1 at −117 to rank 10 at −8: the composite
+landed (`INDEXED-DESIGN.md` §8.6, −70) and the label's other two causes are now
+separate rows (rank 4 `K-like eliminator`, the `Acc.rec` share absorbed).
+**`proj_reduce` is gone from both small populations entirely** — it was rank 2
+at −74 and is now zero on 383 gaps. Two rows are new: rank 5 (`IDEP
+undischargeable`, all of it `077_RBTree.id_spec`) and rank 4, which is the
+`iota: K-like eliminator` cause the previous ranking predicted was hiding inside
+rank 1 and priced at −20. **That prediction was exactly right**, and it is the
+only forecast in the old document that survives re-measurement unchanged.
 
-* terminal / no-interpretation rows: **5–13 %** over (`major premise's domain`
-  5 %, `indexed family` 9 %, `constructor's bridge` 10 %, `several constructors`
-  13 %, `proj_reduce` 13 %). The 5 % row sits below the recorded 7 % floor.
-* mid-chain rows: **25–50 %** over (`unit_like` 25 %, `eq_cache` 29 %,
-  `pi congruence` 43 %, `eta_struct` 50 %).
+### Where the small-population origins live
 
-The high overshoots are all on small populations, where a single relay is a
-large fraction of the sub-tree; treat percentages under a sub-tree of ~10 as
-granularity, not signal. **The rule to plan on: `SUBTREE` is an upper bound,
-never an estimate. Budget ~10 % under it for a terminal origin and ~30 % under
-it for a mid-chain one.**
+| origin | files |
+| --- | --- |
+| 1 `…at this parameter` | `076_listRecReduction` (own 5, sub 37) |
+| 2 `nat_eq` | `nat_char_equations` (5/29), `098_natLitEq` (4/5) |
+| 3 `quot` | `quot_lift_reduction` (2/12), `124_quotLiftReduction` (2/10), `125_quotIndReduction` (2/2) |
+| 4 `K-like eliminator` | `delta_inside_a_proof` (1/9), `094_ruleK` (1/8), `transport_through_eq_rec` (1/6) |
+| 5 `IDEP undischargeable` | `077_RBTree.id_spec` (3/22) |
+| 6 `unit_like` | `103_unitEta2` (2/8), `102_unitEta1` (1/4), `ground_unit_subsingleton` (1/4), `mono_prefix` (1/4) |
+| 7 `…is not this inductive` | `074_prodRecEqns` (1/10) |
+| 8 `eta funext` | `106_funEta` (1/5), `107_funEtaDep` (1/5) |
+| 9 `nat_reduce` | `nat_char_equations` (2/10) |
+| 10 `indexed family` | `118_accRecReduction` (1/9) |
+| 11 `several constructors` | `116_rtreeRecReduction` (1/8) |
+| 12 `pi congruence` | `nested_roundtrip` (3/7) |
+| 13 `eq_cache` | `105_structEta` (2/4), `076_listRecReduction` (1/2) |
+| 14 `eta_struct` | `105_structEta` (2/4) |
 
-### Acquire shortfall, per row
+Eleven of fourteen rows are single-file or two-file. **The small populations are
+now a long tail**: the largest row is 37 of 383, and the top three together are
+95 of 383. There is no dominant tranche left in them.
+
+## Ranking B — `init-prelude`, the real goal population (10 262 gaps)
+
+**Nobody had ever ranked this and it is not a scaled-up version of Ranking A.**
+Its top row does not appear in either small population at all, and the two rows
+the small populations are built around (`…at this parameter`, `IDEP
+undischargeable`) are 6th and absent here.
+
+Measured with `--nested --no-modelgen`; **`modelgen` is not built in this
+worktree**, so this run accepts 1 774 declarations against the 1 822 recorded in
+`MEASUREMENTS.md:11043` for the modelgen run, with 10 262 gaps against 11 909
+and certified prefix 127 against 152. The origin *shape* is what this table is
+for and it is not sensitive to that difference; the absolute totals are, and are
+quoted here on the flags stated, not on the recorded ones.
+
+| # | origin cause | own | relay | SUBTREE | Δ measured | over | acquired |
+| --: | --- | --: | --: | --: | --: | --: | :-: |
+| 1 | `iota: the major premise is not a constructor` | 577 | 3 333 | 3 910 | **−3 780** | 3 % | 577/577 |
+| 2 | `iota: the major premise's domain is not this inductive` | 249 | 1 495 | 1 744 | **−1 609** | 8 % | 249/249 |
+| 3 | `proj_reduce` | 213 | 717 | 930 | **−890** | 4 % | 213/213 |
+| 4 | `eq_cache` | 163 | 502 | 665 | **−511** | 23 % | 163/163 |
+| 5 | `iota: no interpretation — a nested inductive` | 100 | 493 | 593 | **−525** | 11 % | 100/100 |
+| 6 | `iota: the major premise's domain is not this inductive at this parameter` | 46 | 264 | 310 | −283 | 9 % | 46/46 |
+| 7 | `nat_eq` | 44 | 200 | 244 | −62 ⚠ | 75 % | **18/44** |
+| 8 | `nat_reduce` | 32 | 113 | 145 | −119 | 18 % | 32/32 |
+| 9 | `iota: no interpretation — a K-like eliminator` | 6 | 54 | 60 | −54 | 10 % | 6/6 |
+| 10 | `iota: the constructor's bridge is not about this spine` | 4 | 22 | 26 | −24 | 8 % | 4/4 |
+| 11 | `eta_struct` | 6 | 18 | 24 | −6 | 75 % | 6/6 |
+| 12 | `beta: the lambda has no function-graph interpretation` | 8 | 16 | 24 | −23 | 4 % | 8/8 |
+| 13 | `proof_irrel` | 3 | 14 | 17 | −14 | 18 % | 3/3 |
+| 14 | `pi congruence: two Πs of undetermined sort over differently shaped bodies` | 4 | 3 | 7 | **−3 ‼** | 57 % | 4/4 |
+| 15 | `def_eq_proj` | 1 | 3 | 4 | **0 ✗** | — | **no hook** | 
+| | **total** | **1 456** | **7 247** | **8 703** | | | |
+
+‼ = **`Δ` is below `own`.** All four origins acquire and the ledger falls by
+three, so one acquisition mints an escape that did not exist before. This is the
+first row anywhere in the census where closing an origin is *worth less than the
+origin's own count*, and it is the clearest single illustration that the escape
+ledger takes back part of every win.
+
+Rows 2 and 6 are the same prefix-nesting as Ranking A's 7 and 1, separated the
+same way (joint −1 892 = −1 609 + −283).
+
+**`def_eq_proj` is a second unhooked origin**, `crate::certify::Admit::Proj.name()`
+raised through `note_admit` at `tg.rs:23073`. Its `Δ = 0` is not a result. The
+previous ranking said exactly one unhooked reason string carried gaps; that was
+true of the small populations and is false of the goal population.
+
+## Composition, all three populations
+
+`sum ≤ joint ≤ sum + MULTI` holds everywhere, and the `iota:` family composes
+**exactly** additively on both populations that have one.
+
+| population | sum of singles | joint (`*`) | MULTI | bound holds |
+| --- | --: | --: | --: | :-: |
+| small (14 rows) | 160 | **164** | 5 | 160 ≤ 164 ≤ 165 ✓ |
+| small, `iota:` only (6 rows) | 98 | **98** | — | exact ✓ |
+| `init-prelude` (15 rows) | 7 903 | **8 211** | 485 | 7 903 ≤ 8 211 ≤ 8 388 ✓ |
+| `init-prelude`, `iota:` only (6 rows) | 6 275 | **6 315** | 485 | ✓ |
+
+There is still no bundling premium worth capturing: the excess over the sum is
+4 % on the goal population and 2.5 % on the small ones, and bundling would lose
+per-tranche attribution.
+
+## `SUBTREE` is a ceiling — confirmed a third time, and the band is now tight
+
+Twenty-eight measurable rows across three populations, **`Δ ≤ SUBTREE` without
+exception**. The previous ranking's bands were taken on sub-trees of size 4–129
+and were correspondingly noisy. On `init-prelude`'s large rows the ceiling is
+much tighter than anyone has been budgeting for:
+
+* **large terminal rows (sub-tree ≥ 300): 3–11 % over** — rank 1 3 %,
+  `proj_reduce` 4 %, rank 2 8 %, `…at this parameter` 9 %, `nested inductive`
+  11 %. The 25–50 % mid-chain band does **not** appear at scale.
+* **mid-size rows (sub-tree 17–70): 8–23 %** — `constructor's bridge` 8 %,
+  `K-like` 10 %, `proof_irrel` 18 %, `nat_reduce` 18 %, `eq_cache` 23 %.
+* **small rows (sub-tree ≤ 10): 20–75 %, and one negative.** Treat anything
+  under a sub-tree of ~10 as granularity, not signal.
+
+**The rule to plan on, revised: budget ~5 % under `SUBTREE` for a terminal row
+with a sub-tree over 300, ~20 % for one in the tens, and do not plan off
+`SUBTREE` at all below ten.** The old blanket "~10 % terminal / ~30 % mid-chain"
+was calibrated on the small populations and is pessimistic by 2× on the rows
+that now matter.
+
+## Acquire shortfall, per row
 
 `admit_or_acquire` acquires only when `premask == 0 && ta != tb` and
-`CondEq::new` succeeds. Where it cannot, the origin is admitted as usual and the
-deletion under-reports. Measured by re-counting each origin's own row *under its
+`CondEq::new` succeeds. Measured by re-counting each origin's own row *under its
 own deletion*:
 
-| origin | own | survives its own deletion | verdict |
-| --- | --: | --: | --- |
-| `quot` | 6 | **4** | −18 is a **lower** bound; ceiling 24 |
-| `nat_eq` | 9 | **4** | −7 is a **lower** bound; ceiling 25 |
-| `eta (function-extensionality)` | 2 | **2** | no hook; unmeasured, ceiling 10 |
-| all ten others | — | 0 | full acquisition, `Δ` is the number |
+| origin | population | own | survives its own deletion | verdict |
+| --- | --- | --: | --: | --- |
+| `nat_eq` | small | 9 | **4** | −11 is a **lower** bound; ceiling 34 |
+| `nat_eq` | `init-prelude` | 44 | **26** | −62 is a **lower** bound; ceiling 244 |
+| `quot` | small | 6 | **4** | −18 is a **lower** bound; ceiling 24 |
+| `eta (funext)` | small | 2 | **2** | no hook; unmeasured, ceiling 10 |
+| `def_eq_proj` | `init-prelude` | 1 | **1** | no hook; unmeasured, ceiling 4 |
+| every other row | both | — | 0 | full acquisition, `Δ` is the number |
 
-**Do not read a zero or a small `Δ` as "this origin is worth nothing" without
-checking this column.** Two of thirteen rows are partial and one is unhooked.
+**`nat_eq` is the only origin that is partial on both populations**, and it is
+partial in the same proportion (56 % / 59 % surviving). That is a property of the
+rule, not of a fixture.
 
-## Two defects in the measurement machinery
+## Two — now three — defects in the measurement machinery
 
-Both found by this census; neither is in `checker/` production behaviour, and I
-have changed no code.
+Neither of the first two is in `checker/` production behaviour; the third is in
+the build, not the code. No production code was changed by this tranche.
 
 **1. `NANODA_ASSUME` cannot delete every origin.** `TgBackend::admit_or_acquire`'s
-doc comment (`tg.rs:4931-4936`) claims "**any origin can be deleted by name** —
-which is what makes the census completable rather than only the origins that
-happened to get a hook". That is **false**. Seventeen reason strings are raised
-by calling `note_admit` directly rather than going through `admit`, so
-`origin_assume` is never consulted for them:
-
-```
-tg.rs:4471, 4473, 19771, 19936, 19953, 19963, 19971, 19994,
-     20008, 20017, 20044, 20047, 20051, 20072, 20075, 20110, 20113
-```
-
-Exactly one of them carries gaps on either population:
-`eta (needs a function-extensionality lemma)` at `tg.rs:19994`, own 2, sub-tree
-10. Its `Δ = 0` is **not** a result. Anyone extending this table must check
-`note_admit` first — a zero from an unhooked origin is indistinguishable from a
-zero from a real absorption unless you look.
+doc comment still claims "any origin can be deleted by name". False: reason
+strings raised by calling `note_admit` directly never consult `origin_assume`.
+There are now **19** such call sites in `tg.rs` (the previous count of 17 was
+taken before two were added), and **two** of them carry gaps —
+`eta (needs a function-extensionality lemma)` at `tg.rs:23031` on the small
+populations, and `def_eq_proj` at `tg.rs:23073` on `init-prelude`. A zero from an
+unhooked origin is indistinguishable from a real absorption unless you look.
 
 **2. The ACQUIRED line disappears when a deletion empties a file's origin set.**
-`origin_report()` returns `String::new()` early when `ORIGINS` is empty, and the
-`equations ACQUIRED rather than reported` line lives inside the report. So a
-single-origin file that fully acquires prints **no** acquired count, and a naive
-sum reads 0. Measured: `delta_inside_a_proof` goes 11 → 3 gaps with derived
-theorems 45 → 54 under `indexed family` deletion, and prints no ACQUIRED line at
-all. This is why the shortfall table above is computed from surviving own-rows
-rather than from the printed counter.
+`origin_report()` returns early when `ORIGINS` is empty and the
+`equations ACQUIRED` line lives inside the report, so a single-origin file that
+fully acquires prints no acquired count. This is why the shortfall table is
+computed from surviving own-rows rather than from the printed counter.
+`TEST-INVENTORY.md` §6.4 records this as a known, deliberately unfixed
+measurement hazard; it is still live and it still costs every census a step.
 
-## Composition of the top groups
+**3. The gates destroy the census binary.** See the box at the top. New, found
+here, and the only one of the three that yields a plausible wrong number rather
+than an obviously absent one.
 
-The standing arithmetic `sum ≤ joint ≤ sum + MULTI` holds, with `MULTI = 18`
-combined.
+## The floor, and the escape endgame
 
-| deleted together | fixtures | exports | both | Δ | sum of singles |
-| --- | --: | --: | --: | --: | --: |
-| baseline | 383 | 217 | 600 | — | — |
-| all four `iota:` causes | 300 | 132 | 432 | **−168** | 168 (exact) |
-| `iota` + `proj_reduce` | 226 | 132 | 358 | **−242** | 242 (exact) |
-| `iota` + `proj_reduce` + `quot` | 216 | 124 | 340 | **−260** | 260 (exact) |
-| `*` (every hooked origin) | 182 | 104 | 286 | **−314** | 303, +11 |
+With every hooked origin deleted:
 
-The top three compose **exactly additively** — no shared relays between them at
-all. Superadditivity appears only when everything goes at once (+11, inside the
-18-gap `MULTI` bound), so the leverage is in single tranches and there is no
-argument for bundling them.
-
-**Scheduling consequence, since the `PProd` tranche is in flight:** `iota` is
-worth −168 standalone (600 → 432) and −168 again on top of `proj_reduce`
-(526 → 358). Its value is **completely unaffected** by whether `PProd` lands
-first, so the two can be scheduled in either order, or in parallel, without
-either seat's number moving.
-
-## The floor, and what it says about the whole programme
-
-With every hooked origin deleted, **286 gaps remain** and their composition is
-the finding:
-
-| | count |
-| --- | --: |
-| `undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary` | **254** |
-| residual relays (`trans` 10, `pi congruence` 7, `congruence` 5) | 22 |
-| undeletable origins (`quot` 4, `nat_eq` 4, `eta funext` 2) | 10 |
-
-**89 % of the floor is the escape row.** It rises from 203 to 254 as origins are
-deleted, because each acquisition becomes an antecedent the escape ledger then
-charges for. So:
-
-* closing every admit-origin in the tree takes 600 → 286, a **52 %** reduction;
-* the escape row is the terminal wall for the entire corpus, and its sub-tree is
-  empty by construction — it is worth exactly its own count and unlocks nothing;
-* it cannot be deferred forever, but it also cannot be *reached* by any origin
-  tranche. It is a separate programme of work: discharging conditional
-  certificates at declaration boundaries.
-
-## Answering the `iota:` question directly
-
-**The four `iota:` causes are not terminal in the ledger sense — they carry
-relays heavily, and as a group they are the largest thing in the tree.**
-
-| | own | relay | SUBTREE | Δ measured |
-| --- | --: | --: | --: | --: |
-| all four `iota:` causes | 19 | 165 | 184 | **−168** |
-| `proj_reduce`, for comparison | 14 | 71 | 85 | −74 |
-
-`iota` is **2.3×** `proj_reduce` combined, and the gap is far wider on the
-population that matters:
-
-| | fixtures (383) | exports (217) | both (600) |
+| | small populations | `init-prelude` | all three |
 | --- | --: | --: | --: |
-| `iota` (all four) | −83 (22 %) | **−85 (39 %)** | −168 (28 %) |
-| `proj_reduce` | −74 (19 %) | **0 (0 %)** | −74 (12 %) |
+| baseline | 383 | 10 262 | **10 645** |
+| floor (`NANODA_ASSUME='*'`) | **219** | **2 051** | **2 270** |
+| reduction | 43 % | 80 % | **79 %** |
+| of the floor: escapes | 187 (**85 %**) | 1 874 (**91 %**) | **2 061 (91 %)** |
+| of the floor: residual relays | 22 | 151 | 173 |
+| of the floor: undeletable origins | 10 | 26 | 36 |
 
-### The correction this forces
+**The escape row is still the terminal wall and it is more dominant than the
+previous ranking found, not less.** It was 254 of 286 (89 %) on a 600-gap tree;
+it is 2 061 of 2 270 (91 %) on a 10 645-gap one. Escapes rise as origins close —
+154 → 187 on the small populations, 1 074 → 1 874 on `init-prelude` — because
+each acquisition becomes an antecedent the escape ledger then charges for. On
+the goal population the escape population **grows by 800 as the origins close**,
+which is 75 % growth: the ledger takes back nearly a tenth of the −8 211.
 
-**`proj_reduce` is worth exactly zero on the reference population.** It occurs on
-one file in the entire tree — `nat_char_equations`, which is our own
-hand-written development fixture — and on none of the 91 Lean exports. The
-`PProd` tranche now in flight is real work and my recommendation for it stands
-*for that fixture*, but it should be understood as unblocking a development
-signal, not as moving the reference measurement. I did not know this when I
-recommended it; the fixture-only census could not have shown it, and this is the
-correction I owe on my earlier note.
+Closing every admit-origin in the tree is worth 10 645 → 2 270. Then the whole
+remaining programme is the escape ledger, and its sub-tree is empty by
+construction — it is worth exactly its own count and unlocks nothing.
 
-**The next tranche after `PProd` should be `iota: no interpretation — an indexed
-family`** (rank 1, −117 combined, −34 on exports), and the one after it
-`iota: the major premise's domain is not this inductive at this parameter`
-(rank 3, −35, **all of it on exports**, all of it on one file,
-`076_listRecReduction`). Together with the two small iota rows that is −168.
+### The shape of the escape population, re-measured
 
-*Corrected: rank 1 landed at −70. Rank 3 was then censused and its construction
-reaches **−1**, not −35 — the row is a symptom of a carrier-spelling collision,
-and the −35 sits one wall behind it. `SEAM-DESIGN.md` §10.*
+The brief that scoped this tranche said a beta-typing seat had found **ten**
+shape-groups needing different constructions, and that the raw-beta category was
+priced at **44 gaps tree-wide**. **Neither is in the tree.** `MEASUREMENTS.md`
+has no such section; the nearest is a three-group classification dated
+2026-07-31, and `CLAUDE-HANDOFF.md:238` says 77 raw-beta obligations, unpriced.
+The decomposition was therefore taken fresh, off `crate::escapes::report()`,
+which groups by `Prov::group()` — the obligation's shape, ignoring the subject.
 
-Where the iota origins live:
+| | small populations | `init-prelude` |
+| --- | --: | --: |
+| escaping certificates | 154 | 1 074 |
+| **distinct shape groups** | **23** | **48** |
+| carrying **only** raw-beta atoms | 61 (40 %) | 625 (58 %) |
+| …of those, carrying only atoms **already concluded elsewhere in the run** | **2** | **1** |
+| certificates closable by **any single** shape group (Σ of the `sole` column) | 24 (16 %) | 309 (29 %) |
+| largest single group's closable count | 9 | 86 |
 
-| cause | file | own | sub-tree |
-| --- | --- | --: | --: |
-| indexed family | `mutual_aux_encoding` | 3 | 50 |
-| indexed family | `ctor_abbrev_major` | 2 | 25 |
-| indexed family | `077_RBTree.id_spec` | 3 | 22 |
-| indexed family | `118_accRecReduction` | 1 | 9 |
-| indexed family | `delta_inside_a_proof` | 1 | 9 |
-| indexed family | `094_ruleK` | 1 | 8 |
-| indexed family | `transport_through_eq_rec` | 1 | 6 |
-| major premise's domain | `076_listRecReduction` | 5 | 37 |
-| constructor's bridge | `074_prodRecEqns` | 1 | 10 |
-| several constructors | `116_rtreeRecReduction` | 1 | 8 |
+**Three findings, and the first one governs the whole programme.**
 
-The leverage ratio is the highest in the tree: `mutual_aux_encoding` carries
-**50 gaps on 3 origins**, ~17 gaps per origin.
+1. **The escape population does not decompose into tranches.** A certificate
+   closes only when *every* atom it carries is discharged. The largest shape
+   group on `init-prelude` — `raw beta [a lambda whose typing rule did not apply
+   @ something else] (never checked at an application)` — carries **3 182 atoms
+   across 245 certificates, and exactly 6 of those certificates carry nothing
+   else**. Building that one construction perfectly closes 6 of 1 074 escapes.
+   Summed over all 48 groups, single-shape constructions can reach **309 of
+   1 074 (29 %)**; the other 71 % need two or more different constructions each
+   before a single gap moves. This is the opposite of the ten-groups picture the
+   brief inherited, and it is why the escape endgame cannot be scheduled as a
+   sequence of tranches with individual numbers.
+2. **The "thread it, don't derive it" prize is essentially zero.** Of 625
+   `init-prelude` certificates carrying only raw-beta atoms, **one** carries only
+   atoms the run already concluded somewhere. A cross-declaration typing store
+   is worth 1 gap. This refutes the standing hope that most of the escape
+   population is plumbing.
+3. **The ambient-local category is not exhausted.** The brief said scope
+   provenance had closed it corpus-wide; no such measurement exists, and
+   `context local's own typing` is still the **second** largest group on
+   `init-prelude` (738 atoms, 344 certificates, 15 closable) and the **largest**
+   on the small populations (180 atoms, 43 certificates, 9 closable).
 
-### …but rank 1 is three causes wearing one label
+## `nat_char_equations`, re-adjudicated
 
-`tg.rs:14075` tests `r.num_indices != 0` **first**, ahead of `all_inductives`,
-`is_k`, `recognised_ind` and `is_nested`. So every indexed declaration gets this
-label whatever its real blocker is. Splitting the −117 per file by the recursor
-the row names:
+Asked: is the standing "do not build the `Nat` bridge" verdict still −11 and
+still zero theorems? **The price has moved and the verdict has not.**
 
-| recursor | files | Δ | the real cause |
-| --- | --- | --: | --- |
-| `Aux.rec`, `Ix.rec`, `RBTree.rec` | `mutual_aux_encoding` −47, `ctor_abbrev_major` −23, `077_RBTree.id_spec` −19 | **−89** | genuinely `IndexedDepRecursor` |
-| `Eq.rec` | `delta_inside_a_proof` −8, `094_ruleK` −7, `transport_through_eq_rec` −5 | **−20** | **K-like eliminator** — `Eq` has `num_indices = 1` *and* `is_k` |
-| `Acc.rec` | `118_accRecReduction` | **−8** | `derived::rec_acc`'s `pack_iota`, a different engine |
+| | at `b91433b` (152 gaps) | now (61 gaps) |
+| --- | --: | --: |
+| `nat_eq` alone | −6 | **−10** |
+| `nat_reduce` alone | −5 | **−8** |
+| both (= `*` on this fixture) | **−11** (7.2 %) | **−18** (30 %) |
+| ceiling (`SUBTREE`) | 26 | **39** |
+| theorems that certify as a result | 0 | **0** |
 
-**This is task #153 repeating verbatim.** The comment immediately above line
-14075 records that a clause called "a mutual block" once carried 100 gaps of
-which none was a mutual block, and concludes "*Split so that each clause tests
-the thing it is named for*". The same defect is live one line below it: 28 of the
-117 gaps under "an indexed family" are not an indexed-family problem, and one of
-the three files is literally named `094_ruleK`.
+The fixture's composition is exactly as the brief states — 22 escapes, 18
+`trans`, 7 `congruence`, 6 `pi congruence`, 5 `nat_eq`, 2 `nat_reduce`, 1 `symm`
+— and `nat_eq`/`nat_reduce` are now the *only* hooked origins on it, so `*` and
+"both" coincide at 43.
 
-Reordering the chain to test `is_k` before `num_indices` is a one-line change in
-`checker/` and therefore out of scope for this measurement tranche — but until it
-is made, **rank 1's true size is −89, not −117**, and there is an unlisted
-`iota: K-like eliminator` cause worth −20 hiding inside it.
+**The price is −18, not −11, and as a fraction of the fixture it has gone from
+7 % to 30 %** — because `proj_reduce`'s −87 landed at `3eab691` and removed the
+denominator, not because the Nat wall moved.
 
-The whole iota population sits on **six distinct recursors**, 13 firings —
-`Aux.rec` 3, `RBTree.rec` 3, `Eq.rec` 3, `Ix.rec` 2, `RTree.rec` 1, `Acc.rec` 1.
-That is a bounded, enumerable target, not an open family.
+**The "zero additional theorems" half is confirmed directly, by a measurement
+the earlier census could not take.** Under `*`, the escape census names every
+declaration that still carries an escaping certificate, and **16 of the fixture's
+17 theorems are on that list**: `recAddZero`, `recAddSucc`, `natAddZero`,
+`natAddSucc`, `natSubZero`, `natSubSucc`, `natMulSucc`, `natPowZero`,
+`natPowSucc`, `natBeqZZ`, `natBeqZS`, `natBeqSZ`, `natBeqSS`, `natBleZ`,
+`natBleSZ`, `natBleSS`. The seventeenth, `natMulZero`, carries no escaping
+certificate **in either state** — so **no theorem changes status between the
+baseline and `*`**, which is the claim that matters. Two theorems move the wrong
+way: `natPowZero` and `natBeqZZ` appear **only** under `*`, i.e. assuming the Nat
+equations true creates escapes on declarations that had none. The `ble`/`beq`
+theorems carry 16–25 raw-beta atoms each, the same shape and the same count as
+the `sub`/`mul`/`pow` ones, confirming they fail for the identical reason.
+`natLits=2`, `maxNatLit=1` — there are still no numerals.
 
-## Pure absorption: none found
+**So the verdict stands on this fixture, and stands for a sharper reason than
+before: the fixture's residual wall is now the escape ledger (26 of the
+remaining 43), which no Nat construction reaches.** — **but see the next
+section, because the fixture is no longer the reason to care about the Nat
+bridge, and the conclusion drawn from it corpus-wide is now wrong.**
 
-Asked: is any origin large and moving the ledger by zero because another row
-takes its declines the instant it stops? **No — not among the twelve hooked
-origins.** Every one moves the ledger by at least its own count, and eleven of
-twelve move it by strictly more:
+## The next build: the `Nat` bridge, −3 780, and why the standing decision inverted
 
-* the only zero-mover is `eta (function-extensionality)`, and that is the
-  **missing hook**, not absorption. It is untested, not refuted;
-* the closest thing to absorption is `eta_struct`, whose `Δ` equals its own count
-  exactly (2), so both of its predicted relays failed to vanish;
-* `nat_eq` has `Δ = 7` against `own = 9`, but only 5 of the 9 acquire, so it is a
-  shortfall row, not an absorption row.
+**`iota: the major premise is not a constructor` is the largest single origin in
+the project: own 577, sub-tree 3 910, measured −3 780 — 37 % of `init-prelude`'s
+entire gap population from one origin, with full acquisition and a 3 % ceiling
+overshoot.** It is 2.3× the next row in its own ranking and 22× the largest
+number in the whole of the previous census (`iota`, all four causes, −168).
 
-To test the one open case, `note_admit` at `tg.rs:19994` would have to be routed
-through `admit` as the other origins are. That is a one-line change to
-production code in `checker/`, which this tranche is not permitted to make, and
-it is worth at most 10 gaps — I would not spend a seat on it.
+The tree already instruments it. Its own census (`NOT_CTOR`, `NOT_CTOR_NAMES`)
+says **563 of 577 firings are "a CONSTANT that is not a constructor — it did not
+reduce"**, over **7 distinct head constants**. Temporary instrumentation added
+here, measured, and reverted spelled the whole major premise rather than only its
+head:
+
+| major premise | firings |
+| --- | --: |
+| `Nat.ble <lit> <lit>` | **466** |
+| `Nat.decEq (_.ctorIdx _) <lit>` (four inductives) | 46 |
+| `OfNat.ofNat Nat <lit> (instOfNatNat _)` | 18 |
+| `Nat.decLt (OfNat.ofNat _ _ _) UInt{8,16,32,64}.size` etc. | 16 |
+| `Nat.beq (_.ctorIdx _) (_.ctorIdx _)`, `Nat.beq Nat.zero Nat.zero`, … | 14 |
+| `instDecidableEqNat …`, `HAdd.hAdd Nat Nat Nat …` | 3 |
+| | **563** |
+
+**All 563 are `Nat` arithmetic or `Nat` decidability, and 466 of them — 83 % of
+the origin, 81 % of its own count — are `Nat.ble` applied to two literals.**
+Ground. Not symbolic. Exactly the clause
+`derived::nat::BleClauses` / `ble_transfer` concludes
+(`⊢ app(app(g,a),b) = bleb(t,f,a,b)`, `derived/src/nat/ble_unique.rs:306,330`),
+and whose "only callers in the tree are `derived/tests/nat.rs`".
+
+**This inverts `NAT-CHAR-CENSUS.md` §6's standing decision, and the reason it was
+wrong is instructive rather than embarrassing.** §6 declined to build the Nat
+bridge on a measurement that was correct — 11 gaps and zero theorems on
+`nat_char_equations` — taken on a hand-written 44-declaration fixture with
+`natLits=2, maxNatLit=1`, i.e. **a fixture with no numerals in it**. Lean's own
+prelude is full of them. §6's own reasoning ("build it when something is actually
+gated on it; nothing here is") was right; what was missing was that the thing
+gated on it had never been measured. This is the second time in a week that a
+conclusion true of the fixtures has been false of the reference population, after
+`proj_reduce` — which, note, is **rank 3 on `init-prelude` at −890** having been
+declared "worth exactly zero on the reference population" when the reference
+population was the 91 tutorial exports.
+
+**What the next seat must refute first, because this brief is a hypothesis
+too.** −3 780 prices the equations being *true*, not a construction reaching
+them. Two specific checks, in this order:
+
+1. **Does `Nat.ble n m` at two literals need `BleClauses` at all, or does it need
+   the native `NatClause` routed one level further?** `nat_reduce` ("native
+   arithmetic on literals") already exists, fires 32 times, and is worth −119 —
+   yet 466 ground `Nat.ble` applications reach ι unreduced. If the native clause
+   already decides them and merely fails to hand TG a certificate at the ι site,
+   this is a wiring tranche of the `3eab691` shape (one added disjunct in a
+   readiness gate, −87 on its fixture) rather than a derivation tranche. **That
+   is the cheapest possible outcome and it should be checked before a line is
+   written.** `NAT-CHAR-CENSUS.md` §5 is the precedent: the wall was located at
+   the rule whose *name* was on the gap, and it was one gate away.
+2. **`ble_transfer`'s preconditions.** `NAT-CHAR-CENSUS.md` §3 priced them: a
+   `&mut mini::kernel::Checker` over a populated interpretation store, which
+   `TgBackend` holds at no site. If check 1 fails and the construction really is
+   needed on the TG side, that seam cost is the tranche, and §6's refusal to pay
+   it for an 11-gap prize should be re-taken against −3 780. It is exactly the
+   "revisit it if a large origin ever turns out to need cashing" clause, and this
+   is that origin.
+
+**Second-ranked build, if the Nat row turns out to be blocked:**
+`iota: the major premise's domain is not this inductive` at **−1 609** on
+`init-prelude` — the same cause as Ranking A's rank 7 (−9 on `074_prodRecEqns`),
+which makes `074` a 10-gap development fixture for a 1 609-gap goal-population
+tranche. That is the best fixture-to-goal leverage ratio in the tree and nobody
+has noticed it. **Third:** `proj_reduce` at −890, whose construction already
+landed once (`3eab691`) on `nat_char_equations` and would be an extension rather
+than a new derivation.
+
+## Question (b), answered: the `np == 0` layer in `fire_dep` is **twelve** constructions
+
+`SEAM-DESIGN.md` §10.4 left `076_listRecReduction`'s −35 "bounded below by three
+walls and above by nothing anyone has measured", and asked for a census before
+anyone builds. Taken here, by walking `fire_dep` and its transitive callees and
+enumerating every site that assumes the inductive has no parameters:
+
+**12 sites: 10 hard (would decline or be wrong at `np > 0`), 2 latent. Three are
+the walls §10.4 named — all three verified still present and unfixed. Seven are
+new.**
+
+| # | site | `file:line` | assumption | fix |
+| --: | --- | --- | --- | --- |
+| 1 † | `gen_ty_nest` | `tg.rs:9545` | `gi.param_vars.is_empty()` gates carrier adoption; `np > 0` mints a third `⟦T⟧` | substantial (~75 lines, prototyped) |
+| 2 | `adopt_ty_nest` | `tg.rs:9658` | `self.mk(tn.head_sym?, vec![])` rebuilds the head **nullary** | small |
+| 3 | `gen_ind_build` | `tg.rs:9386` | `betas: …map(\|_\| Vec::new())` drops the βⱼ on the adoption branch | small — 8 lines already exist at `:9412` |
+| 4 † | `dep_minor_typed` | `tg.rs:18151` | `inst_all(ax, &[])` against mini's `∀p⃗. ⟦cᵢ⟧(p⃗) = …` | **one line** |
+| 5 † | `dep_minor_typed` | `tg.rs:18161` | `from != mdom` compares parameter-applied against nullary | small, possibly **zero** once #4 lands |
+| 6 | `fire_dep` | `tg.rs:19067` | `np == 0 && fields.is_empty()` gate on the major's own spine equation | one line |
+| 7 | `mini_ctor_spine_bridge` | `tg.rs:19372` | explicit `!param_vars.is_empty()` decline — **this is where the 37-gap sub-tree lands once #1 falls** | substantial |
+| 8 | `mini_ctor_spine_bridge` | `tg.rs:19379` | arity check compares the whole spine against `fields` alone | part of #7 |
+| 9 | `mini_ctor_spine_bridge` | `tg.rs:19404` | transports **every** spine argument along the carrier bridge, parameters included | part of #7 |
+| 10 | `mini_ctor_spine_bridge` | `tg.rs:19445,19453` | `ctor_term(…, &[], &ts)` and `ys_c = Vec::new()` hand parameters on as recursive fields | part of #7 |
+| 11 ‡ | `fire_dep` | `tg.rs:19178` | `ctor_term` resolves parameters at the *declaration's* variables; `ctor_term_at` exists uncalled at `carrier.rs:510` | one line |
+| 12 ‡ | `fire_dep` | `tg.rs:19189` | `minor_ihs` → `minor_subs` → `rec_slot_domains`, same | one line, or nothing |
+
+† = named in `SEAM-DESIGN.md` §10.4. ‡ = latent (inert behind other declines today).
+
+**The verdict this census was asked for: `076`'s −35 sits behind at least ten
+walls, not three, and seven of them were unknown when §10.4 recommended the
+census.** Six are one-liners or small; the cost is concentrated in two
+substantial pieces (#1, and #7–#10 as a single rewrite of
+`mini_ctor_spine_bridge` into the parameterised form that its already-general
+sibling `ctor_spine_bridge` has). Half of `fire_dep`'s parameterised path needs
+nothing at all — `gen_ty_bridge`, `ctor_spine_bridge`, `dep_subst`/`dep_rec_at`,
+`carrier_at`, `mini_cod_at_rung`, `dep_minor_typed`'s fieldful walk and
+`nest_chain` are already written for arbitrary `np`.
+
+**And the scheduling answer is no.** §10.4 measured every one of the three walls
+it cleared at `076` = 45, sub-tree 37 — the tranche migrates rather than
+shrinking, so **there is no partial credit anywhere in this layer**: the payoff
+is 0 until all ten hard sites are done, and then it is −35, on one file, in the
+population that is now 168 of 10 645 gaps. Against `init-prelude`'s −3 780 for a
+Nat bridge, or −1 609 for rank 2, **this layer should not be started.** The
+correct disposition of §10.4's open question is: censused, ten walls, declined.
+Cheapest useful act if anyone touches it anyway: land #4 (one line) and see
+whether #5 disappears — that is the only sub-question in the layer with an
+answer shorter than the whole tranche.
 
 ## Construction reachability, per row
 
-The distinction the project keeps paying for skipping: `Δ` prices *the equations
-being true*; a construction has to *derive* them, and may not reach the same
-number.
-
-**Rank 3 has since been censused and the estimate below was wrong by 34.** The
-row is one cause on one recursor as predicted (`List.rec`, 3 × `cons` + 2 ×
-`nil`), but it is the *first* of three consecutive matching points inside the
-same ι engine, and clearing it is worth **−1** measured two independent ways.
-The cause is a spelling collision — three independent mints of `⟦List⟧` in one
-binary — not a missing rule. `SEAM-DESIGN.md` §10 has the census, the two
-probes, and what the remaining −35 actually needs. Read "terminal, one file,
-one recursor shape" as *necessary* conditions for a construction to reach `Δ`,
-never sufficient ones: none of them says the rule *completes* once the named
-check passes.
+`Δ` prices *the equations being true*; a construction has to *derive* them.
 
 | origin | expect a construction to reach `Δ`? |
 | --- | --- |
-| `indexed family` (−89 true) | **Yes — and no new derivation is needed.** See below. |
-| `proj_reduce` (−74) | Likely yes on its own fixture; already in flight. |
-| `major premise's domain` (−35) | **No — measured at −1.** See `SEAM-DESIGN.md` §10. |
-| `constructor's bridge` / `several ctors` (−9 / −7) | Probably; both terminal, single-file, single-recursor. |
-| `unit_like` / `eq_cache` (−15 / −10) | **Partly.** Both mid-chain (25–29 % over), so the derivation runs on into the next wall rather than ending the conversion. Expect noticeably under `Δ`. |
-| `quot` (−18, LB) | Unknown — two thirds of it does not acquire, so it is not yet priced. |
-| `nat_eq` / `nat_reduce` (−7 LB / −5) | Small, and `NAT-CHAR-CENSUS.md` §6 already argues against building them now. |
-| `pi congruence` / `eta_struct` (−4 / −2) | Not worth a tranche either way. |
+| `major premise is not a constructor` (−3 780) | **Unknown and it is the whole question.** 83 % is ground `Nat.ble`. If the native clause already decides it, a gate reaches most of `Δ`; if `ble_transfer` is needed on the TG side, the `mini::Checker` seam is the tranche. Check 1 above settles it. |
+| `…domain is not this inductive` (−1 609) | Probably. Terminal, 8 % over, full acquisition, and it has a 10-gap fixture (`074_prodRecEqns`) to develop against. |
+| `proj_reduce` (−890) | Likely — the construction landed once at `3eab691` and beat its own price (−87 against −74). |
+| `eq_cache` (−511) / `nested inductive` (−525) | Partly. 23 % / 11 % over; both mid-chain at scale. |
+| `…at this parameter` (−35 small / −283 goal) | **No on the small population — measured at −1**, `SEAM-DESIGN.md` §10, and behind the ten-wall layer above. The goal population's −283 is the same cause and inherits the same obstruction. |
+| `IDEP undischargeable` (−19) | Priced at `INDEXED-DESIGN.md` §8.7; the wall is a constructor typing for an indexed family and `mem_lean`'s protocol **cannot** be met from a use site (task #38). Not reachable as scoped. |
+| `nat_eq` (−11 / −62, both LB) | Small on the small populations. On the goal population it is the same family as rank 1 and should be taken with it, not separately. |
+| everything under 25 | Not worth a tranche either way. |
 
-Every row that acquires fully raises the escape count as it closes, so each of
-these numbers is additionally subject to the escape ledger taking back part of
-the win. That is the one respect in which all thirteen rows are alike, and it is
-why the escape programme is not optional.
-
-## The next tranche, sized: publish the indexed ι across the engine seam
-
-**The construction exists, is complete, and is already firing in this same
-binary. TG cannot see it because the evidence never crosses the `EnvCore` seam.**
-This is a wiring tranche, not a derivation tranche.
-
-* **What concludes the target.** `derived/src/inductive/family/dep_rec.rs:255-258`,
-  `IndexedDepRecursor::iota`:
-  `⊢ ∀p⃗ ∀m ∀S⃗ ∀T. (PRE → ∀y⃗ ∀t⃗. (Hᵢ → app(irec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗)))`
-  per constructor — the ι rule at Lean's own minor, index vector eliminated.
-  Built by `over_family` (`:279`). The sibling family modules are *not*
-  competitors: `prop_rec.rs` and `trunc_rec_ix.rs` have no `iota` field at all
-  (Prop/truncated — ι is proof irrelevance), and `le_rec.rs` / `le_prop_rec.rs`
-  are the class-(S) `Acc`-shaped eliminator over a different carrier.
-* **Mini already builds and consumes it.** `Interp::indexed_dep_recursor`
-  (`checker/src/mini/interp.rs:1457`) caches it per declaration;
-  `checker/src/mini/iota_ix_dep.rs` fires it at use sites, routed live from the
-  `*num_indices != 0` arm of `kernel.rs:1325-1331`.
-* **TG consumes none of it.** `IndexedDepRecursor`, `IndexedInductive`,
-  `IndexedCarrier`, `IndexedDeclSpec`, `over_family`, `family::` — **zero**
-  occurrences in `tg.rs`. `rec_bottom` refuses indexed recursors at five separate
-  gates (`tg.rs:7015, 7111, 7257, 8437, 10977`), so `derive_iota` falls through
-  to the label at `14075`, which builds nothing.
-* **The seam defect, exactly.** `checker/src/mini/rec_ix_dep.rs:487-491` does
-  `app.dep_elims.insert(key, DepElim{…})` and **omits the `publish_dep_elim`**
-  that its non-indexed sibling `rec_dep.rs:1186-1189` performs. `publish_dep_elim`
-  is the only channel into the shared store that `tg.rs:2205 dep_elim()` — and
-  hence `mini_dep_rec_bottom` — reads. `IndexedTranslation` likewise has no
-  analogue of `publish_projection_translation`.
-* **Size: ~800–1000 lines, two tranches**, against three measured precedents that
-  did exactly this job for other evidence: `b4127ac` (+497 in `tg.rs`),
-  `fb1692c` (+338), `02ab90f` (+293). Itemised: publication across the seam
-  ~80–120; `RecBottom::IxDep` + adoption gate + `mini_ix_dep_rec_bottom`
-  ~150–200; `fire_ix_dep` ~500–650 (the analogue of `fire_dep`, `tg.rs:15859-16331`,
-  473 lines).
-* **Settle before writing, not during:** `iota_ix_dep.rs:238` reads each child's
-  index expressions via mini's `zoneb::ind_spine_at` over mini's own `E`, and
-  `tg.rs` has no equivalent over `ExprPtr<'t>`. Either port it (~40 lines,
-  mechanical) or — consistent with the ownership rule that TG must consume mini's
-  exact objects — publish the index expressions and their memberships alongside
-  the constructor abbreviations.
-* **Not in scope:** no new `derived/` theorem, no new Separation, no new symbol.
-
-### Design-document status, corrected
-
-Anyone sizing this row from the design docs will size it wrong.
-
-* `INDEXED-DESIGN.md` §8.1 says "*what is left of C3 is **ι** at a value motive*".
-  **Stale — that landed.** `checker/src/mini/iota_ix_dep.rs` is 670 lines and is
-  routed live. `MINI-HANDOFF.md` §26 supersedes it and self-corrects. §8.1's
-  *other* claim — that nothing in `derived::inductive::family` is reachable from
-  `tg.rs` — is **correct and still true**, and is the only line in the repo
-  naming the actual defect. §8.1 also still cites pre-`4e86d46` `mini/src/…` paths.
-* `tg.rs:3927-3931`'s `Decline::Indices` doc says indices are "*unrepresentable
-  in `DeclSpec`, so there is **no derived-side backstop***". True of `DeclSpec`,
-  false as written: `derived/src/inductive/family/spec.rs:110`'s
-  `IndexedDeclSpec` wraps it precisely to represent them, and the derived side is
-  complete.
-* `INDEXED-ROW-AUDIT.md` §1's "live bug" claims are stale and the document's own
-  closing block already says so; the fixes are verified in place
-  (`class_p_ix.rs:419` now shifts; zero `ctor_atoms(` callers remain). Its §2
-  corpus census is still true and still useful.
-
-I have **not** corrected the first two in place: `tg.rs` is production code under
-three live seats, and `INDEXED-DESIGN.md` is the design document for the tranche
-a seat will pick up next — correcting it is that seat's first act, with the code
-in front of them, not mine from outside. Both are recorded here instead.
+Every row that acquires fully raises the escape count as it closes, and on the
+goal population that take-back is 800 gaps across the whole census. No number in
+this document is net of it.
 
 ## What I would not do
 
-* **Bundle tranches.** The top three compose exactly additively; there is no
-  bundling premium to capture and bundling would lose the per-tranche
-  attribution.
-* **Plan anything off the `SUBTREE` column alone.** It is a ceiling in all twelve
-  measurable rows, over by 5–50 %.
-* **Trust a `Δ` without its acquire column.** Three of thirteen rows are partial
-  or unhooked.
-* **Spend a seat on `eta (function-extensionality)`.** Worth ≤ 10, and pricing it
-  at all requires touching `checker/`.
-* **Treat `proj_reduce` as a reference-population win.** It is zero there.
-* **Size the indexed-ι row off `INDEXED-DESIGN.md` §8.1.** It reads as a missing
-  construction; the construction landed and is firing in mini today.
-* **Write a new indexed ι in `derived/`.** It exists. This row is a publication
-  and re-instantiation job across the `EnvCore` seam.
+* **Start the `fire_dep` `np > 0` layer.** Ten walls, no partial credit, −35 on
+  one file. Censused and declined; see question (b).
+* **Treat `nat_char_equations` as the reason to decide anything about `Nat`.**
+  It has no numerals. It said the bridge was worth 11 gaps; it was right about
+  itself (now 18) and the same family of origins on the goal population measures
+  **−3 961** (rank 1 −3 780, `nat_reduce` −119, `nat_eq` −62).
+* **Bundle tranches.** Excess over the sum is 2.5–4 %.
+* **Plan anything off the `SUBTREE` column alone**, or off the old 10 %/30 %
+  bands — they are 2× pessimistic on the rows that now matter.
+* **Trust a `Δ` without its acquire column.** Five of twenty-nine rows are
+  partial or unhooked, and one row (`pi congruence: two Πs…`) is *negative*
+  against its own count.
+* **Spend a seat on `eta (function-extensionality)` or `def_eq_proj`.** Worth
+  ≤ 10 and ≤ 4, and pricing either requires touching `checker/`.
+* **Read the escape endgame as ten constructions with ten numbers.** It is 48
+  shape groups on the goal population and 71 % of its certificates need two or
+  more of them before one gap moves.
+* **Measure with a binary built before the gates ran.** See defect 3.
+
+## Provenance
+
+Every number above is from mechanisms already in the tree — `origin_report`, the
+escape ledger, `crate::escapes::report()`, `NOT_CTOR`/`NOT_CTOR_NAMES`, and
+`NANODA_ASSUME` under the existing `stepcount` feature. One temporary
+instrumentation line was added inside `derive_iota_core`'s `NOT_CTOR_NAMES` arm
+(`tg.rs:~17270`, `lean_sketch` on the major premise rather than `spell` on its
+head), measured, and **reverted**; `git diff` is empty and no file under
+`checker/`, `kernel/`, `derived/` or `modelgen/` is modified by this tranche.
+Gates at the time of writing: `unified_cli` 6/6, `mini_designed` 34/34,
+`tg_tutorial` 36/36, `--no-default-features --lib` 251/251,
+`cargo check --no-default-features --all-targets` existing warnings only,
+`ci/check-boundary.sh` OK. No ratchet moved.

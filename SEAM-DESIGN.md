@@ -670,9 +670,27 @@ re-derive them:
 **What this says about scheduling.** Do not take this as a tranche on the
 strength of the −35. The correct next act is a *census of the layer*: walk
 `fire_dep` and count the constructions that assume `np == 0`, before writing
-any of them. Three are named above and the third is unexamined. Until that
-count exists, the honest statement is that `076`'s −35 is bounded below by
-three walls and above by nothing anyone has measured.
+any of them.
+
+**That census was taken on 2026-08-15 and the count is twelve — ten hard sites
+and two latent, of which seven were unknown when this paragraph was written.**
+All three walls named above are still present and unfixed. The full enumeration,
+with `file:line` and fix size for each, is in `ORIGIN-RANKING.md`, "Question (b),
+answered". Six of the ten are one-liners or small; the cost is two substantial
+pieces — the `gen_ty_nest` carrier adoption (#1 above) and a rewrite of
+`mini_ctor_spine_bridge` into the parameterised form its already-general sibling
+`ctor_spine_bridge` has. Roughly half of `fire_dep`'s parameterised path needs
+nothing at all.
+
+**And the scheduling answer is no.** Because the sub-tree migrates rather than
+shrinking — every row of the table above is 45 — there is **no partial credit
+anywhere in this layer**: the payoff is 0 until all ten hard sites are done, and
+then it is −35, on one file, in a population that is 168 of 10 645 gaps
+tree-wide. The same re-census priced a `Nat` bridge at **−3 780** on
+`init-prelude`. This layer should not be started. Cheapest useful act if anyone
+touches it anyway: land wall #2 (`inst_all(ax, ps)`, one line) and see whether
+wall #3 disappears with it — the only sub-question in the layer with an answer
+shorter than the whole tranche.
 
 
 ### 10.5 What landed instead

@@ -334,6 +334,25 @@ gate underneath it.** (Heading kept; the diagnosis below is corrected in place.)
   at `PProd`. `nat_eq`'s deletion is additionally only 2/5 effective, so even the
   11 is partly untested. Build it when something is actually gated on it; nothing
   here is.
+
+  > **REVERSED, 2026-08-15 — and the last sentence is why.** Something is gated
+  > on it, and it had never been measured. On `init-prelude` — the real goal
+  > population, 10 262 gaps — the origin
+  > `iota: the major premise is not a constructor` measures **−3 780**, the
+  > largest single closure in the project, and **466 of its 563 constant-head
+  > firings are `Nat.ble` applied to two literals**, with the remaining 97
+  > `Nat.decEq` / `Nat.beq` / `Nat.decLt` / `OfNat.ofNat` — all of them `Nat`
+  > arithmetic or `Nat` decidability. `derived::nat::BleClauses` / `ble_transfer`
+  > conclude exactly that clause and are still called only from
+  > `derived/tests/nat.rs`.
+  >
+  > Everything measured *about this fixture* above remains correct — the price
+  > here is now −18 of 61 (30 %, up from 11 of 152) and it still certifies zero
+  > additional theorems. The error was one of population, not of arithmetic:
+  > this fixture is hand-written with `natLits=2, maxNatLit=1`, i.e. **it
+  > contains no numerals**, and Lean's prelude is full of them. Do not re-derive
+  > the decision from this section; `ORIGIN-RANKING.md`, "The next build", has
+  > the measurement and names the two checks that must refute it first.
 * **`BleClauses` / `ble_transfer` wiring into a neutral path.** Same reason, plus
   the clauses are not in the export and would have to be synthesised first — and
   synthesising clauses to make them checker-routed failures is explicitly out of
