@@ -11568,10 +11568,16 @@ translation, where for ranks 1–3 it understated the obstruction.
 native support, carries **zero** gaps on `Nat.brecOn.go` and `Nat.brecOn.eq`.
 But `List`, also fully translated, carries 76 + 27 on the same two — 36
 `eq_cache` and 40 `…at this parameter` on `.go`, 24 `proj_reduce` on `.eq`.
-**Translation alone does not certify the generated machinery**: a translated
-`Lean.Syntax` would still meet `List`'s residue, which is the `np > 0` layer
-(Ranking B rank 2, measured at 0 reachable). That risk is unpriced here and is
-the one thing that could take −1 162 down.
+**Translation alone does not certify the generated machinery** — that stands.
+The inference drawn from it here did not: *"a translated `Lean.Syntax` would
+still meet `List`'s residue, which is the `np > 0` layer (Ranking B rank 2,
+measured at 0 reachable); that risk is unpriced here and is the one thing that
+could take −1 162 down."* **Priced 2026-08-15 on `joachim/layer-probe` and
+refuted** — see "The layer probe" at the end of this file. `List` and `Nat`
+differ in `np`, not in translation, and `Lean.Syntax` is `np = 0` throughout.
+The split quoted just above is also wrong by the origin mask: `.go` own is
+**16 = 8 `eq_cache` + 8 `…at this parameter`** over four seqs and `.eq` own is
+**7 = 6 `proj_reduce` + 1 `beta`**, so **8 of the 103**, not 40, are the layer.
 
 ### Falsification
 
@@ -11594,3 +11600,157 @@ Gates after the revert: `unified_cli` 6/6, `mini_designed` 34/34,
 `ci/check-boundary.sh` OK. No ratchet moved; `init-prelude` **10 262**, the 14
 gap-bearing fixtures **215** (61/49/23/13/12/11/11/11/6/6/4/4/2/2, verified row
 by row), the exports 16 files / 168.
+
+## The layer probe: `Lean.Syntax` does not sit behind the `np > 0` walls
+
+*2026-08-15, `joachim/layer-probe`, master `7ecef03`. Release binary
+`cargo build -p nanoda_lib --features tg,stepcount --release --bin checker`,
+copied to `_tmp/checker-probe` so the gates' `target/debug` rebuild cannot
+overwrite the census binary. `ci/corpus-dir.sh --link` run first. Both
+populations quoted: `--no-modelgen` (1 774 declarations, 89 untranslated,
+**10 262** gaps, prefix 127) and `--modelgen=` the repo-root build (1 822, 91,
+**11 556**). Four temporary censuses added, measured, and **reverted**;
+`checker/src/tg.rs` is byte-identical to master by `md5sum` and `git diff` is
+empty.*
+
+`ORIGIN-RANKING.md`'s synthesis rested on one seat's inference that a translated
+`Lean.Syntax` would inherit the `np > 0` layer, and named the probe that would
+settle it. Run here. **It refutes the synthesis.**
+
+### `gen_ty_bridge`, at its entry, by `np`
+
+The layer's wall #1, censused where it is *entered* rather than where it
+declines — so that "0 declines at `np == 0`" can be distinguished from
+"`np == 0` is never reached":
+
+| `np` at the ι site | entries | admits | declines |
+| --- | ---: | ---: | ---: |
+| **0** | **356** (`--no-modelgen` 284) | **356** | **0** |
+| 1 | 185 | 0 | 185 |
+| 2 | 52 | 0 | 52 |
+| ≥ 3 | 12 | 0 | 12 |
+
+Identical `np > 0` figures on both populations. `np` separates admit from
+decline perfectly, and the `np == 0` arm is the busiest ι path in the run.
+
+### Where `fire_dep` routes at `np == 0`
+
+| branch | sites (modelgen) | sites (`--no-modelgen`) |
+| --- | ---: | ---: |
+| `np == 0`, fielded ctor, `dp.elim` **none** → the general `ctor_spine_bridge` | **181** | **181** |
+| `np == 0`, nullary ctor, `dp.elim` some → mini's nullary abbreviation | 95 | 23 |
+| anything reaching `mini_ctor_spine_bridge` | **0** | **0** |
+
+276 = `ι sites the DEPENDENT rule computed`. **`mini_ctor_spine_bridge` — layer
+sites #7–#10 — is never called on either population.**
+
+### `Lean.Syntax`'s `np`, three ways
+
+1. **The export.** `Lean.Syntax` is `numParams = 0`, `numNested = 2`.
+2. **The report's own `NO_NEST` census**, which records `r.num_params` at the
+   `derive_iota` decline a landed translation would move past: `Lean.Syntax.rec`
+   66, `._model.2.rec` 36, `._model.1.rec` 34, `.rec_1` 22,
+   `._model.0._model.aux.rec` 14, `.rec_2` 12, `._model.0.rec` 4 — **188 of the
+   201 firings, every one at `np = 0`**. The remaining 13 are `Eq.rec`, `np = 2`.
+   On `--no-modelgen`: `rec` 66, `rec_1` 22, `rec_2` 12, all `np = 0`, plus
+   `Eq.rec` 6.
+3. **`modelgen`'s own output**, read statically. `rec_1` and `rec_2` state their
+   ι rules at `Array.mk` and `List.nil`/`List.cons`, which are `np = 1`
+   constructors, so the model was the place a parameter could re-enter. It does
+   not: `_model.0`, `_model.1`, `_model.2`, `._model.0._model.tag` and
+   `._model.0._model.aux` are **all `numParams = 0`**, as are all fourteen of
+   their constructors. `_model.2` is `List Syntax` specialised to a nullary
+   declaration with nullary `nil`/`cons`. `._model.0._model.aux` is
+   `numIndices = 1` — the **indexed** row, a different programme.
+
+### The per-declaration gap ledger
+
+Keyed on `TgBackend::seq`, joined with the spelling `note_declar` already
+computes for `escapes::decl`. Reproduces `origin_report` exactly: own **1 638**
+/ admit-gaps **10 339** (modelgen), own **1 456** / **9 188** (`--no-modelgen`);
+the residues 1 217 and 1 074 are the escape ledger, which raises no `note_admit`.
+
+`Lean.Syntax` proper: **2 561 co-located, 429 own** — the frontier census's 2 561
+to the digit. `Lean.Syntax.SepArray` (`np = 1`), `Lean.Syntax.TSepArray`
+(`np = 2`) and `Lean.TSyntax` (`np = 1`) carry **0 gaps between them**, so no
+part of the prize is on a parameterised declaration.
+
+The family's 437 own gaps (429 + 8 `Preresolved`), by origin:
+
+| origin | own |
+| --- | ---: |
+| `iota: no interpretation` — nested 100 / mutual 74 / indexed 14 / K-like 7 | **195** |
+| `iota: the major premise is not a constructor` | 85 |
+| `eq_cache` | 54 |
+| `proj_reduce` | 36 |
+| `pi congruence: one Π of undetermined sort and one decided` | 36 |
+| `beta` (18), `delta` (11), `nat_reduce` (2) | 31 |
+| **`iota: the major premise's domain is not this inductive`** | **0** |
+| **`…at this parameter`** | **0** |
+
+The 62 declarations owning the first layer row are `Option.noConfusion` 8,
+`EStateM.Result.noConfusion` 8, `Decidable.noConfusion` 8, `Except.noConfusion`
+8, `Pow.noConfusion` 4, … — all `np > 0`, none `Lean.*`. The 10 owning the second
+are `List.noConfusion` 12, `List.brecOn.go` 8, `List.hasDecEq` 4,
+`instDecidableEqList` 4, `List.instDecidableNilEq` 4, … — all `List`, `np = 1`.
+
+### `List`'s 103, and the matched control
+
+| declaration | gaps | seqs | own | own, by origin |
+| --- | ---: | ---: | ---: | --- |
+| `List.brecOn.go` | 76 | 4 | 16 | `eq_cache` 8, `…at this parameter` 8 |
+| `List.brecOn.eq` | 27 | 2 | 7 | `proj_reduce` 6, `beta` 1 |
+
+Identical on both populations. **8 of 103 are the layer.**
+
+| declaration | translated | `np` | ctors | `brecOn.go` + `.eq` gaps | of which the layer |
+| --- | :-: | ---: | ---: | ---: | ---: |
+| `Nat` | yes | **0** | 2 | **0** | 0 |
+| `List` | yes | **1** | 2 | **103** | **8** |
+
+`Nat.brecOn.go` is checked and carries escape-ledger rows, so its zero is
+measured, not absent. The pair is matched on translation and differs in `np`;
+**`np` is what carries the residue**, and `Lean.Syntax` is on `Nat`'s side.
+
+### The next gate after wall #1, read from `dp` rather than simulated
+
+| at each of wall #1's 249 declines | sites |
+| --- | ---: |
+| `dp.elim.is_some()` — really does route to `mini_ctor_spine_bridge` | **249** |
+| would pass its three predicates | **0** |
+| blocked by `np` only | **6** |
+| blocked by `np` + a plain slot | **203** |
+| blocked by `np` + a plain slot + arity > 1 | **40** |
+| has a `gen_ctor_bridges` entry (what `ctor_spine_bridge` needs) | **0** |
+
+The first four rows reproduce rank 2's simulated census. The last is new and
+closes the hypothesis rank 2 left open: **#7–#10 cannot be a reroute to the
+already-general `ctor_spine_bridge`**, because only the general path mints a
+`gen_ctor_bridges` entry and all 249 sites are on the adopted path. And the
+twelve censused sites are all `np`-shaped, so completing them leaves **243 of
+249** declining on generality that is *not in the census*.
+
+### Falsification
+
+* **The instrument is inert.** `tg gaps` was 11 556 / 10 262 with the censuses
+  compiled in, identical to the baseline; no `NANODA_ASSUME` was used.
+* **The classifiers are not tautologies and both cells are populated.**
+  `gen_ty_bridge` splits 356 / 249 rather than 605 / 0. Removing the `np`
+  predicate from the next-gate classifier moves it from 0 passing to 6; removing
+  the plain-slot predicate moves 203 sites; the three cells 6 / 203 / 40 are all
+  non-empty, so no one predicate carries the classification.
+* **Three independent instruments agree on `Lean.Syntax`'s `np`**: the export,
+  the checker's own `NO_NEST` census, and `modelgen`'s output read statically.
+* **The per-declaration ledger reproduces `origin_report`** row for row on both
+  populations, and `own + relay + escapes` reproduces the verdict line.
+* One aggregation bug of my own was caught by this: keying `List.brecOn.go` by
+  name without summing its four seqs gave own 4 instead of 16. The corrected
+  figure is the one above.
+
+Gates after the revert: `unified_cli` 6/6, `mini_designed` 34/34, `tg_tutorial`
+36/36, `--no-default-features --lib` 251/251, `cargo check
+--no-default-features --all-targets` 10 warnings (existing),
+`ci/check-boundary.sh` OK. No ratchet moved and none could: `git diff` is empty
+and `checker/src/tg.rs` matches master by `md5sum`. `init-prelude` **10 262** on
+`--nested --no-modelgen`, re-measured; the 14 gap-bearing fixtures **215** are
+gate-asserted (`unified_cli` pins `nat_char_equations` 61 directly).

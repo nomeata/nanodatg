@@ -875,14 +875,22 @@ instrument's artifact and the deletion overstates the take-back**, where for
 ranks 1–3 it understated the obstruction. *This is the first road in the census
 whose price is not eaten by the escape ledger.*
 
-**The positive control is real but partial, and it is where the residual risk
-is.** `Nat`, fully translated with native support, carries **zero** gaps on
-`Nat.brecOn.go` and `Nat.brecOn.eq`. `List`, also fully translated, carries
-76 + 27 on the same two — 36 `eq_cache` and 40 `…at this parameter` on `.go`,
-24 `proj_reduce` on `.eq`. **Translation alone does not certify the generated
-machinery**; a translated `Lean.Syntax` would still meet `List`'s residue, which
-is the `np > 0` layer measured at 0 reachable. Unpriced, and the one thing that
-could take −1 162 down.
+**The positive control is real, and the risk it was read as carrying was
+measured away on 2026-08-15 (`joachim/layer-probe`).** `Nat`, fully translated
+with native support, carries **zero** gaps on `Nat.brecOn.go` and
+`Nat.brecOn.eq`. `List`, also fully translated, carries 76 + 27 on the same two.
+**Translation alone does not certify the generated machinery** — that part
+stands. What does not stand is the sentence this paragraph originally ended
+with, *"a translated `Lean.Syntax` would still meet `List`'s residue, which is
+the `np > 0` layer measured at 0 reachable"*, together with the split quoted for
+it (`.go` was given as 36 `eq_cache` + 40 `…at this parameter` and `.eq` as 24
+`proj_reduce`; **by the origin mask it is `.go` own 16 = 8 + 8 over four seqs,
+and `.eq` own 7 = 6 `proj_reduce` + 1 `beta`**). Only **8 of the 103** are the
+layer, and `Nat` and `List` differ in `np`, not in translation: `List` is
+`np = 1`, `Nat` is `np = 0`, and **`Lean.Syntax` is `np = 0` at every recursor,
+every constructor and every member of its nested model**. The layer's walls are
+`np > 0` walls, so a translated `Lean.Syntax` does not meet them. See the probe
+section under "Synthesis". The −1 162 is not exposed to this.
 
 ### Disposition
 
@@ -891,9 +899,18 @@ construction concludes exactly the equation the deletion assumes, nothing
 migrates, and the escape ledger does not take it back. What declines it is the
 **shape**: 1 307 of 1 333 sit behind a nine-link chain rooted at an
 interpretation for `Nat.lt`/`Nat.le`, whose first eight links are measured at
-zero. A seat that cannot commit to the whole chain should not start it, and a
-seat that can should price the `List` residue first, because a translated
-`Lean.Syntax` inherits it.
+zero. A seat that cannot commit to the whole chain should not start it.
+
+> **The one caveat this disposition carried is withdrawn, 2026-08-15
+> (`joachim/layer-probe`).** It read *"and a seat that can should price the
+> `List` residue first, because a translated `Lean.Syntax` inherits it."* It
+> does not: `Lean.Syntax` is `np = 0` everywhere and the layer is `np > 0`
+> everywhere, `gen_ty_bridge` being **356 admits / 0 declines at `np == 0`**
+> against **0 / 249 at `np > 0`**. The residue a translated `Lean.Syntax` should
+> actually be priced against is the **indexed** row — its nested model's
+> `._model.0._model.aux` is `numIndices = 1` — and `eq_cache`, which
+> `List.brecOn.go` and `Lean.Name.brecOn.go` carry at the same rate. Neither is
+> this layer.
 
 **The cheapest useful act if anyone touches this anyway** is the root and only
 the root: **an interpretation for `Nat.le`** (`elim Nat.le computed=false
@@ -930,7 +947,16 @@ this document is net of it.
   next gate reads the same `param_vars.is_empty()` field. What has changed since
   question (b) is the price: the layer is **−1 609** on the goal population
   (Ranking B rank 2 is the layer), not −35 on one export, so the decline is now
-  about the commitment and not about the size of the prize.
+  about the commitment and not about the size of the prize. **And the commitment
+  is larger than the census says** (2026-08-15, `joachim/layer-probe`): all
+  twelve sites are `np`-shaped, and with `np` set aside **243 of the 249** still
+  decline on a plain slot or arity, which is a thirteenth piece outside the
+  census; the reroute to `ctor_spine_bridge` that would have supplied it is
+  unavailable, **249 of 249** having no `gen_ctor_bridges` entry.
+* **Buy the layer in order to get `Lean.Syntax`.** Measured and refuted,
+  2026-08-15. `Lean.Syntax` is `np = 0` at every recursor, every constructor and
+  every member of its nested model; `gen_ty_bridge` is **356 admits / 0 declines
+  at `np == 0`** and **0 / 249 at `np > 0`**. The two roads are independent.
 * **Take Ranking B rank 2 as a tranche of its own.** It has no separable
   construction; see "Rank 2, censused".
 * **Build the `Nat` bridge.** Measured and declined, 2026-08-15 — see the box at
@@ -998,11 +1024,14 @@ Gates at the time of writing: `unified_cli` 6/6, `mini_designed` 34/34,
 
 ---
 
-## Synthesis after six refutations — the `np == 0` layer is the shared root
+## Synthesis after six refutations — the two roads are INDEPENDENT
 
-Written 2026-08-15 by the coordinator, from the six tranches below. It asserts
-no new measurement; it is a reading of the ones already recorded above, and it
-should be corrected in place if any of them is re-measured differently.
+*Written 2026-08-15 by the coordinator as a reading of the six tranches below,
+asserting no new measurement, and headed "the `np == 0` layer is the shared
+root". **The probe it asked for was run the same day on `joachim/layer-probe`
+and refuted it**; the section is corrected in place, as its own last paragraph
+instructed. What it got right, what it got wrong, and the measurement, are
+below — see "The probe, run: `Lean.Syntax` is np = 0 at every site".*
 
 | tranche | headline | reachable | why it died |
 | --- | ---: | ---: | --- |
@@ -1013,7 +1042,7 @@ should be corrected in place if any of them is re-measured differently.
 | `077`'s `has_type_lam` | −19 | **0** | needs task #38's bridge, which does not exist |
 | the untranslated frontier | 6 531 | **1 333** | 63 % is co-location, proved by a matched control; 1 307 of the rest is `Lean.Syntax` |
 
-**Two roads survive contact with measurement, and they are the same road.**
+**Two roads survive contact with measurement. They do not intersect.**
 
 * The **`np == 0` layer in `fire_dep`** is worth **−1 609** on its own (−1 892 with
   its `fire_list` sibling, 18 % of `init-prelude`). Twelve constructions, ten
@@ -1026,25 +1055,161 @@ should be corrected in place if any of them is re-measured differently.
   translation publishes an *unconditional* ι where `NANODA_ASSUME` mints the
   antecedent the ledger charges for.
 
-**But the second road runs through the first.** The frontier seat's own residual
-risk: *`List` is fully translated and still carries 103 gaps on its `brecOn`
-tower, so a translated `Lean.Syntax` inherits the `np > 0` layer.* And
-`Lean.Syntax` is a nine-link chain rooted at `Nat.le` whose **first eight links
-are measured at 0** — `Fin` included, which gates 24 of the 59 untranslated
-declarations and is worth **7 gaps**.
+**The second road was said to run through the first. It does not.** The claim
+rested on the frontier seat's residual risk — *`List` is fully translated and
+still carries 103 gaps on its `brecOn` tower, so a translated `Lean.Syntax`
+inherits the `np > 0` layer* — which was an inference from `List`, never a
+measurement of `Lean.Syntax`. **`List` differs from `Lean.Syntax` in exactly the
+variable at issue: `List` is `np = 1` and `Lean.Syntax` is `np = 0`, at every
+recursor, every constructor and every member of its nested model.** The layer's
+walls are `np > 0` walls and cannot gate a declaration that has no parameters.
+See the probe section below for the numbers.
 
-**So the layer is not one option among several. It is the shared root**, worth
-−1 609 directly and a precondition for most of the −1 162. That is the case for
-paying its commitment, and it is the first time the case has rested on anything
-but the size of a single prize.
+**So the layer is one option among two, not the root of both.** It is worth
+−1 609 (−1 892 with row 6) and it is a precondition for **none** of the −1 162.
+`Lean.Syntax` remains a nine-link chain rooted at `Nat.le` whose **first eight
+links are measured at 0** — that is its own shape problem, and it is the reason
+that road was declined; but the ninth link does not additionally owe the layer.
 
-**What would refute this synthesis**, and should be checked before anyone
-commits ten constructions to it: that a translated `Lean.Syntax` really does
-inherit the layer — it is one seat's inference from `List`'s 103 residual gaps,
-not a measurement of `Lean.Syntax` itself, and `List` may differ. **One probe
-settles it: translate nothing, and ask whether `Lean.Syntax`'s 1 307 are raised
-at sites the layer's walls would gate.** That probe is cheap and it is the
-correct next act, ahead of any construction.
+**Which inverts the recommendation this section was written to support.** The
+two roads are now comparable on their merits rather than nested, and on the
+merits the translation is the better bet: it is the only tranche measured this
+week where nothing migrates and the escape ledger takes no cut, whereas the
+layer is a ten-site commitment whose own census is now known to be **short** of
+what −1 609 needs (below). Neither is a small piece of work; the point is that
+committing to the layer no longer buys anything on the other road.
+
+### The probe, run: `Lean.Syntax` is np = 0 at every site
+
+*Measured 2026-08-15 on `joachim/layer-probe` at master `7ecef03`, release binary
+`cargo build -p nanoda_lib --features tg,stepcount --release --bin checker` kept
+at `_tmp/checker-probe` where the gates cannot overwrite it, `ci/corpus-dir.sh
+--link` run first. Both populations: `--no-modelgen` (1 774 declarations, **10
+262** gaps) and `--modelgen=…` at the repo root (1 822, **11 556**). Four
+temporary censuses were added inside `note_admit_m`, `note_declar`,
+`gen_ty_bridge`, `fire_dep` and `mini_ctor_spine_bridge`, measured, and
+**reverted**; the gap totals were byte-identical with the instrumentation in, and
+`git diff` is empty.*
+
+**1. `gen_ty_bridge`, by `np`, admits and declines.** The wall the whole layer
+is entered through, censused at its own entry rather than at its declines:
+
+| `np` at the ι site | entries | admits | declines |
+| --- | ---: | ---: | ---: |
+| **0** | **356** (284 `--no-modelgen`) | **356** | **0** |
+| 1 | 185 | 0 | 185 |
+| 2 | 52 | 0 | 52 |
+| ≥ 3 | 12 | 0 | 12 |
+
+`np` predicts the outcome perfectly and **neither cell is empty** — the `np == 0`
+arm is not vacuously green, it is the busiest ι path in the run. That is the
+control the "0 at `np == 0`" figure needed: without it, "the layer never fires at
+`np == 0`" would have been consistent with `np == 0` never being reached.
+
+**2. Every `Lean.Syntax` gap is raised at an `np = 0` recursor.** The report's own
+`NO_NEST` census, which records `r.num_params` at the `derive_iota` decline that
+a landed translation would move past — 188 of the 201 firings:
+
+| recursor | `np` | firings (modelgen) |
+| --- | ---: | ---: |
+| `Lean.Syntax.rec` | **0** | 66 |
+| `Lean.Syntax._model.2.rec` | **0** | 36 |
+| `Lean.Syntax._model.1.rec` | **0** | 34 |
+| `Lean.Syntax.rec_1` | **0** | 22 |
+| `Lean.Syntax._model.0._model.aux.rec` | **0** | 14 |
+| `Lean.Syntax.rec_2` | **0** | 12 |
+| `Lean.Syntax._model.0.rec` | **0** | 4 |
+| `Eq.rec` | 2 | 13 |
+
+**3. And the nested model does not smuggle a parameter back in.** `rec_1` and
+`rec_2` state their ι rules at `Array.mk` and `List.nil`/`List.cons`, which are
+`np = 1` constructors, so the reading that survives step 2 is that mini's model
+would meet the layer on the constructor side. It would not: reading `modelgen`'s
+own output for this export, **every** member of the model — `Lean.Syntax._model.0`,
+`._model.1`, `._model.2`, `._model.0._model.tag`, `._model.0._model.aux` — and
+every one of their constructors is `numParams = 0`. The nested model
+*specialises the parameter away*; `_model.2` is `List Syntax` as a nullary
+declaration with nullary `nil`/`cons`. (`._model.0._model.aux` is `numIndices = 1`,
+so a translated `Lean.Syntax` meets the **indexed** row, `INDEXED-DESIGN.md`'s
+programme — a different obstruction, not this one.)
+
+**4. Nor do the parameterised declarations in the family carry any of the prize.**
+`Lean.Syntax.SepArray` (`np = 1`), `Lean.Syntax.TSepArray` (`np = 2`) and
+`Lean.TSyntax` (`np = 1`) are untranslated too, and a per-declaration gap ledger
+keyed on `TgBackend::seq` gives them **0 gaps between them**. The 2 561 co-located
+and 429 own are `Lean.Syntax` proper.
+
+**5. `Lean.Syntax` owns nothing on either of the layer's rows.** Its 437 own gaps
+(429 base + 8 `Preresolved`) split as: `no interpretation` 195 (nested 100,
+mutual 74, indexed 14, K-like 7), `major premise is not a constructor` 85,
+`eq_cache` 54, `proj_reduce` 36, `pi congruence` 36, `beta` 18, `delta` 11,
+`nat_reduce` 2 — and **0** on `…domain is not this inductive` and **0** on
+`…at this parameter`. The 62 declarations that own the first row are
+`Option.noConfusion` 8, `EStateM.Result.noConfusion` 8, `Decidable.noConfusion` 8,
+`Except.noConfusion` 8, `Pow.noConfusion` 4, … — all `np > 0`, none `Lean.*`. The
+10 that own the second are `List.noConfusion` 12, `List.brecOn.go` 8,
+`List.hasDecEq` 4, `instDecidableEqList` 4, `List.instDecidableNilEq` 4, … — all
+`List`, `np = 1`.
+
+### `List`'s 103, re-attributed — and the matched control that reassigns it
+
+The same ledger reproduces the 103 exactly and shows it is mostly not the layer:
+
+| declaration | gaps | seqs | own | own, by origin |
+| --- | ---: | ---: | ---: | --- |
+| `List.brecOn.go` | 76 | 4 | 16 | `eq_cache` **8**, `…at this parameter` **8** |
+| `List.brecOn.eq` | 27 | 2 | 7 | `proj_reduce` **6**, `beta` **1** |
+
+Identical on both populations. **8 of the 103 are the layer**, not the whole of
+it; the rest is `eq_cache`, `proj_reduce` and their relays, which are separately
+ranked and separately declined.
+
+**The matched control, in the technique that retired the 63 % headline.** Pair
+two *translated* declarations of the same shape — recursive, two constructors, a
+`brecOn` tower — differing only in `np`:
+
+| declaration | translated | `np` | gaps on `brecOn.go` + `.eq` | of which the layer |
+| --- | :-: | ---: | ---: | ---: |
+| `Nat` | yes | **0** | **0** | 0 |
+| `List` | yes | **1** | **103** | **8** |
+
+`Nat.brecOn.go` is checked and appears in the escape ledger, so its zero is a
+measured zero and not an absent declaration. **`List`'s residue is evidence about
+`np > 0`, not about translation** — which is precisely the substitution the
+synthesis made, and `Lean.Syntax` sits on `Nat`'s side of the split.
+
+### The layer's own census is short of what −1 609 needs
+
+Evaluating, at each of wall #1's 249 declines, the gate the site would meet next
+— this time reading `dp` directly rather than by simulation:
+
+| at wall #1's decline | sites |
+| --- | ---: |
+| declines | **249** |
+| `dp.elim.is_some()` — really does route to `mini_ctor_spine_bridge` | **249** |
+| would pass that gate's three predicates | **0** |
+| blocked by `np` **only** | **6** |
+| blocked by `np` **and a plain slot** | **203** |
+| blocked by `np`, a plain slot **and** arity > 1 | **40** |
+
+**So the twelve-site census, all of whose sites are `np`-shaped, would leave 243
+of 249 still declining.** The plain-slot and arity generality is a thirteenth
+piece and is not in the twelve; "ten hard sites" is a floor, not the commitment.
+
+**And the escape hatch rank 2 left open is closed.** That census hypothesised
+#7–#10 might be a *reroute* to the already-general `ctor_spine_bridge` rather
+than a rewrite, noting it "needs `Inductive::ctor_bridge`, which the adopted path
+may not hold, and that was not checked here". Checked here: `ctor_spine_bridge`'s
+first requirement is a `gen_ctor_bridges` entry for the constructor, and **249 of
+249 have none** — only the general path mints one, and all 249 are on the adopted
+path. The reroute is not available; #7–#10 is a rewrite.
+
+**No prefix pays, for a third reason on top of the two already recorded.**
+`mini_ctor_spine_bridge` is called **zero** times on either population — every ι
+site that would reach it dies at wall #1 first — so sites #7–#10 are unreachable
+code until #1 lands, and #1 is worth 0. Sites #4, #5, #6, #11 and #12 are all
+inside paths only `np > 0` enters. There is no ordering of the twelve in which an
+early one closes a gap.
 
 ### The two pre-build checks this week produced, both cheap and both decisive
 

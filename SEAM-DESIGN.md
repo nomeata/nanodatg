@@ -708,6 +708,22 @@ touches it anyway: land wall #2 (`inst_all(ax, ps)`, one line) and see whether
 wall #3 disappears with it — the only sub-question in the layer with an answer
 shorter than the whole tranche.
 
+> **Two further measurements, 2026-08-15 (`joachim/layer-probe`), both against
+> this layer's scope.** (a) **The twelve-site census is short of −1 609.** Every
+> one of its sites is `np`-shaped; reading `dp` at each of wall #1's 249
+> declines, the next gate would still refuse **243 of 249** on a plain
+> (non-`Slot::Rec`) constructor slot and **40** on arity > 1 — generality that is
+> not among the twelve. The reroute that would have supplied it is unavailable:
+> `ctor_spine_bridge` needs a `gen_ctor_bridges` entry and **249 of 249** of
+> these constructors have none, only the general path minting one. (b) **The
+> layer is not a precondition for `Lean.Syntax`.** `gen_ty_bridge` is **356
+> admits / 0 declines at `np == 0`** against **0 / 249 at `np > 0`**, and
+> `Lean.Syntax` is `numParams = 0` at every recursor, every constructor and every
+> member of its nested model — `modelgen` specialises `List`/`Array`'s parameter
+> away, so `_model.2` is a nullary `List Syntax`. `mini_ctor_spine_bridge` is
+> called **zero** times on either population. Full numbers in `MEASUREMENTS.md`,
+> "The layer probe".
+
 
 ### 10.5 What landed instead
 
