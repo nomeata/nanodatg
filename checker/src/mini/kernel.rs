@@ -456,7 +456,7 @@ pub struct Checker<'e, 'i> {
     /// [`Checker::whnf_typing`]'s memo. See that function for the key and why
     /// it is sound; the lifetime is this `Checker`, so it is one
     /// `(declaration, σ)` and never leaks across pairs.
-    wt_memo: HashMap<Term, (E, E, Thm)>,
+    wt_memo: FxHashMap<Term, (E, E, Thm)>,
     /// **`infer_type`'s frame-local memo**, one frame per telescope slot.
     /// `frames.len() == lenv.len() + 1` at all times. See [`Frame`].
     frames: Vec<Frame>,
@@ -721,7 +721,12 @@ struct Frame {
     /// the old key all had nothing left to do. The soundness argument above is
     /// unchanged — it is about *which* expressions may share a frame, not
     /// about how the frame finds them.
-    map: HashMap<E, Typing>,
+    /// **`FxHashMap`.** Frames are created and destroyed at every binder
+    /// push, so this map's *construction* cost is paid hundreds of millions of
+    /// times on a deep nest: profiled at `reserve_rehash` 2.0 % +
+    /// `rustc_entry` 1.8 % + `insert_no_grow` 1.35 %. The key is an [`E`],
+    /// which is one `u32`.
+    map: FxHashMap<E, Typing>,
 }
 
 /// The interpretation and the kernel scope stack, kept **inside** the
@@ -745,7 +750,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             env,
             lenv: Vec::new(),
             th: None,
-            wt_memo: HashMap::new(),
+            wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
             defeq_cache: FxHashMap::default(),
             defeq_depth: 0,
@@ -766,7 +771,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 slots: Vec::new(),
                 tokens: Vec::new(),
             }),
-            wt_memo: HashMap::new(),
+            wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
             defeq_cache: FxHashMap::default(),
             defeq_depth: 0,

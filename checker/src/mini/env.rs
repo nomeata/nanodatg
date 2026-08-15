@@ -20,7 +20,7 @@
 //! accept or reject exactly as Lean's kernel does.
 
 use crate::mini::expr::{Level, Name, E};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DefKind {
@@ -154,14 +154,27 @@ impl ConstantInfo {
 
 #[derive(Clone, Default, Debug)]
 pub struct Environment {
-    pub consts: HashMap<Name, ConstantInfo>,
+    /// **`FxHashMap`, not `HashMap`**, for the reason `crate::mini::arena`'s
+    /// `LEVELS` gives and with the measurement to match. `Checker::lookup`
+    /// runs on every `Const` node the reduction walks, and on
+    /// `ByteArray.IsValidUTF8` that is the hottest single lookup in the run:
+    /// profiled at `hash_one::<&Name>` **5.1 %** plus its share of
+    /// `sip::Hasher::write` **2.9 %**, against a key that is one `u32`
+    /// pointer into the hash-consed name arena. SipHash's DoS resistance buys
+    /// nothing here — the keys are not attacker-chosen, they are the export's
+    /// own declaration names.
+    ///
+    /// Iteration order cannot be depended on either way: `RandomState` is
+    /// seeded per process, so anything that read this map in order was already
+    /// non-deterministic across runs.
+    pub consts: FxHashMap<Name, ConstantInfo>,
     /// Which inductive declaration a constructor or recursor belongs to.
     ///
     /// An **index**, built when the declaration is added, not a lookup that
     /// scans. MINI-DESIGN.md §0's claim is about the checker never searching
     /// for a fact; `⟦List.cons⟧` has to reach `List`'s declaration data, and it
     /// reaches it by one hash lookup on the name it was asked about.
-    pub owners: HashMap<Name, Name>,
+    pub owners: FxHashMap<Name, Name>,
 }
 
 impl Environment {

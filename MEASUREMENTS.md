@@ -10599,3 +10599,45 @@ recorded). `frame_put` refuses to store a `Gap`-carrying `Typing` whenever
 that would now succeed must not be frozen — so on the threaded pass the memo is
 disabled for exactly the population the grind consists of. That is the next
 defect, and it is a different one from this.
+
+### The hashers, and Lean's own bound — 2026-08-15
+
+Two follow-ups on the same run, both small and both measured.
+
+**The hot maps are `FxHashMap`.** With `def_eq` cached the profile went flat,
+and the largest remaining single item was not a kernel rule: `hash_one::<&Name>`
+**5.1 %** plus its share of `sip::Hasher::write` **2.9 %**, all of it
+`Environment::consts` — the lookup every `Const` node in the reduction performs
+— against a key that is one `u32` into the hash-consed name arena. `Frame::map`
+added `reserve_rehash` 2.0 % + `rustc_entry` 1.8 % + `insert_no_grow` 1.35 %,
+paid at every binder push. Switching those three (`consts`, `owners`,
+`Frame::map`, `wt_memo`) to `FxHashMap`:
+
+| | instructions:u | task-clock |
+| --- | ---: | ---: |
+| decision cache only | 6 103 545 034 876 | 469 896 ms |
+| + `FxHashMap` | **5 467 212 113 559** | **438 747 ms** |
+| | 10.4 % | 6.6 % |
+
+Verdict byte-identical again; fixture gap counts and the corpus 16/185
+unchanged. Cumulative against master `36106d2`: **28.211 T → 5.467 T, 5.16×**.
+
+**Raising the bound to Lean's own does not clear the wall — and the tower is
+not 2 047 tall.** Lean's kernel recursion limit is `maxRecDepth * 16`
+(`src/runtime/interrupt.cpp:65,74-80`, factor 16), i.e. **8 192** at the default
+`maxRecDepth` of 512 — four times mini's 2 000. `mini::run` already runs the
+check on a **256 MB** stack (`run.rs:416`), so 2 000 was nowhere near a real
+stack limit and the experiment is cheap now that the run is.
+
+At `NANODA_MAX_DEPTH=8192` the closure **still declines**, and it declines
+*while reducing a different expression* (`253954`, where the 2 000-level refusal
+names `260146`). So the weak-head recursion goes deeper than 8 192, and the
+"its height is a numeral, 2047" reading of the frame histogram does not survive
+a larger budget: 1 998 `Proj PProd.0` frames is what fits under a 2 000 bound,
+not the height of the thing being walked. Whether the recursion is very deep or
+does not terminate is **open**, and the histogram cannot settle it — a bound
+that is raised and hit again is compatible with both.
+
+What this does settle is the shape of the fix. It is neither a larger constant
+nor `derived/src/nat/`'s binary numerals: at four times the budget the same
+declaration fails the same way.
