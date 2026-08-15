@@ -2314,9 +2314,21 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // discharged go 7 691 → 8 686 with `carried as assumptions` down by the
     // same 995. Locked in rather than left slack, because a ratchet that only
     // ever loosens has stopped measuring.
+    // **Tightened 11 821 → 10 386 on 2026-08-15**, in the right direction and
+    // therefore without a trade to write — but it is recorded because the
+    // *slack* is the finding. 11 821 was pinned at `1cbd603`, the last commit
+    // that edited this file. Everything after it landed without anyone running
+    // this suite, and by master the run came in at 10 386: **1 435 of slack**,
+    // which is to say this guard could not have seen a 1 435-gap regression
+    // arrive. That is the standing task "guards that assert a TOTAL are
+    // re-based by neighbours' traffic" happening, and it is how two rows rose
+    // unobserved underneath a passing total. The rows now have their own table
+    // in [`the_whole_gap_ledger_is_accounted_for_row_by_row`]; this number
+    // stays because it is the one the project is judged on, and it is pinned
+    // *exactly* at the run so that the next arrival has nowhere to hide.
     assert!(
-        gaps > 0 && gaps <= 11821,
-        "init-prelude: {gaps} gaps, ratchet 11821 — SOME clause of the ledger regressed. \
+        gaps > 0 && gaps <= 10386,
+        "init-prelude: {gaps} gaps, ratchet 10386 — SOME clause of the ledger regressed. \
          This is the whole-ledger total and it does not say which; read the per-row gap \
          table in the report, and see the per-origin ratchets for the named subjects."
     );
@@ -2405,10 +2417,170 @@ fn the_prelude_ledger_totals_are_ratcheted() {
     // are `⟦lit n⟧ = num(n)`'s, and they fall for the reason the gap ratchet
     // above records — a literal's typing is now derivable, so a certificate
     // that used to carry it as an assumption no longer does.
+    // **Tightened 2 625 → 1 199 on 2026-08-15**, with the same 1 426 of slack
+    // and the same cause as the gap total above: pinned at `1cbd603` and not
+    // re-read since. Recorded rather than quietly lowered, because a ratchet
+    // carrying more slack than the counter it guards is the failure mode
+    // `DECISIONS.md` names — "a ratchet that only ever loosens has stopped
+    // measuring" — and this one had stopped.
     assert!(
-        esc <= 2625,
-        "init-prelude: {esc} escapes, ratchet 2625 — SOME clause let an assumption reach the \
+        esc <= 1199,
+        "init-prelude: {esc} escapes, ratchet 1199 — SOME clause let an assumption reach the \
          boundary. Whole-ledger, like the gap ratchet above; it does not name a subject."
+    );
+}
+
+/// Every row of the `init-prelude` gap ledger, pinned — **"no row rose",
+/// mechanised**.
+///
+/// `DECISIONS.md`, 2026-08-10: *"Whenever a ratchet is loosened, the diff of the
+/// whole gap ledger is the evidence, and 'no row rose' is the sentence to be
+/// able to write."* That sentence was, until this table, something a seat
+/// produced by hand — by building at the pinned commit, running both, and
+/// diffing. It had been produced exactly once, and the next four months of
+/// commits were landed against the *total* instead.
+///
+/// The rows are pinned at master `83a95cf`, measured with the same
+/// `nanoda_bin` the rest of this file spawns. See
+/// [`the_whole_gap_ledger_is_accounted_for_row_by_row`] for the two invariants
+/// this table carries and for why the scope is the `gap:` rows and not the
+/// whole report.
+const GAP_LEDGER: &[(&str, u64)] = &[
+    ("gap: trans over an admitted premise", 5370),
+    ("gap: undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary", 1199),
+    ("gap: pi congruence over an admitted body premise", 722),
+    ("gap: proj_reduce", 678),
+    ("gap: iota: the major premise is not a constructor", 550),
+    ("gap: congruence over an admitted premise", 523),
+    ("gap: symm over an admitted premise", 483),
+    ("gap: eq_cache", 255),
+    ("gap: lam congruence over an admitted premise", 179),
+    ("gap: iota: no interpretation — a nested inductive", 100),
+    ("gap: pi congruence over an admitted domain premise", 86),
+    ("gap: pi congruence: two Πs of undetermined sort over differently shaped bodies", 59),
+    ("gap: nat_eq", 44),
+    ("gap: pi congruence: the body certificate is not about the binder bodies", 33),
+    ("gap: nat_reduce", 32),
+    ("gap: lam congruence: the domain certificate does not match the binder types", 29),
+    ("gap: lam congruence: the body certificate is not the graphs' pointwise equation", 19),
+    ("gap: beta: the lambda has no function-graph interpretation", 7),
+    ("gap: iota: no interpretation — a K-like eliminator", 6),
+    ("gap: eta_struct", 6),
+    ("gap: proof_irrel", 3),
+    ("gap: pi congruence: one Π of undetermined sort and one decided", 2),
+    ("gap: def_eq_proj", 1),
+];
+
+/// Split `text`'s gap ledger into `(label, count)`, one entry per `gap:` row.
+///
+/// Deliberately *not* [`rows_or_zero`]'s prefix sum. A prefix sum is right for
+/// `gap: iota`, where a new sub-row should land in the ι test's subject
+/// automatically; it is wrong here, where the point is that every row is
+/// enumerated separately and the enumeration is checked for completeness.
+fn gap_ledger_rows(text: &str) -> Vec<(String, u64)> {
+    text.lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("gap: "))
+        .filter_map(|l| {
+            let (label, n) = l.rsplit_once(char::is_whitespace)?;
+            Some((label.trim_end().to_string(), n.parse::<u64>().ok()?))
+        })
+        .collect()
+}
+
+/// **The whole gap ledger, row by row — the guard that the total could not be.**
+///
+/// # The defect this exists for
+///
+/// [`the_prelude_ledger_totals_are_ratcheted`] guards `TOTAL gaps`, and a total
+/// is re-based by every contributor's traffic. Measured on 2026-08-15 by
+/// building at `3c4323b` — where `projection_reduction_is_a_rule_fed_by_inference`
+/// and `the_declaration_typing_ledger_accounts_for_every_declaration` were last
+/// pinned — and diffing every row against master `83a95cf`: the total fell
+/// **15 734 → 10 386** while two rows *rose*. A guard with 1 435 of slack in it
+/// cannot see 83 gaps arriving, and the standing task this answers is exactly
+/// that — *"guards that assert a TOTAL are re-based by neighbours' traffic"*.
+///
+/// # Why this scope, and not the whole report
+///
+/// Per-row floors over the *whole* report would be unmaintainable, and the same
+/// diff is what says so rather than a guess: of the report's **342** counted
+/// rows, **87 rose** over that range — almost all of them census counters that
+/// rise whenever a rule reaches further, which is the shape of an improvement
+/// here. Of the **23 `gap:` rows**, **2 rose**. So the ledger proper is stable
+/// enough to pin row by row and the census is not, and this table stops at the
+/// `gap:` rows for that measured reason.
+///
+/// # The two invariants
+///
+/// 1. **No row rose.** One-sided, per row. The total above remains the
+///    two-sided pressure — `DECISIONS.md`'s "tightening is required whenever
+///    the counter improves" is discharged there, on one number, rather than
+///    here on twenty-three.
+/// 2. **The enumeration is complete**: the table's rows are exactly the
+///    report's, and they sum to `TOTAL gaps`. This is the half a per-row floor
+///    does not have on its own, and the range measured is why it is here — the
+///    792-gap row `iota: this recursor has no curried interpretation`
+///    **vanished** over it, and 106 gaps arrived under two labels that did not
+///    previously exist. Against floors alone a rename banks itself as progress
+///    and a new row is invisible; against the sum it cannot be either.
+#[test]
+fn the_whole_gap_ledger_is_accounted_for_row_by_row() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let text = report(&f);
+    assert_is_a_report(&text, "init-prelude");
+    // The floor. Every assertion below is over the entries or over the report's
+    // own rows; an emptied table would check nothing and pass.
+    assert!(!GAP_LEDGER.is_empty(), "`GAP_LEDGER` is empty — this test would pass having checked nothing");
+
+    let measured = gap_ledger_rows(&text);
+    assert!(!measured.is_empty(), "the report has no `gap:` rows at all — this is not the ledger");
+
+    // (2a) Every row the report has is priced here. A *new* gap row is a new
+    // fact about the checker and must be given a line, not absorbed.
+    for (label, n) in &measured {
+        assert!(
+            GAP_LEDGER.iter().any(|(l, _)| *l == label.as_str()),
+            "the report has a gap row `{label}` at {n} that `GAP_LEDGER` does not price — \
+             a new row, or a renamed one. Add it with the trade that produced it."
+        );
+    }
+    // (2b) …and every row priced here is still in the report. A vanished row
+    // reads zero to any permissive reader and turns its own floor green.
+    for (label, pinned) in GAP_LEDGER {
+        assert!(
+            measured.iter().any(|(l, _)| l.as_str() == *label),
+            "`GAP_LEDGER` prices `{label}` at {pinned} and the report no longer has that row — \
+             closed, or renamed. Either way the pin has stopped measuring and must be moved."
+        );
+    }
+
+    // (1) No row rose.
+    for (label, n) in &measured {
+        let pinned =
+            GAP_LEDGER.iter().find(|(l, _)| *l == label.as_str()).map(|(_, p)| *p).expect("priced above");
+        assert!(
+            *n <= pinned,
+            "init-prelude: gap row `{label}` is {n}, pinned at {pinned} — this row rose. \
+             That is not automatically a regression: a rule reaches sites it never reached \
+             before and declines honestly at each (`the population, not the rate`). But the \
+             trade has to be written here before the number moves, and it has to name what \
+             fell to pay for it."
+        );
+    }
+
+    // (2c) The enumeration accounts for the total, exactly. Pins can go stale
+    // low without failing (1); they cannot go stale about *which rows exist*.
+    let sum: u64 = measured.iter().map(|(_, n)| n).sum();
+    let total = row(&text, "TOTAL gaps");
+    assert_eq!(
+        sum, total,
+        "the {} gap rows sum to {sum} but `TOTAL gaps` is {total} — the ledger has a gap the \
+         per-row table cannot see, which is the exact failure a total-only ratchet has",
+        measured.len()
     );
 }
 
@@ -2558,7 +2730,37 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     // before, and they land on rules that were already admitting, both of them
     // named bucket-(ii) items in `THREADING-CENSUS.md` §3. Nothing that was
     // derived before is admitted now.
-    assert!(miss_cond <= 1244, "{miss_cond} misses against a discarded typing, was 1244");
+    // **Moved 1 244 → 1 250 on 2026-08-15, and it is attribution churn — the
+    // case this pin's own comment above declares in advance is *not* the
+    // regression it is for.** Measured by building at `3c4323b`, where this
+    // number was pinned, and diffing the whole ledger against master. The
+    // declaration-typing ledger is **identical at every other row**:
+    //
+    // | row | 3c4323b | master |
+    // | --- | ---: | ---: |
+    // | declarations with a value | 2891 | 2891 |
+    // | …could not justify at all (`gap`) | 2667 | 2667 |
+    // | …derived only under antecedents (`cond`) | 198 | 198 |
+    // | …stored as ⟦c⟧ ∈ ⟦T⟧ | 26 | 26 |
+    // | uses answered from the store (`hit`) | 1326 | 1326 |
+    // | **uses with no entry** | 29 131 | **30 420** |
+    // | **…against a typing derived and discarded** | 1 244 | **1 250** |
+    //
+    // Exactly two rows moved, and the one that decides the reading did not:
+    // **`cond` is flat at 198**, so no typing was newly derived-and-discarded.
+    // `gap`, `stored` and `hit` are flat too, so nothing was newly lost either.
+    // What rose is the store's *ask* traffic, by 1 289, and 6 of those extra
+    // asks land on keys whose typing was already being discarded. The **rate
+    // fell**: 1244/29131 = 4.27 % against 1250/30420 = 4.11 %. This is the
+    // population, not the rate, in the most literal form the phrase takes in
+    // this file.
+    //
+    // Paid: nothing this row can see. Bought, on the same diff: `TOTAL gaps`
+    // 15 734 → 10 386 and escapes 2 232 → 1 199. Of the 23 gap rows only two
+    // rose, and both are named — see
+    // [`the_whole_gap_ledger_is_accounted_for_row_by_row`], which exists so
+    // that this comparison is a test run rather than a seat's afternoon.
+    assert!(miss_cond <= 1250, "{miss_cond} misses against a discarded typing, was 1250");
     // Sanity: the store is consulted, and it mostly misses. Stated so that a
     // change that stops consulting it fails here rather than reading as a win.
     assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
@@ -2765,10 +2967,72 @@ fn projection_reduction_is_a_rule_fed_by_inference() {
     // — and the population, not the rate, is what changed. See
     // `MEASUREMENTS.md`, "Typing the reduction's own arguments", for what the
     // extra reductions bought.
+    // **Moved 661 → 678 on 2026-08-15, and it is the same trade a second time:
+    // the population, not the rate.** Measured by building at `3c4323b`, where
+    // this ratchet was last verified, and diffing the whole ledger against
+    // master — the evidence `DECISIONS.md` asks for, which had never been
+    // produced for this row.
+    //
+    // **I cannot write "no row rose", and this is what I write instead.** Of
+    // the ledger's 23 `gap:` rows, exactly **two** rose over the whole range:
+    // this one, +19, and `iota: the major premise is not a constructor`, +64 —
+    // and the second is already accounted for, with its trade, at the ι
+    // ratchet above. Everything else fell or held: `TOTAL gaps`
+    // 15 734 → 10 386, escapes 2 232 → 1 199, `trans` 8 457 → 5 370, and the
+    // 792-gap row `iota: this recursor has no curried interpretation` closed
+    // outright.
+    //
+    // **It belongs to exactly one commit: `b654c98`, "do not park conditional
+    // reduct certificates".** Measured per-commit across all ten commits of the
+    // projection-evidence block after `18212fc`; the other nine are inert on
+    // this row (659 at every one of them, `TOTAL gaps` flat at 11 821), and the
+    // whole move happens at `b654c98`.
+    //
+    // **And the mechanism is not the one the 630 → 661 move had.** That was new
+    // inference *contracting* redexes nothing had contracted. This is the other
+    // shape, the one `the_prelude_ledger_totals_are_ratcheted` already records
+    // for the 15 423 → 15 455 move: **the gaps were always there, and something
+    // was hiding them.** At `b654c98`, in one commit:
+    //
+    // | | 4fc2f25 | b654c98 |
+    // | --- | ---: | ---: |
+    // | conditional derivations made | 33 171 | 32 938 |
+    // | …**of them copies** | **238** | **0** |
+    // | escapes | 2 657 | **2 420** |
+    // | `derived (real kernel Thm)` | 164 205 | **164 210** |
+    // | `gap: proj_reduce` | 659 | **678** |
+    // | `gap: trans over an admitted premise` | 5 366 | 5 370 |
+    // | `TOTAL gaps` | 11 821 | **11 607** |
+    //
+    // A parked conditional certificate was being re-served in place of the
+    // rule, and it was **escaping debt**: 238 copies go to zero and 237 escapes
+    // go with them. What the parking concealed is 19 projection reductions that
+    // have no certificate — the same honest decline as the other 659, no
+    // interpretation of structures exists — plus the 4 they relay into `trans`.
+    //
+    // **Nothing that was derived before is admitted now**, which is the property
+    // this ratchet is a proxy for, and the two numbers that establish it are
+    // that `derived (real kernel Thm)` went **up** by 5 and escapes went **down**
+    // by 237. A commit that had *lost* 19 real certificates would have moved
+    // both the other way.
+    //
+    // Corroborating, and the reason "19 lost" and "19 newly visible" are
+    // distinguishable here at all: the four rows this test protects are
+    // **byte-identical** across the whole range — `threaded` 9, proof shortcut
+    // 34, proof λ's body clause 41, admit fall-through 0. The rule reaches the
+    // threaded derivation exactly as often as before and no searcher moved. The
+    // origin bitmask agrees: `proj_reduce` own 659 → 678, relayed
+    // 1 840 → 1 844, and that +4 *is* the +4 on `trans`. Nothing else relays
+    // them.
+    //
+    // **The reason nobody saw it for four days is not this number.** This
+    // assertion fired correctly, the first time it was run. `tg_tutorial` is
+    // not on the gate list any seat runs, so it was not run — see
+    // `TEST-INVENTORY.md` §3.5.
     let proj_red = row(&text, "gap: proj_reduce");
     assert!(
-        proj_red > 0 && proj_red <= 661,
-        "init-prelude: {proj_red} proj_reduce gaps, ratchet 661 — projection reduction regressed"
+        proj_red > 0 && proj_red <= 678,
+        "init-prelude: {proj_red} proj_reduce gaps, ratchet 678 — projection reduction regressed"
     );
 
     // **Moved 11 → 9 on 2026-08-10, with a written trade, and for the same
