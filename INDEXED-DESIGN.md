@@ -1600,25 +1600,42 @@ populations, and following them down settles the tranche:
   sites) and the bottom of it is **`RBTree.red` and `RBTree.black` applied to
   their fields** (2 + 2).
 
-**So the wall is a constructor typing for an indexed family, and mini already
-publishes it.** `has_type_ctor_app` works where `has_type_app` does not because
-a constructor's base case is *supplied* — a `CtorRule` derived in `derived`. TG
-builds those for its own general inductives and builds none for an indexed
-family, because `gen_scope` declines it. But
-`IndexedCtor::mem_lean` — `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)))`,
-**with its antecedent already in Lean field order** — is exactly that supplied
-base case, it is on the shared store inside the published
-`IndexedTranslation`, and `checker/src/tg.rs` consumes it **zero times**.
+**So the wall is a constructor typing for an indexed family.**
+`has_type_ctor_app` works where `has_type_app` does not because a constructor's
+base case is *supplied* — a `CtorRule` derived in `derived`. TG builds those for
+its own general inductives and builds none for an indexed family, because
+`gen_scope` declines it.
 
-That is the *third* instance of one shape in this tranche: the fact is already
-published and the consumer declines for want of a rule it could have stood on
-(§8.4.1 item 2 is the first, `Full::rule`'s `want_full = false` the second).
+*This section then said the supplied base case was `IndexedCtor::mem_lean`,
+published inside `IndexedTranslation` and consumed zero times, and that taking
+it was one short consumption. **The second half of that is wrong and
+`checker/src/mini/ctor_ix.rs:43–68` already said so.*** `mem_lean` **cannot be
+called from a use site at a constructor with fields.** Its witness protocol
+demands each `wₖ` be *closed, prenex, and at `derived`'s own working variables*;
+a consumer at a use site — or at the bottom of a λ-nest, which is where mini
+meets it — holds **open-scope, already-instantiated** theorems about that site's
+own kernel variables, and generalising them back is unavailable because the
+parameters' scope assumptions are live hypotheses there and **a
+hypothesis-carrying theorem cannot be generalised**. The bridge for that
+mismatch is filed as **task #38** and does not exist. `mem_lean`'s one existing
+consumer is a *field-less* constructor, where the protocol is met vacuously —
+"exactly the shape that cannot tell the two interfaces apart", as its own test
+says. `RBTree.red`/`black` are the fielded shape.
 
-**What to build, in order**: consume `IndexedCtor::mem_lean` in the constructor
-typing path for a published indexed family; then the λ target bridge above,
-which is inert on its own and was **reverted rather than left in the tree** for
-exactly that reason — it moves the decline inward and rescues nothing until the
-constructor typing lands.
+So the count was right and the conclusion drawn from it was not: **zero
+consumers measured a protocol nobody can meet, not an opportunity nobody
+took.** The interface a use site *can* use is `mem` + `mem_atoms` +
+`lean_order` — carrier-ordered antecedent, `Eᵢ` still to discharge, both
+endpoints at `derived`'s terms rather than the interpretation's — which is what
+`ctor_ix` itself uses, and turning that into a `CtorRule` needs exactly the
+∀-closure task #38 names. A route that avoids the closure entirely does exist —
+discharge the obligation **at the site's own concrete terms**, as `fire_ix_dep`
+does, reusing `ix_ctor_spine`/`ix_arg_bridge`/`ix_slot_bridge` — but that is a
+new clause of its own, not a consumption.
+
+**Handed off, not built.** The λ target bridge above is built, measured and
+**reverted**: it moves the decline inward and rescues nothing until the
+constructor typing lands, so it belongs in whichever commit lands that.
 
 ---
 

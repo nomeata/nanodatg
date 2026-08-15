@@ -485,3 +485,73 @@ Recorded because a brief is a hypothesis and this project keeps the refutations.
 * **[unverified, 2026-08-14]** Whether `Closed::discharge` yields the antecedent
   order §8.2 route (B) would need. Not checked, because §3.2 removes the reason
   to take route (B) at all; a seat reviving it must check this first.
+
+---
+
+## 9. What crosses the seam, and who reads it — the inventory
+
+*Measured 2026-08-15 by counting field references in `checker/src/tg.rs` against
+`checker/src/mini/*.rs`. §1–§8 settled **where** the seam belongs; nothing
+enumerated **what actually crosses it and whether anyone reads it**, and three
+tranches in a row were blocked by a published fact with no consumer.*
+
+**How to read the numbers.** A **zero is exact** — a field with no `.field`
+reference in a file is not read there, whatever it is named. A **non-zero is an
+upper bound**: `.rec`, `.ctors`, `.spec`, `.ty`, `.minors` and `.mem` are common
+enough that the count includes unrelated matches. So this table is a list of
+*absences*, and that is the useful direction.
+
+### 9.1 Published and read by mini, **never** by TG
+
+| field | mini | TG | is the protocol meetable by TG? |
+| --- | ---: | ---: | --- |
+| `IndexedTranslation::field_abbrev` | 18 | **0** | yes — positional, instantiable at a site's terms |
+| `IndexedTranslation::rec_dom_abbrev` | 12 | **0** | yes, but it is the function-typed-slot bridge, which the value walk declines by name |
+| `IndexedGuardedMinors::hyp` | 12 | **0** | yes |
+| `IndexedCtor::mem_lean` | 3 | **0** | **NO — see §9.3** |
+| `IndexedCtor::lean_order` | 2 | **0** | yes |
+| `IndexedGuardedMinors::typed` | 2 | **0** | yes |
+| `IndexedCtor::mem_atoms` | 1 | **0** | yes |
+| `IndexedCarrier::subset_w` | 1 | **0** | yes |
+| `IndexedCtor::inv` | 1 | **0** | yes |
+
+### 9.2 Published and read by **neither** engine
+
+`IndexedCarrier::good_of`, `IndexedGuardedMinors::fires`, `::minor_typed`,
+`::guard_atoms`, and `IndexedInductive::ix` / `gv` / `gs` / `good`. These are
+not seam defects — they are the internals of the `good` recursion and the
+guarded minors, reachable through the objects that *are* read. Listed so a
+future reader does not mistake them for the same category as §9.1.
+
+### 9.3 The correction this inventory exists for: **zero can measure an unmeetable protocol**
+
+`IndexedCtor::mem_lean` was reported (INDEXED-DESIGN.md §8.7, since corrected in
+place) as a published fact in exactly the right shape that TG simply had not
+taken. **The count was right and the inference from it was wrong.** `mem_lean`'s
+witness protocol demands each `wₖ` be *closed, prenex, and at `derived`'s own
+working variables*; every consumer that could want it — a use site, or the
+bottom of a λ-nest, which is where mini meets it — holds **open-scope,
+already-instantiated** theorems, and generalising them back is unavailable
+because the scope assumptions are live hypotheses and **a hypothesis-carrying
+theorem cannot be generalised**. The bridge is filed as **task #38** and does
+not exist. `checker/src/mini/ctor_ix.rs:43–68` had said all of this for months.
+
+So the inventory needs the third column and not only the count. **A zero-consumer
+row is a question, not a finding**, and the question is: *can the protocol be
+met by anyone standing where the consumer stands?*
+
+* **`Full::rule` / `want_full = false`** — meetable; nobody asked. A real
+  opportunity, taken (INDEXED-DESIGN.md §8.4.1).
+* **the type former's typing behind `Decline::Indices`** — meetable; a *cost*
+  guard said no. A real opportunity, taken (ibid.).
+* **`mem_lean`** — *not* meetable. Not an opportunity at all.
+
+Two of three were what they looked like. The third is why the column exists.
+
+### 9.4 What this does not cover
+
+Only the indexed publications. The projection translation, `DepElim`, the shared
+`LamStore`/`PiStore`/`ConstStore` and the `Nat` clause are unmeasured here, and
+the same three-column treatment would apply to each. **Do not read the absence
+of a row as a zero.**
+
