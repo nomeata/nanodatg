@@ -651,3 +651,52 @@ fn a_store_that_gained_a_theorem_is_no_longer_printed_as_absent() {
         "…and the set `T` was instantiated at, which is the rung and not u₁:\n{out}"
     );
 }
+
+/// **The spliced model tower is *interpreted* at the σ its subject is used at,
+/// and the dump is the only place that can be read.**
+///
+/// The companion to `nanoda_lib::instantiations::tests::
+/// a_spliced_model_is_scheduled_at_the_sigma_its_subject_is_used_at`, and it is
+/// a separate test for a reason that is the point of it: that one asserts on
+/// the **schedule**, which is the same module the fix lives in. This one
+/// asserts on `⟦PTree._model.{2}⟧` being *in the store*, which it can only be
+/// if the schedule reached `crate::mini::ledger`'s walk and the walk built it —
+/// a path that shares nothing with `instantiations.rs` but the number it hands
+/// over.
+///
+/// `tool_poly_nested.ndjson` uses `PTree.{u}` at **three** universes, and three
+/// is what the assertion needs: `instantiations::DEFAULT_LEVELS` is `[0, 1]`,
+/// so the tower was already interpreted at *two* σ under the defect. Both σ = 0
+/// and σ = 1 rows are asserted beside σ = 2 so that a fix which moved the
+/// tower onto one σ instead of onto its subject's three would be caught here
+/// rather than read as a pass.
+///
+/// The δ equation is asserted with each row because it names the *next*
+/// constant down the chain — `PTree._model._impl.0.{σ}` — so this pins that the
+/// σ carried on through the tower rather than stopping at its head. That is
+/// what the defect did: the head was reachable at the σ the recogniser
+/// propagated to it, and nothing under it was.
+#[test]
+fn a_spliced_models_tower_is_interpreted_at_its_subjects_third_universe() {
+    let out = run(&fixture("tool_poly_nested.ndjson"), &[
+        "--nested",
+        "--mutual",
+        "--dump-only=PTree._model",
+    ]);
+    for u in 0..=2u32 {
+        assert!(
+            out.contains(&format!("⟦PTree._model.{{{u}}}⟧")),
+            "the model carrier is not interpreted at σ = {u}:\n{out}"
+        );
+        // Line-based rather than one literal: the right-hand side opens with a
+        // generated function symbol whose number moves with the prelude, and a
+        // test that pinned it would go red on an unrelated change.
+        assert!(
+            out.lines().any(|l| {
+                l.contains(&format!("⊢ ⟦PTree._model.{{{u}}}⟧ ="))
+                    && l.contains(&format!("⟦PTree._model._impl.0.{{{u}}}⟧"))
+            }),
+            "the carrier's δ equation at σ = {u} does not reach the block under it:\n{out}"
+        );
+    }
+}
