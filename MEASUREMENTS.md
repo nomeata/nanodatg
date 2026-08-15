@@ -10350,3 +10350,97 @@ One run, one binary, no `perf stat` — this measures *where* it stops, not what
 it costs. The instruction figure of record (22.50 T) predates the pipeline
 unification and was not re-taken. `/usr/bin/time` does not exist in this
 environment; use the shell builtin or `perf` if a cost number is wanted.
+
+## The 2 000 whnf frames are one tower — what stops `init-prelude`, measured — 2026-08-15
+
+The section above records the stop and calls the bound "a **2000-level whnf
+recursion guard**". That is where it stops; this is *what it is*. Three
+diagnoses were open — legitimate depth, a blowup, or non-termination — and the
+frame histogram at the refusal separates them in one line.
+
+### The refusal's own frames
+
+`NANODA_WHNF_TRACE=1`, release, modelgen on, `--mutual --nested`:
+
+```
+whnf-trace  frames=2000  distinct=3
+    1998  Proj PProd.0/1
+       1  Const HSub.hSub/6
+       1  Const Nat.rec/4
+```
+
+**Three distinct shapes in two thousand frames.** One `HSub.hSub` on top, an
+unbroken 1 998-deep tower of `PProd.0` projections, one `Nat.rec` at the bottom.
+That is the `below` nest `Nat.brecOn` builds, one `whnf_conv` frame per level,
+and its height is the height of a **numeral** — `String.utf8EncodeChar`'s `ite`
+chain is on 127 / 2047 / 65535, and 1 998 sits at 2047.
+
+So it is not a runaway and it is not non-termination. The reduction is as deep
+as the term, and the term is only that deep because the numeral is unary.
+**Raising the bound moves the stack overflow; shortening the tower removes it**
+— which is the binary numeral path in `derived/src/nat/`, not a constant in
+`kernel.rs`.
+
+### It is one declaration, not a file
+
+With `NANODA_DECL_PROGRESS=1` on the 238-declaration backward closure of
+`ByteArray.IsValidUTF8` (`scripts/decl-closure.py`), every declaration ahead of
+the wall finishes in milliseconds — the slowest is `Nat.le.below` at **0.106 s**
+— and then `ByteArray.IsValidUTF8` alone does not finish in ten minutes. The
+34 minutes are not spread over 2 131 declarations.
+
+### `def_eq` has no cache at all, and 120 M calls decide 1 237 pairs
+
+Beside the tower there is a second, independent defect. Lean's kernel keeps an
+`is_def_eq` cache; mini keeps none. On the same declaration:
+
+```
+defeq-census  calls=120000000  distinct=1237  ratio=97008.9  depth=55
+              asked=4786  no-endpoints=119995175
+```
+
+Calls grow linearly while the distinct set is flat (1 224 → 1 237 over 100 M
+calls). Note the split: **119 995 175 of the calls carry no endpoints** and
+4 786 carry them — the decision-only path is essentially the whole population,
+which is what makes a memo there evidence-neutral rather than delicate.
+
+### The memo was built, measured, and **not landed** — and this is why
+
+A frame-local decision-only memo (positive answers only; an `Err` here is
+overloaded with depth-dependent budget refusals) was implemented and measured:
+**8.1 M hits against 20.0 M misses**, ~29 %, and *the wall does not move*. Worse,
+it **removes the verdict**: with the memo in, the run no longer reaches the
+depth bound at all and grinds indefinitely with no output, where the baseline at
+least declined. A bound whose whole purpose is to report cannot be traded for a
+hang, so the memo is reverted and only the instrumentation is kept.
+
+For the record, the pre-existing `infer_type` frame memo on the same run
+measures **24.0 M hits / 100.2 M misses** — a 19 % hit rate.
+
+### Two claims this corrects
+
+* **The literal-major hypothesis is right in substance, wrong in location.** The
+  task list carries this decline as "on a **literal major**". `ByteArray.IsValidUTF8`
+  is a one-constructor `Prop`, `numIndices=0`, `k=false`, whose recursor rule is
+  `fun b motive intro m hm => intro m hm`, and whose major premise is a bound
+  variable — there is no literal there. `List.utf8Encode` is not recursive at
+  all: it is `List.toByteArray (List.flatMap Char UInt8 String.utf8EncodeChar l)`.
+  The numeral that drives the depth is the one the `below` tower is built at,
+  inside the arithmetic, not the eliminator's major.
+* **Well-founded recursion is not involved.** The entire 287-constant transitive
+  value-dependency cone of `List.utf8Encode` contains no `WellFounded.fix`,
+  `WellFounded.fixF`, `Acc.rec` or `invImage`; those strings do not occur
+  anywhere in this export, which is `Init.Prelude` and stops before
+  `WellFounded` is defined. All 57 recursive constants in the cone are
+  structural, through `.brecOn`/`.below`/`.rec`.
+
+### Method note
+
+Diagnosis came from live `gdb -p` stack samples and `perf record --call-graph
+dwarf` on the running process, not from the verdict line: two samples seconds
+apart were 224 and ~2 000 frames, which is what ruled out a single deep descent
+before any code was changed. One trap worth naming — `DeclProgress` is a `Drop`
+guard and `Drop` runs during **panic unwinding**, so a `decl-leave … 0.001s`
+line printed by an unwinding instrumentation bug read exactly like a
+declaration that had finished, and was briefly reported as a fix. The guard now
+prints `PANIC` or `ok`.

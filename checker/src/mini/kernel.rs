@@ -46,7 +46,7 @@ use crate::mini::expr::{
     lam, shift, sort,
     subst, substs, Expr, Level, Name, E,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub type R<T> = Result<T, String>;
@@ -329,7 +329,7 @@ pub enum Clause {
 /// itself fires **25** times in the whole run. The gate is nearly always
 /// asked and almost never answered yes; the four `Type` sites are where the
 /// asking was provably pointless.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Lhs {
     /// Nothing known — infer `e1` and ask the gate. Every decision-only
     /// caller, and every congruence over *terms*, is here.
@@ -465,6 +465,41 @@ pub struct Checker<'e, 'i> {
     /// How deep [`Checker::whnf_conv`] currently is. Same bound, same reason:
     /// the two recursions are different and either one alone is fatal.
     whnf_depth: u32,
+    /// **The frame descriptors on the [`Checker::whnf_conv`] stack**, one per
+    /// live frame, maintained only when `NANODA_WHNF_TRACE` is set. Empty and
+    /// untouched otherwise, so an ordinary run pays one `bool` test per call.
+    ///
+    /// This is a *diagnostic*, and the question it answers is the one the
+    /// budget refusal cannot: whether 2 000 frames are 2 000 **distinct**
+    /// redexes (legitimate depth), the **same** redex recurring (a blowup or a
+    /// non-terminating reduction), or a literal being walked one successor at a
+    /// time. The refusal prints the term it gave up on and nothing about how it
+    /// got there, and the three diagnoses are indistinguishable from that line.
+    whnf_trace: Vec<String>,
+    /// The deepest [`Checker::whnf_depth`] already reported on, so the
+    /// high-water dump fires once per level rather than once per call.
+    whnf_high: u32,
+}
+
+thread_local! {
+    /// Diagnostic call counters, maintained only under `NANODA_WHNF_TRACE`.
+    /// `proj_ty` and `is_prop` are the pair the budget refusal's stack cycles
+    /// through, and their ratio to the frame memo's misses is what separates a
+    /// deep derivation from a re-derived one.
+    static PROJ_TY_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static IS_PROP_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The distinct `(e1, e2)` pairs `assert_def_eq_as` has been asked about,
+    /// and the number of times it has been asked. See its entry.
+    static DEFEQ_SEEN: std::cell::RefCell<(HashSet<(E, E)>, u64, u64, u64)> =
+        std::cell::RefCell::new((HashSet::new(), 0, 0, 0));
+}
+
+/// Whether [`Checker::whnf_trace`] is being maintained — `NANODA_WHNF_TRACE`,
+/// read once. Off, the trace costs one relaxed load per `whnf_conv` call.
+pub fn whnf_trace_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NANODA_WHNF_TRACE").is_some())
 }
 
 /// **The bound on definitional-equality recursion**, and the one guard in mini
@@ -497,10 +532,40 @@ pub struct Checker<'e, 'i> {
 ///
 /// The corpus's own peaks are **34** for `def_eq` and **at most 20** for
 /// `whnf`, measured over all 91 exports, so `2_000` is 58× and 100× headroom
-/// and no legitimate derivation on anything mini accepts is near it. It is deliberately a round number and deliberately not tight: it
+/// there. It is deliberately a round number and deliberately not tight: it
 /// is a backstop against a runaway, not a statement about how deep a proof may
 /// be, and the message says so.
+///
+/// **`init-prelude` reaches it, and the sentence "no legitimate derivation on
+/// anything mini accepts is near it" that stood here is false.** At
+/// `ByteArray.IsValidUTF8` the `whnf` bound trips exactly, and the frame
+/// histogram at the refusal is **1 998 `Proj PProd.0` frames** between one
+/// `HSub.hSub` and one `Nat.rec` — three distinct shapes in two thousand
+/// frames. That is not a runaway: it is one `whnf_conv` frame per level of the
+/// `below` tower `Nat.brecOn` builds, and the tower is as tall as the numeral
+/// it was built at. **Raising the bound does not fix it and lowering the
+/// numeral would**, which is why the answer is the binary numeral path in
+/// `derived/src/nat/` and not a larger constant here. Set `NANODA_MAX_DEPTH` to
+/// reach the refusal sooner while measuring; see [`max_depth`].
 pub const DEFEQ_MAX_DEPTH: u32 = 2_000;
+
+/// [`DEFEQ_MAX_DEPTH`], overridable by `NANODA_MAX_DEPTH` for **diagnosis**.
+///
+/// The bound's purpose is to turn a stack overflow into a verdict, and that
+/// purpose is served at any value; what the value buys is headroom. Lowering it
+/// makes the refusal — and the frame report beside it — reachable in seconds on
+/// a witness that otherwise takes half an hour to arrive at the same place,
+/// which is the difference between one measurement a day and one an hour.
+///
+/// Read once. The default is [`DEFEQ_MAX_DEPTH`] exactly, so no run that does
+/// not set the variable can take a different branch than before.
+pub fn max_depth() -> u32 {
+    use std::sync::OnceLock;
+    static N: OnceLock<u32> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("NANODA_MAX_DEPTH").ok().and_then(|s| s.parse().ok()).unwrap_or(DEFEQ_MAX_DEPTH)
+    })
+}
 
 /// The prefix both budget messages carry, and the seam
 /// [`crate::mini::run`] classifies them by.
@@ -614,6 +679,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             frames: vec![Frame::default()],
             defeq_depth: 0,
             whnf_depth: 0,
+            whnf_trace: Vec::new(),
+            whnf_high: 0,
         }
     }
 
@@ -632,6 +699,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             frames: vec![Frame::default()],
             defeq_depth: 0,
             whnf_depth: 0,
+            whnf_trace: Vec::new(),
+            whnf_high: 0,
         }
     }
 
@@ -948,14 +1017,107 @@ impl<'e, 'i> Checker<'e, 'i> {
         // minutes. What is left is the genuine one, and until the accelerated
         // operations are in it must **report** rather than abort.
         self.whnf_depth += 1;
-        if self.whnf_depth > DEFEQ_MAX_DEPTH {
+        if self.whnf_depth > max_depth() {
             self.whnf_depth -= 1;
+            if whnf_trace_on() {
+                eprintln!("{}", self.whnf_frame_report());
+            }
+            let n = max_depth();
             return Err(budget_refusal(format_args!(
-                "weak-head reduction recursed past {DEFEQ_MAX_DEPTH} levels while reducing {e};                  mini bounds this because the alternative is a stack overflow, which reports                  nothing"
+                "weak-head reduction recursed past {n} levels while reducing {e};                  mini bounds this because the alternative is a stack overflow, which reports                  nothing"
             )))
         }
+        if whnf_trace_on() {
+            // The **ends** of the tower are printed in full, because a
+            // histogram says what shape recurs and never says what the tower is
+            // made of. Only the outermost two frames and the innermost few pay
+            // for the print.
+            let mut key = Self::whnf_frame_key(e);
+            let d = max_depth();
+            if self.whnf_depth <= 2 || self.whnf_depth + 3 >= d {
+                // Char-safe: the printer emits `∀`, `⟦` and friends, and a
+                // byte truncation splits one.
+                let txt: String = format!("{e}").chars().take(600).collect();
+                key = format!("{key} := {txt}");
+            }
+            self.whnf_trace.push(key);
+            // The high-water marks, so a run that is *heading* for the bound
+            // says what it is doing before it gets there. A 34-minute witness
+            // that reports only at the abort answers the question once.
+            if self.whnf_depth % 250 == 0 && self.whnf_depth > self.whnf_high {
+                self.whnf_high = self.whnf_depth;
+                eprintln!("{}", self.whnf_frame_report());
+            }
+        }
         let out = self.whnf_conv_inner(e, tm, why);
+        if whnf_trace_on() {
+            self.whnf_trace.pop();
+        }
         self.whnf_depth -= 1;
+        out
+    }
+
+    /// The descriptor one [`Checker::whnf_conv`] frame is bucketed by: the head
+    /// of the application spine, plus its argument count. Deliberately *not*
+    /// the whole term — the question is which rule keeps firing, and 2 000
+    /// printed terms answer it less well than 2 000 keys do.
+    fn whnf_frame_key(e: &E) -> String {
+        let (head, args) = get_app(e);
+        let h = match &head.view() {
+            Expr::Const(n, _) => format!("Const {n}"),
+            Expr::NatLit(n) => format!("NatLit {n}"),
+            Expr::StrLit(_) => "StrLit".to_string(),
+            Expr::Lam { .. } => "Lam".to_string(),
+            Expr::Forall { .. } => "Forall".to_string(),
+            Expr::Let { .. } => "Let".to_string(),
+            Expr::Proj { ind, idx, .. } => format!("Proj {ind}.{idx}"),
+            Expr::Sort(_) => "Sort".to_string(),
+            Expr::BVar(i) => format!("BVar {i}"),
+            Expr::App(..) => "App".to_string(),
+        };
+        format!("{h}/{}", args.len())
+    }
+
+    /// **The frame histogram at the moment of the budget refusal**, and the
+    /// only thing that separates the three diagnoses the refusal is compatible
+    /// with. See [`Checker::whnf_trace`].
+    fn whnf_frame_report(&self) -> String {
+        use std::fmt::Write;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for k in &self.whnf_trace {
+            *counts.entry(k.as_str()).or_default() += 1;
+        }
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        let fc = crate::mini::census::frame_cache();
+        let mut out = format!(
+            "whnf-trace  frames={}  distinct={}\n\
+             whnf-trace  infer-frame-memo hits={} misses={}  proj_ty={}  is_prop={}  \
+             defeq_depth={}\n",
+            self.whnf_trace.len(),
+            rows.len(),
+            fc.hits,
+            fc.misses,
+            PROJ_TY_CALLS.with(|c| c.get()),
+            IS_PROP_CALLS.with(|c| c.get()),
+            self.defeq_depth,
+        );
+        for (k, n) in rows.iter().take(25) {
+            let _ = writeln!(out, "  {n:>6}  {k}");
+        }
+        // The *innermost* frames, in order, because a histogram cannot show
+        // whether a repeat is a cycle or a descent.
+        let tail: Vec<&str> =
+            self.whnf_trace.iter().rev().take(24).map(|s| s.as_str()).collect();
+        let _ = writeln!(out, "  innermost-first: {}", tail.join(" | "));
+        let head: Vec<&str> = self.whnf_trace.iter().take(12).map(|s| s.as_str()).collect();
+        let _ = writeln!(out, "  outermost-first: {}", head.join(" | "));
+        for (label, k) in [("outermost", self.whnf_trace.first()), ("innermost", self.whnf_trace.last())]
+        {
+            if let Some(k) = k {
+                let _ = writeln!(out, "  {label}-term: {k}");
+            }
+        }
         out
     }
 
@@ -3438,6 +3600,9 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `isProp`.
     pub fn is_prop(&mut self, ty: &E) -> R<bool> {
+        if whnf_trace_on() {
+            IS_PROP_CALLS.with(|c| c.set(c.get() + 1));
+        }
         let s = self.infer_ty(ty)?;
         let s = self.whnf(&s)?;
         Ok(as_sort(&s)?.is_zero())
@@ -3466,6 +3631,9 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `infer_proj`, with the two `Prop`-projection refusals under `strict`.
     fn proj_ty(&mut self, n: &Name, idx: u32, e: &E, strict: bool) -> R<(E, Option<Gap>)> {
+        if whnf_trace_on() {
+            PROJ_TY_CALLS.with(|c| c.set(c.get() + 1));
+        }
         let te = self.infer_type(e)?;
         let sub = if te.tm.is_none() { te.ev.gap().cloned() } else { None };
         let t = te.ty;
@@ -3772,11 +3940,43 @@ impl<'e, 'i> Checker<'e, 'i> {
         // [`DEFEQ_MAX_DEPTH`]. Decremented before the `?` so that a refusal
         // from below does not leave the counter raised for the rest of the
         // run.
+        // **Is this pair being decided, or re-decided?** Mini has no
+        // `is_def_eq` cache at all, where Lean's kernel keeps one; if the
+        // blowup is re-comparison then total ≫ distinct here and a cache is the
+        // fix, while if the two track each other the work is genuinely new and
+        // a cache would buy nothing.
+        if whnf_trace_on() {
+            let (n, d, a, b) = DEFEQ_SEEN.with(|s| {
+                let mut s = s.borrow_mut();
+                s.1 += 1;
+                if asked {
+                    s.2 += 1;
+                } else if tm1.is_none() && tm2.is_none() {
+                    s.3 += 1;
+                }
+                s.0.insert((*e1, *e2));
+                (s.1, s.0.len(), s.2, s.3)
+            });
+            if n % 20_000_000 == 0 {
+                let fc = crate::mini::census::frame_cache();
+                eprintln!(
+                    "defeq-census  calls={n}  distinct={d}  ratio={ratio:.1}  \
+                     depth={depth}  asked={a}  no-endpoints={b}  \
+                     frame-hit={fh} frame-miss={fm}  telescope={tel}",
+                    ratio = n as f64 / d.max(1) as f64,
+                    depth = self.defeq_depth,
+                    fh = fc.hits,
+                    fm = fc.misses,
+                    tel = self.frames.len(),
+                );
+            }
+        }
         self.defeq_depth += 1;
-        if self.defeq_depth > DEFEQ_MAX_DEPTH {
+        if self.defeq_depth > max_depth() {
             self.defeq_depth -= 1;
+            let n = max_depth();
             return Err(budget_refusal(format_args!(
-                "definitional equality recursed past {DEFEQ_MAX_DEPTH} levels while checking                  {e1} =?= {e2}; mini bounds this because the alternative is a stack overflow,                  which reports nothing"
+                "definitional equality recursed past {n} levels while checking                  {e1} =?= {e2}; mini bounds this because the alternative is a stack overflow,                  which reports nothing"
             )))
         }
         let attempt = self.def_eq_ev(e1, tm1, e2, tm2, lhs);
@@ -3856,10 +4056,21 @@ impl<'e, 'i> Checker<'e, 'i> {
         //
         // *(Nor is the loop what it looked like from outside. A probe counting
         // successor peels within one `whnf_conv` call never reached 4096 —
-        // there is only ever one peel per call — and probes at the entries of
-        // `whnf_conv` and `infer_type` never reached 2000 and 3000. The core
-        // dump named the pair of functions, and a frame dump showed both sides
-        // to be the *same* literal counting down: `53814`, `53813`, `53812`.)*
+        // there is only ever one peel per call. The core dump named the pair of
+        // functions, and a frame dump showed both sides to be the *same*
+        // literal counting down: `53814`, `53813`, `53812`.)*
+        //
+        // *(This paragraph also said that probes at the entries of `whnf_conv`
+        // and `infer_type` "never reached 2000 and 3000", and **that is false**
+        // — it was measured on the population that reaches this clause, not on
+        // the whole file. `init-prelude` reaches `whnf_conv` depth 2 000
+        // exactly, at `ByteArray.IsValidUTF8`, and the frame histogram there is
+        // **1 998 `Proj PProd.0` frames** under a single `HSub.hSub` and above a
+        // single `Nat.rec` — one `whnf_conv` frame per level of the `below`
+        // tower `Nat.brecOn` builds, whose height is a numeral. So the bound is
+        // reached, it is reached on a tower and not on a runaway, and the depth
+        // is a consequence of the **unary** numeral rather than of this clause.
+        // See `MEASUREMENTS.md`, "the 2 000 whnf frames are one tower".)*
         //
         // Sound in both directions. Equal literals have the **same**
         // interpretation, `num` being a function of the value, so reflexivity
