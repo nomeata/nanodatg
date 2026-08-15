@@ -623,47 +623,57 @@ measured two ways, and both move the wall rather than remove it:
 *completing*, and the named decline is the first of at least three consecutive
 matching points that all fail for the same reason.
 
-### 10.4 What the −35 actually needs, and what exists for it
+### 10.4 The −35 is not behind a wall, it is behind a **layer** — measured at 0
 
-One wall, and it now carries `074` as well as `076`: **`gen_ty_nest` mints its
-own type-former abbreviation at `np > 0` instead of adopting mini's published
-carrier.** After §10.5's change, `074_prodRecEqns`' remaining origin is
-`iota: the major premise's domain is not this inductive` (own 1, sub-tree 10) —
-the same `gen_ty_bridge` decline. Sub-tree 10 there plus 37 on `076`.
+*This section previously scoped the `np > 0` type-former adoption as the tranche
+that would reach the −35, and warned only against pricing it at −47. It was
+built behind a switch and measured, as it told the reader to do. **It works, and
+it is worth zero.** Corrected here in place, with what the probe found.*
 
-Checked before concluding anything is missing, per §9.3:
+`fire_dep`'s parameterised path is a **layer** of constructions each written for
+`np == 0`. Clearing one is small, correct, and moves the entire 37-gap sub-tree
+onto the next one intact. Three walls were traversed on `076_listRecReduction`:
 
-* **No stored theorem `app(mini's ⟦T⟧, p⃗) = ind(p⃗)` exists anywhere.**
-  `Translated` (`mini/interp.rs:742`) has `field_abbrev`, `ctor_abbrev`,
-  `rec_dom_abbrev` and **no type-former field** — unlike its sibling
-  `TruncTranslation`, whose `abbrev` doc says outright "without it nothing can
-  get from `⟦T p⃗⟧` to anything `derived` states". `ConstEntry::defeq` is
-  `None` for every inductive type former (`mini/zoneb.rs:3875`, `:321`), so
-  `mini_const`'s `abbrev_defs` insertion never fires for `List`.
-  `derived::inductive::Inductive` *cannot* state it: `ind` is a first-order
-  `FnSym` applied to parameter terms, so there is no set-theoretic `⟦T⟧` in
-  `derived` at all. Mini derives the equation on demand in `Interp::beta_spine`
-  (`mini/interp.rs:2164`) and discards it at ~60 call sites.
-* **But both halves of the wiring already exist on the TG side.**
-  `adopted_lam_step` (`tg.rs:16580`) is one level of mini's `beta_spine` in TG's
-  conditional-equation discipline, reading the graph identity and both defining
-  certificates out of the **shared** lambda store; `adopted_nest_chain`
-  (`:16652`) and `adopted_const_spine` (`:16691`) already iterate it over a
-  spine and return the `(CondEq, obligations)` pair `gen_ty_bridge` wants.
-  `gen_ty_nest` already has an adoption path — gated on `np == 0`
-  (`tg.rs:9506`).
+| # | wall | cause | fix | `076` | sub-tree after |
+| --: | --- | --- | --- | ---: | ---: |
+| 1 | `gen_ty_bridge`: `⟦T p⃗⟧` is a third spelling | `gen_ty_nest` mints its own abbreviation at `np > 0` | adopt mini's carrier, contracting it at the parameters through `adopted_lam_step` (~75 lines) | 45 | 37 |
+| 2 | `iota: mini's nullary constructor abbreviation is not an equation` | `dep_minor_typed` does `inst_all(ax, &[])`; mini publishes `∀p. ⟦cᵢ⟧(p) = …` | `inst_all(ax, ps)` — **one line**, and identical at `np == 0` | 45 | 37 |
+| 3 | `iota: the nullary minor is typed at another constructor` | the `from != mdom` check, same class again | not attempted | 45 | 37 |
 
-**So this is a wiring tranche, not a derivation tranche**: an `np > 0` analogue
-of the `tg.rs:9506` block. Two caveats for whoever takes it: on the adopted path
-`head_sym` is `head.as_app().map(|(f,_)| f)` rather than a `self.parts` lookup,
-and the shared-cache write at `tg.rs:9591` is gated on it being `Some`; and the
-`head_ax` slot has no filler at `np > 0`, so any reader of `GenTyNest::head_ax`
-rather than `spine_eq*` needs auditing.
+**Every row is 45.** At each stage the origin's own count is 5, its sub-tree 37,
+and `NANODA_ASSUME` on it still takes the file 45 → 10. The tranche does not
+shrink as walls fall; it *migrates*. Across both populations the whole
+configuration — adoption, the one-liner, and dropping the recogniser exclusion
+so `List.rec` reaches `fire_dep` at all — moves **nothing**: exports 168,
+every fixture identical.
 
-**Do not price it at −47.** Every measurement in §10.3 moved a wall without
-moving the ledger, and the honest expectation is that this one ends at
-`fire_dep`'s *next* matching point too. Price it by building the bridge behind a
-switch and reading the row, before writing the tranche.
+**The wiring itself is confirmed available**, which is the one durable result
+here. Mini's carrier *is* a registered lambda graph in the shared store: the
+`np > 0` adoption contracts it at the parameter variables, lands on `ind(p⃗)`,
+and produces `⊢ H_p → app-spine(⟦T⟧,p⃗) = ind(p⃗)` with no decline, for `Prod`
+(np = 2) and `List` (np = 1) alike. `adopted_lam_step` is exactly mini's
+`beta_spine` step and needs nothing new. So whoever finally takes this layer
+does not have to rediscover that; they have to get through *all* of it.
+
+Two implementation notes the probe settled, so the next attempt does not
+re-derive them:
+
+* the adopted nest must carry `head_sym: None`. `adopt_ty_nest` rebuilds the
+  head as `mk(head_sym, vec![])` — nullary — and mini's carrier is a graph
+  symbol applied to its domain, so the cross-backend share must be refused
+  rather than taken;
+* `head_ax` has no honest filler at `np > 0` — mini's carrier *is* the outermost
+  graph, so there is no `⟦T⟧ = <graph>` step. `Thm::eq_refl(head)` is truthful
+  and weakest-safe; every reader wanting the stronger form checks the shape and
+  declines.
+
+**What this says about scheduling.** Do not take this as a tranche on the
+strength of the −35. The correct next act is a *census of the layer*: walk
+`fire_dep` and count the constructions that assume `np == 0`, before writing
+any of them. Three are named above and the third is unexamined. Until that
+count exists, the honest statement is that `076`'s −35 is bounded below by
+three walls and above by nothing anyone has measured.
+
 
 ### 10.5 What landed instead
 

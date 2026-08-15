@@ -9522,16 +9522,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Mini already owns the Lean-facing name for an adopted parameterless
         // declaration. Its defining equation is the entire type-former bridge.
         //
-        // **Parameterless only, and this is the wall the `076`/`074` tranche
-        // ends at.** At `np > 0` there is no stored equation to adopt: mini
-        // publishes `defeq: None` for every inductive type former
+        // **Parameterless only.** At `np > 0` there is no stored equation to
+        // adopt: mini publishes `defeq: None` for every inductive type former
         // (`mini/zoneb.rs:3875`), derives `app-spine(⟦T⟧,p⃗) = ind(p⃗)` on
         // demand in `Interp::beta_spine` and discards it every time, and
         // `derived::inductive::Inductive` cannot state it — `ind` is a
         // first-order `FnSym`, so the graph wrapping is entirely checker-side.
         // The fall-through below therefore mints a *third* spelling of `⟦T⟧`,
         // and [`Self::gen_ty_bridge`] then declines against the one `interp`
-        // produced from mini's carrier. See `SEAM-DESIGN.md` §10.
+        // produced from mini's carrier.
+        //
+        // **Extending this to `np > 0` was built, measured, and reverted.** It
+        // works — mini's carrier is a registered lambda graph, so contracting
+        // it at the parameter variables through [`Self::adopted_lam_step`]
+        // lands on `ind(p⃗)` under `H_p` with no decline — and it is worth
+        // **zero**. `gen_ty_bridge` is the *first* of at least three walls in
+        // `fire_dep`'s parameterised path, each a construction written for
+        // `np == 0`, and the 37-gap sub-tree migrates intact to the next one.
+        // Do not re-derive it from the −35; census the layer first.
+        // `SEAM-DESIGN.md` §10.4 has the three walls and the two
+        // implementation notes.
         if gi.param_vars.is_empty()
             && self
                 .mini_adoptable_translation_at(ctx, ind_name, levels)
