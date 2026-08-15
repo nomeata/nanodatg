@@ -315,19 +315,20 @@ mod guard_tests {
         }
     }
 
-    /// **The recursion is bounded, and the bound is a rejection.**
+    /// **Syntactic equality is answered before anything is reduced**, and the
+    /// witness is that reducing would have been *impossible*.
     ///
-    /// A stack overflow is the one failure mode neither `timeout` nor
-    /// `ulimit -v` catches — it aborts with no verdict and no counter, and it
-    /// took a core dump to find out which two functions were on the stack. So
-    /// the depth is bounded and the bound reports.
+    /// The fixture is the one the bound test used to use: a spine deeper than
+    /// [`DEFEQ_MAX_DEPTH`], compared with itself. Walking it is refused — that
+    /// is the whole content of the test below — so an `Ok` here cannot be a
+    /// walk that happened to agree. It is proof that no walk happened.
     ///
-    /// The fixture is a right-nested spine deeper than the bound, compared
-    /// with itself: there is no identity short-circuit, so the `App`/`App` arm
-    /// descends every level. `Lhs::Type` keeps `infer_type` out of it, so what
-    /// is measured is the `def_eq` recursion and nothing else.
+    /// This is the shortcut Lean's `is_def_eq_core` opens with
+    /// (`quick_is_def_eq` → `equiv_manager::is_equiv` → `is_eqp`), and having
+    /// no counterpart for it is what made `init-prelude` normalise
+    /// `x - 262144` against itself.
     #[test]
-    fn def_eq_recursion_is_bounded_and_says_so() {
+    fn syntactic_equality_is_answered_without_reducing() {
         let handle = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(|| {
@@ -339,7 +340,52 @@ mod guard_tests {
                 for _ in 0..(DEFEQ_MAX_DEPTH + 50) {
                     deep = crate::mini::expr::app(f, deep);
                 }
-                c.assert_def_eq_as(&deep, None, &deep, None, Lhs::Type).err()
+                c.assert_def_eq_as(&deep, None, &deep, None, Lhs::Type).is_ok()
+            })
+            .expect("spawn")
+            .join()
+            .expect("the shortcut must not abort the process");
+        assert!(handle, "a term past the bound, compared with itself, must not be walked");
+    }
+
+    /// **The recursion is bounded, and the bound is a rejection.**
+    ///
+    /// A stack overflow is the one failure mode neither `timeout` nor
+    /// `ulimit -v` catches — it aborts with no verdict and no counter, and it
+    /// took a core dump to find out which two functions were on the stack. So
+    /// the depth is bounded and the bound reports.
+    ///
+    /// The fixture is two right-nested spines deeper than the bound, **equal
+    /// all the way down to different bottoms**, so the `App`/`App` arm descends
+    /// every level. `Lhs::Type` keeps `infer_type` out of it, so what is
+    /// measured is the `def_eq` recursion and nothing else.
+    ///
+    /// *(The fixture was one spine compared **with itself**, on the stated
+    /// grounds that "there is no identity short-circuit". There is one now —
+    /// `assert_def_eq_as` answers `e1 == e2` before anything is reduced, which
+    /// is what Lean's `quick_is_def_eq` does and what moved `init-prelude` off
+    /// its wall — so that fixture stopped reaching the recursion at all and
+    /// this test went red. Two spines differing only at the base restore what
+    /// it was measuring: hash-consing makes structurally identical terms the
+    /// *same pointer*, so a fixture that must not be short-circuited has to
+    /// actually differ somewhere.)*
+    #[test]
+    fn def_eq_recursion_is_bounded_and_says_so() {
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let env = nat_env();
+                let mut ip = Interp::new();
+                let mut c = Checker::threaded(&env, &mut ip);
+                let f = konst(Name::str(&Name::simple("Nat"), "succ"), no_levels());
+                let zero = konst(Name::str(&Name::simple("Nat"), "zero"), no_levels());
+                let (mut deep, mut deep2) = (zero, crate::mini::expr::app(f, zero));
+                for _ in 0..(DEFEQ_MAX_DEPTH + 50) {
+                    deep = crate::mini::expr::app(f, deep);
+                    deep2 = crate::mini::expr::app(f, deep2);
+                }
+                assert_ne!(deep, deep2, "the two spines must not be the same pointer");
+                c.assert_def_eq_as(&deep, None, &deep2, None, Lhs::Type).err()
             })
             .expect("spawn")
             .join()

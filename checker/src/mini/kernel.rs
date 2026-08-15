@@ -4256,6 +4256,60 @@ impl<'e, 'i> Checker<'e, 'i> {
                 );
             }
         }
+        // **Syntactic equality, before anything is reduced.**
+        //
+        // Lean's `is_def_eq_core` opens with exactly this — `quick_is_def_eq`
+        // and its `m_eqv_manager` are asked before a single reduction step —
+        // and mini had no counterpart at all. `def_eq_ev`'s order is proof
+        // irrelevance, then two nat literals by value, then `whnf_conv` on
+        // **both sides unconditionally**, and only then `def_eq_struct`. So a
+        // pair that is the same expression twice was being normalised twice to
+        // discover it.
+        //
+        // # What that was costing, measured
+        //
+        // It is the wall. The pair `ByteArray.IsValidUTF8` stops on is
+        //
+        // ```text
+        // L = HSub.hSub.{0 0 0} Nat Nat Nat (instHSub Nat instSubNat) #5
+        //       (OfNat.ofNat.{0} Nat 262144 (instOfNatNat 262144))
+        // R = <the same expression>
+        // ```
+        //
+        // — `x - 262144` against itself, `x` a bound variable. `Nat.sub`
+        // recurses on its *second* argument, so normalising it is 262 144 `ι`
+        // steps whatever `x` is, and `E` is a hash-consed arena index, so
+        // `e1 == e2` is **one `u32` comparison**. Lean settles this pair on the
+        // first line of `is_def_eq`; mini was walking a 262 146-level tower to
+        // reach the same answer.
+        //
+        // # Why the endpoints decide whether this may fire
+        //
+        // `e1 == e2` gives definitional equality outright, but the *caller* may
+        // have asked for a certificate about two `Term`s of its own choosing.
+        // `⟦·⟧` is a function, so equal expressions have equal interpretations
+        // — but `tm1` and `tm2` are handed in, not derived, and two spellings
+        // of one interpretation do occur: the `Proj` arm's header records six
+        // pairs on `nat_char_equations` with `s1` and `s2` the identical
+        // expression and `a_tm ≠ b_tm`. `eq_refl` proves `⟦e⟧ = ⟦e⟧` and not
+        // `a_tm = b_tm`, so the shortcut takes the reflexivity only when the
+        // two endpoints are *the same term*, and otherwise falls through to the
+        // walk that can relate them.
+        if e1 == e2 {
+            match (&tm1, &tm2) {
+                // The decision-only population — 119 995 175 of 120 M calls on
+                // this declaration. Nothing is stated, so nothing is owed.
+                (None, None) => {
+                    crate::mini::census::note_defeq_syntactic();
+                    return Ok(Conv { to: *e2, ev: Ev::missing(Gap::NoEndpoint) })
+                }
+                (Some(a), Some(b)) if a == b => {
+                    crate::mini::census::note_defeq_syntactic();
+                    return Ok(Conv::refl(*e2, a))
+                }
+                _ => {}
+            }
+        }
         // **The decision cache.** See [`Checker::defeq_cache`]'s conditions;
         // `cacheable` is the conjunction of those readable off the call, and
         // the last is checked on the way out.

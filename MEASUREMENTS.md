@@ -10962,3 +10962,129 @@ descent all the room it needs, something at the bottom is not yet sized. The
 memo removed the quadratic re-walk *within* the 2 000-level bound; what happens
 across a 262 146-level descent has not been measured to completion, and no
 claim is made about it here.
+
+## The wall falls: mini was reducing where Lean compares — 2026-08-15
+
+The previous section proposed an abstract machine for `whnf` on the strength of
+"choosing an ι rule needs the major in normal form". That is true, and Lean does
+exactly the same thing — and the machine is not needed, because **Lean never
+performs this reduction at all.**
+
+### Lean's answer, from its source and from running it
+
+`is_def_eq_core` (`type_checker.cpp:1086-1162`) opens at line **1090** with
+`quick_is_def_eq`, which is `m_eqv_manager.is_equiv` at **:771**, which is
+`equiv_manager::is_equiv_core` — `is_eqp` (pointer), then a cached hash, then
+a union-find, then structure. **Nothing is reduced.** Only after that does line
+1110 reach `whnf_core`.
+
+Lean's recursor rule *does* force its major (`inductive.h:93`, the `whnf`
+callback, with `cheap_rec` false at every call site in the tree), and
+`nat_lit_to_constructor` peels one `succ` per step, so the reduction mini was
+performing costs Θ(n) in Lean too — measured at exactly `4n + 7` kernel `Nat.rec`
+unfoldings, and **9.4 s of kernel time at n = 262 144** when forced.
+
+But it is never forced. A Lean file containing
+
+```lean
+def f (x : Nat) : Nat := x - 262144
+def g (x : Nat) (v : Fin (x - 262144)) : Fin (x - 262144) := v
+```
+
+compiles in **0.148 s with zero kernel unfoldings** — no `[kernel] unfolded
+declarations` section at all under `set_option diagnostics true`. The kernel
+demands a weak-head normal form only of *types* (`ensure_sort_core`,
+`ensure_pi_core`, `infer_app`'s function type) and of a recursor's major or a
+projection's scrutinee. An argument's *value* is never reduced, and two
+occurrences of `x - 262144` are settled by pointer equality on line 771.
+
+### The pair mini was stuck on
+
+Instrumented at the outermost frame of the refusal:
+
+```text
+eq=true
+L = HSub.hSub.{0 0 0} Nat Nat Nat (instHSub Nat instSubNat) #5
+      (OfNat.ofNat.{0} Nat 262144 (instOfNatNat 262144))
+R = <the same expression>
+```
+
+**`eq=true`.** `x - 262144` against *itself*, `x` a bound variable. `E` is a
+hash-consed arena index, so this is one `u32` comparison — and `def_eq_ev`'s
+order is proof irrelevance, then two nat literals by value, then `whnf_conv` on
+**both sides unconditionally**, then `def_eq_struct`. There was no identity
+check anywhere. `Nat.sub` recurses on its *second* argument, so mini normalised
+262 144 unary steps, twice, to decide that a term equals itself.
+
+**mini was reducing where Lean compares.** The fix is five lines and a
+condition, not an abstract machine.
+
+### The shortcut, and why the endpoints gate it
+
+`e1 == e2` gives definitional equality outright, but the caller may have asked
+for a certificate about two `Term`s of *its own* choosing. `⟦·⟧` is a function,
+so equal expressions have equal interpretations — but `tm1` and `tm2` are handed
+in, not derived, and two spellings of one interpretation do occur: the `Proj`
+arm's header records six pairs on `nat_char_equations` with `s1` and `s2` the
+identical expression and `a_tm ≠ b_tm`. `eq_refl` proves `⟦e⟧ = ⟦e⟧`, not
+`a_tm = b_tm`. So the shortcut fires when **both endpoints are absent** — the
+decision-only population, 119 995 175 of 120 M calls — or when the two endpoints
+are the *same term*, and otherwise falls through to the walk that can relate
+them.
+
+### What it does
+
+| | verdict | instructions:u | wall |
+| --- | --- | ---: | ---: |
+| closure, `02581e4` | decline | 126 153 544 074 | 8.4 s |
+| closure, + shortcut | **accept, 238 declarations** | **33 340 678 438** | **2.3 s** |
+| `init-prelude`, `36106d2` | decline at declaration 44 | 28 211 388 754 767 | 2126.7 s |
+| `init-prelude`, `02581e4` | decline at declaration 44 | 138 367 858 001 | 9.0 s |
+| `init-prelude`, + shortcut | **accept, 1822 declarations** | 506 861 393 034 | 38.3 s |
+
+`init-prelude`'s instruction count *rises* against `02581e4`, and that is the
+right direction: it stops after declaration 44 there and checks 1822
+declarations here. Against where this arc started it is **28.211 T → 0.507 T**
+while doing forty times more work.
+
+**The certified prefix moves for the first time: `declarations=44 pairs=0` →
+`declarations=152 pairs=32`.** The task list's "≥265" still does not reproduce,
+but 44 → 152 does.
+
+Ratchets held exactly: fixtures **61 / 49 / 23 / 13 / 12 / 6 / 2 / 0**, corpus
+**16 files / 172 gaps**, and every `gap:` reason row and provenance row
+identical across all fixtures and all 91 exports. Gates 6/6, 34/34, 35/35,
+**251/251**, boundary OK.
+
+### One test's premise was the thing being removed
+
+`def_eq_recursion_is_bounded_and_says_so` compared a spine deeper than the bound
+**with itself**, on the stated grounds that *"there is no identity
+short-circuit"*. There is one now, so the fixture stopped reaching the recursion
+and the test went red. It is repaired in place — two spines differing only at
+the base — and the retired fixture became a *new* test: a term past the bound,
+compared with itself, must be answered, because walking it would be refused. An
+`Ok` there is proof that no walk happened, not merely that the answer was right.
+
+Worth keeping: hash-consing makes structurally identical terms the **same
+pointer**, so a fixture that must not be short-circuited has to actually differ
+somewhere.
+
+### What stops `init-prelude` now
+
+Not acceptance. The file is accepted; what is left is interpretation and
+certification debt:
+
+* **`untranslated: 91 declarations, 10 eliminators`**, in two families —
+  `type former spine` (the heterogeneous-operator classes: `HAdd`, `HSub`,
+  `HMul`, `HPow`, `Membership`, the `Monad*` classes, `Trans`; 2 each, 4 for
+  `Trans`) and `field type uninterpretable` (the machine words `UInt8/16/32/64`,
+  `USize`, plus `Char`, `String`, `Fin`, `ByteArray`, `Lean.Name`,
+  `Lean.Syntax` and friends).
+* **`uncertified: 32 const typings, 29 type typings`**, and **11 909 tg gaps**,
+  of which 6 683 are `trans over an admitted premise` — relays, not origins.
+* The certified prefix stops at 152.
+
+So the next question is no longer "why does it stop" but "what interprets a
+machine word and a type-former spine", which is a different kind of work from
+everything in this arc.

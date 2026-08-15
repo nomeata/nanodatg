@@ -292,6 +292,18 @@ pub fn whnf_memo() -> FrameCache {
     })
 }
 
+thread_local! {
+    static DEFEQ_SYNTACTIC: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `assert_def_eq_as` calls were answered by **syntactic equality**,
+/// before any reduction — the counterpart of Lean's `quick_is_def_eq`.
+pub fn note_defeq_syntactic() {
+    DEFEQ_SYNTACTIC.with(|c| c.set(c.get() + 1));
+}
+
+pub fn defeq_syntactic() -> u64 { DEFEQ_SYNTACTIC.with(|c| c.get()) }
+
 pub fn defeq_cache() -> FrameCache {
     DEFEQ_CACHE.with(|c| {
         let (hits, misses) = c.get();
