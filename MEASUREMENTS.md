@@ -10729,3 +10729,38 @@ Still `ByteArray.IsValidUTF8`, still the 2 000-level weak-head bound, still
 `declarations=44 pairs=0 certified=0`. Only the time to reach it changed. What
 that buys is that the *depth* question — reopened by the 8192 result above — is
 now a one-minute experiment instead of a half-hour one.
+
+### The depth is linear, and the law is exact — 2026-08-15
+
+With the closure declining in 26 s, the depth sweep the 8192 result asked for
+is a one-minute experiment. `NANODA_MAX_DEPTH` against the expression the
+refusal names:
+
+| bound | refusal names | bound + index |
+| ---: | ---: | ---: |
+| 2 000 | 260 146 | 262 146 |
+| 4 000 | 258 146 | 262 146 |
+| 8 192 | 253 954 | 262 146 |
+| 16 384 | 245 762 | 262 146 |
+| 32 768 | 229 378 | 262 146 |
+| 65 536 | 196 610 | 262 146 |
+
+**Six bounds, one constant.** The weak-head recursion consumes exactly *one
+consecutive arena index per level*, and deeper levels carry **lower** indices —
+so the chain was allocated bottom-up and is being walked top-down. That is a
+genuine linear descent through distinct expressions: not a cycle, not a
+re-comparison blowup, and not 2 000 frames of anything recurring.
+
+Two things follow. Expression indices are non-negative and strictly decrease by
+one per level, so the recursion is **bounded by 262 146 levels** — it
+terminates. And the height on record is wrong by two orders of magnitude: the
+tower is ~**262 146** deep, not 2 047. 1 998 `Proj PProd.0` frames was only ever
+what fits under a 2 000 bound.
+
+So the wall is **legitimate depth**, the third of the three diagnoses the frame
+histogram was meant to separate, and the one that was ruled out. What it needs
+is not a cache and not a larger constant on a recursive walk — 262 146 native
+frames is beyond any stack the process can be given — but a `whnf` whose
+recursion is on the heap. The bound's own message stays correct either way:
+mini must **report**, because the alternative is a stack overflow that reports
+nothing.
