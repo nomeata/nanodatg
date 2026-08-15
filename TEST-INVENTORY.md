@@ -1153,3 +1153,92 @@ cargo hard-errors on an undeclared feature (measured above) and `ci/check.sh`'s
 `step` wrapper turns that into a failure, so the hole is covered at runtime by
 something louder than the grep. Recorded rather than fixed: adding a leg whose
 only failure mode cargo already reports more clearly would be ceremony.
+
+### 6.9 The general sweep — 2026-08-15, and what it is worth
+
+The §6.8 pass swept *deleted configuration*. This is the other axis: assertions
+that cannot fail on their own subject. It was run as a delegated sweep and then
+**partly re-verified by hand**, and the two statuses are kept apart on purpose —
+a sweep is a hypothesis, and this document's whole subject is what happens when
+one is recorded as a result.
+
+#### Verified first-hand, by direct measurement — seven
+
+| # | site | measured |
+| --- | --- | --- |
+| **20** | `checker/tests/mini_designed.rs:2269` and `:2342` | `!text.split_whitespace().any(\|w\| w == "Nat" \|\| w == "PProd")` over a raw `.ndjson`. **An export line is one unbroken JSON object: measured, `proj_stuck_subject.ndjson` is 432 lines and 432 whitespace tokens, `proj_reduced_carrier.ndjson` 612 and 612.** `split_whitespace()` therefore yields whole lines and no token can ever equal `Nat` or `PProd`. Both guards are unfalsifiable whatever the fixture contains. **And the correct form would not merely pass:** `proj_reduced_carrier.ndjson` contains `PProd` once today (`Nat` zero times, so its own `Nat`-only assertion is substantively true). Rewriting these as substring checks is the fix, and whether that file is *meant* to be `PProd`-free is a question for its author — which is exactly the question a working assertion would have forced years earlier. |
+| **21** | `checker/tests/mini_tutorial.rs:2076` | `k.starts_with("waiting:indexed-family(") && !k.contains(':')`. The prefix **itself contains `:` at index 7**, so the conjunction is unsatisfiable for any key whatsoever. Dead a second time over: the sole producer (`mini/ledger.rs:584`) is `format!("indexed-family({n}: {w})")`, a two-field variant that always interpolates a colon, so the bare spelling the comment says "must not come back" has no constructor to come back through. |
+| **22** | `checker/tests/mini_tutorial.rs:2156-2158`, asserted at `:2160` | Three rows pinned at key `waiting:recursor(X: class (S) eliminator)`. `grep '"class (S) eliminator"' checker/src` returns **nothing** — every producer carries a `: <detail>` suffix (`rec_prop.rs:172,182,184,232,233,…`). The lookup is exact-key, so the key can never be present; and since `note_missing` is `+= 1`, no key can ever hold 0, so `unwrap_or(0) == 0` *is* "absent" — the statement the comment four lines up explicitly says it is not. |
+| **23** | `checker/tests/tg_tutorial.rs:3002` | `assert_eq!(population, scheduled - skipped)`. `tg.rs:26516-26517` is `let (scheduled, skipped) = (st.pairs, st.skipped_pairs); let population = scheduled.saturating_sub(skipped);` — one line apart. The test re-derives the producer's own arithmetic. The two assertions above it (`reached + collapsed == scheduled`, `eligible == seen`) read counters bumped at different sites and **are** live; only this one is an identity. |
+| **24** | `derived/tests/genrec.rs:1565` | `let (values, target) = ind.fibre_at(&mach, &qs); assert_eq!(target, target_of(&s, &values))`. `carrier.rs:747-748` computes `target` as `target_of(s, &values)` and returns both — so this is `f(x) == f(x)`. The comment above it says the codomain is *"rebuilt here from the telescopes rather than read back"*; it is not, `values` is `fibre_at`'s own output. A genuine rebuild is available — `fibre_summands_at` is public and is what the producer itself calls. |
+| **25** | `checker/tests/mini_tutorial.rs:3231-3243` | A loop pinning six binder-congruence labels absent. **Three of the six have no producer.** `BinderRule::tag()` (`mini/ev.rs:81-91`) has range `dprod_ext_n`, `cond_ext_n`, `lam_ext_n`, and `format!("clauses differ: {} vs {}")` over `BinderClause` — which is a **two-variant** enum tagging exactly `dprod` and `cond` (`ev.rs:63-76`). So `fs_cong`, `clauses differ: dprod vs fs` and `fs vs dprod` can never be emitted; `fs_cong` is not a `BinderRule` at all but a derived prelude theorem, and `grep fs_cong checker/src/mini/` is empty. Doubly dead: the loop sits under `assert_eq!(reasons, expected)` at `:3225` with `expected` an **empty** map, so no iteration can reach a failing branch regardless. |
+| **26** | `checker/src/tests/util.rs:82-89` | `check_empty` loops `for declar in export.declars.values()`. The fixture is `checker/test_resources/Empty/export`, **176 bytes and zero newlines** — the header object and nothing else — so `declars` is empty and `check_declar` is never called. No mutation to declaration checking can fail it. Same disease and same file as the already-fixed `hash_test0` `None == None`. |
+
+#### Reported by the sweep, **not** individually re-verified — recorded as candidates
+
+Roughly thirty more, in three groups. They are written down because the sweep
+traced a data path for each and its six verified calls were all correct, but
+**none of the below has been measured by a second reader** and none should be
+acted on without one.
+
+* **Earlier-gate cases** (an assertion unreachable under any mutation that would
+  trip it): `mini_designed.rs:1805` and `:2163`; `mini_dump.rs:641`;
+  `mini_tutorial.rs:1721`, `:2069`, `:2094`, `:2132`, `:2555`;
+  `mini_infinitary.rs:200`.
+* **A systemic cluster in `derived/tests` and `kernel/tests`** — this is the
+  one worth a pass of its own. The idiom is building premises from `eq_refl` /
+  `imp_refl` on a *single* atom, which exercises each rule exactly where its two
+  possible readings coincide: `and_elim_left`/`right` at `p ∧ p`,
+  `iff_mp`/`iff_mpr` at `p ↔ p`, `hyp_or_elim` with the same theorem in both
+  branch slots, `syl`/`hyp_syl` with antecedent = middle = consequent,
+  `congr_arg` at `eq_refl`, `inst_all` on a body whose second binder does not
+  occur. Named: `rules.rs:19,47,64`; `propositional.rs:27,84,106`;
+  `hypothesis.rs:53,84`; `sets.rs:189`; `separation.rs:70`; `quantifier.rs:105`;
+  `deprec.rs:696`; `kernel/tests/rules.rs:11`; `kernel/tests/hypotheses.rs:372`.
+  This is §6.6 rule 3 — *two atoms cannot distinguish a swap* — at scale, and it
+  is the densest known concentration of the defect in the tree.
+* **Medium-confidence singles**: `derived/tests/define.rs:80` (the leg named
+  *"even the existence half alone is not enough"* builds `bare_exists` and then
+  discards it with `let _ = bare_exists;` — the witness actually passed is
+  `⊢ ∀x. x = x`, which contains no `∃` and is refused for the same reason as the
+  line above, so the `∃` vs `∃!` distinction the test is named for is untested);
+  `mini_envshare_cross.rs:103` and `:679`; `mini_nested.rs:1132`;
+  `mini_designed.rs:2996`; `tg_tutorial.rs:531`; `natlit.rs:263`;
+  `mini_mutual.rs:292`.
+
+**One reason the second-reader rule above is not ceremony.** The sweep was asked
+twice and reported twice, and between the two reports it **moved three findings
+between confidence tiers** — `define.rs:80` and `mini_envshare_cross.rs:103`/
+`:679` were "medium" in one and "dead by construction" in the other. Its six
+verified calls were all correct, so this is not a competence question; it is that
+a confidence label assigned without a second reader is itself unmeasured. The six
+in the table above are the ones two readers have now looked at.
+
+#### Eight candidates examined and dropped — the negative result, on record
+
+`kernel/tests/rules.rs:139` (redundant, not unguarded — `tarski.rs:99,217`
+rebuilds `equinumerous` from the constructors and pins the swap);
+`derived/tests/err.rs`'s `ends_with("err.rs")` family (the `#[track_caller]`
+line assertion beside it catches everything they would);
+`mini_designed.rs:1148`; `mini_route.rs:604` (a real tautology, but `#[ignore]`d,
+documented as one at `:457`, and floored); `mini_infinitary.rs:218`;
+`unified_cli.rs`'s `!contains("gap: X")` family (all four literals confirmed
+producible, and `TOTAL gaps` is pinned through a reader that panics on a missing
+row); `mini_dump.rs:95`; `mini_designed.rs:3377` and `:3403`. Recorded because a
+refuted candidate is worth as much as a confirmed one, and because §6.5 exists
+for exactly this reason.
+
+#### Coverage, stated so it is not mistaken for completeness
+
+Read first-hand by the sweep: **all** of `checker/tests`, `checker/src/tests`
+and `kernel/tests`, plus `derived/tests`' `define`, `hypothesis`,
+`propositional`, `rules`, `sets`, `separation`, `quantifier`, `genrec`,
+`deprec`, `err`. **Not individually read: the bulk of `derived/tests`** — the
+`family_*`, `cumul_*`, `w*`, `nat`, `ext`, `isum*`, `quot*`, `funspace`,
+`inductive`, `recursion`, `rec_acc` group, roughly 45 000 lines. Mechanical
+scans (duplicate assertion, textually identical arguments, `Option == Option`,
+absent literal without a producer, symmetric conjunct) covered those and found
+nothing beyond the above — but a mechanical scan cannot see a degenerate
+instantiation, and that group is the densest user of the very idiom the cluster
+above is about. **That is the next pass, and until it is run this section is a
+lower bound.**
