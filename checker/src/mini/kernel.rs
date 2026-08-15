@@ -503,6 +503,44 @@ pub struct Checker<'e, 'i> {
     /// store holds `⟦c⟧` but its `typing` is an `Err`. Condition 1 is what
     /// makes that term safe to keep.
     gap_types: FxHashMap<E, Typing>,
+    /// **`whnf`'s memo, for the acceptance-only reduction** — the counterpart
+    /// of the `m_whnf_core`/`m_whnf` pair Lean's kernel keys structurally and
+    /// keeps for the life of one declaration.
+    ///
+    /// # Why the third memo, and what it is for that the other two are not
+    ///
+    /// `defeq_cache` stops a *decision* being re-taken and `gap_types` stops a
+    /// *type* being re-inferred. Neither stops a **reduction** being re-walked,
+    /// and on `ByteArray.IsValidUTF8` that is what the remaining time is: a
+    /// 262 146-level `Proj PProd.0` descent whose subjects are reduced again at
+    /// every level, which is quadratic in the tower's height. Profiled at the
+    /// bottom of the descent, `whnf_conv_inner` and `whnf_conv` are **39.5 %**
+    /// of samples with a further ~12 % in arena allocation — the descent
+    /// re-walking itself, not some other phase.
+    ///
+    /// # The key, and why it needs nothing else
+    ///
+    /// The expression alone, restricted to `num_loose_bvars() == 0`. Reduction
+    /// is delta, beta, zeta, iota and projection — all of them functions of the
+    /// environment, which is fixed for a `Checker` — and *whnf of a closed term
+    /// stays closed at every step*, so no intermediate can consult the
+    /// telescope either. This is the same restriction that made the other two
+    /// memos work, for the third time and for the same reason.
+    ///
+    /// # Three conditions on top, each with a different job
+    ///
+    /// * **`tm.is_none()`** — the acceptance-only reduction. A call carrying
+    ///   `⟦e⟧` is building a certificate about it.
+    /// * **`why` is `Gap::NoEndpoint`** — the reason is *part of the answer*,
+    ///   because the `Conv` this replays carries it. Keying on `e` alone while
+    ///   replaying a gap minted under some other caller's `why` would move a
+    ///   gap from one reason row to another while every total stayed put.
+    ///   Restricting to the one canonical `why` makes the key determine the
+    ///   value.
+    /// * **the `Conv` states nothing** — checked at the insert.
+    whnf_memo: FxHashMap<E, (E, Conv)>,
+    /// [`Interp::generation`] when [`Checker::whnf_memo`] was last written.
+    whnf_gen: (u64, usize, bool),
     /// [`Interp::generation`] when [`Checker::gap_types`] was last written.
     ///
     /// A `Gap` is a claim that something could **not** be derived *yet*, and
@@ -804,6 +842,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             th: None,
             wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
+            whnf_memo: FxHashMap::default(),
+            whnf_gen: <(u64, usize, bool)>::default(),
             gap_types: FxHashMap::default(),
             gap_gen: <(u64, usize, bool)>::default(),
             defeq_cache: FxHashMap::default(),
@@ -827,6 +867,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             }),
             wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
+            whnf_memo: FxHashMap::default(),
+            whnf_gen: <(u64, usize, bool)>::default(),
             gap_types: FxHashMap::default(),
             gap_gen: <(u64, usize, bool)>::default(),
             defeq_cache: FxHashMap::default(),
@@ -1137,6 +1179,21 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// heuristic; `go`'s recursion is a loop here, and the certificate is a
     /// `trans` chain composed along it.
     pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
+        // **The reduction memo** — [`Checker::whnf_memo`]. Consulted *before*
+        // the depth counter, so a hit costs no budget as well as no work: a
+        // re-walk that is answered from the memo is not a level of recursion
+        // and must not be charged as one.
+        let memoizable = tm.is_none()
+            && matches!(why, Gap::NoEndpoint)
+            && e.num_loose_bvars() == 0
+            && self.whnf_gen_ok();
+        if memoizable {
+            if let Some((to, conv)) = self.whnf_memo.get(e) {
+                crate::mini::census::note_whnf_memo(true);
+                return Ok((*to, conv.clone()))
+            }
+            crate::mini::census::note_whnf_memo(false);
+        }
         // **Bounded, for the reason [`DEFEQ_MAX_DEPTH`] gives.** `whnf_conv`
         // recurses into itself — at a recursor's major premise, and through
         // `whnf_typing` — and a major that is a nat literal makes that
@@ -1187,7 +1244,35 @@ impl<'e, 'i> Checker<'e, 'i> {
             self.whnf_trace.pop();
         }
         self.whnf_depth -= 1;
+        // Only an `Ok` is stored: an `Err` here is a **budget refusal**, which
+        // says where in the recursion the call happened and not what the
+        // expression reduces to. And only a `Conv` that states nothing —
+        // checked, not argued, exactly as the other two memos check it.
+        if memoizable && self.whnf_memo.len() < DEFEQ_CACHE_CAP {
+            if let Ok((to, conv)) = &out {
+                if conv.ev.thm().is_none() {
+                    self.whnf_memo.insert(*e, (*to, conv.clone()));
+                }
+            }
+        }
         out
+    }
+
+    /// Empty [`Checker::whnf_memo`] if the `Interp` has moved, and report
+    /// whether it may be used at all.
+    ///
+    /// A reduction's *reduct* depends only on the environment, which is fixed
+    /// for a `Checker`. Its `Gap` does not: a stored reason such as
+    /// `no-interp(T)` can stop being true once `⟦T⟧` lands, and this memo
+    /// replays the `Conv` and therefore the reason. Same stamp, same argument
+    /// and same device as [`Checker::gap_types`] — see [`Interp::generation`].
+    fn whnf_gen_ok(&mut self) -> bool {
+        let g = self.th.as_ref().map_or_else(Default::default, |th| th.ip.generation());
+        if self.whnf_gen != g {
+            self.whnf_memo.clear();
+            self.whnf_gen = g;
+        }
+        true
     }
 
     /// The descriptor one [`Checker::whnf_conv`] frame is bucketed by: the head
@@ -5901,6 +5986,47 @@ mod tests {
         );
         // A rejection is still a rejection, and it needs no evidence.
         assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err());
+    }
+
+    /// **[`Checker::whnf_memo`] answers the second reduction, and only under
+    /// its own conditions.**
+    ///
+    /// `sel X Y Z` reduces to `Y` through one δ and three βs, so a memo that
+    /// returned the *subject* rather than the reduct would pass an
+    /// "is it cached" test and fail this one. Each condition is asked for
+    /// separately, because the key is only sound as the conjunction.
+    #[test]
+    fn the_whnf_memo_answers_the_second_reduction() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::mini::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        let before = crate::mini::census::whnf_memo().hits;
+        assert_eq!(c.whnf(&e).expect("whnf"), k("Y"), "the middle argument");
+        let mid = crate::mini::census::whnf_memo().hits;
+        assert_eq!(c.whnf(&e).expect("whnf"), k("Y"), "and again, from the memo");
+        let after = crate::mini::census::whnf_memo().hits;
+        assert_eq!(after - mid, 1, "the second reduction is served");
+        assert!(mid >= before);
+
+        // **`tm` present is a certificate request and is not memoised.** The
+        // reduct is the same; what must not happen is the `Conv` being
+        // replayed from an entry that states nothing.
+        let tm = c.infer_type(&e).expect("infer").tm.expect("⟦sel X Y Z⟧");
+        let h0 = crate::mini::census::whnf_memo().hits;
+        let (to, conv) = c.whnf_conv(&e, Some(tm), &Gap::NoEndpoint).expect("whnf_conv");
+        assert_eq!(to, k("Y"));
+        assert!(conv.ev.thm().is_some(), "the certified call still certifies");
+        assert_eq!(crate::mini::census::whnf_memo().hits, h0, "and did not read the memo");
+
+        // **An open expression is not keyed by the expression alone.**
+        let prop = sort(Level::zero());
+        let open = lam(prop, bvar(1));
+        c.whnf_memo.clear();
+        let _ = c.whnf(&open);
+        assert!(c.whnf_memo.is_empty(), "a loose bvar means the telescope is part of the answer");
     }
 
     /// **[`Checker::gap_types`] keeps exactly what its three conditions

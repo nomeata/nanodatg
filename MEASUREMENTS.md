@@ -10791,3 +10791,89 @@ in a loop turns that recursion into iteration — with the certificate composed
 along the loop exactly as it is composed along the recursion now. That is a
 bounded, well-scoped change to one arm, and it is the one the depth measurement
 points at.
+
+## The work at the bottom, sized — and the reduction memo — 2026-08-15
+
+The section above left one thing open and named it: legitimate depth is
+necessary and **not sufficient**, because at full depth the declaration still
+did not finish. An iterative walk that removed the frames and left that work
+would look like a fix and not be one, so the work is sized first.
+
+### What the bottom is doing
+
+`perf record` on the big-stack run once its resident set has plateaued — i.e.
+sampling the work *at* maximum depth, not the descent to it:
+
+| | share |
+| --- | ---: |
+| `whnf_conv_inner` | 29.2 % |
+| `whnf_conv` | 10.3 % |
+| `mi_free` | 8.8 % |
+| arena hash-consing (`insert_full`, `get_index_of`, `alloc_expr`, `mk_app`) | ~12 % |
+| `get_app` | 6.7 % |
+
+**The bottom is the descent, re-walking itself.** Not a second phase, not a
+different rule: `whnf` is 39.5 % of samples and the rest is the allocation that
+walk performs. The `Proj` arm reduces its *subject* at every level, and the
+subject is the tower one level down — so a 262 146-level tower is walked
+262 146 times. That is the quadratic term, and it is why full depth alone did
+not finish.
+
+### The chain is projections, and the numeral is 262 144
+
+At `NANODA_MAX_DEPTH=8192` the frame histogram is **8 186 `Proj PProd.0/1` of
+8 192 frames** — the chain is projections essentially all the way, which is what
+makes an iterative `Proj` walk able to remove it.
+
+And the outermost frame names the numeral:
+
+```
+Const HSub.hSub/6 := HSub.hSub.{0 0 0} Nat Nat Nat (instHSub Nat instSubNat) #5
+                       (OfNat.ofNat.{0} Nat 262144 (instOfNatNat 262144))
+```
+
+**262 144 = 2¹⁸**, and the descent's constant is 262 146 = 262 144 + 2. The
+tower is `Nat.rec` over `Nat.below (fun _ => Nat → Nat)` — `Nat.mul`'s `brecOn`
+nest — built at that numeral. So "the numeral drives the depth" was right all
+along; the numeral is 262 144, not 2 047, and it is reached through `Nat.sub`.
+
+### The third memo
+
+`defeq_cache` stops a decision being re-taken; `gap_types` stops a type being
+re-inferred; neither stops a **reduction** being re-walked. `whnf_memo` is the
+counterpart of Lean's `m_whnf_core`/`m_whnf`, and the key is the same one that
+worked twice already: **the closed expression alone**. Reduction is δβζι and
+projection, all functions of a fixed environment, and *whnf of a closed term
+stays closed at every step*, so no intermediate can consult the telescope.
+
+Three conditions on top. `tm.is_none()`, because a call carrying `⟦e⟧` is
+building a certificate. The `Conv` states nothing, checked at the insert. And
+`why` must be `Gap::NoEndpoint` — this one is not bookkeeping: the memo replays
+a `Conv`, the `Conv` carries the gap's **reason**, and keying on `e` alone
+while replaying a reason minted under some other caller's `why` would move a
+gap between reason rows while every total stayed put. Restricting to the one
+canonical `why` makes the key determine the value.
+
+The memo is consulted *before* the depth counter, so a hit costs no budget as
+well as no work: an answered re-walk is not a level of recursion.
+
+| | instructions:u | wall |
+| --- | ---: | ---: |
+| the closure, `8230b77` | 403 340 287 064 | 25.8 s |
+| the closure, + `whnf_memo` | **126 153 544 074** | **8.4 s** |
+| `init-prelude`, `8230b77` | 418 139 170 886 | 26.9 s |
+| `init-prelude`, + `whnf_memo` | **138 367 858 001** | **9.0 s** |
+| | **3.0×** | **3.0×** |
+
+Cumulative against `36106d2`: **28.211 T → 0.138 T instructions, 204×**, and
+**2126.7 s → 9.0 s, 236×**. Verdict byte-identical throughout; every `gap:`
+reason row and provenance row identical across all fixtures and all 91 exports;
+fixtures 61/96/46/13/12/6/2/0 and the corpus 16 files / 172 gaps unmoved.
+
+### The wall, still
+
+`declarations=44`. And the quadratic term is removed *within the bound* — the
+memo cannot help the **first** descent, which visits 262 146 distinct
+expressions once each and is exactly what the 2 000-level ceiling stops. That
+is the iterative walk's job, and it is now the only thing between here and the
+declaration.
