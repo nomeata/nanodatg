@@ -901,6 +901,87 @@ struct DeclUniv {
     level: u32,
 }
 
+/// **The one declaration allowed to choose its carrier per instantiation.**
+///
+/// [`build`]'s trichotomy reads the declaration's **own** level expression and
+/// never σ's, and [`large_eliminating`] says why: reading the substituted one
+/// would hand a W-type to a declaration that is a `Prop` at `u := 0`, which is
+/// the design error `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3 closes and
+/// [`tests::a_possibly_prop_declaration_never_acquires_a_w_type`] pins. **That
+/// rule is unamended.** This is a licence for one name, and every other
+/// declaration — including every non-basis one, which after the model pivot
+/// does not reach this code at all — keeps the σ-blind decision.
+///
+/// # Why `PSigma'` needs it, and why nothing else here does
+///
+/// `PSigma' {α : Sort u} (β : α → Sort v) : Sort (max u v)` is the basis Σ, and
+/// `max u v` is deliberately **not** `max 1 u v` — that is the whole point of
+/// it, and it is what `Subtype`, every structure with a `Prop` field and every
+/// `Prop`-fibred pair need. So its declared sort is not `provably_nonzero`, and
+/// its two *data* fields fail the subsingleton test, which makes it class (P)
+/// at **every** σ; `build_trunc` then refuses any σ whose sort is a nonzero
+/// numeral. Measured before this licence, on the producer's
+/// `tight_psigma_prime`: `untranslated: 3 declarations`, one of them
+/// `ind-spec(PSigma': class (P) above Prop)`.
+///
+/// It is genuinely a declaration whose two instantiations want two carriers,
+/// which is not evidence that the general clause is incomplete — `direct.rs`'s
+/// standing rule, applied honestly — but evidence that the general clause is
+/// *correctly conservative* and that one declaration needs a licence the
+/// general clause must not be given.
+///
+/// The other basis members do not need it. `PUnit` is a subsingleton, and the
+/// class-(S) carrier is a subset of `{•}` and hence admissible at every sort
+/// whatever σ says; `Eq` and `Nat` have [`crate::mini::direct`] clauses ahead
+/// of the trichotomy; `Quot` is not an inductive and is answered at the top of
+/// [`ensure`].
+///
+/// # Why per-σ carriers are sound, and it is not this licence that makes them so
+///
+/// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.1: every level is ground per check, and
+/// Lean's definitional equality never equates a constant at `[0]` with the same
+/// constant at `[1]` — so **no obligation of the form `⟦c.{0}⟧ = ⟦c.{1}⟧` can
+/// ever arise**, and two instantiations denoting unrelated sets is sound by
+/// itself. The σ-blind rule buys *economy and uniformity*, not soundness, which
+/// is exactly why one named exception costs nothing but the exception.
+///
+/// `Quot` is the precedent rather than this being new: it is a basis member
+/// whose `derived/` carrier is built at rung `n ≥ 1` and whose interpretation
+/// at `Sort 0` is the identity, with `derived/src/quot/` not consulted at all
+/// (`QUOT-MODEL.md` §2, `derived/src/quot/universe.rs:37-46`).
+///
+/// # This needs no new `derived/` construction, and that was verified first
+///
+/// Both carriers already exist and are measured on this exact shape: the
+/// truncation at rung 0 (`PSigma'.{0,0}` translated before this licence), and
+/// the general data carrier at `Uₙ` for `n ≥ 1` (green on `PSigma.{1,1}`, which
+/// is the *same instantiated declaration* — `Sort (max 1 u v)` and
+/// `Sort (max u v)` are both `Sort 1` at `u = v = 1`). So the obstruction was a
+/// classification here and nothing else, and `MODEL-BASIS.md` §3.6's claim to
+/// that effect is confirmed rather than taken.
+///
+/// **`TruncCarrier::in_un` is not the route and must not be reached for**, and
+/// that is recorded rather than assumed: it would put `PSigma'.{1,1}`'s type
+/// former on a carrier `‖a‖ ⊆ {•}`, on which `fst_mk` demands `⟦a⟧ = ⟦c⟧` for
+/// every pair of inhabitants — at `α := Nat` that is `∅ = {∅}`, refutable. The
+/// family fails closed there, but the type former reads green while it does,
+/// which is the failure mode this project pays for most (`MODEL-BASIS.md`
+/// §8.2). It remains the right fix for `Squash`/`MyBool`, which is a different
+/// tranche.
+///
+/// # A name is not evidence, and nothing here treats it as such
+///
+/// The licence changes **which route is taken**, never what a route proves.
+/// Whichever branch it opens does its own shape checks and declines by name if
+/// the declaration is not what its name claims, exactly as
+/// [`crate::mini::direct`]'s header describes for the closed-form clauses: the
+/// derivation is the check. A declaration falsely called `PSigma'` therefore
+/// gets a per-σ *choice* and then has to earn each carrier on the statements it
+/// actually has.
+fn per_sigma_carrier(ind_name: &Name) -> bool {
+    ind_name.to_string() == "PSigma'"
+}
+
 /// Translate one declaration at one ground instantiation.
 pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), Gap> {
     // **`Eq`'s direct clause comes first**, and the dispatch is one lookup on
@@ -927,6 +1008,12 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let Expr::Sort(l) = &own.view() else {
         return Err(Gap::IndSpec(*ind_name, "resultant sort"))
     };
+    // The resultant sort at *this* instantiation, for [`per_sigma_carrier`]'s
+    // one licensed name. Computed here because `lparams` is in scope here and
+    // not at the trichotomy below.
+    let inst_level: Option<u32> = per_sigma_carrier(ind_name)
+        .then(|| ground::eval(l, &ground::ground_env(lparams, inst)))
+        .flatten();
     let ind_ty = ground::subst_ground(ty, lparams, inst);
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
@@ -978,7 +1065,9 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // here; what class (P) still declines is narrower and named at its own site
     // (`REC_FUN`, a function-typed recursive field, for which the class-(T)
     // `reindex_in_funspace` bridge has no counterpart).
-    let pnz = provably_nonzero(l);
+    // `inst_level` is `Some` only for [`per_sigma_carrier`]'s one name, so this
+    // is the declaration's own level expression for everything else.
+    let pnz = inst_level.map_or_else(|| provably_nonzero(l), |n| n != 0);
     let class_s =
         if pnz { collapsed_subsingleton(c, ind_name) } else { subsingleton(c, ind_name) };
     // ── an indexed family: walk it, *then* decline ────────────────────────
