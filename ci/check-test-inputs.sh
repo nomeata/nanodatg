@@ -55,6 +55,14 @@
 # `certify`. It was retired with the `tg` feature on 2026-08-15: it held up a
 # matrix of *two* narrowed feature runs, and there is one left. See
 # `checker/src/certify.rs`.
+#
+# **Leg C has no input on this tree.** Crate-level `#![cfg(feature = …)]` went
+# with the `tg` feature, so the grep leg C runs matches zero files — measured,
+# not assumed. That is not a fault: leg C guards against such a suite being
+# *reintroduced* without a matching `--features` step. It is a fault to be
+# unable to tell that state apart from having run, so each leg carries its own
+# counter and leg C says which case it is in. See the per-leg counters below and
+# task #137 (`83a95cf`, `ci/check-arena.sh`).
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -81,6 +89,22 @@ self_test() {
     local rc; env "$@" "$0" >/dev/null 2>&1; rc=$?
     if [[ $rc -eq $want ]]; then echo "  ok: $name (rc=$rc)"
     else echo "SELFTEST FAIL: $name wanted rc=$want, got $rc" >&2; env "$@" "$0" >&2; sfails=$((sfails+1)); fi
+  }
+  # An exit code cannot tell "leg C examined nothing" from "leg C examined
+  # something and was happy" — both are 0 — which is why the defect this pins
+  # survived a self-test that only ever read `$?`. These cells read the output.
+  expect_says() { # expect_says <rc> <substring> <name> [env...]
+    local want="$1" want_out="$2" name="$3"; shift 3
+    local out rc
+    out="$(env "$@" "$0" 2>&1)"; rc=$?
+    if [[ $rc -eq $want ]] && grep -qF -- "$want_out" <<<"$out"; then
+      echo "  ok: $name (rc=$rc)"
+    else
+      echo "SELFTEST FAIL: $name wanted rc=$want and output containing" >&2
+      echo "               '$want_out', got rc=$rc and:" >&2
+      printf '%s\n' "$out" >&2
+      sfails=$((sfails+1))
+    fi
   }
   echo "self-testing $0"
   # A synthetic corpus — one directory holding one export — and the two
@@ -193,6 +217,31 @@ self_test() {
   # …and the count guard: pointed at nothing, it must not report success.
   expect 1  "a feature-matrix check that examined nothing is BROKEN" \
             CHECK_SH="$TMP/ok.sh" MEMBER_DIRS="$TMP/nope" SCAN_DIRS="$TMP/nope" $NOIN
+
+  # ── Each leg reports its own count ────────────────────────────────────────
+  # The tree is now in the shape this repository is actually in: members present
+  # and healthy, no gated suite anywhere. This is the cell that would have caught
+  # the defect — before per-leg counters the run printed
+  # `3 feature-matrix premises checked` with leg C contributing 0, and no line of
+  # output told the two cases apart.
+  #
+  # Falsifier for all four: collapse `mA`/`mB`/`mC` back into one `matrix` and
+  # every one of them reds, because no `leg …:` line is printed at all.
+  expect_says 77 "leg C: INAPPLICABLE" \
+              "leg C says so when no gated suite exists" \
+              CHECK_SH="$TMP/ok.sh" MEMBER_DIRS="$WD" SCAN_DIRS="$SD" $NOIN
+  # …and the inapplicability report has to be a measurement, not a constant: put
+  # the gated suite back where it belongs and leg C must count it instead.
+  printf '#![cfg(feature = "gated")]\n' > "$TMP/w/feat/tests/gated_suite.rs"
+  expect_says 77 "leg C: 1 crate-level feature-gated suite" \
+              "leg C counts a suite it did examine" \
+              CHECK_SH="$TMP/ok.sh" MEMBER_DIRS="$WD" SCAN_DIRS="$SD" $NOIN
+  rm -f "$TMP/w/feat/tests/gated_suite.rs"
+  # …and legs A and B, so neither can hide behind the other's count either.
+  expect_says 77 "leg A: 1 declared feature" "leg A reports its own count" \
+              CHECK_SH="$TMP/ok.sh" MEMBER_DIRS="$WD" SCAN_DIRS="$SD" $NOIN
+  expect_says 77 "leg B: 1 member" "leg B reports its own count" \
+              CHECK_SH="$TMP/ok.sh" MEMBER_DIRS="$WD" SCAN_DIRS="$SD" $NOIN
   echo
   if (( sfails )); then echo "$sfails self-test failure(s)" >&2; return 1; fi
   echo "test-input self-test OK"
@@ -203,8 +252,12 @@ if [[ "${1:-}" == --self-test ]]; then self_test; exit $?; fi
 # Two failure shapes, both of which report `ok`:
 #
 #   * A suite behind `#![cfg(feature = "X")]` without an `--features X` step is
-#     not "skipped" — it does not exist. `checker/tests/tg_tutorial.rs` opens
-#     with that line; measured, its 28 tests become 0 and the run stays green.
+#     not "skipped" — it does not exist. `checker/tests/tg_tutorial.rs` opened
+#     with that line while the `tg` feature existed; measured then, its 28 tests
+#     became 0 and the run stayed green. Both the feature and the line are gone
+#     (that suite's 33 tests are unconditional today), which is why leg C's
+#     input set is empty and why it now reports that instead of counting into a
+#     total the other two legs also feed.
 #   * A `--features X` step that no longer *selects* the crate holding such a
 #     suite is the same hole with the step still in place. Since the matrix was
 #     narrowed from `--workspace` to `-p nanoda_lib`, that is now the shape to
@@ -251,10 +304,31 @@ line_selects_pkg() {
 # A. Every feature any member declares must be run by a step that selects that
 #    member. A declared-but-unrun feature is a whole build configuration nobody
 #    checks, which is how `tg_tutorial.rs` would go quiet.
-matrix=0
+#
+# ── One counter per leg, because a leg with nothing to do has to say so ──────
+# Task #137's per-leg floors (`83a95cf`, `ci/check-arena.sh`): "one counter lets
+# a healthy leg hide a dead one." This script had exactly that shape, on the leg
+# whose entire job is to catch a suite that compiles to an empty binary and
+# reports `running 0 tests … ok`. All three legs incremented one `matrix`, the
+# only guard was `matrix == 0`, and leg C's input set is empty on this tree — so
+# the run printed `3 feature-matrix premises checked` over 1 + 2 + 0 and leg C's
+# silence was indistinguishable from leg C having run.
+#
+# The floor is on **members examined**, not on the sum: every member with a
+# manifest lands in leg A (once per feature it declares) or in leg B, so
+# `members == 0` is exactly the "pointed at nothing" condition the old guard's
+# message already described, and it fires on the same inputs the old one did.
+#
+# Leg C deliberately gets **no floor**. Its input is a thing that must not be
+# reintroduced unguarded; none existing is the healthy state, not a broken
+# check. What is unacceptable is silence, so it prints which of the two cases it
+# is in. Its liveness is pinned by the self-test cell `a gated suite in a
+# package the step does not select is BROKEN`, which builds the input this tree
+# does not have — the tree cannot exercise leg C, so the self-test must.
+mA=0 mB=0 mC=0 members=0
 while read -r d p f; do
   [[ -n "$f" ]] || continue
-  matrix=$((matrix+1))
+  mA=$((mA+1))
   ok=0
   while IFS= read -r line; do
     line_selects_pkg "$line" "$p" && ok=1
@@ -282,13 +356,17 @@ done < <(declared_features)
 for d in $MEMBER_DIRS; do
   [[ -f "$d/Cargo.toml" ]] || continue
   p="$(pkg_name "$d")"
+  # Counted here and not in leg A because this is the one loop that visits every
+  # member exactly once, whether or not it declares a feature. This is the
+  # quantity the floor below is on.
+  members=$((members+1))
   # `grep -c`, not `grep -q`: under `pipefail`, `-q`'s early exit SIGPIPEs
   # `declared_features` the moment a *later* member also declares features —
   # the whole pipeline then reports failure for a member whose row matched.
   # Latent while `checker` was the last (and only) feature-declaring member;
   # exposed the day `mini` declared one. `-c` reads the stream to the end.
   [[ "$(declared_features | grep -c "^$d $p ")" -gt 0 ]] && continue
-  matrix=$((matrix+1))
+  mB=$((mB+1))
   hits=$(grep -rlE 'cfg!?\([^)]*feature[[:space:]]*=' --include='*.rs' "$d/src" "$d/tests" 2>/dev/null)
   if [[ -n "$hits" ]]; then
     echo "BROKEN: $p declares no features, so ci/check.sh's feature steps do not" >&2
@@ -309,7 +387,7 @@ while IFS= read -r file; do
   # …/<member>/tests/<suite>.rs
   d=$(dirname "$(dirname "$file")")
   p="$(pkg_name "$d")"
-  matrix=$((matrix+1))
+  mC=$((mC+1))
   ok=0
   while IFS= read -r line; do
     line_selects_pkg "$line" "$p" && ok=1
@@ -324,12 +402,22 @@ while IFS= read -r file; do
   echo "  ${file#$ROOT/}: behind \`$f\`, run by a step that selects $p"
 done < <(grep -rlE '^#!\[cfg\(feature = "[a-z_]+"\)\]' --include='*.rs' $SCAN_DIRS 2>/dev/null)
 
-if (( matrix == 0 )); then
+if (( members == 0 )); then
   echo "BROKEN: the feature-matrix check examined nothing — no member manifests" >&2
   echo "        were found under MEMBER_DIRS, so it cannot have proved anything." >&2
   exit 1
 fi
-echo "  $matrix feature-matrix premises checked"
+echo "  leg A: $mA declared feature(s), each run by a step that selects its member"
+echo "  leg B: $mB member(s) declaring none, none of them feature-conditional"
+if (( mC == 0 )); then
+  echo "  leg C: INAPPLICABLE — 0 crate-level \`#![cfg(feature = …)]\` suites exist"
+  echo "         under the scanned trees, so there is nothing for it to examine."
+  echo "         It guards against one being reintroduced without a --features"
+  echo "         step; \`$0 --self-test\` is what keeps it live meanwhile."
+else
+  echo "  leg C: $mC crate-level feature-gated suite(s), each in a selected package"
+fi
+echo "  $((mA + mB + mC)) feature-matrix premises checked over $members member manifest(s)"
 
 # How much is riding on this — counted, not asserted from memory, so the number
 # cannot rot the way a comment would.
