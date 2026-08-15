@@ -1060,6 +1060,29 @@ corrected two of this document's own entries. Each case below is here because
 breaking it cost real time, and each names the incident that taught it. They are
 about **instruments and claims**, not about the checker.*
 
+### Before any of the eight
+
+> **When a document tells you something is missing, try to *use* it before you
+> build it.**
+
+The seat that wrote §7 left this as a suggestion rather than installing it at the
+end of a long session; it is installed here deliberately, because it is cheaper
+than every rule below and would have caught more of that day than all of them.
+
+Its evidence: **eight of that day's outcomes were "this already exists" or "this
+is smaller than scoped", and not one was found by reading a document.** Every one
+came from trying to use the thing — an allowlist entry found wrong by *consuming*
+the premise it described; `derived/src/inductive/decl_proj.rs` found by looking
+for *where to put* a construction that turned out already written at the right
+generality; the `proj_reduce` split found by grepping for *where to add one* (it
+existed, behind a feature gate, unread); and the `ProjRed` flattening found by
+trying to *remove* it, whereupon it turned out deliberate (§7.9).
+
+**The documents were accurate when written and the code moved underneath them** —
+which is why reading harder does not help and using does. A stale sentence reads
+exactly like a current one; an artefact either exists at the call site or it does
+not.
+
 **Six of the eight are one lesson with six faces**, and the header is that
 lesson. A check that cannot fail (§7.4); a count nobody asserts (§7.5); a probe
 that perturbs what it measures (§7.3); a citation that rots (§7.6); a
