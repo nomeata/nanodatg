@@ -3604,3 +3604,72 @@ behavior. The implementation task is ownership inversion and crate collapse,
 not choosing one checker and porting selected facilities across a lasting crate
 edge. Model generation is being extracted as a separate product elsewhere and
 is outside this work.
+
+---
+
+## 2026-08-15 — Retire the `Certifier` trait, and the `tg` feature with it
+
+**Chosen.** One backend, named outright: `certify::Backend` is
+`tg::TgBackend` in every build, and its 36 rules are inherent methods.
+`NullCertifier`, the `Certifier` trait, the `tg` feature, and
+`NANODATG_ASSERT_FEATURE_INERT`/`ci/check-feature-inert.sh` are all deleted.
+
+**Rejected — `Option`-shaped evidence, mini's literal shape.**
+`mini::kernel::Checker` keeps `th: Option<Th>` and is the arrangement that
+finished, so it was the obvious model. Only half of it transfers. Mini's
+`None` has a real inhabitant — the declaration-shape zone (§9 zone A) runs at
+a declaration's own *symbolic* levels, where there is no interpretation to be
+had. `tc.rs` has no such zone: every `TypeChecker` is built at a ground
+instantiation with an interpretation available. An `Option` there would have
+nothing to put in its `None` except "pretend to be the old null backend",
+i.e. a build switch wearing a runtime disguise, and it would have cost a
+branch per rule to express. What transfers is the other half, which is the
+part the owner asked for: **one concrete evidence type, threaded directly, no
+trait and no associated types.**
+
+**Rejected — keeping the `tg` feature over two concrete backends.** Without a
+trait there is no conformance check between two `cfg`-selected structs, so
+this trades a compile error for a silent divergence. The feature could only
+have survived as a *runtime* inert mode, which is the rejected option above.
+
+**Why the null backend had to go for the trait to go.** The trait's remaining
+job was its defaults, and `TgBackend` overrode **all 36** methods — so every
+default described `NullCertifier` alone. Five of them minted a generic
+admission (`self.admit(ctx, a, b, Admit::X.name())`) named for the site that
+noticed rather than for what stopped. `Admit::Iota` was constructed *only*
+there and is now constructed nowhere; `TgBackend::iota` mints seven specific
+reasons instead.
+
+**What the feature was costing, measured.** The product path was never in the
+plain build — `bin/checker.rs` refused the unified route without
+`--features tg` — so the second configuration bought no product coverage and
+lost test coverage: four suites (`tg_tutorial`, `unified_cli`,
+`mini_envshare_tg`, `mini_route_tg`) were *absent* rather than skipped in it,
+`mini_designed` was 32/34 there against 34/34 under the feature, and `tg.rs`'s
+48 unit tests were `cfg(all(test, feature = "tg"))`. One configuration:
+`--lib` 251 → 299, `mini_designed` 34/34 everywhere, `ci/check.sh` 29 → 26
+steps, warnings 10 → 4.
+
+**Cost.** None measurable: `init-prelude` 0.5028 T → 0.5026 T `instructions:u`.
+No runtime branch was introduced — the alternative was deleted, not selected.
+
+**The retired guard, deliberately.** `NANODATG_ASSERT_FEATURE_INERT` asserted
+that a process which never builds a backend cannot tell the feature builds
+apart. That is what licensed narrowing the two feature runs to
+`-p nanoda_lib`. With one feature left the premise has no subject, so the
+variable and the script that watched it fire are deleted in the same commit
+rather than left asserting a tautology — a guard that cannot fire is the
+failure it was written to prevent. `ci/check-test-inputs.sh` keeps the general
+rule, now about `stepcount`, and its self-test cell was re-pointed and watched
+firing for the new reason.
+
+**Invariant.** All three populations byte-identical to master `5bab7c0`, per
+file: 54 designed fixtures (14 gap-bearing, **215**), Lean's 91 tutorial
+exports (21 gap-bearing, **156**), `init-prelude` (accept **1822**, tg gaps
+**11556**, prefix 152, pairs 32).
+
+**Correction to a standing figure.** `CLAUDE-HANDOFF.md` records the exports
+as "16 carry gaps, **168** total", measured at `d73c94f`. Measured at
+`5bab7c0` with one process per export, it is **21 files / 156**. The total
+improved and the spread widened; the handoff figure is stale, not wrong at the
+time.
