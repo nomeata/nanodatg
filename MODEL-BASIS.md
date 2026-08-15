@@ -6,6 +6,14 @@ number below was produced with the release binary at master `4c6426a` — line
 counts re-verified unchanged at `5bab7c0` — or read off the external tool's own
 source. Where a claim is unmeasured it says so.*
 
+*Revised 2026-08-15 at master `dd1996e`, again with no change to `checker/`,
+`derived/` or `kernel/`. The revision is confined to `PSigma'`: §0, §3.3, §3.5,
+§3.6, §8.2, §8.6 and §9. **The claim that closing `PSigma'` needs a new
+`derived/` construction was wrong**, and the statement it was scoped around,
+`⊢ Σ ∈ U₀`, is refutable rather than missing. Corrections are made in place;
+where a conclusion reversed, the superseded reasoning is stated so the reversal
+can be checked rather than taken.*
+
 The proposal: **every non-basis inductive arrives in the export as a *model*
 built over a fixed basis, and the checker recognises the model and cases on its
 theorems, instead of constructing a carrier, recursor and ι rule itself.** The
@@ -42,11 +50,19 @@ operator classes, `Trans`, `False`, `PEmpty`, `HEq`. **That entire category of
 refusal disappears.** Nobody had considered it and it is now measured.
 
 Two costs the brief did not price stand against it, one measured red here for the
-first time: **`PSigma'` is untranslatable by our current machinery** — it declines
-`ind-spec(PSigma': class (P) above Prop)`, and closing it needs a genuinely new
-`derived/` construction, because `U₀` has no closure clauses at all — and **`Acc`
+first time: **`PSigma'` is partly untranslatable by our current machinery** — at
+`σ = (1,1)` it declines `ind-spec(PSigma': class (P) above Prop)` — and **`Acc`
 has left the basis**, so the 3 519-line `Acc` family retires and every
 well-founded definition arrives instead as a `Classical.choice`-bearing model.
+
+*Corrected 2026-08-15, by measurement, against the §3.6/§8.2 this document first
+shipped: closing `PSigma'` needs **no new `derived/` construction at all**. Both
+memberships it wants already exist and are each measured on this exact shape —
+`⊢ ‖a‖ ∈ U₀` at `σ = (0,0)`, where `PSigma'` **already translates today**, and
+the general data carrier at `Uₙ` for `n ≥ 1`, measured on `PSigma.{1,1}`, which
+is the same instantiated declaration. The obstruction is a classification in
+`checker/`, not a missing set-theoretic fact. §3.6 and §8.2 carry the corrected
+account and the derivation of why `⊢ Σ ∈ U₀` must never be built.*
 
 ## 1. The decisive question, answered
 
@@ -255,9 +271,29 @@ untranslated	declarations=3	constructors=0	eliminators=0
   notrans:ind-spec(PIDep:   class (P) above Prop)=1
 ```
 
-**A mandatory basis member is untranslatable by our current machinery, at every
-σ, today.** So are `PI2` and `PIDep`, the two companion shapes the same fixture
+**A mandatory basis member is partly untranslatable by our current machinery
+today.** So are `PI2` and `PIDep`, the two companion shapes the same fixture
 carries for the same reason.
+
+**It is not red at every σ, and which σ is red decides the whole shape of the
+fix.** The verdict line counts a declaration once, so it hides the split. Per σ
+(`--dump-theorems --dump-only=PSigma'`, release binary, same fixture):
+
+```text
+PSigma'   σ = [0,0]   ⊢ ⟦PSigma'.{0,0}⟧ ∈ f69(⟦Sort 0⟧, ⟦Sort 0⟧, ⟦Sort 0⟧)
+PSigma'.mk   σ = [0,0]   stored          PSigma'.rec   σ = [0,0]   stored
+  class-(P) PSigma' σ = [0,0]   1 constructor(s), truncated
+    ‖a‖ ∈ U₀      ⊢ ∀x0 x1. f61(f60(x0, x1)) ∈ ⟦Sort 0⟧
+    only_point    ⊢ ∀x0 x1 x2. (x2 ∈ f61(f60(x0, x1)) → x2 = ⟦PSigma'.mk.{0,0}⟧)
+    ι             (none — every inhabitant of ‖a‖ is •, so the reduction is
+                   reflexivity and no equation is retained)
+
+PSigma'   σ = [1,1]   declaration not translated:
+                      ind-spec(PSigma': class (P) above Prop)
+```
+
+**`PSigma'.{0,0}` translates today, with its full class-(P) apparatus.** The two
+scheduled σ are `[0,0]` and `[1,1]`; only the second declines.
 
 The refusal site says precisely what is missing —
 `checker/src/mini/zoneb.rs:1402`, `if shape.result_level != 0` — and the comment
@@ -358,9 +394,44 @@ reachable for exactly four declarations — but the alternative is deleting work
 certified coverage and rebuilding it as a special case, against a rule the file
 already states.
 
-### 3.6 What `derived/` already has, and the one thing it does not
+#### The standing rule, applied to `PSigma'` — and why the basis is the exception
 
-Against §3.4's five obligations, the set-theoretic side is nearly complete.
+*Added 2026-08-15, from a tranche briefed to build a custom clause for
+`PSigma'`. A rule overridden without its reasoning addressed is how a good rule
+rots, so this records the argument rather than the verdict — and the argument
+turns out to narrow the override rather than justify it.*
+
+`direct.rs:44-58` says the table takes no fourth row, and gives the test: **"a
+declaration that seems to want one is evidence that the general clause is missing
+a case, and belongs in the ledger as a gap naming that construction."** Apply it
+literally to `PSigma'` and the rule *acquits itself* — §3.6 shows the general
+clause is missing no construction at all. Both carriers exist, both are measured
+green on this exact shape, and no set-theoretic statement is absent. Under the
+rule's own test, a closed-form `PSigma'` row would be exactly the mistake the
+rule forbids.
+
+**What `PSigma'` needs is not a construction but a *policy* — and the general
+route is forbidden that policy on purpose.** `zoneb::large_eliminating` must read
+the declaration's own level expression and never σ's, because deciding the class
+per instantiation would hand a W-type to a declaration that is a `Prop` at
+`u := 0` (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3, pinned by
+`zoneb::tests::a_possibly_prop_declaration_never_acquires_a_w_type`). `PSigma'`
+is a declaration whose two instantiations genuinely want two carriers. So it is
+not evidence of an incomplete general clause; it is evidence that the general
+clause is **correctly complete and correctly conservative**, and that one
+declaration needs a licence the general clause must not be given.
+
+That is what "basis" buys, and it is the narrowest possible exception: five
+named declarations, name-keyed and shape-verified against the export
+(`direct.rs:62-80`), where §3.1 already establishes that nothing ever compares
+carriers across instantiations. The rule stands unamended for every non-basis
+declaration — which, after the pivot, is a population that no longer reaches
+this code at all.
+
+### 3.6 What `derived/` already has — which is everything `PSigma'` needs
+
+Against §3.4's five obligations, the set-theoretic side is **complete**, and the
+`PSigma'` build this section originally scoped **must not be built**.
 *(Statements are quoted as the constructions conclude them; how the evidence
 reaches TG is `tc.rs`'s business and is being reworked separately.)*
 
@@ -371,36 +442,96 @@ reaches TG is `tc.rs`'s business and is being reworked separately.)*
 | singleton at a rung | `derived/src/isum/in_universe.rs:138`, `derived/src/tower.rs:33` | `⊢ ∀c. 1 ∈ U(c)`; `⊢ 1 ∈ U₀` | **exists**, two lemmas not one |
 | unit-like η | `derived/src/sums/unit_type.rs` | `⊢ x ∈ 1 → x = •` | **exists** |
 | structure η | `derived/src/sigma/dsum.rs:111`, `derived/src/inductive/decl_proj.rs:322` | `⊢ ∀p⃗∀q. (q ∈ Σ(p⃗) → ⟨π₁q,π₂q⟩ = q)`; `⊢ ∀p⃗∀z. (z ∈ ind(p⃗) → ctor₀(π₀z,…) = z)` | **exists**, used by `proj_data.rs:649` |
-| **Σ in a rung** | `derived/src/cumul/sigma.rs:51`, `sigma_n.rs:602` | `Σ(p⃗) ∈ Uₙ ⇐ β₀ ∈ Uₙ ∧ img ∈ Uₙ` | **exists but private and telescope-bound**; and see below |
-| **Σ is a subsingleton when its components are** | — | `⊢ ∀x∀y. ((x ∈ Σ(p⃗) ∧ y ∈ Σ(p⃗)) → x = y)` | **not found** |
+| **Σ in a rung** | `derived/src/cumul/sigma.rs:311`, `sigma_n.rs:373` | `Σ(p⃗) ∈ Uₙ ⇐ β₀ ∈ Uₙ ∧ img ∈ Uₙ` | **exists and is public** — `unary_telescope_at`, `unary_summand_at`, `summand_at`, all re-exported at `derived/src/cumul.rs:96-100` |
+| **Σ is a subsingleton when its components are** | — | `⊢ ∀x∀y. ((x ∈ Σ(p⃗) ∧ y ∈ Σ(p⃗)) → x = y)` | **not found — and not needed**, see below |
 
-**The one real gap is `PSigma'` at `u = v = 0`, and it is structural rather than
-missing work.** `derived/src/tower.rs:69-80` states it:
+Two corrections to this table as it first shipped. "Private and telescope-bound"
+was half wrong: the `Uₙ` route has **five public entry points**, and
+`unary_telescope_at` has already been freed of the declaration — its doc
+(`cumul/sigma.rs:295-300`) says "This form takes the telescope directly … The
+declaration was never used for anything but its parameters and that pin."
+*Apparatus*-bound (an `IndChain`, a `Machine`, a `Telescope`) is the accurate
+word. And there is **no `max(1, …)` clamp in `derived/`'s executable code at
+all** — all six occurrences (`cumul/sigma.rs`, `cumul/sigma_n.rs`,
+`cumul/decl.rs`, `cumul/tags.rs`, `inductive/family/trunc_rec_ix.rs`,
+`tower/cumulative.rs`) are inside `//!` doc comments, stating a *caller
+scheduling rule* that avoids minting a second Replacement symbol. The
+restriction to `n ≥ 1` is type-level: every entry takes `rung: &Rung`, and
+`Tower::at(0)` is `None`.
+
+#### `⊢ Σ ∈ U₀` is not missing. It is **false**, and the thesis excludes it
+
+This is the correction that matters, because the original text scoped a build
+around reaching it. `derived/src/tower.rs:69-80` says why no *route* exists:
 
 > `U₀` is `Prop`, not a universe … it is not closed under power set … So `U₀`
 > gets the membership condition, the subsingleton property and `[φ] ∈ U₀`, and
 > **none of the closure clauses**; `Tower::at(0)` is `None` rather than a `Rung`
 > whose fields would be unprovable.
 
-So `⊢ Σ ∈ U₀` cannot be reached through `Rung::product`/`union`/`sub` — there is
-no `Rung` at 0 at all. The only door into `U₀` is `Tower::cond_in_u0`,
-`⊢ [φ] ∈ U₀` for any formula `φ`: the carrier must be *presented as* a conditional
-singleton, or proved equal to one. **There is no lemma `z ⊆ 1 → z ∈ U₀`
-anywhere.** `derived/src/tower.rs:31`'s `u0_members`,
-`⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))`, is the raw material and nothing derives the
-subset direction from it.
+But the statement is not merely unreachable, it is **refutable**, and no amount
+of new construction can close it:
 
-Note also that the governing rung rule as `derived/` writes it is
-`n₀ := max(1, max over fields …)` (`derived/src/cumul/sigma.rs:32-34`) — **the
-`max 1` that `PSigma'` exists to remove.** That is not a coincidence: our set side
-and Lean's `PSigma` made the same choice, and `PSigma'` is the tool's decision to
-unmake it.
+* `U₀ = {0,1}` exactly — `Tower::u0_members`, `⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))`
+  (`derived/src/tower/rungs.rs:57`), built literally as the unordered-pair axiom
+  at `{0,1}`.
+* `0 = • = ∅` and `1 = {∅}` (`derived/src/sums/unit_type.rs:12`), and pairs are
+  Kuratowski (`derived/src/proj.rs:21`).
+* So `Σ(1, λ_.1) = {⟨∅,∅⟩} = {{{∅}}} = {1}`, which is neither `0` nor `1`.
+  **A non-empty Σ is provably not in `U₀`.**
 
-**Therefore the honest cost of basis member `PSigma'` is one new `derived/`
-construction plus a subsingleton lemma**, both stated above, plus the
-`TruncCarrier::in_un` signature change `zoneb.rs:1394` already promises. That is
-the smallest well-defined build this pivot depends on, and §8.2 is where it should
-be refuted first.
+Carneiro agrees by construction. `thesis.txt:2461-2470` states the tagged-type
+clauses **"For n > 0"**, with `T₀ = U₀` and `⌜p⌝ = p` at zero; the `(Σ, A, B)`
+clause has no instance at `n = 0`. **There is no Σ at Prop in the model.** A
+`Prop`-valued dependent pair is a conditional singleton, and `Tower::cond_in_u0`
+(`⊢ [φ] ∈ U₀`) is the door — the only door, and the right one.
+
+**This repository has already made exactly this argument once, for `Quot`, and
+acted on it.** `derived/src/quot/universe.rs:37-46`, arrived at independently:
+
+> **Rung 0 is not** [of the form `U(c)`], and the theorem is false there:
+> `U₀ = {0,1}`, `quot(1,R) = 1` for the one-point carrier, and `{1} ∈ U₀` is
+> refutable. That is not a gap to be closed — `QUOT-MODEL.md` §2 establishes
+> that at `Sort 0` the interpretation is the **identity**, `⟦Quot α r⟧ = ⟦α⟧`,
+> and `derived/src/quot/` is not consulted at all. So the `c ≥ 1` restriction is
+> where the two branches meet, not a weakness of this route.
+
+Same shape, same refutation, same resolution: **a basis member whose carrier is
+built at rung `n ≥ 1` takes a different interpretation at `Sort 0`, and the
+`derived/` construction is simply not consulted there.** `Quot` is a basis
+member that already branches per σ and is green. So the per-σ split §8.2 asks
+for on `PSigma'` is not a new exception being invented for it — it is the
+established treatment of the one other basis member with a rung-bound carrier.
+
+Hence the missing "Σ of subsingletons is a subsingleton" is **not needed**: the
+only thing that wanted it was the derivation of `Σ ∈ U₀`, which must not exist.
+Likewise the absent `z ⊆ 1 → z ∈ U₀` (confirmed absent; only the converse
+`∈ U₀ ⟹ ⊆ 1` exists, at `checker/src/mini/rec_prop.rs:578`) is not on this path.
+
+#### So what does `PSigma'` need? Two carriers, both already built and measured
+
+`⟦Sort ℓ⟧ = U_ℓ` (`derived/src/inductive/family/universe.rs:34`), so the rung is
+read off the *instantiated* resultant sort `max u v`:
+
+| σ | rung | carrier | construction | measured |
+| --- | --- | --- | --- | --- |
+| `max u v = 0` | `U₀` | truncation `‖a‖` | `TruncCarrier::in_u0` over `Tower::cond_in_u0` (`derived/src/inductive/family/trunc.rs:214`) | **green today** — §3.3 dumps the full apparatus at `σ = (0,0)` |
+| `max u v ≥ 1` | `Uₙ` | the general data carrier | `DeclUniverse::over_at` / `IndexedUniverse::over_at`, over `cumul/sigma.rs`'s `Σ ∈ Uₙ` | **green today on the identical shape** — `PSigma.{1,1}` |
+
+The second row is the load-bearing one. `PSigma.{1,1}` and `PSigma'.{1,1}` are
+**the same instantiated declaration**: they differ only in the declared sort,
+`Sort (max 1 u v)` against `Sort (max u v)`, which at `u = v = 1` is `Sort 1`
+either way. `081_PSigma.snd.ndjson` dumps the whole apparatus for it — carrier,
+carrier ax, `ctor 0 mem`, `ctor 0 inj`, rec typing, `ι 0`, `gen ι 0`, rec abbrev
+at `σ = [1,1,1]` — with `untranslated declarations=0`.
+
+**Therefore the honest cost of basis member `PSigma'` in `derived/` is nothing.**
+Both memberships exist; each is measured on this exact shape. What blocks
+`PSigma'.{1,1}` is a **classification in `checker/`**: `zoneb::large_eliminating`
+(`zoneb.rs:1149`) reads *the declaration's own* level expression, and `max u v`
+is not `provably_nonzero`, while two data fields fail the subsingleton test — so
+`PSigma'` is class (P), goes to `build_trunc`, and `build_trunc` refuses a
+nonzero numeral sort at `zoneb.rs:1402`. §8.2 carries the consequence.
 
 ## 4. The recognition path — what it takes to generalise
 
@@ -787,23 +918,56 @@ changed coverage argument. The next measurement is `scripts/ci-mathlib.sh` in th
 external repo; it is cheap relative to any build this document proposes and should
 be taken before, not after.
 
-### 8.2 `PSigma'` is red today and the fix is only half-written
+### 8.2 `PSigma'` is red at `σ = (1,1)`, and the fix is a classification, not a construction
 
-§3.3 and §3.6. `zoneb.rs:1394` says the replacement is "a signature change rather
-than a derivation" and names the pieces — `TruncCarrier::in_un` from `in_u0` +
-`Rung::u0_mem` + `Rung::transitive`. **That comment is about class-(P)
-truncation above `Prop`, and it is not the whole of what `PSigma'` needs.** §3.6
-finds two statements with no construction concluding them: `Σ ∈ U₀` (blocked
-structurally — `Tower::at(0)` is `None` and `U₀` has no closure clauses), and
-"a Σ whose components are subsingletons is a subsingleton".
+*Rewritten 2026-08-15. This section previously named `TruncCarrier::in_un` as the
+experiment to run first and predicted a new `derived/` construction behind it.
+Both were wrong, and the second was worse than wrong — see the warning below.*
 
-This is the load-bearing claim to refute first, and it is cheap to refute:
-build `TruncCarrier::in_un` against the shipped `tight_psigma_prime.ndjson` and
-see whether one signature change turns three `class (P) above Prop` declines
-green. **If it does not** — and §3.6 predicts it will not at `u = v = 0` — then
-part 1 includes one genuinely new `derived/` construction and part 1 is larger
-than the brief assumed. Either way the experiment is a day, and it gates
-everything else.
+§3.3 and §3.6, measured. `PSigma'.{0,0}` translates today; `PSigma'.{1,1}`
+declines. Neither `Σ ∈ U₀` nor "a Σ of subsingletons is a subsingleton" is on
+the path: the first is **false** (§3.6) and the second was only ever wanted in
+order to derive it.
+
+**What remains is one decision in `checker/`.** `zoneb::large_eliminating`
+(`zoneb.rs:1149`) deliberately reads the declaration's own level expression and
+never σ's, and the comment above it names the design rule and the test that
+pins it:
+
+> **The declaration's own types, never σ's.** Reading the substituted ones would
+> decide the class per instantiation, which is the design error
+> `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3 closes … `zoneb::tests::
+> a_possibly_prop_declaration_never_acquires_a_w_type` is that case.
+
+`PSigma'`'s declared sort `max u v` is not `provably_nonzero` and its two data
+fields fail the subsingleton test, so it is class (P) at every σ, and
+`build_trunc` refuses any σ where `max u v` is a nonzero numeral. A basis clause
+for `PSigma'` is exactly a licence to pick the carrier **per σ** — truncation at
+rung 0, the data carrier at rung `n ≥ 1` — for one name-keyed, shape-verified
+declaration, which is the policy the general rule must not have.
+
+**Warning, and it is the reason this section was rewritten rather than
+extended: do not build `TruncCarrier::in_un` in order to close `PSigma'`.** It
+would make `PSigma'.{1,1}`'s *type former* go green with a carrier
+`‖a‖ ⊆ {•}` — and the rest of the mandatory family cannot live on that carrier.
+`PSigma'.rec'` (`vendor/lean-inductive-models/src/InductiveModels/Simple.lean:594`)
+is an ordinary `def` with an **arbitrary `Sort w` motive**, `fun … => minor
+self.1 self.2`, and `fst_mk`/`snd_mk`/`rec'_mk` are `Eq.refl`. On a subsingleton
+carrier `⟦mk a b⟧ = ⟦mk c d⟧ = •`, so `fst_mk` would demand `⟦a⟧ = ⟦c⟧` for
+every pair of inhabitants — at `α := Nat` that is `∅ = {∅}`, refutable. It
+**fails closed** (the projections have no `DeclProj` structure-eta on a
+truncated carrier, so they decline rather than certify), but the failure mode is
+the one this project pays for most: the type former reads green while the family
+is red, and a later seat scores it as progress. `in_un` remains the right and
+promised fix for `Squash`/`MyBool` (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.5) —
+which is a **different** tranche, and must not be merged with this one.
+
+What is genuinely unmeasured is §8.6's mixed-σ question: the corpus schedules
+only `[0,0]` and `[1,1]` (`DEFAULT_LEVELS = [0,1]`), so the data carrier at
+`(0,1)` / `(1,0)` — one `Prop` field and one data field, lifted by
+`Cumul::lift(0,n)` — has never been exercised. `Simple.lean:26-27` makes this a
+production case rather than a curiosity: `PUnit`'s role in the models is
+`PSigma'.{0,u} (fun _ : p => PUnit.{u})`.
 
 ### 8.3 The `Acc` retirement is a real cost, not a saving
 
@@ -843,8 +1007,12 @@ check buys the reason string.
   theorems subsume `fun_eta.rs`, `unit_like.rs` and our K handling. The README
   says they are emitted "when the exported kernel metadata calls for them", which
   is a weaker guarantee than "always".
-* Whether `PSigma'` translates at mixed universes `(0,1)` and `(1,0)`, which
-  `tight_psigma_prime` does not isolate.
+* Whether `PSigma'` translates at mixed universes `(0,1)` and `(1,0)`. Still
+  open, and now the *only* open `derived/`-side question about `PSigma'` (§8.2):
+  `tight_psigma_prime` does not isolate it and the σ pre-pass schedules only
+  `[0,0]` and `[1,1]`, so nothing in the corpus has ever run the data carrier
+  over one `Prop` field and one data field. `Cumul::lift(0,n)`
+  (`derived/src/tower/cumulative.rs:180`) is the lemma it would spend.
 * Whether the recognition path scales. §6 measures the **modelling** side at
   `init-prelude` scale and `MODELGEN.md` measures the predecessor's at Mathlib
   scale. The **recognition** side has never been run at more than fixture scale,
@@ -879,7 +1047,11 @@ first.*
 | `nested_keying.ndjson` `_model` declarations by kind | 16 `def`, 11 `thm`, 0 inductive, 0 axiom |
 | `nested_keying.ndjson` routing | `toMini=8 toChecker=31 unclaimed=0` |
 | `tight_psigma_prime.ndjson` (external fixture) | `accept 3 declarations`, **`untranslated: 3`**, all `class (P) above Prop` |
+| — the same, **per σ** (2026-08-15) | `PSigma'.{0,0}` **translated**, with `‖a‖ ∈ U₀`, `only_point`, `elim`, ι-by-reflexivity; `PSigma'.{1,1}` declined. Two scheduled σ, one red |
 | `081_PSigma.snd.ndjson` (Lean's `PSigma`) | `accept`, `untranslated declarations=0`, **1 tg gap** |
+| — `PSigma.{1,1}` apparatus (2026-08-15) | full data carrier: carrier ax, `ctor 0 mem`, `ctor 0 inj`, rec typing, `ι 0`, `gen ι 0`, rec abbrev at `σ = [1,1,1]`; `elim PSigma computed=true oracle=true` |
+| `⊢ Σ ∈ U₀` | **refutable**, not missing: `U₀ = {0,1}`, `1 = {∅}`, Kuratowski pairs ⟹ `Σ(1,λ_.1) = {1} ∉ U₀`. `thesis.txt:2461` states the Σ clause "For n > 0" only |
+| `Σ ∈ Uₙ` entry points | **public**, five of them, `derived/src/cumul.rs:96-100`; no `max(1,…)` clamp exists in `derived/`'s executable code |
 | `PSigma'.rec` level params | `[u, v]` — small-eliminating |
 | `PSigma.rec` level params (control) | `[u_1, u, v]` — large-eliminating |
 | `init-prelude.ndjson` with `--no-modelgen` | declines at `Lean.Syntax`, as `CLAUDE-HANDOFF.md` records |
