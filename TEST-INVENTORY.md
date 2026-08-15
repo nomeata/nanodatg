@@ -1383,6 +1383,17 @@ run over all 99 non-`perf` `good/` exports of the Lean Kernel Arena corpus,
 every refusal collected and grouped by reason. Nothing here is inferred from a
 fixture or from the gap ledger's own totals.
 
+**Provenance, because these numbers move under active work.** First taken at
+master `b91dbfd`; **re-taken in full at `203b3ff`**, after `demand-closure` and
+`splicer-names` landed — `4e3b28b` in particular converts model-route debt into
+declines by name, which is exactly this section's subject. All three headline
+figures are **unchanged** across that rebase: the production census at 76 clean
+/ 3 declined / 20 carrying debt, the TG gap census at 11 279 gaps over 26 of 99
+files, and `init-prelude`'s pinned verdict and reason. Stated rather than
+assumed, because the seat that moved the code was moving the very declines
+counted here, and "the numbers did not shift" is only worth anything if someone
+looked.
+
 ### 7.1 The finding that reframes the rest: the gate and the product are two programs
 
 `scripts/arena.sh` — the corpus gate, and the thing that licenses "102 good, all
