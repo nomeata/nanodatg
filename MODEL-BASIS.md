@@ -587,6 +587,11 @@ That is the owner's rule, already written down, for a smaller population.
 
 ### 4.2 What the recogniser must be taught
 
+*Item 1 **landed** on 2026-08-15 at `236ba86`, "checker: read
+lean-inductive-models' model names beside modelgen's". It is corrected in place
+below rather than struck through, and the one claim in it that was wrong is
+named where it was made. Items 2 and 3 are open and unchanged.*
+
 Three things, none of them structural:
 
 1. **The new naming scheme, which shares no name with the old one.** Measured,
@@ -607,7 +612,18 @@ Three things, none of them structural:
    overlap in nothing.** The mismatch fails closed — a name that is not found
    reads as "no model", which under the owner's rule is a loud decline — but it
    fails *uniformly*, so the first end-to-end run reports "no model" for
-   everything (§8.4).
+   everything (§8.4). Measured before the fix, on that fixture: `untranslated:
+   2 declarations`, `ind-spec(Tree: no nested model in the export)`.
+
+   **The difference is the key and not the spelling**, and the authority for
+   that is the producer's own `Naming.lean` rather than this fixture.
+   `modelName n = n._model` (`:77`) is one total function on the exact
+   declaration being modelled, applied to the type former, each constructor and
+   each recursor alike; ours makes `_model` a namespace under the type former
+   and names every leaf by a role word plus a position. An index survives on
+   the tool's side in exactly the places where the modelled thing has no
+   declaration of its own — `R._model.iota_j` (`:82`), the projections, and the
+   metadata theorems.
 
    Two structural differences ride along and are improvements rather than
    translations. **A constructor is keyed by its own name** (`Tree.leaf._model`),
@@ -615,14 +631,26 @@ Three things, none of them structural:
    constructor order; and **a rule is keyed off the recursor**
    (`R._model.iota_j`), not off the triple `(T, k, j)`. `model_of`'s `ModelKey`
    and `model_iota`'s `(ModelKey, Name)` both survive that; what changes is the
-   name-building functions and nothing downstream of them.
-2. **Projections.** `T._model.proj_j` and `T._model.proj_j.iota` are new slots
-   with no counterpart in our table. Today a projection out of a structure is
+   name-building functions and nothing downstream of them. *That last clause was
+   right about the tables and wrong about the total cost: `modelgen/` is still
+   what makes `init-prelude` accept and is not this arc's to change, so the
+   recogniser reads **both** schemes —* `nested_splice::Scheme` *— deciding on
+   the carrier and then reading the whole tower in one scheme. The legacy arm
+   retires with `modelgen/`.*
+2. **Projections.** `T._model.proj_i` and `T._model.proj_i.iota` are new slots
+   with no counterpart in our table. `Naming.lean:93-97` is the contract and
+   says why they are the one family indexed off the *type former*: a projection
+   "does not model a source constant", so there is no name to suffix, and `i` is
+   the field's position in the unique constructor's telescope rather than a
+   constructor index. Today a projection out of a structure is
    *constructed* by `proj_data.rs` / `proj_prop.rs`; under the pivot it should be
    *recognised*, which is a fifth family beside carrier / ctor / rec / ι.
 3. **The optional metadata theorems.** The tool "may additionally emit exact
    structure-eta, unit-like, and recursor-rule-K theorems when the exported kernel
-   metadata calls for them" (README). Those correspond to `fun_eta.rs`,
+   metadata calls for them" (README); their names are `T._model.eta`,
+   `T._model.unitlike` and `R._model.ruleK` (`Naming.lean:85-107`), and the
+   `ruleK` slot is one this document's earlier name table omitted. Those
+   correspond to `fun_eta.rs`,
    `unit_like.rs` and the K-rule handling. **Whether they subsume the clauses we
    carry is not established** — see §8.
 
@@ -630,6 +658,87 @@ Three things, none of them structural:
 model's ι *theorem* into a firing reduction rule inside mini's `whnf`. Both are
 already keyed off `model_iota` rather than off nesting, and both grow rather than
 change.
+
+### 4.3 What step 2 costs, measured
+
+*Added 2026-08-15 from the same modelled `init-prelude` §6 is now corrected
+against. Step 2 is §4.1's "drop the `nested::plan` gate and make the second gate
+total". Nothing below is an estimate.*
+
+**The good news first: the second gate needs no `zoneb.rs` change.**
+`zoneb.rs:248`'s `nested_seen` is *membership in `app.nested`*, and `app.nested`
+is filled by `nested_splice`. Populating it for every non-basis inductive makes
+`ensure` route them all to `model_alias`, which already declines by name when
+there is no entry. The basis exemption also belongs on the `nested_splice` side,
+because `Eq` and `Nat` reach `direct::build` from *inside* `build` — i.e. after
+the gate — so putting them in `app.nested` would hijack them. `Quot` is handled
+at `zoneb.rs:193`, before the gate, and is safe either way. **Two string
+literals in `zoneb.rs` would still be wrong for a non-nested declaration:
+`"nested model not keyed here"` (`:315`) and `"nested model not interpreted"`
+(`:319`), and `Missing::label`'s seven strings on our side say "nested" too.**
+
+**Item 1 — the type former and constructors are keyed at `σ = []` only.**
+`Model::mono`'s own doc calls this a limitation and says why it has never
+mattered: "every nested fixture mini has is monomorphic". Step 2 ends that
+immediately. Of `init-prelude`'s **126 inductive type formers, 88 are
+universe-polymorphic**, and `zoneb::model_alias` looks up
+`model_of[(T, σ)]` at the constant's own σ — so every one of the 88 misses and
+reports `nested model not keyed here`. The fix is to key them the way recursors
+already are, from `schedule ∪ applied`; it is perhaps fifteen lines and it is
+entirely inside `nested_splice.rs`.
+
+**Item 2 — the projection family is not optional, and it is the bulk of the
+work.** This is the finding that decides step 2's size. Counted over the tool's
+`init-prelude` output, the **1 044 public model declarations** are:
+
+| family | count | do we read it? |
+| --- | ---: | --- |
+| `X._model` — carrier, constructors, recursors | 453 | **yes** |
+| `R._model.iota_j` | 174 | **yes** |
+| `T._model.proj_i` | 153 | no slot |
+| `T._model.proj_i.iota` | 153 | no slot |
+| `T._model.eta` | 104 | no slot |
+| `R._model.ruleK` | 4 | no slot |
+| `T._model.unitlike` | 3 | no slot |
+| (`T._model._impl.*`, not API) | 100 | n/a |
+
+**417 of 1 044 — 40% of the public model surface — is families we have no table
+for**, against §4.2(2)'s "a fifth family beside carrier / ctor / rec / ι".
+
+And they are load-bearing rather than decorative, because `model_alias`
+publishes strictly less than `build` does. `model_alias` writes one
+`Interp::consts` entry (`zoneb.rs:321`); the projection route reads
+`IndApparatus::decls[(T, σ)] : Translated`, which is inserted in exactly one
+place, `zoneb::build` at `zoneb.rs:1029-1048`. Everything else the route needs
+is *derived from* that value and takes it as an argument —
+`IndApparatus::decl_proj` (`interp.rs:1430`) builds `DeclProj::typed[j]` and
+`DeclProj::eta` from a `&Translated`, and `decl_fields` likewise. So a structure
+that takes the model route has:
+
+* `proj_data::typing` (`proj_data.rs:421`) and `proj_prop::typing`
+  (`proj_prop.rs:139`) returning `Gap::StructProj(T)` — the projection gets **no
+  interpretation and no certificate**;
+* `whnf_conv`'s proj-of-ctor ι (`kernel.rs:2071`) dropping its certificate;
+* structure-η in `def_eq` (`kernel.rs:4866`) dropping its certificate.
+
+**`init-prelude` has 107 single-constructor inductives out of 126 — 85%** — so
+this is the common case and not an edge. Those three tool families
+(`proj_i`, `proj_i.iota`, `eta`) are precisely the replacements for
+`DeclProj::typed[j]`, `decl_proj::computes` and `DeclProj::eta`.
+
+**And it fails soft, which is the part to be careful about.** `kernel.rs:4860`
+records that the structure-η *probe* decides acceptance and the certificate is
+separate, and `proj_data::iota` returning a gap leaves `whnf` reducing with
+`cur_tm = None`. So a step 2 that stops at carrier / ctor / rec / ι **still
+accepts every file** and merely stops certifying the projections — the type
+former reads green while the family is red, which §8.2 already names as the
+failure mode this project pays for most. The `nested`/adoption row does not
+catch it either; a projection census would.
+
+**Order of work, therefore:** (1) σ-key `Model::mono`; (2) grow the
+`proj_i` / `proj_i.iota` / `eta` families and their consumers; (3) only then
+open the first gate. Doing (3) first produces a green run that has quietly
+stopped certifying 85% of the file's structures.
 
 ## 5. The retirement, in lines
 
@@ -868,6 +977,62 @@ fire. And the models are exactly the declarations we refuse:
 of them.** That is the largest single consequence of the pivot, it was
 unconsidered before this tranche, and it is now measured rather than inferred.
 
+#### The claim is **conditional on §4.1's step 2, and this section did not say so**
+
+*Corrected in place 2026-08-15, by running it. The modelling side of §6 above is
+confirmed exactly — 144 families, 0 declines, exit 0, and now also `output
+kernel check: accepted`. What was wrong is the sentence directly above.*
+
+`lean-inductive-models` was run over `init-prelude` **with output**, and our
+checker run over the result — `checker --verbose --mutual --nested
+--no-modelgen`, the pivot's production path, at `236ba86`:*
+
+```
+init-prelude-lim.ndjson  accept 3123 declarations
+                         untranslated: 109 declarations, 17 eliminators
+prefix declarations=171  pairs=32  certified=0
+nested  seen=1  models=1  tool=1  legacy=0
+route   mode=Split  toMini=149  toChecker=2974  unclaimed=0
+```
+
+**The count went from 91/10 to 109/17. It did not go to 0.** Every name §6
+lists is still refused, by the same reason string: all fourteen `H*` classes,
+every `Monad*`, `Membership`, `Trans`, `EStateM.Backtrackable`, the machine
+words, `Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Hashable`, `Lean.Name`,
+`Lean.Syntax`, and the `False` / `PEmpty` / `HEq` eliminators. By reason: 60
+`type former spine`, 30 `field type uninterpretable`, 4 `parameter type
+uninterpretable`, over 62 distinct declarations.
+
+**Why, and it is not a defect in the tool.** §6's mechanism is right —
+`zoneb::ensure` does return at the model route before `build`, so a declaration
+that reaches `model_alias` never mints these reasons. But it reaches
+`model_alias` only if it is in `app.nested`, and `app.nested` is filled only for
+declarations `nested::plan` calls nested (§4.1's *first* gate). `HAdd` is not
+nested. So it still goes to `build`, and `build` still refuses it — **with a
+model sitting unread three declarations earlier in the same file.**
+
+**§6 is therefore a consequence of step 2 and not of the pivot**, and it should
+be read as the payoff for opening the first gate rather than as something the
+models deliver on arrival. Its own §5 evidence is intact; only the tense was
+wrong.
+
+Three further things the same run establishes, none of them previously measured:
+
+* **`--no-modelgen` no longer declines on `Lean.Syntax`.** `CLAUDE-HANDOFF.md`
+  records that it stops there at declaration 1; the tool splices the nested
+  model and our recogniser reads it — `nested seen=1 models=1 tool=1 legacy=0`,
+  which is §8.4's rename working on a real export rather than a fixture.
+* **§8.3's `Acc` cost is now a number.** `_wcore.Acc: recursive argument
+  telescope depth` = 3 and `_wcore.WellFounded: field type uninterpretable` = 3.
+  The `Classical.choice`-bearing `_wcore.*` prelude arrives as predicted and
+  its `Acc` is *not* translatable by the machinery that survives.
+* **§8.2's `PSigma'` red is the single largest untranslated family in the run** —
+  `ind-spec(PSigma': class (P) above Prop)` = 11 pairs, because the tool splices
+  `PSigma'` into every export that lacks it. It is not a fixture curiosity.
+
+`route mode=Split toMini=149 toChecker=2974` confirms §1 at scale: 95% of the
+declarations go to nanoda.
+
 Two details from the same run worth carrying:
 
 * **`PSigma'` is spliced, not assumed.** `init-prelude` declares no `PSigma'`, and
@@ -999,15 +1164,53 @@ is cheap and exact. Trading it for a `Classical.choice`-bearing model on every
 well-founded definition is a decision with a cost, and this document is where the
 cost should be argued rather than absorbed. **It has not been argued anywhere.**
 
-### 8.4 The naming scheme does not match, and the mismatch fails quiet
+### 8.4 The naming scheme did not match — **closed 2026-08-15 at `236ba86`**
 
-§4.2(1). Our recogniser looks for `T._model.self`; the tool emits `T._model`. A
+*Retired as a risk for the four families a nested declaration needs. The
+account below is kept because the diagnosis was right and the fix is scoped by
+it; what changed is the verdict line.*
+
+§4.2(1). Our recogniser looked for `T._model.self`; the tool emits `T._model`. A
 name that is not found reads as "no model", which under the owner's rule is a
-loud decline — so it fails closed, not open. But it fails *uniformly*, which
-means the first end-to-end run will report "no model" for everything and say
+loud decline — so it failed closed, not open. But it failed *uniformly*, which
+means the first end-to-end run reported "no model" for everything and said
 nothing about why. The shape-check diagnostics `nested_splice.rs:214-262` exist
-precisely to prevent that class of report and will need the same treatment for the
+precisely to prevent that class of report and needed the same treatment for the
 new slots.
+
+**Measured, on `lean-inductive-models`' own filtered `nested_keying` — which is
+now checked in as `checker/tests/fixtures/tool_nested_keying.ndjson`:**
+
+| | before | after |
+| --- | --- | --- |
+| `untranslated declarations` | **2** | **0** |
+| the reasons | `Tree: no nested model in the export`, `UTree: nested model over a later declaration` | none |
+| ledger `typesOk` / `valuesOk` | 119 / 117 of 121 | **121 / 121** |
+| adoption, split by producer | — | `nested seen=2 models=2 tool=2 legacy=0` |
+
+and the legacy side is unmoved — `nested_keying.ndjson` still reports `accept 39
+declarations`, `untranslated: 1`, `nested seen=2 models=1 tool=0 legacy=1`.
+
+**Two things this closes that a total could not show, and they are the reason
+the `nested` row is now printed at all.** A recogniser that stops recognising
+*declines*, and a decline moves no total on any line — the declarations are
+counted in the `untranslated` column instead. So the split adoption count is
+the measurement, and it is asserted per fixture rather than inferred.
+
+**The `init-prelude` ratchets are unmoved, by construction rather than by a
+run.** `vendor/arena-tests/good/init-prelude.ndjson` interns **zero** names
+containing `_model`, and `modelgen`'s tower declares `T._model.self` and never a
+bare `T._model` — verified on all five `modelgen`-filtered nested fixtures,
+where `T._model` exists only as an interned *prefix* and `env.get` therefore
+misses it. The `Scheme::Tool` carrier lookup cannot fire on a `modelgen` export,
+so the legacy path is taken and behaviour is identical. It was not re-measured
+end to end: `modelgen/` is not built in this worktree, and building it needs a
+Lean toolchain.
+
+**What is left of this section is the slots, not the names.** `T._model.proj_i`,
+`T._model.proj_i.iota`, `T._model.eta`, `T._model.unitlike` and `R._model.ruleK`
+still have no table here, and they are §4.2(2)–(3) rather than a naming
+mismatch.
 
 ### 8.5 The structural checker is a second contract we would depend on
 
@@ -1045,9 +1248,10 @@ check buys the reason string.
 * Whether the recognition path scales. §6 measures the **modelling** side at
   `init-prelude` scale and `MODELGEN.md` measures the predecessor's at Mathlib
   scale. The **recognition** side has never been run at more than fixture scale,
-  because today it recognises only what was written for nested declarations —
-  and it cannot be run at all until the naming scheme is fixed (§4.2). That is
-  the asymmetry the brief identified and it survives this tranche intact.
+  because today it recognises only what was written for nested declarations.
+  *The naming blocker is gone (§8.4), so it is now runnable; it has not been
+  run.* That is the asymmetry the brief identified and only its first half is
+  retired.
 * The performance consequence. A model is `2 + 2c` declarations for `c`
   constructors on most arms, all of which now go through nanoda and its schedule.
   Mathlib's 6 882 inductives become on the order of 30 000 extra declarations to
@@ -1093,7 +1297,14 @@ first.*
 | `checker/src/mini/*.rs` | 55 255 lines, 60 files (unchanged `4c6426a` → `5bab7c0`) |
 | retiring / staying split | 23 656 / 8 702 of the 32 358 in scope |
 | model names in the tool's own output fixture | `T._model`, `C._model`, `R._model`, `R._model.iota_j` — **no overlap** with our `T._model.self` / `ctor_j` / `rec_k` / `iota_k_j` |
+| the naming contract, from `Naming.lean` rather than a fixture (2026-08-15) | `modelName n = n._model` on the exact modelled declaration; `iota_j`, `proj_i`, `proj_i.iota`, `eta`, `unitlike`, `ruleK` are the only indexed or role-named slots |
+| **our checker over the tool's filtered `nested_keying`** (2026-08-15) | before: `untranslated 2`, `typesOk 119/121`, `valuesOk 117/121`. After `236ba86`: **`untranslated 0`, `121/121`, `nested seen=2 models=2 tool=2 legacy=0`** |
+| — the `modelgen` fixture beside it, same run | unchanged: `accept 39`, `untranslated 1`, `nested seen=2 models=1 tool=0 legacy=1` |
+| `_model` names interned by unfiltered `init-prelude` | **0** — so `Scheme::Tool`'s carrier lookup cannot fire on a `modelgen` export |
 | **`lean-inductive-models` over `init-prelude`** | **144 model families, 0 declines, 3 exempt (`Nat`, `Eq`, `PUnit`), 658 statements compared / 0 differ, exit 0** |
+| — the same **with output**, and our checker over it (2026-08-15, `236ba86`) | `accept 3123`, **`untranslated: 109 declarations, 17 eliminators`** (was 91/10 — §6 corrected), `prefix 171`, `nested seen=1 models=1 tool=1 legacy=0`, `route toMini=149 toChecker=2974`, `output kernel check: accepted` |
+| — the public model surface, by family | 1 044 declarations: 453 `X._model`, 174 `iota_j`, **153 `proj_i` + 153 `proj_i.iota` + 104 `eta` + 4 `ruleK` + 3 `unitlike` with no slot on our side (40%)**, 100 `_impl` |
+| — `init-prelude`'s inductives | 126 type formers; **88 universe-polymorphic**, **107 single-constructor**, 4 indexed, 0 mutual |
 | — the `field type uninterpretable` family | all modelled (`UInt8/16/32/64`, `USize`, `Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Hashable`, `Lean.Name`, `Lean.Syntax`) |
 | — the `type former spine` family | all modelled (`HAdd`…`HAppend`, `Membership`, `Trans`, `Monad*`) |
 | — the 10 untranslated eliminators | all modelled (`False`, `PEmpty`, `HEq`) |

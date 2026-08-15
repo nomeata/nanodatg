@@ -332,6 +332,8 @@ pub fn check_file_with_interp(
     let prefix = pass.prefix();
     facts.nested_models = pass.nested_models;
     facts.nested_seen = pass.nested_seen;
+    facts.nested_models_tool = pass.nested_models_tool;
+    facts.nested_models_legacy = pass.nested_models_legacy;
     facts.mutual_blocks = pass.mutual_blocks();
     facts.mutual_encoded = pass.mutual_encoded();
     facts.mutual_rules = pass.mutual_rules();

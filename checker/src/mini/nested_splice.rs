@@ -44,20 +44,64 @@
 //! What is left is the part that was always the point: **deciding whether a
 //! model is there, and keying the export's names onto it.**
 //!
+//! # Two producers, and the difference is the **key** rather than the spelling
+//!
+//! There are two filters that write a model tower, and this module reads both
+//! — [`Scheme`] is which. They do not share a single name, and reading the
+//! difference as a rename undersells it.
+//!
+//! | | carrier | constructor `j` of `T`, named `c` | recursor `k`, named `r` | rule `j` of `r` |
+//! | --- | --- | --- | --- | --- |
+//! | [`Scheme::Legacy`] (`modelgen/`) | `T._model.self` | `T._model.ctor_j` | `T._model.rec_k` | `T._model.iota_k_j` |
+//! | [`Scheme::Tool`] (`lean-inductive-models`) | `T._model` | `c._model` | `r._model` | `r._model.iota_j` |
+//!
+//! **Legacy makes `_model` a namespace under the type former** and names every
+//! leaf by a role word plus a position, so `T`'s name is the only input the
+//! scheme takes and everything below it is an index. **The tool has one
+//! name-forming operation, `modelName n = n._model`
+//! (`vendor/lean-inductive-models/src/InductiveModels/Naming.lean:77`), applied
+//! to the exact declaration being modelled** — the type former, each
+//! constructor and each recursor alike. An index survives in exactly one place
+//! here, and it is the place where the modelled thing has no declaration of its
+//! own: a recursor *rule* is a field of the recursor, so it is `iota_j` under
+//! `r._model`.
+//!
+//! Three consequences that are not spelling:
+//!
+//! 1. **Constructor order leaves the contract.** `T._model.ctor_j` couples the
+//!    table to the order of the export's `ctors` array; `c._model` couples it to
+//!    nothing. Same for the recursors.
+//! 2. **A declaration that does not live below `T` is nameable.** `Naming.lean`
+//!    is emphatic that a private constructor need not be in its inductive's
+//!    namespace, so prefix substitution "is not a naming model". Legacy has no
+//!    way to say that; the tool needs no way, because it never leaves the
+//!    declaration's own name.
+//! 3. **The tool has slots this module has no table for**: `T._model.proj_i`
+//!    and `T._model.proj_i.iota` for an intrinsic structure projection — which
+//!    models no source constant at all and is therefore indexed off the type
+//!    former — and the metadata theorems `T._model.eta`, `T._model.unitlike`
+//!    and `r._model.ruleK`. None is a *nested* declaration's business and none
+//!    is read here; they are what generalising past nesting has to grow.
+//!
+//! The private bookkeeping moved too and is not this module's concern either
+//! way: `modelgen` put `pack_0`/`unpack_0` in the same namespace as the public
+//! API, the tool roots it at `T._model._impl.*` and its README says it is not
+//! API. Nothing here looks at it.
+//!
+//! [`Scheme::Legacy`] is transitional and goes when `modelgen/` does. It is
+//! still read because `modelgen/` is still what makes `init-prelude` accept.
+//!
 //! # Why this is a *table* and not a name rule, still
 //!
-//! `⟦T⟧ := ⟦T._model.self⟧` could be spelled as a name rule: take the
-//! declaration's name, append `_model.self`, look it up. **It must not be**, and
-//! the argument is *stronger* now that the model arrives in the file rather
-//! than being built here. A name rule answers for a constant that exists for
-//! some other reason — a file that declares its own `Tree._model.self` gets its
-//! interpretation silently substituted for the model's — and the counters would
-//! report a working model. This project has paid for that once already, at
-//! `_auxCarrier`, and `mini/tests/fixtures/nested_keying.lean`'s `UTree` is the
-//! same input at this site: two nested declarations of one shape, and the file
-//! itself has taken the name one of their models wants. `modelgen` declines
-//! `UTree` for exactly that reason (`MODELGEN.md` §1.3) and this module must
-//! reach the same verdict from the other side.
+//! `⟦T⟧ := ⟦T._model⟧` could be spelled as a name rule: take the declaration's
+//! name, append `_model`, look it up. **It must not be**, and the argument is
+//! *stronger* now that the model arrives in the file rather than being built
+//! here, and stronger again under the tool's scheme — where `c._model` sits in
+//! a namespace an ordinary file legitimately owns, which `T._model.self` never
+//! did. A name rule answers for a constant that exists for some other reason —
+//! a file that declares its own `Tree._model` gets its interpretation silently
+//! substituted for the model's — and the counters would report a working model.
+//! This project has paid for that once already, at `_auxCarrier`.
 //!
 //! So the table is filled only from declarations whose **statements** were
 //! checked against the export's own, by [`shape`] below, and it is keyed on the
@@ -65,6 +109,28 @@
 //! level is part of what is being keyed. A constant with no entry **declines**,
 //! by name, in [`crate::mini::zoneb::ensure`]; it never falls through to the class-(T)
 //! walk and never falls back to a name.
+//!
+//! **`nested_keying`'s `UTree` is still the input that says so, and the rename
+//! moved which half of the guard it exercises.** The file declares its own
+//! `UTree._model.self`. Under legacy that is the carrier's name, and what
+//! stopped it was the *position* check in [`model_const`] — the squatter is
+//! declared after `UTree` — because `def UTree._model.self : Type := N` has
+//! exactly `UTree`'s declared type and passes the statement check. Under the
+//! tool's scheme it is an unrelated definition, `UTree` models normally, and
+//! the guard that now carries the weight is the statement check on
+//! `UTree._model`. Both are pinned:
+//! `mini_nested::the_recognition_reads_the_external_tools_names` asserts what
+//! `⟦UTree⟧` is keyed *to*, and
+//! `mini_nested::a_tool_carrier_that_states_something_else_is_not_adopted`
+//! deletes the statement check and is the only test that notices.
+//!
+//! The producer guards the same boundary from its side and by a different
+//! mechanism, which is worth knowing and worth not relying on:
+//! `Naming.Table.collisionCensus` refuses to generate a family any of whose
+//! required public names is already taken in the input, and
+//! `Table.originalName?` is "a table lookup, not an attempt to parse `_model`
+//! from `model`". That is the producer's business. Ours is the certificate;
+//! see the next section.
 //!
 //! # The shape check is a **diagnostic**, and saying so is the point
 //!
@@ -79,7 +145,7 @@
 //! no certificate whatever this module does.
 //!
 //! What the check buys is the **reason string**. Without it a file whose
-//! `Tree._model.rec_0` is not `Tree.rec`'s statement stops somewhere downstream
+//! `Tree.rec._model` is not `Tree.rec`'s statement stops somewhere downstream
 //! — `eq-cash-retarget`, or `iota: the model rule is not about the redex this
 //! run is reducing` — naming where a value stopped rather than why. With it the
 //! decline says `nested model recursor 0 does not state T.rec`, at the
@@ -95,11 +161,21 @@
 //!
 //! **Any instantiation of a modelled declaration is an instantiation of the
 //! model.** If the file applies `T.rec.{3}` then `⟦T.rec.{3}⟧` is
-//! `⟦T._model.rec_0.{3}⟧`, and nothing in `checker::instantiations` knows that
-//! — it sees `T._model.rec_0` mentioned only by `T._model.iota_0_j`, which
+//! `⟦T.rec._model.{3}⟧`, and nothing in `checker::instantiations` knows that
+//! — it sees `T.rec._model` mentioned only by `T.rec._model.iota_j`, which
 //! nothing mentions at all. So the propagation is made here, at
 //! [`Recognised::schedule`], from the σ the pre-pass gave the **export**
 //! constant onto the model constant.
+//!
+//! **The rename does not move this, and the reason is worth stating rather than
+//! re-measuring.** `checker::instantiations` builds its mention graph by
+//! walking `Expr::Const` occurrences; it contains no `_model` string and no
+//! name-shape rule of any kind, so renaming a node renames a node and leaves
+//! every edge where it was. Both facts below therefore transfer verbatim from
+//! `T._model.rec_k` to `r._model` and from `T._model.iota_k_j` to
+//! `r._model.iota_j`: the recursor's model is *mentioned* by its own ι
+//! theorems' statements, and the ι theorems are mentioned by nothing and
+//! defaulted. Seeding and defaulting are unchanged.
 //!
 //! The trap, paid for once on this arc and recorded so it is not paid again:
 //! `checker::instantiations` closes its demand and then **defaults** — "a
@@ -130,7 +206,9 @@
 //! because a seat was briefed off it.
 //!
 //! Measured on `nested_keying` by counting the `(name, σ)` pairs the pre-pass
-//! schedules, without changing any behaviour:
+//! schedules, without changing any behaviour. The names below are
+//! [`Scheme::Legacy`]'s because that is the fixture the measurement was taken
+//! on; the paragraph above says why the conclusion is the tool's too:
 //!
 //! * **`T._model.rec_k` is not "mentioned by nothing".** `T._model.iota_k_j`
 //!   mentions it, so it is *demanded* at `[0]` and `[1]` — not defaulted there.
@@ -215,8 +293,9 @@ pub struct NestedRecord {
 /// see the module header on what the check is and is not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Missing {
-    /// No `T._model.self` in the environment. `MODELGEN.md` §1.3: the absence
-    /// of the carrier is "no model", not an error — the filter declined the
+    /// No carrier in the environment under **either** [`Scheme`] — neither
+    /// `T._model` nor `T._model.self`. `MODELGEN.md` §1.3: the absence of the
+    /// carrier is "no model", not an error — the filter declined the
     /// declaration and said which shape stopped it.
     ///
     /// This label says **where** the lookup stopped and not **why** the model
@@ -229,15 +308,18 @@ pub enum Missing {
     /// [`crate::mini::ledger::fill_declaration`] cannot read it when it resolves
     /// `⟦T⟧`.
     Later,
-    /// `T._model.self` is not a `def`, or is not `T`'s own type.
+    /// The carrier is not a `def`, or is not `T`'s own type. Reachable only
+    /// under [`Scheme::Legacy`]: a carrier that fails this under
+    /// [`Scheme::Tool`] is not a tool tower, so [`Recogniser::step`] reads the
+    /// legacy one instead and reports that scheme's verdict.
     Carrier,
-    /// A `T._model.ctor_j` is absent or is not the `j`-th constructor's
-    /// statement.
+    /// The `j`-th constructor's model is absent or is not its statement.
     Ctor,
-    /// A `T._model.rec_k` is absent or is not `T.rec_k`'s statement.
+    /// The `k`-th recursor's model is absent or is not `T.rec_k`'s
+    /// statement.
     Rec,
-    /// A `T._model.iota_k_j` is absent, or its statement is not an equation
-    /// about `T._model.rec_k` applied to a constructor.
+    /// A rule's ι theorem is absent, or its statement is not an equation
+    /// about the recursor's model applied to a constructor.
     Iota,
     /// The export declares a recursor rule on a constructor no ι theorem is
     /// about. Distinct from [`Missing::Iota`]: the theorem is there and states
@@ -283,24 +365,90 @@ pub struct Recognised {
     /// the difference is the [`NestedRecord::why`] population.
     pub seen: usize,
     pub modelled: usize,
+    /// **`modelled`, split by which producer wrote the tower** —
+    /// `modelled_tool + modelled_legacy == modelled`.
+    ///
+    /// It exists because a rename that stopped recognising and started
+    /// declining leaves `seen` and every downstream total exactly where they
+    /// were: the declines are simply counted elsewhere. A split adoption count
+    /// is what says *which* names were read, and it is asserted per fixture in
+    /// `checker/tests/mini_nested.rs`.
+    pub modelled_tool: usize,
+    pub modelled_legacy: usize,
 }
 
-/// `T._model` — the prefix every name in `MODELGEN.md` §1 hangs off.
-fn model_prefix(t: &Name) -> Name { Name::str(t, "_model") }
+/// `X._model` — the one name-forming operation the external producer has, read
+/// off `vendor/lean-inductive-models/src/InductiveModels/Naming.lean:77`,
+/// `def modelName (n : Name) : Name := Name.str n "_model"`.
+fn model_suffix(x: &Name) -> Name { Name::str(x, "_model") }
 
-/// `T._model.self`, the carrier.
-pub fn carrier_name(t: &Name) -> Name { Name::str(&model_prefix(t), "self") }
+/// **Which producer wrote a model tower**, and therefore how its declarations
+/// are named. See the module header's "two producers, and the difference is
+/// the key rather than the spelling".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Scheme {
+    /// `lean-inductive-models`, the external producer, which is authoritative.
+    /// **`_model` is a suffix on the exact declaration being modelled**, so the
+    /// carrier is `T._model`, constructor `C`'s model is `C._model` and
+    /// recursor `R`'s is `R._model`; only a declaration that models no source
+    /// constant is named off an index, and rule `j` of `R` is the one this
+    /// module needs — `R._model.iota_j`.
+    Tool,
+    /// `modelgen/`, this repository's own filter, which is being retired.
+    /// **`_model` is a namespace under the type former** and every leaf is a
+    /// role word plus a position: `T._model.self`, `T._model.ctor_j`,
+    /// `T._model.rec_k`, `T._model.iota_k_j`.
+    ///
+    /// Kept only because `modelgen/` is still what makes `init-prelude`
+    /// accept, and it is not this tranche's to change. **It goes with
+    /// `modelgen/`**; nothing new should be written against it.
+    Legacy,
+}
 
-/// `T._model.ctor_j`.
-fn ctor_name(t: &Name, j: usize) -> Name { Name::str(&model_prefix(t), &format!("ctor_{j}")) }
+impl Scheme {
+    /// The carrier: `⟦T⟧`'s model.
+    fn carrier(self, t: &Name) -> Name {
+        match self {
+            Scheme::Tool => model_suffix(t),
+            Scheme::Legacy => Name::str(&model_suffix(t), "self"),
+        }
+    }
 
-/// `T._model.rec_k`. **The model's index is the member index uniformly**, so
-/// the export's `T.rec` is `T._model.rec_0` — `MODELGEN.md` §1.
-fn rec_name(t: &Name, k: usize) -> Name { Name::str(&model_prefix(t), &format!("rec_{k}")) }
+    /// Constructor `j` of `T`, whose own exported name is `c`.
+    ///
+    /// **The two arguments are not both used, and that is the difference.**
+    /// [`Scheme::Tool`] reads `c` and ignores `(t, j)`, so a constructor that
+    /// does not live below `T` — `Naming.lean:20-27` says a private one need
+    /// not — is still nameable, and the order of the `ctors` array is not part
+    /// of the contract. [`Scheme::Legacy`] reads `(t, j)` and ignores `c`.
+    fn ctor(self, t: &Name, j: usize, c: &Name) -> Name {
+        match self {
+            Scheme::Tool => model_suffix(c),
+            Scheme::Legacy => Name::str(&model_suffix(t), &format!("ctor_{j}")),
+        }
+    }
 
-/// `T._model.iota_k_j`.
-fn iota_name(t: &Name, k: usize, j: usize) -> Name {
-    Name::str(&model_prefix(t), &format!("iota_{k}_{j}"))
+    /// Recursor `k` of `T`, whose own exported name is `r` — `T.rec`,
+    /// `T.rec_1`, … for `k = 0, 1, …`.
+    fn rec(self, t: &Name, k: usize, r: &Name) -> Name {
+        match self {
+            Scheme::Tool => model_suffix(r),
+            Scheme::Legacy => Name::str(&model_suffix(t), &format!("rec_{k}")),
+        }
+    }
+
+    /// Rule `j` of recursor `k`, whose own exported name is `r`.
+    ///
+    /// A rule is a *field* of a recursor and has no exported declaration of its
+    /// own, so this is the one place [`Scheme::Tool`] still spends an index —
+    /// `Naming.lean:79-83`, "rule numbers are positions in the export's
+    /// recursor-rule array".
+    fn iota(self, t: &Name, k: usize, r: &Name, j: usize) -> Name {
+        match self {
+            Scheme::Tool => Name::str(&model_suffix(r), &format!("iota_{j}")),
+            Scheme::Legacy => Name::str(&model_suffix(t), &format!("iota_{k}_{j}")),
+        }
+    }
 }
 
 /// **Recognise each nested declaration's model, and key it.**
@@ -337,6 +485,8 @@ pub fn recognise(
         nested: r.nested,
         seen: r.seen,
         modelled: r.modelled,
+        modelled_tool: r.modelled_tool,
+        modelled_legacy: r.modelled_legacy,
     }
 }
 
@@ -380,6 +530,9 @@ pub struct Recogniser {
     pub nested: HashMap<Name, NestedRecord>,
     pub seen: usize,
     pub modelled: usize,
+    /// [`Recognised::modelled_tool`], [`Recognised::modelled_legacy`].
+    pub modelled_tool: usize,
+    pub modelled_legacy: usize,
     pos: HashMap<Name, usize>,
     applied: HashMap<Name, Vec<Vec<u32>>>,
 }
@@ -403,6 +556,8 @@ impl Recogniser {
             nested: HashMap::new(),
             seen: 0,
             modelled: 0,
+            modelled_tool: 0,
+            modelled_legacy: 0,
             pos,
             // What the file's own declarations name, and at which ground σ. The
             // pre-pass's schedule is the other half; a recursor is keyed at the
@@ -468,9 +623,28 @@ impl Recogniser {
             _ => return,
         }
         self.seen += 1;
-        match shape(env, name, ctors, &self.pos, i) {
+        // **The scheme is decided by the carrier, and the tower is then read
+        // entirely in that scheme.** A well-formed `T._model` is the evidence
+        // the external producer ran over this file; from there every remaining
+        // lookup is its business, and a `Missing` is *the tool's tower is
+        // wrong* — a decline, not a licence to go looking for a second tower
+        // under other names. Deciding on the whole [`shape`] instead would do
+        // exactly that, and would report a broken tool tower under the legacy
+        // scheme's least informative label.
+        //
+        // The legacy arm goes when `modelgen/` does; nothing else here is
+        // transitional.
+        let scheme = match carrier_of(env, name, &self.pos, i, Scheme::Tool) {
+            Ok(_) => Scheme::Tool,
+            Err(_) => Scheme::Legacy,
+        };
+        match shape(env, name, ctors, &self.pos, i, scheme) {
             Ok(m) => {
                 self.modelled += 1;
+                match scheme {
+                    Scheme::Tool => self.modelled_tool += 1,
+                    Scheme::Legacy => self.modelled_legacy += 1,
+                }
                 self.key(env, name, &m, schedule);
             }
             Err(why) => self.decline(env, name, ctors, why),
@@ -604,8 +778,8 @@ fn export_recs<'e>(env: &'e Environment, t: &Name) -> Vec<(Name, &'e ConstantInf
 /// own statements.**
 ///
 /// `MODELGEN.md` §1.1's property 1 from the consumer's side: take the export's
-/// declared type, rewrite `T ↦ T._model.self`, `T.ctorⱼ ↦ T._model.ctor_j`,
-/// `T.rec_m ↦ T._model.rec_m`, and the result must be the model declaration's
+/// declared type, rewrite each of `T`, its constructors and its recursors to
+/// the model name [`Scheme`] gives it, and the result must be the model's
 /// declared type **on the nose**. Property 2 is read the other way round: the
 /// ι theorem's own left-hand side says which constructor it is about, and that
 /// is compared against the rule the export's recursor carries at that index.
@@ -618,8 +792,9 @@ fn shape(
     ctors: &[(Name, E)],
     pos: &HashMap<Name, usize>,
     i: usize,
+    scheme: Scheme,
 ) -> Result<Model, Missing> {
-    let self_n = carrier_name(t);
+    let self_n = scheme.carrier(t);
     let recs = export_recs(env, t);
 
     // The rewriting, built before anything is compared. Its *keys* are the
@@ -630,10 +805,10 @@ fn shape(
     let mut rho: HashMap<Name, Name> = HashMap::new();
     rho.insert(*t, self_n);
     for (j, (c, _)) in ctors.iter().enumerate() {
-        rho.insert(*c, ctor_name(t, j));
+        rho.insert(*c, scheme.ctor(t, j, c));
     }
     for (k, (r, _)) in recs.iter().enumerate() {
-        rho.insert(*r, rec_name(t, k));
+        rho.insert(*r, scheme.rec(t, k, r));
     }
 
     // ── the carrier ─────────────────────────────────────────────────────────
@@ -645,18 +820,14 @@ fn shape(
     // (`MODELGEN.md` §1.3): the filter declined the declaration and said which
     // shape stopped it, and a consumer that treated that as a failure would
     // turn every unsupported nested shape into a broken file.
-    let carrier = model_const(env, pos, &self_n, i, Missing::NoCarrier)?;
-    let ConstantInfo::Def { .. } = carrier else { return Err(Missing::Carrier) };
+    carrier_of(env, t, pos, i, scheme)?;
     let Some(t_ci @ ConstantInfo::Inductive { .. }) = env.get(t) else {
         return Err(Missing::Carrier)
     };
-    if at_export_levels(carrier, t_ci).ok_or(Missing::Carrier)? != *t_ci.ty() {
-        return Err(Missing::Carrier)
-    }
 
     let mut mono: Vec<(Name, Name)> = vec![(*t, self_n)];
     for (j, (c, c_ty)) in ctors.iter().enumerate() {
-        let m = ctor_name(t, j);
+        let m = scheme.ctor(t, j, c);
         let ci = model_const(env, pos, &m, i, Missing::Ctor)?;
         // At the *declaration's* level parameters, for [`at_export_levels`]'s
         // reason: `MODELGEN.md` §1 says every generated constant carries `ℓ⃗`,
@@ -675,7 +846,7 @@ fn shape(
     }
 
     // ρ read backwards, for [`iota_key`]: an ι theorem's major is written in
-    // the *model's* names at the root — `T._model.ctor_j`, because
+    // the *model's* names at the root — `c._model`, because
     // `MODELGEN.md` §1.1's rewriting reaches into the rule's own statement —
     // and in the container's at a mimic, where `List.cons` is nobody's model
     // and is left alone. So the head read off the statement is mapped back
@@ -687,7 +858,7 @@ fn shape(
     let mut out_recs: Vec<(Name, Name)> = Vec::new();
     let mut iotas: Vec<(Name, Name, Name)> = Vec::new();
     for (k, (r, r_ci)) in recs.iter().enumerate() {
-        let m = rec_name(t, k);
+        let m = scheme.rec(t, k, r);
         let ci = model_const(env, pos, &m, i, Missing::Rec)?;
         if at_export_levels(ci, r_ci).ok_or(Missing::Rec)? != rename(&rho, r_ci.ty()) {
             return Err(Missing::Rec)
@@ -698,7 +869,7 @@ fn shape(
         // theorem's **own left-hand side** rather than trusted from the index.
         let ConstantInfo::Recursor { rules, .. } = r_ci else { return Err(Missing::Rec) };
         for (j, (rule_ctor, _)) in rules.iter().enumerate() {
-            let thm = iota_name(t, k, j);
+            let thm = scheme.iota(t, k, r, j);
             let thm_ci = model_const(env, pos, &thm, i, Missing::Iota)?;
             if thm_ci.lparams().len() != r_ci.lparams().len() {
                 return Err(Missing::Iota)
@@ -714,9 +885,47 @@ fn shape(
     Ok(Model { mono, recs: out_recs, iotas })
 }
 
+/// **The carrier of `T`'s model in `scheme`, checked against `T`'s own type.**
+///
+/// Split out of [`shape`] because it is also **the scheme decision**
+/// ([`Recogniser::step`]): a well-formed `T._model` is the evidence that the
+/// external producer ran over this file, and it is the *only* evidence taken.
+/// Once it is there the whole tower is read in [`Scheme::Tool`] and a later
+/// absence is a decline; when it is not, the legacy tower is looked for instead.
+///
+/// The check is `T`'s declared type on the nose — `∀p⃗, Sort u`, since a
+/// producer declines a declaration with indices — which is what stops the
+/// scheme decision being a bare name lookup. It is not enough on its own to
+/// stop a squatter: `nested_keying`'s `def UTree._model.self : Type := N` has
+/// exactly `UTree`'s type and passes here, and is stopped by the position
+/// check inside [`model_const`] and then by the constructors. The module
+/// header's "why this is a table and not a name rule" is the full argument.
+///
+/// **The absence of the carrier is [`Missing::NoCarrier`] and not an error**
+/// (`MODELGEN.md` §1.3): the producer declined the declaration and said which
+/// shape stopped it, and a consumer that treated that as a failure would turn
+/// every unsupported nested shape into a broken file.
+fn carrier_of<'e>(
+    env: &'e Environment,
+    t: &Name,
+    pos: &HashMap<Name, usize>,
+    i: usize,
+    scheme: Scheme,
+) -> Result<&'e ConstantInfo, Missing> {
+    let carrier = model_const(env, pos, &scheme.carrier(t), i, Missing::NoCarrier)?;
+    let ConstantInfo::Def { .. } = carrier else { return Err(Missing::Carrier) };
+    let Some(t_ci @ ConstantInfo::Inductive { .. }) = env.get(t) else {
+        return Err(Missing::Carrier)
+    };
+    if at_export_levels(carrier, t_ci).ok_or(Missing::Carrier)? != *t_ci.ty() {
+        return Err(Missing::Carrier)
+    }
+    Ok(carrier)
+}
+
 /// **One model constant, if the file settles it strictly before position `i`.**
 ///
-/// `⟦T⟧` is resolved at `T`'s own position out of `⟦T._model.self⟧`, so a model
+/// `⟦T⟧` is resolved at `T`'s own position out of the carrier's, so a model
 /// declared level with — or after — the declaration it models is one the alias
 /// cannot look up. `modelgen` splices the model *before* the nested inductive,
 /// so this holds for anything it wrote; it is checked because a `_model` name

@@ -89,6 +89,10 @@ pub struct Facts {
     /// same place and for the same reason as the three above.
     pub nested_seen: usize,
     pub nested_models: usize,
+    /// `nested_models` split by producer —
+    /// [`crate::mini::nested_splice::Scheme`]. The two sum to `nested_models`.
+    pub nested_models_tool: usize,
+    pub nested_models_legacy: usize,
 }
 
 pub struct Loaded {

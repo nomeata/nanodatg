@@ -193,6 +193,12 @@ pub struct Pass {
     xenv_extra: usize,
     pub nested_seen: usize,
     pub nested_models: usize,
+    /// [`Pass::nested_models`], split by which producer wrote the tower — see
+    /// [`crate::mini::nested_splice::Recognised::modelled_tool`]. Carried all
+    /// the way to the `nested` row `checker` prints, because a rename that
+    /// stopped recognising and started declining moves no total.
+    pub nested_models_tool: usize,
+    pub nested_models_legacy: usize,
 }
 
 /// Whether per-declaration progress is printed — `NANODA_DECL_PROGRESS`, read
@@ -268,6 +274,8 @@ impl Pass {
             xenv_extra: 0,
             nested_seen: 0,
             nested_models: 0,
+            nested_models_tool: 0,
+            nested_models_legacy: 0,
         }
     }
 
@@ -445,6 +453,8 @@ impl Pass {
         app.nested = self.nested.nested.clone();
         self.nested_seen = self.nested.seen;
         self.nested_models = self.nested.modelled;
+        self.nested_models_tool = self.nested.modelled_tool;
+        self.nested_models_legacy = self.nested.modelled_legacy;
     }
 
     /// The certified prefix, at whatever point the run stopped.
