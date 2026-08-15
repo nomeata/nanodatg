@@ -1,0 +1,45 @@
+/- **A nested declaration that is also structure-like, and whose projection is
+   used.**
+
+   `Wrap` is nested — its one constructor's field mentions `Wrap` under the
+   foreign inductive `List` — and it is single-constructor and unindexed, so
+   Lean's kernel treats it as structure-like and `w.1` elaborates to a
+   primitive `Expr.proj`. `lean-inductive-models` therefore emits
+   `Wrap._model.proj_0` and `Wrap._model.proj_0.iota` beside the carrier,
+   constructors, recursors and iota rules.
+
+   Both halves are load-bearing and neither existing fixture has both. The
+   producer's `nest_odd_shapes` has nested structure-like declarations and
+   never projects out of one; its `structure_projections` projects freely and
+   its structure-like declarations are not nested. A file needs both for a
+   projection to reach the model route at all.
+
+   `unwrapped` is the use site: it is what makes the run owe
+   `⟦Wrap.proj 0 w⟧`, and without it the projection family is emitted, ignored
+   and measures nothing. -/
+prelude
+
+--#export Eq List Wrap unwrapped rewrapped
+
+unsafe axiom lcErased : Type
+unsafe axiom lcAny : Type
+unsafe axiom lcVoid : Type
+
+universe u
+
+inductive Eq : {α : Sort u} → α → α → Prop where
+  | refl (a : α) : Eq a a
+
+inductive List (α : Type) : Type where
+  | nil : List α
+  | cons : α → List α → List α
+
+/-- Nested, single-constructor and unindexed: structure-like *and* modelled. -/
+inductive Wrap : Type where
+  | mk : List Wrap → Wrap
+
+/-- The projection use site. -/
+def unwrapped (w : Wrap) : List Wrap := w.1
+
+/-- And one that puts it back, so the constructor is used too. -/
+def rewrapped (w : Wrap) : Wrap := Wrap.mk w.1

@@ -1328,6 +1328,62 @@ fn a_polymorphic_declarations_model_is_keyed_at_every_instantiation() {
     );
 }
 
+/// **A projection whose declaration took the model route declines by name and
+/// is counted, instead of filing certification debt under a green
+/// declaration.**
+///
+/// `tool_nested_proj.ndjson` is the input that makes this reachable, and it had
+/// to be written because no existing fixture has both halves.
+/// `zoneb::model_route_untranslated` fires only for a declaration that is
+/// **nested** — so it takes the model route today, with the recognition gate
+/// still closed — **and structure-like**, so Lean mints an `Expr::proj` out of
+/// it, **and actually projected somewhere in the file**, so the projection is
+/// demanded. The producer's `nest_odd_shapes` has the first two and never
+/// projects; its `structure_projections` projects freely and its
+/// structure-like declarations are not nested. `Wrap` is
+///
+/// ```lean
+/// inductive Wrap : Type where | mk : List Wrap → Wrap
+/// def unwrapped (w : Wrap) : List Wrap := w.1
+/// ```
+///
+/// — nested through `List`, single-constructor and unindexed. Its source is
+/// checked in beside it as `tool_nested_proj.lean.txt`, **not** `.lean`, on
+/// purpose: `scripts/export-fixture.sh` globs `*.lean` recursively and would
+/// rewrite the export with `modelgen`'s, which cannot produce the projection
+/// family at all. It was exported with `lean4export` at the pinned toolchain
+/// and filtered with `lean-inductive-models --nested --simple --no-mutual
+/// --no-basic`.
+///
+/// # What it pins
+///
+/// Before this change the run read `accept 35 declarations`, `untranslated: 2`
+/// — both `PSigma'`, neither `Wrap` — with `proj(Wrap)=2` in the ledger row.
+/// `Wrap` had a carrier, constructors, a recursor and its ι rules; only the two
+/// projections out of it were uncertified, and they were filed as *conversion
+/// debt* under a declaration whose own verdict said translated.
+///
+/// **The last assertion is the one that stops this passing vacuously.** A
+/// change that stopped recognising `Wrap` at all would also remove `proj(Wrap)`
+/// and would still produce a decline — a different one, for the opposite
+/// reason. So the model must still be recognised: `models=1 tool=1`.
+#[test]
+fn a_model_route_projection_declines_by_name_instead_of_filing_debt() {
+    let (_, out) = run("tool_nested_proj", &["--mutual", "--nested", "--verbose"]);
+    assert!(
+        out.contains("notrans:ind-spec(Wrap: model projection table not recognised)"),
+        "the declaration must be untranslated by name; got:\n{out}",
+    );
+    assert!(
+        !out.contains("proj(Wrap)"),
+        "the projection must not be filed as conversion debt; got:\n{out}",
+    );
+    assert!(
+        out.contains("nested\tseen=1\tmodels=1\ttool=1\tlegacy=0"),
+        "and the model must still be recognised, or this passes for the wrong reason; got:\n{out}",
+    );
+}
+
 /// **The legacy tower is still read, and this says which fixtures read it.**
 ///
 /// The companion to [`the_recognition_reads_the_external_tools_names`], and it

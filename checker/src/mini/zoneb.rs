@@ -322,6 +322,70 @@ fn model_alias(
     Ok(())
 }
 
+/// **A consumer wanted a `Translated` for a declaration that took the model
+/// route, where there is none — so say the declaration is untranslated,
+/// by name, instead of letting the consumer file certification debt.**
+///
+/// [`model_alias`] publishes one `Interp::consts` entry and nothing else.
+/// [`build`] is what inserts `IndApparatus::decls`, and the model route returns
+/// before it. Every consumer that needs the constructed package — the
+/// projection routes are the ones this exists for — therefore misses, and its
+/// own miss label is a *conversion* gap: `proj(T)`, which lands in the ledger's
+/// debt column while the declaration itself still reads as translated.
+///
+/// **That is the wrong direction and it is why this is here.** Measured on
+/// `tool_nested_proj`, whose `Wrap` is nested, structure-like and modelled:
+/// before this, `accept 35 declarations`, `untranslated: 2` (both `PSigma'`,
+/// neither `Wrap`), and `proj(Wrap)=2` in the ledger row. `Wrap` had a carrier,
+/// constructors, a recursor and its ι rules and *looked* complete; the two
+/// projections out of it were simply uncertified. A reader who trusts the
+/// declaration-level verdict is misled, and the model-basis rule is that a
+/// non-basis inductive is used or is declined **by name**.
+///
+/// # Why the model route and not "no `decls` entry"
+///
+/// The condition is `model_of` carrying this exact `(T, σ)` — the declaration's
+/// interpretation *is* a model alias here — and not the mere absence of a
+/// `decls` entry. Absence has other causes: a declaration whose `build`
+/// declined already filed its own reason through [`record_reason`], and one
+/// that has not been reached yet must not be condemned early. Only the model
+/// route is a case where the package will never arrive however long anyone
+/// waits.
+///
+/// # Why this is a decline and not a repair
+///
+/// It is deliberately not the fix. The producer *does* emit the family —
+/// `Wrap._model.proj_0` and `Wrap._model.proj_0.iota` are in that same export,
+/// unread — so the repair is to recognise them, and this is what stands in
+/// front of it: until the recogniser reads them, the declaration is honestly
+/// untranslated rather than dishonestly complete. **When the projection family
+/// is recognised this stops firing**, because `model_of`'s declarations will
+/// carry a projection package of their own; it is not a permanent narrowing.
+///
+/// Returns `None` when the declaration did not take the model route, and the
+/// caller keeps its own label.
+pub(crate) fn model_route_untranslated(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    inst: &[u32],
+    why: &'static str,
+) -> Option<Gap> {
+    let key = (*ind, inst.to_vec());
+    let app = c.interp()?.ind_apparatus()?;
+    if !app.model_of.contains_key(&key) {
+        return None
+    }
+    let g = Gap::IndSpec(*ind, why);
+    // Filed at the declaration's key, which is where `Untranslated::of` reads
+    // it and where a later [`ensure`] will short-circuit on it — the same cell
+    // `build`'s own declines use, so the census needs no new column.
+    app.untranslated.insert(key, g.clone());
+    Some(g)
+}
+
+/// The reason [`model_route_untranslated`] files for a projection.
+pub(crate) const NO_PROJECTION_MODEL: &str = "model projection table not recognised";
+
 /// File a decline under the table [`recorded_reason`] will read it from — the
 /// declaration's, the constructor's or the recursor's, by what the constant is.
 ///
