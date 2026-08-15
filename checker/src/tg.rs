@@ -11967,6 +11967,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         idx: usize,
         _cfun_name: NamePtr<'t>,
         _cfun_levels: LevelsPtr<'t>,
+        fields: &[ExprPtr<'t>],
     ) -> Result<CondEq, &'static str> {
         let n = d.dr.minors.len();
         let ni = d.dr.xvs.len();
@@ -12107,8 +12108,233 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the derived premise is not IndexedDepRecursor's PRE")
         }
         PRE_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _ = (pre_thm, rule, ctx);
-        Err("iota: PRE is discharged; the rule's own composite is not yet built")
+        let _ = rule;
+
+        // ── The composite: the rule at this site's fields ────────────────────
+        //
+        // `nest_chain` has already brought the redex to `app(irec, ⟦major⟧)`,
+        // so what is owed from here is that term's equation with the reduct.
+        let ap = self.pre.ap.clone();
+        let irec = self
+            .ix_dep_rec_at(d, &ps, &c, &minors, &d.elim.target)
+            .ok_or("iota: the indexed recursor term could not be built")?;
+        let major_t = ta[ta.len() - 1].clone();
+
+        // The use site's own fields, in declared order, with their typings at
+        // the types their binders declare — which is the only place a local has
+        // one. Asking at `derived`'s set instead was measured and returns
+        // nothing: `ind(p⃗, d⃗ᵢⱼ)` is not any binder's declared type, and the
+        // distance between the two is a bridge, not an inference.
+        let order = d.tr.ii.spec.base.ctors[idx].order.clone();
+        if fields.len() != order.len() {
+            return Err("iota: the major premise's field count is not the constructor's")
+        }
+        let mut f_hyps: Vec<Formula> = Vec::new();
+        let mut f_terms: Vec<Term> = Vec::with_capacity(fields.len());
+        let mut f_decl: Vec<Term> = Vec::with_capacity(fields.len());
+        let mut f_mems: Vec<Thm> = Vec::with_capacity(fields.len());
+        for fe in fields.iter() {
+            let t = self.interp(ctx, *fe);
+            let Expr::Local { binder_type, .. } = ctx.read_expr(*fe) else {
+                return Err("iota: a constructor field at this use site is not a local")
+            };
+            let dt = self.interp(ctx, binder_type);
+            let Some((thm, used)) = self.has_type_a(ctx, *fe, &dt, &f_hyps, 0) else {
+                return Err("iota: a constructor field at this use site has no typing")
+            };
+            f_hyps = used;
+            f_terms.push(t);
+            f_decl.push(dt);
+            f_mems.push(thm);
+        }
+        // Restate every field typing on the final list, and add the
+        // parameters', which the constructor's own nest wants first.
+        let fh = conj_of(&f_hyps);
+        let mut ctor_mems: Vec<Thm> = Vec::with_capacity(np + fields.len());
+        for (l, (pt, phs)) in _obligations[..np].iter().enumerate() {
+            let _ = l;
+            let Some(p) = reassume(pt, phs, &f_hyps) else {
+                return Err("iota: restating a parameter's typing at this use site failed")
+            };
+            ctor_mems.push(p);
+        }
+        for (l, thm) in f_mems.iter().enumerate() {
+            let want = Formula::mem(f_terms[l].clone(), f_decl[l].clone());
+            let Some(t) = reassume(thm, &f_hyps, &f_hyps).filter(|t| {
+                u_concl(t, fh.as_ref()) == Some(want.clone())
+            }) else {
+                return Err("iota: a field's typing is not about the field")
+            };
+            ctor_mems.push(t);
+        }
+        let (mut ys, mut ts) = (Vec::new(), Vec::new());
+        for (pos, sl) in order.iter().enumerate() {
+            match sl {
+                Slot::Plain => ys.push(f_terms[pos].clone()),
+                Slot::Rec => ts.push(f_terms[pos].clone()),
+            }
+        }
+
+        // ── Step 2: `⊢ ⟦major⟧ = ctorᵢ(y⃗,t⃗)` ────────────────────────────────
+        let mut ctor_args = ps.clone();
+        ctor_args.extend(f_terms.iter().cloned());
+        let (_, cab) = d
+            .tr
+            .ctor_abbrev
+            .get(idx)
+            .ok_or("iota: mini published no constructor abbreviation")?;
+        let cab = derived::inst_all(cab, &ctor_args)
+            .ok_or("iota: instantiating the constructor abbreviation at this site failed")?;
+        let (c_sym, c_term) = cab
+            .concl()
+            .as_eq()
+            .ok_or("iota: the constructor abbreviation is not an equation")?;
+        // The abbreviation chain first, the beta spine only if it does not
+        // reach — [`Self::ix_concl_bridge`]'s order, and for its reason: which
+        // of the two the site wrote is not a fact this code knows.
+        let spine = match self.ix_arg_bridge(ctx, &major_t, &c_sym, &f_hyps, true) {
+            Some(b) => b,
+            None => self.ix_ctor_spine(&major_t, &ctor_args, &ctor_mems, &c_sym, &f_hyps)?,
+        };
+        let joined = self
+            .u_eq_trans(&spine.thm, &u_a1i(&cab, fh.as_ref()), fh.as_ref())
+            .ok_or("iota: composing the major's spine with mini's constructor failed")?;
+        let major_eq = CondEq::new(joined, f_hyps.clone())
+            .ok_or("iota: the major premise's bridge is not an equation")?;
+        let at_ctor = self
+            .ceq_congr(ap.app, &[CondEq::refl(irec.clone()), major_eq])
+            .ok_or("iota: congruence at the indexed recursor refused")?;
+
+        // ── Step 3: the rule, at this site's fields, with `Hᵢ` discharged ────
+        let hyps = merge_hyps(&pre_hyps, &f_hyps);
+        let hh = conj_of(&hyps);
+        let Some(pre_j) = reassume(&pre_thm, &pre_hyps, &hyps) else {
+            return Err("iota: restating PRE on the site's assumptions failed")
+        };
+        let Some(rule_i) = d.dr.iota.get(idx).and_then(|r| derived::inst_all(r, &at)) else {
+            return Err("iota: mini's indexed iota rule did not instantiate at this site")
+        };
+        let Some(over) = u_mp(&u_a1i(&rule_i, hh.as_ref()), &pre_j, hh.as_ref()) else {
+            return Err("iota: discharging the indexed premise into the rule failed")
+        };
+        // `iota_vars` binds plains then recursives — `GenRecursor::iota`'s
+        // prefix, which is **not** the declared order the fields arrive in.
+        let mut fargs = ys.clone();
+        fargs.extend(ts.iter().cloned());
+        let mut at_f = over;
+        for a in &fargs {
+            at_f = u_inst1(&at_f, a, hh.as_ref())
+                .ok_or("iota: instantiating the indexed rule at a field failed")?;
+        }
+        // `Hᵢ`, atom by atom in declared order: the field's own typing moved
+        // from the type its binder declares onto the set `derived` states the
+        // atom at. That move is `ix_slot_bridge`, the same one the minor
+        // premise's walk uses — the atoms are the same shape.
+        let atoms_i = d.dr.iota_atoms.get(idx).cloned().unwrap_or_default();
+        let mut hi_thms: Vec<Thm> = Vec::with_capacity(atoms_i.len());
+        let mut hi_forms: Vec<Formula> = Vec::with_capacity(atoms_i.len());
+        {
+            let (yvs, tvs) = d
+                .dr
+                .iota_vars
+                .get(idx)
+                .ok_or("iota: the indexed rule binds no fields for this constructor")?;
+            let mut hsub: Vec<(kernel::FreeVar, Term)> = sub.clone();
+            let (mut pj, mut rj) = (0usize, 0usize);
+            for sl in order.iter() {
+                match sl {
+                    Slot::Plain => {
+                        hsub.push((yvs[pj], ys[pj].clone()));
+                        pj += 1;
+                    }
+                    Slot::Rec => {
+                        hsub.push((tvs[rj], ts[rj].clone()));
+                        rj += 1;
+                    }
+                }
+            }
+            let mut rec_seen = 0usize;
+            for (pos, a) in atoms_i.iter().enumerate() {
+                let f = crate::mini::rec_dep::subst_f(a, &hsub);
+                let (subj, set) =
+                    f.as_mem().ok_or("iota: an atom of the rule's antecedent is not a membership")?;
+                if subj != f_terms[pos] {
+                    return Err("iota: an atom of the rule's antecedent is about another field")
+                }
+                let j = match order[pos] {
+                    Slot::Rec => {
+                        let jj = rec_seen;
+                        rec_seen += 1;
+                        jj
+                    }
+                    Slot::Plain => usize::MAX,
+                };
+                let moved = if set == f_decl[pos] {
+                    reassume(&f_mems[pos], &f_hyps, &hyps)
+                        .ok_or("iota: restating a field's typing failed")?
+                } else {
+                    let b = self.ix_slot_bridge(
+                        ctx, d, idx, j, &set, &f_decl[pos], &ps, &ys, &f_hyps, true,
+                    )?;
+                    let bh = conj_of(&b.hyps);
+                    let back = self
+                        .u_eq_symm(&b.thm, bh.as_ref())
+                        .ok_or("iota: reversing a field's set bridge failed")?;
+                    // The bridge may have acquired a typing about the site's
+                    // own local; it joins the list rather than being refused,
+                    // and the escape ledger charges for it.
+                    if merge_hyps(&hyps, &b.hyps) != hyps {
+                        return Err("iota: a field's set bridge acquired a foreign assumption")
+                    }
+                    let (Some(mm), Some(bb)) = (
+                        reassume(&f_mems[pos], &f_hyps, &hyps),
+                        reassume(&back, &b.hyps, &hyps),
+                    ) else {
+                        return Err("iota: restating a field's typing and bridge failed")
+                    };
+                    self.uu_mem_along(&mm, &bb, hh.as_ref())
+                        .ok_or("iota: moving a field's typing onto the rule's atom failed")?
+                };
+                hi_forms.push(f);
+                hi_thms.push(moved);
+            }
+        }
+        let fired = if atoms_i.is_empty() {
+            at_f
+        } else {
+            let mut acc: Option<Thm> = None;
+            for t in hi_thms.iter().rev() {
+                acc = Some(match acc {
+                    None => t.clone(),
+                    Some(a) => u_and_intro(t, &a, hh.as_ref())
+                        .ok_or("iota: conjoining the rule's antecedent failed")?,
+                });
+            }
+            let hi = acc.ok_or("iota: the rule's antecedent is empty after all")?;
+            if u_concl(&hi, hh.as_ref()) != derived::conj_of(&hi_forms) {
+                return Err("iota: the derived antecedent is not the rule's Hᵢ")
+            }
+            u_mp(&at_f, &hi, hh.as_ref())
+                .ok_or("iota: discharging the rule's antecedent failed")?
+        };
+        let fired = CondEq::new(fired, hyps.clone())
+            .ok_or("iota: the fired indexed rule is not an equation")?;
+
+        // Join step 2 onto step 3: the rule speaks of `ctorᵢ(y⃗,t⃗)` and the
+        // nest arrived at `app(irec, ⟦major⟧)`.
+        let out = self
+            .ceq_trans(&at_ctor, &fired)
+            .ok_or("iota: chaining the major's bridge onto the fired rule failed")?;
+        let lhs = ap.apply(irec, major_t);
+        let Some((l, _)) = out.as_eq() else {
+            return Err("iota: the composite is not an equation")
+        };
+        if l != lhs {
+            return Err("iota: the composite does not start at the nest's own bottom")
+        }
+        let _ = c_term;
+        IX_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(out)
     }
 
     /// **`⊢ H → ICOD(⟦C⟧, T)`** — `crate::mini::rec_ix_dep`'s `icod_at_rung`
@@ -12524,7 +12750,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     Some(Slot::Plain) => usize::MAX,
                     None => step - (k + m),
                 };
-                let eq = self.ix_slot_bridge(ctx, d, i, j, &dset, &dom_t, ps, &ys, &out_hyps)?;
+                let eq =
+                    self.ix_slot_bridge(ctx, d, i, j, &dset, &dom_t, ps, &ys, &out_hyps, false)?;
                 // The bridge is stated under the site's own assumptions; the
                 // walk runs under `h_all = h_out ∧ h_pw`. Lift it the way the
                 // carrier bridge is lifted on the non-indexed row — through
@@ -12660,12 +12887,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ps: &[Term],
         ys: &[Term],
         out_hyps: &[Formula],
+        acquire: bool,
     ) -> Result<CondEq, &'static str> {
         let ni = d.tr.ii.spec.num_indices();
         if j == usize::MAX {
             // A plain field: one published abbreviation, used right-to-left.
             return self
-                .ix_arg_bridge(ctx, dset, dom_t, out_hyps)
+                .ix_arg_bridge(ctx, dset, dom_t, out_hyps, acquire)
                 .ok_or("iota: a plain field's declared domain has no bridge")
         }
         // `⊢ dᵢⱼₖ(p⃗,y⃗) = ⟦dₖ⟧`, one per index of this child.
@@ -12738,7 +12966,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         // …then from there to the binder's own domain.
         let tail = self
-            .ix_arg_bridge(ctx, dom_t, &mid, out_hyps)
+            .ix_arg_bridge(ctx, dom_t, &mid, out_hyps, acquire)
             .ok_or("iota: a recursive slot's binder domain has no bridge to the carrier")?;
         let back = {
             let hh = conj_of(&tail.hyps);
@@ -12834,7 +13062,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             } else {
                 return Err("iota: a published conclusion axiom is about another symbol")
             };
-            let head = match self.ix_arg_bridge(ctx, from, &near, hyps) {
+            let head = match self.ix_arg_bridge(ctx, from, &near, hyps, false) {
                 Some(b) => b,
                 None if pos == ni => {
                     // **The constructor's own spine.** `⟦cᵢ p⃗ f⃗⟧` is a lambda
@@ -12898,6 +13126,21 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut cur = head;
         let mut acc = CondEq::refl(cur.clone());
         for (l, (arg, mem)) in args.iter().zip(mems.iter()).enumerate() {
+            // **The head may be an abbreviation.** `⟦ixba a⟧`'s head is the
+            // `def`, not the constructor, and only mini's own lambda graph has
+            // a beta certificate — so the defining equations are consumed
+            // first, at every level, before a step is attempted.
+            while let Some(step) = self.abbrev_defs.get(&cur).cloned() {
+                let Some((_, next)) = step.concl().as_eq() else { break };
+                let hh = conj_of(&acc.hyps);
+                let Some(j) = self.u_eq_trans(&acc.thm, &u_a1i(&step, hh.as_ref()), hh.as_ref())
+                else {
+                    return Err("iota: unfolding the constructor's head failed")
+                };
+                acc = CondEq::new(j, acc.hyps)
+                    .ok_or("iota: the unfolded constructor head is not an equation")?;
+                cur = next;
+            }
             let dom = u_concl(mem, conj_of(hyps).as_ref())
                 .and_then(|f| f.as_mem())
                 .map(|(_, s)| s)
@@ -12968,6 +13211,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         from: &Term,
         to: &Term,
         hyps: &[Formula],
+        acquire: bool,
     ) -> Option<CondEq> {
         if from == to {
             return Some(CondEq::refl(from.clone()))
@@ -12979,28 +13223,55 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let back = u_eq_symm(&mut self.env_mut(), &t, None)?;
             return CondEq::plain(back)
         }
-        // The contraction loop, `dep_minor_typed`'s: step the head and require
-        // that no step acquires an assumption the caller does not already hold.
+        // The contraction loop, `dep_minor_typed`'s — except that a step which
+        // **acquires** an assumption is carried rather than refused.
+        //
+        // That difference is deliberate and was measured: the non-indexed walk
+        // can insist on `used == hyps` because its field domains are the
+        // declaration's own `βⱼ` symbols, while an indexed slot's binder domain
+        // at a use site is whatever the site wrote — `IxA`, a `def` — and
+        // contracting it goes through a typing obligation about the site's own
+        // local. Refusing that is refusing the fixture. The assumption stays in
+        // the returned list, so the escape ledger still charges for it.
         let mut acc: Option<Thm> = None;
         let mut cur = from.clone();
+        let mut used: Vec<Formula> = hyps.to_vec();
         for _ in 0..DELTA_FUEL {
             self.record_shape(&cur);
-            let (step, next, used) = self.target_head_step(ctx, &cur, hyps, 0)?;
-            if used != hyps {
+            // **δ before the head step.** A use site writes a domain through
+            // its own `def` — `IxA`, not `Ix Tag.ta` — and that is a nullary
+            // abbreviation symbol `target_head_step` has no head to step. The
+            // recursor's *declared* minor type never has this shape, which is
+            // why the minor premise's own walk never needed it and this one
+            // does.
+            let (step, next, grown) = match self.abbrev_defs.get(&cur).cloned() {
+                Some(dstep) => {
+                    let (_, nxt) = dstep.concl().as_eq()?;
+                    (u_a1i(&dstep, conj_of(&used).as_ref()), nxt, used.clone())
+                }
+                None => self.target_head_step(ctx, &cur, &used, 0)?,
+            };
+            if !acquire && grown != used {
                 return None
             }
+            let gh = conj_of(&grown);
             acc = Some(match acc {
                 None => step,
-                Some(a) => self.u_eq_trans(&a, &step, conj_of(hyps).as_ref())?,
+                Some(a) => {
+                    let a = reassume(&a, &used, &grown)?;
+                    self.u_eq_trans(&a, &step, gh.as_ref())?
+                }
             });
+            used = grown;
             cur = next;
             if cur == *to {
-                return CondEq::new(acc?, hyps.to_vec())
+                return CondEq::new(acc?, used)
             }
             if let Some(t) = self.unfolds_to(&cur, to) {
                 let a = acc?;
-                let joined = self.u_eq_trans(&a, &u_a1i(&t, conj_of(hyps).as_ref()), conj_of(hyps).as_ref())?;
-                return CondEq::new(joined, hyps.to_vec())
+                let gh = conj_of(&used);
+                let joined = self.u_eq_trans(&a, &u_a1i(&t, gh.as_ref()), gh.as_ref())?;
+                return CondEq::new(joined, used)
             }
         }
         None
@@ -16386,6 +16657,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let usable = match &bottom {
                 RecBottom::Nat(_) => self.nat_rec_shape(ctx, &name).is_some(),
                 RecBottom::Dep(dp, _) => dp.elim.is_some(),
+                // **The indexed row is adopted for the same reason the
+                // dependent one is, and omitting it was a silent mismatch.**
+                // `interp` gives a recursor mini has stored *mini's* term, so a
+                // nest built here would start the chain at a head the redex's
+                // own interpretation is not — and `derive_iota_core`'s final
+                // check is the only thing that noticed.
+                RecBottom::IxDep(_) => true,
                 _ => false,
             };
             usable.then(|| {
@@ -16684,20 +16962,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // `app(drec, major)`; consume the stored equation to reach the exact
         // dependent recursor its computation theorem is about.
         if nest.adopted {
-            if let RecBottom::Dep(dp, _) = &nest.bottom {
-                let elim = dp.elim.as_ref().ok_or("iota: adopted dependent nest has no bottom evidence")?;
+            // Step 1 of `iota_ix_dep`'s composite, and its non-indexed twin:
+            // mini's nest contracts to *its own* abbreviation of the applied
+            // recursor, and the stored defining equation is what reaches the
+            // term its computation theorem is about.
+            let elim = match &nest.bottom {
+                RecBottom::Dep(dp, _) => dp.elim.clone(),
+                RecBottom::IxDep(d) => Some(d.elim.clone()),
+                _ => None,
+            };
+            if let Some(elim) = elim {
                 let unfold = derived::inst_all(&elim.ax, &ta)
                     .and_then(CondEq::plain)
-                    .ok_or("iota: mini's dependent nest bottom did not instantiate")?;
+                    .ok_or("iota: mini's nest bottom did not instantiate")?;
                 chain = self
                     .ceq_trans(&chain, &unfold)
-                    .ok_or("iota: chaining mini's dependent nest bottom failed")?;
+                    .ok_or("iota: chaining mini's nest bottom failed")?;
             }
         }
         let fired = match nest.bottom.clone() {
             RecBottom::IxDep(d) => self.fire_ix_dep(
                 ctx, &d, nest, cfun, args, &ta, &doms, &dom_exprs, &obligations, idx, name,
-                levels,
+                levels, &fields,
             )?,
             RecBottom::Enum(br) => self.fire_enum(&br, &ta, idx)?,
             // `obligations` is not passed, and the absence is load-bearing:
@@ -23196,6 +23482,8 @@ static IDEP_FIELDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// conjunct so that "every conjunct is in hand" and "the rule fired" stay two
 /// observations.
 static PRE_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **The indexed ι rule fired end to end at a use site.**
+static IX_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "stepcount")]
 fn note_ix_census_row(rec: &str, what: &str) {
@@ -23426,8 +23714,10 @@ pub fn origin_report() -> String {
                 IDEP_FIELDED.load(Relaxed),
             ));
             s.push_str(&format!(
-                "  indexed premise PRE = ICOD ∧ IDEP discharged at a use site — {}\n",
-                PRE_DONE.load(Relaxed)
+                "  indexed premise PRE = ICOD ∧ IDEP discharged at a use site — {}, \
+                 rule FIRED {}\n",
+                PRE_DONE.load(Relaxed),
+                IX_FIRED.load(Relaxed)
             ));
         }
         // A routed run names every declaration off the export file, so this is
