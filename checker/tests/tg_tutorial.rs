@@ -164,6 +164,66 @@ const FULLY_DERIVED: &[&str] = &[
     "030_letType",
     "031_letTypeDep",
     "032_letRed",
+
+    // ── The zeros that nothing was holding, added 2026-08-15 ────────────────
+    //
+    // Measured over the whole tutorial corpus at master `203b3ff`: **70 of the
+    // 91 exports are at zero gaps, and this list asserted 27 of them.** The 42
+    // below were at zero with nothing holding them there, so any of them could
+    // start gapping and no test would say so — the same hollow guarantee as an
+    // unbudgeted gap count, pointed the other way, and the cheaper of the two to
+    // lose because a regression here is invisible rather than merely unbounded.
+    //
+    // (`073_boolRecEqns` is the 43rd and is deliberately absent: it is held by
+    // `RECURSOR_DERIVED`, which asserts zero gaps *and* zero escapes, so listing
+    // it here as well would be a weaker restatement of a stronger assertion.)
+    //
+    // Nothing about these files changed; only the claim did. Together with
+    // `GAP_BUDGET`'s 25 and `GAP_LEDGER`'s row-by-row pin on `init-prelude`,
+    // every tutorial export is now either asserted at zero or pinned at a
+    // measured count.
+    "033_empty",
+    "034_boolType",
+    "035_twoBool",
+    "036_andType",
+    "037_prodType",
+    "038_pprodType",
+    "039_pUnitType",
+    "040_eqType",
+    "041_natDef",
+    "042_rbTreeDef",
+    "055_predWithTypeField",
+    "056_typeWithTypeField",
+    "057_typeWithTypeFieldPoly",
+    "059_emptyRec",
+    "060_boolRec",
+    "061_twoBoolRec",
+    "062_andRec",
+    "063_prodRec",
+    "064_pprodRec",
+    "065_punitRec",
+    "066_eqRec",
+    "067_nRec",
+    "068_rbTreeRef",
+    "069_boolPropRec",
+    "070_existsRec",
+    "071_sortElimPropRec",
+    "072_sortElimProp2Rec",
+    "078_And.right",
+    "079_Prod.snd",
+    "080_PProd.snd",
+    "084_projProp1",
+    "086_projProp3",
+    "090_projDataIndexRec",
+    "097_aNatLit",
+    "099_proofIrrelevance",
+    "101_proofIrrelevanceWhnf",
+    "115_rTreeRec",
+    "117_accRecType",
+    "120_quotMkType",
+    "121_quotIndType",
+    "122_quotLiftType",
+    "123_quotSoundType",
 ];
 
 /// Exports that still contain a gap, with the reason. Listing them explicitly
@@ -411,6 +471,13 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     ("undecidability/alg-conv-trans-acc-right", 248),
     ("undecidability/alg-conv-trans-quot-right", 9),
     ("undecidability/subject-reduction-redex", 275),
+    ("proof-irrel", 0),
+    // `good/`'s own root, and the last export in the corpus that was on no list
+    // at all. It is at **zero** gaps — pinned here rather than in
+    // [`FULLY_DERIVED`], whose loop is rooted at `good/tutorial` and cannot
+    // reach it. A budget of 0 is not a special case: the loop below fails on an
+    // increase and on a decrease alike, so this says "derived completely, and it
+    // must stay that way" in the same words as every other entry.
 ];
 
 /// Exports outside the inductive-free fragment that are nevertheless derived
@@ -495,6 +562,103 @@ fn the_bool_recursor_file_is_fully_derived() {
         assert!(derived > 0, "{name}: reported no derivation steps at all");
         assert_eq!(escaped_count(&f), 0, "{name}: a certificate reached the boundary still assuming something");
     }
+}
+
+/// **Every `good/` export is classified, and by exactly one mechanism.**
+///
+/// Measured 2026-08-15, the 99 non-`perf` exports partition: 69 in
+/// [`FULLY_DERIVED`], 1 in [`RECURSOR_DERIVED`], 26 in [`GAP_BUDGET`],
+/// `init-prelude` pinned row by row by [`GAP_LEDGER`], and the two the parser
+/// declines held by `corpus.rs` with their reason. That adds up.
+/// **Unasserted, it adds up only until someone adds a file** — and an export
+/// named by nothing is exactly the state 43 of these were in until that date:
+/// sitting at zero gaps with no assertion, so a regression in any of them would
+/// have been silent.
+///
+/// This keeps the arithmetic true rather than merely observed, and fails in
+/// three directions: an export named by nothing; an export named by two, which
+/// is how a file quietly acquires a gap budget while still being asserted at
+/// zero; and a list entry naming a file that is not there — the stale-waiver
+/// shape `scripts/arena.sh` already guards for its own accept-list, because an
+/// entry describing nothing makes the record a liar and the whole value of these
+/// lists is that they read as "this is what we know about".
+///
+/// It spawns nothing: it is arithmetic over the lists and one directory walk.
+#[test]
+fn every_good_export_is_named_by_exactly_one_ratchet() {
+    let root = corpus().join("good");
+    if skip_guard::absent(&root) {
+        return
+    }
+    // `<subdir>/<stem>` for a nested export, bare `<stem>` at `good/`'s root —
+    // the same spelling `GAP_BUDGET` uses.
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            if p.is_dir() {
+                // `perf/` is a benchmark corpus, not a correctness one, and is
+                // excluded everywhere else in this suite for the same reason.
+                if name != "perf" {
+                    walk(&p, &format!("{prefix}{name}/"), out);
+                }
+            } else if p.extension().is_some_and(|x| x == "ndjson") {
+                out.push(format!("{prefix}{}", name.trim_end_matches(".ndjson")));
+            }
+        }
+    }
+    let mut keys = Vec::new();
+    walk(&root, "", &mut keys);
+    assert!(!keys.is_empty(), "no exports found under {}", root.display());
+
+    // The two mechanisms that are not lists in this file.
+    const LEDGER_PINNED: &str = "init-prelude";
+    const DECLINED_IN_CORPUS_RS: [&str; 2] = ["level-index-out-of-order", "sparse-name-index"];
+
+    let stem = |k: &str| k.rsplit('/').next().unwrap().to_string();
+    let listed = |k: &str| -> Vec<&'static str> {
+        let s = stem(k);
+        let mut v = Vec::new();
+        if FULLY_DERIVED.contains(&s.as_str()) {
+            v.push("FULLY_DERIVED")
+        }
+        if RECURSOR_DERIVED.contains(&s.as_str()) {
+            v.push("RECURSOR_DERIVED")
+        }
+        if GAP_BUDGET.iter().any(|(n, _)| *n == k) {
+            v.push("GAP_BUDGET")
+        }
+        if k == LEDGER_PINNED {
+            v.push("GAP_LEDGER")
+        }
+        if DECLINED_IN_CORPUS_RS.contains(&k) {
+            v.push("corpus.rs (declined, with its reason)")
+        }
+        v
+    };
+    for k in &keys {
+        let on = listed(k);
+        assert_eq!(
+            on.len(),
+            1,
+            "{k} is named by {} mechanisms ({on:?}). Every `good/` export must be on exactly \
+             one: asserted at zero gaps (FULLY_DERIVED, or RECURSOR_DERIVED if its escapes are \
+             pinned too), pinned at a measured count (GAP_BUDGET), pinned row by row \
+             (GAP_LEDGER), or declined with its reason in corpus.rs. An export on none is one \
+             whose gap count can move in silence.",
+            on.len()
+        );
+    }
+    // …and no list may name an export that is not here.
+    let have: std::collections::BTreeSet<String> = keys.iter().cloned().collect();
+    let stems: std::collections::BTreeSet<String> = keys.iter().map(|k| stem(k)).collect();
+    let mut stale: Vec<String> = Vec::new();
+    stale.extend(FULLY_DERIVED.iter().filter(|n| !stems.contains(**n)).map(|n| format!("FULLY_DERIVED/{n}")));
+    stale.extend(RECURSOR_DERIVED.iter().filter(|n| !stems.contains(**n)).map(|n| format!("RECURSOR_DERIVED/{n}")));
+    stale.extend(GAP_BUDGET.iter().filter(|(n, _)| !have.contains(*n)).map(|(n, _)| format!("GAP_BUDGET/{n}")));
+    assert!(stale.is_empty(), "these entries name exports that do not exist: {stale:?}");
+    eprintln!("good/ ratchets: {} exports, each on exactly one mechanism", keys.len());
 }
 
 #[test]

@@ -1547,11 +1547,36 @@ in the corpus was not addressable from it; entries now carry their subdirectory
 and the loop is rooted at `good/`. And no claim is made that any of these numbers
 is *good* — only that it is known, and that it cannot move in silence.
 
-The zero side is looser still. Measured, **70 of 91 tutorial exports have zero
-gaps**; `FULLY_DERIVED` and `RECURSOR_DERIVED` together assert 28 of them. So
-**42 files sit at zero with nothing holding them there**, and a regression in
-any of the 42 is a silent one. (The `README.md` figure "69 of 91" is a
-measurement of the same quantity and is off by one today.)
+The zero side was looser still. Measured, **70 of 91 tutorial exports have zero
+gaps**, and `FULLY_DERIVED` plus `RECURSOR_DERIVED` asserted 28 of them — so
+**42 files sat at zero with nothing holding them there**, and a regression in any
+of the 42 would have been silent. (The `README.md` figure "69 of 91" measures the
+same quantity and is off by one today.) All 42 are now in `FULLY_DERIVED`; the
+43rd zero, `073_boolRecEqns`, is deliberately left to `RECURSOR_DERIVED`, which
+asserts zero gaps *and* zero escapes and would only be weakened by a second
+listing.
+
+**And there was a 43rd, outside `tutorial/` entirely.** Walking all of `good/`
+rather than the tutorial subdirectory found **`good/proof-irrel.ndjson`** at zero
+gaps, on no list — the one export in the whole corpus that no mechanism named.
+`FULLY_DERIVED` could not reach it, because that loop is rooted at
+`good/tutorial`. It is pinned in `GAP_BUDGET` at 0, which is not a special case:
+the loop fails on an increase and a decrease alike, so a budget of 0 says
+"derived completely, and it must stay that way" in the same words as every other
+entry.
+
+**The partition is now enforced over the whole corpus, not merely observed.**
+The mechanisms add up — 69 `FULLY_DERIVED` + 1 `RECURSOR_DERIVED` + 26
+`GAP_BUDGET` + `init-prelude` under `GAP_LEDGER` + the 2 declined under
+`corpus.rs` = **99**, the corpus — which was true before anyone asserted it and
+would have stayed true only until the next export was added.
+`every_good_export_is_named_by_exactly_one_ratchet` fails in three directions: an
+export named by nothing (precisely the state 43 of these were in), an export
+named by two (how a file quietly acquires a budget while still being asserted at
+zero), and a list entry naming a file that does not exist — the stale-waiver
+shape `scripts/arena.sh` already guards for its own accept-list. It spawns
+nothing and runs in 0.00 s, being arithmetic over the lists and one directory
+walk rather than a re-run of the corpus.
 
 *Method, and its cross-check.* Each file was run through `nanoda_bin` with the
 arena's own config, and the `gap:` rows parsed. The eight files in `GAP_BUDGET`
