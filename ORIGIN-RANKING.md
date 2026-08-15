@@ -477,13 +477,23 @@ Measured, `NANODA_NAT_RULED=1 NANODA_ASSUME='nat_reduce'`: 10 262 → **7 632**,
 escapes 1 074 → **1 777**. Every future quotation of this row should be −2 630.
 
 **The next build, therefore:**
-`iota: the major premise's domain is not this inductive` at **−1 609** on
-`init-prelude` — the same cause as Ranking A's rank 7 (−9 on `074_prodRecEqns`),
-which makes `074` a 10-gap development fixture for a 1 609-gap goal-population
-tranche. That is the best fixture-to-goal leverage ratio in the tree and nobody
-has noticed it. **Third:** `proj_reduce` at −890, whose construction already
-landed once (`3eab691`) on `nat_char_equations` and would be an extension rather
-than a new derivation.
+
+> **Withdrawn, 2026-08-15 — rank 2 is the `np > 0` layer, at every one of its
+> 249 sites.** This paragraph recommended
+> `iota: the major premise's domain is not this inductive` at **−1 609** on the
+> strength of `074_prodRecEqns` being a 10-gap development fixture for it. The
+> leverage claim is true and the scoping was wrong: the row is not a tranche of
+> its own, it is **wall #1 of the layer question (b) censused and declined**,
+> and it is raised at `gen_ty_bridge`'s `np > 0` arm at 249 of 249 firings —
+> `np = 1` 185, `np = 2` 52, `np = 3` 12, **`np = 0` zero**, all
+> `lhs_eq = false, rhs_eq = true`, i.e. mini's `ind(p⃗)` matches and the
+> `⟦T p⃗⟧` is the third spelling. `074`'s single firing is the same thing at
+> `Prod.mk`, `np = 2`. Full measurement in "Rank 2, censused" below.
+> **Reachable prize of the one-leg construction: 0 of 249 sites.**
+> **Second:** `proj_reduce` at −890, whose construction already landed once
+> (`3eab691`) on `nat_char_equations` and would be an extension rather than a
+> new derivation — and it is now the largest row in the tree with no known
+> structural obstruction.
 
 ## Question (b), answered: the `np == 0` layer in `fire_dep` is **twelve** constructions
 
@@ -523,16 +533,147 @@ nothing at all — `gen_ty_bridge`, `ctor_spine_bridge`, `dep_subst`/`dep_rec_at
 `carrier_at`, `mini_cod_at_rung`, `dep_minor_typed`'s fieldful walk and
 `nest_chain` are already written for arbitrary `np`.
 
-**And the scheduling answer is no.** §10.4 measured every one of the three walls
+**And the scheduling answer is no — but the price below is wrong, and the
+correction inverts the comparison.** §10.4 measured every one of the three walls
 it cleared at `076` = 45, sub-tree 37 — the tranche migrates rather than
 shrinking, so **there is no partial credit anywhere in this layer**: the payoff
-is 0 until all ten hard sites are done, and then it is −35, on one file, in the
-population that is now 168 of 10 645 gaps. Against `init-prelude`'s −3 780 for a
-Nat bridge, or −1 609 for rank 2, **this layer should not be started.** The
-correct disposition of §10.4's open question is: censused, ten walls, declined.
-Cheapest useful act if anyone touches it anyway: land #4 (one line) and see
-whether #5 disappears — that is the only sub-question in the layer with an
-answer shorter than the whole tranche.
+is 0 until all ten hard sites are done. That part stands and was re-confirmed
+independently (see "Rank 2, censused"). What does not stand is the sentence this
+paragraph originally ended with, *"and then it is −35, on one file, in the
+population that is now 168 of 10 645 gaps … against `init-prelude`'s −3 780 for
+a Nat bridge, or −1 609 for rank 2, this layer should not be started"*: **rank 2
+IS this layer**, all 249 of its firings being wall #1 at `np > 0`, so the layer's
+payoff on the goal population is **−1 609**, or **−1 892** with row 6's
+`fire_list` sibling — and the −3 780 it was compared against is worth 0
+reachable. The comparison that justified the decline no longer exists.
+
+**The disposition, restated.** Censused, ten hard sites, **no partial credit,
+and now the largest reachable prize in the tree**. Decline it if you cannot
+commit to all ten; do not decline it on the −35. Cheapest useful act if anyone
+touches it anyway: land #4 (one line) and see whether #5 disappears — that is
+the only sub-question in the layer with an answer shorter than the whole
+tranche. And note that #7's gate is **three** predicates, not one: with the `np`
+test set aside, 243 of the 249 goal-population sites still decline on a plain
+slot.
+
+## Rank 2, censused: it is the `np > 0` layer, and one leg of it is worth zero
+
+*Measured 2026-08-15 on `joachim/domain-rank2` at master `a10369e`, release
+binary `cargo build -p nanoda_lib --features tg,stepcount --release --bin
+checker` kept at a path the gates cannot overwrite, `ci/corpus-dir.sh --link`
+run first. One temporary census was added inside `fire_dep`, `gen_ty_bridge` and
+`derive_iota_core`'s `succ` arm, measured, and **reverted**; `git diff` is empty
+and no file under `checker/`, `kernel/`, `derived/` or `modelgen/` is modified.*
+
+### The deletion reproduces, on both populations
+
+| probe | `074_prodRecEqns` | `init-prelude` | escapes |
+| --- | ---: | ---: | ---: |
+| baseline | 10 | 10 262 | 1 074 |
+| `NANODA_ASSUME` on the **short** prefix (deletes rows 2 **and** 6) | **1** | **8 370** | 1 236 |
+| `NANODA_ASSUME` on `…at this parameter` alone (row 6) | — | 9 979 | 1 101 |
+| row 2 alone, by subtraction | **−9** | **−1 609** | ≈ +135 |
+
+### The row is one site, and that site is `np > 0`
+
+The string is raised at three places — `derive_iota_core`'s `succ` arm
+(`tg.rs:17598`) and `gen_ty_bridge`'s two arms (`:19785` at `np == 0`, `:19793`
+at `np > 0`). Instrumenting all three:
+
+| site | `074` | `init-prelude` |
+| --- | ---: | ---: |
+| `derive_iota_core` succ arm | 0 | **0** |
+| `gen_ty_bridge`, `np == 0` | 0 | **0** |
+| `gen_ty_bridge`, `np > 0` | **1** | **249** |
+
+with `np = 1` 185, `np = 2` 52, `np = 3` 12 over **57 distinct constructors**
+(`Decidable.isTrue` 10, `Decidable.isFalse` 7, `Option.some`/`none` 6 each,
+`Except.ok`/`error` 6 each, `EStateM.Result.ok`/`error` 6 each, then a long tail
+of single-field classes — `Add.mk`, `Monad.mk`, `Inhabited.mk`, … — at 4 apiece).
+**Every one of the 249 reports `lhs_eq = false, rhs_eq = true`**: mini's
+`ind(p⃗)` is the term the bridge concludes about and `⟦T p⃗⟧` is not, which is
+`SEAM-DESIGN.md` §10.2's third spelling and §10.4's **wall #1**, verbatim. `074`
+is the same firing at `Prod.mk`, `np = 2`.
+
+**So rank 2 does not sit next to the layer, it is the layer's first wall**, and
+the "best fixture-to-goal leverage in the tree" is leverage on an entry ticket.
+Ranking A's rank 7 and Ranking B's rank 2 are the same wall as Ranking A's
+rank 1 and Ranking B's rank 6; the two label families differ only in which
+recogniser raises them (`fire_dep` versus `fire_list`).
+
+### The census inside the rule: the one-leg prize is 0 of 249
+
+`Δ = −1 609` prices the ι equation at those 249 sites being *true*. What wall #1
+alone can reach was measured by evaluating, at the moment of the decline, the
+gate the site would meet next:
+
+| next gate after wall #1 falls | sites |
+| --- | ---: |
+| `mini_ctor_spine_bridge` declines — `!dp.gi.param_vars.is_empty()` | **249 of 249** |
+| anything else | 0 |
+
+`fire_dep` routes a fielded constructor of an adopted declaration to
+`mini_ctor_spine_bridge` (`dp.elim.is_some()` at all 249), whose first act is
+`if !dp.gi.param_vars.is_empty() { … }`. **It is the same predicate `gen_ty_nest`
+gates carrier adoption on.** A construction that clears wall #1 therefore closes
+nothing at all — not "few", zero — and this is checkable in advance because both
+gates read the same field.
+
+Removing that predicate from consideration and re-asking gives the size of the
+wall behind it:
+
+| `mini_ctor_spine_bridge`, ignoring its `np` gate | sites |
+| --- | ---: |
+| declines — a **plain** slot (`order` is not all `Slot::Rec`) | **243** |
+| admits | **6** |
+
+So the layer's site #7 is not one predicate but three, and 243 of 249 need the
+plain-slot and arity generality as well. *Hypothesis, unbuilt and unmeasured:*
+the already-general sibling `ctor_spine_bridge` (`tg.rs:19524`) handles arbitrary
+`np`, plain slots and any arity, so #7–#10 might be a **reroute** of the
+`dp.elim.is_some()` branch rather than the rewrite question (b) priced — but it
+needs `Inductive::ctor_bridge`, which the adopted path may not hold, and that
+was not checked here.
+
+### Conditionality, and where it does and does not bite
+
+`gen_ty_bridge` at `np > 0` returns the union of the parameters' own assumption
+lists as the bridge's `hyps`, which merge into the final `CondEq`. **At all 249
+sites every parameter's typing carries a non-empty assumption list**
+(`cond-params = np/np`, 249 of 249), so a completed layer delivers the ι
+equation *conditionally* at every site.
+
+**That is a haircut, not a second zero, and the distinction matters.** On `074`
+conditional derivations close at the judgement boundary — "29 made, 21 accounted
+for by a rule, **0 escaped**", 8 closed as the ambient context's own typings. On
+`init-prelude` they do not all close: rank 2's own deletion mints ≈ 135 escapes
+against 249 acquisitions. The −1 609 is already net of that.
+
+### Not composite-reached
+
+Unlike rank 1, this origin carries no second leg. `reduce_rec` splits the major
+premise off only when its reduction is **fully ruled** (`tc.rs:2810`), which is
+an empty population today, and reaching `fire_dep` at all requires the major to
+already be a constructor application. So `Δ` is not overpriced by the
+composite ceiling `ORIGIN-RANKING`'s second-ceiling section names; it is
+overpriced by the layer, which is the stronger of the two effects here — the
+haircut is 100 %, not 30 %.
+
+### The scheduling consequence, and the one thing question (b) got wrong
+
+Question (b)'s verdict — **ten hard sites, no partial credit, do not start** —
+is confirmed and strengthened: rank 2 is inside it, and its first wall is
+provably worth zero because the next gate reads the same field.
+
+What question (b) got wrong is the **price**. It declined the layer at **−35 on
+one file in a 168-gap population**, against a `Nat` bridge at −3 780. Both of
+those numbers have since moved: the `Nat` bridge is worth **0** reachable, and
+the layer is worth **−1 609 on the goal population** (rank 2), plus **−283** if
+`fire_list`'s sibling wall (row 6) is taken with it — **−1 892, 18 % of
+`init-prelude`'s entire gap population**. That is not a −35 tranche on one
+export. **The decline stands for any seat that cannot commit to all ten sites;
+the layer is now the largest reachable prize in the tree and should be scheduled
+as one piece or not at all.**
 
 ## Construction reachability, per row
 
@@ -541,7 +682,7 @@ answer shorter than the whole tranche.
 | origin | expect a construction to reach `Δ`? |
 | --- | --- |
 | `major premise is not a constructor` (−3 780) | **No — measured at 0, 2026-08-15.** The route's own ceiling is **−2 630** (the numeral equation, not the ι equation), and nothing reaches it: the numeral step has no backend rule to certify, and `Nat.ble`'s three clauses escape with 16/23/24 raw-beta atoms in the program that owns the ledger, so `ble_transfer` returns a conditional equation. Declined. |
-| `…domain is not this inductive` (−1 609) | Probably. Terminal, 8 % over, full acquisition, and it has a 10-gap fixture (`074_prodRecEqns`) to develop against. |
+| `…domain is not this inductive` (−1 609) | **No — measured at 0, 2026-08-15.** All 249 firings are `gen_ty_bridge`'s `np > 0` arm, so the row *is* the layer of question (b), and the construction that concludes its equation is the whole layer. The one-leg construction (wall #1, the `gen_ty_nest` carrier adoption) reaches **0 of 249**: the next gate, `mini_ctor_spine_bridge`, tests the same `param_vars.is_empty()` predicate. See "Rank 2, censused". |
 | `proj_reduce` (−890) | Likely — the construction landed once at `3eab691` and beat its own price (−87 against −74). |
 | `eq_cache` (−511) / `nested inductive` (−525) | Partly. 23 % / 11 % over; both mid-chain at scale. |
 | `…at this parameter` (−35 small / −283 goal) | **No on the small population — measured at −1**, `SEAM-DESIGN.md` §10, and behind the ten-wall layer above. The goal population's −283 is the same cause and inherits the same obstruction. |
@@ -555,8 +696,14 @@ this document is net of it.
 
 ## What I would not do
 
-* **Start the `fire_dep` `np > 0` layer.** Ten walls, no partial credit, −35 on
-  one file. Censused and declined; see question (b).
+* **Start the `fire_dep` `np > 0` layer *in part*.** Ten hard sites, no partial
+  credit anywhere. Its first wall is measured at **0 of 249 sites** because the
+  next gate reads the same `param_vars.is_empty()` field. What has changed since
+  question (b) is the price: the layer is **−1 609** on the goal population
+  (Ranking B rank 2 is the layer), not −35 on one export, so the decline is now
+  about the commitment and not about the size of the prize.
+* **Take Ranking B rank 2 as a tranche of its own.** It has no separable
+  construction; see "Rank 2, censused".
 * **Build the `Nat` bridge.** Measured and declined, 2026-08-15 — see the box at
   the head of "The largest origin". Reachable prize 0 against a route ceiling of
   −2 630. The one thing left worth doing with it is *not* a construction:

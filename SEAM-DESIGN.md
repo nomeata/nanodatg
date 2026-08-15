@@ -682,12 +682,28 @@ pieces — the `gen_ty_nest` carrier adoption (#1 above) and a rewrite of
 `ctor_spine_bridge` has. Roughly half of `fire_dep`'s parameterised path needs
 nothing at all.
 
-**And the scheduling answer is no.** Because the sub-tree migrates rather than
-shrinking — every row of the table above is 45 — there is **no partial credit
-anywhere in this layer**: the payoff is 0 until all ten hard sites are done, and
-then it is −35, on one file, in a population that is 168 of 10 645 gaps
-tree-wide. The same re-census priced a `Nat` bridge at **−3 780** on
-`init-prelude`. This layer should not be started. Cheapest useful act if anyone
+**And the scheduling answer is no — on the commitment, not on the size.**
+Because the sub-tree migrates rather than shrinking — every row of the table
+above is 45 — there is **no partial credit anywhere in this layer**: the payoff
+is 0 until all ten hard sites are done.
+
+> **The price in this paragraph was wrong and is corrected here, 2026-08-15
+> (`joachim/domain-rank2`).** It read *"and then it is −35, on one file, in a
+> population that is 168 of 10 645 gaps tree-wide. The same re-census priced a
+> `Nat` bridge at −3 780 on `init-prelude`."* **Wall #1 is not a `076`
+> phenomenon.** `ORIGIN-RANKING.md`'s Ranking B rank 2,
+> `iota: the major premise's domain is not this inductive` at **−1 609**, is
+> this wall: all **249** of its `init-prelude` firings are `gen_ty_bridge`'s
+> `np > 0` arm with `lhs_eq = false, rhs_eq = true` — the third spelling of
+> §10.2 — across 57 constructors at `np = 1/2/3`, with **zero** at `np == 0` and
+> zero on either of the string's two other sites. Row 6 adds **−283** through
+> `fire_list`'s sibling wall. So the layer is worth **−1 892, 18 % of the goal
+> population**, and the −3 780 it was weighed against is worth 0 reachable
+> (that section is itself withdrawn). Wall #1 alone is still worth **exactly
+> zero**, for a reason sharper than migration: at 249 of 249 sites the next
+> gate, `mini_ctor_spine_bridge`, declines on
+> `!dp.gi.param_vars.is_empty()` — *the same field* `gen_ty_nest` gates
+> adoption on. Full census in `ORIGIN-RANKING.md`, "Rank 2, censused". Cheapest useful act if anyone
 touches it anyway: land wall #2 (`inst_all(ax, ps)`, one line) and see whether
 wall #3 disappears with it — the only sub-question in the layer with an answer
 shorter than the whole tranche.
