@@ -178,6 +178,103 @@ fn declined_fixtures_are_declined_for_the_stated_reason() {
     }
 }
 
+/// The two gates the production route keeps closed, and the reason each gives
+/// on `init-prelude`. Which one fires depends only on whether the `modelgen`
+/// filter ran; both are declines at exit 2 and both name what stopped the file.
+///
+/// * With `modelgen` — the **default**, `mini/modelgen.rs:18` — the model of the
+///   nested inductive is spliced in ahead of it as `T._model.0 … T._model.{n−1}`,
+///   a `mutual … end` block, and the mutual gate refuses that block first.
+/// * With `--no-modelgen` there is no model in the file, so the nested
+///   declaration itself is what stops it.
+///
+/// `mini_nested.rs` asserts this same two-gate ladder on designed fixtures; this
+/// asserts it on the real export.
+const PRELUDE_GATES: [&str; 2] = [
+    "declined: Mutual inductive Lean.Syntax._model.0 not supported",
+    "declined: Nested inductive Lean.Syntax not supported",
+];
+
+/// **The production checker's verdict on the corpus's flagship export, asserted
+/// on the binary that ships.**
+///
+/// `scripts/arena.sh` gates the corpus with `nanoda_bin` (`arena.sh:58`). The
+/// production checker is `checker` — `bin/checker.rs:71` says so — and the two
+/// do not agree here. Measured 2026-08-15 over all 99 non-`perf` `good/`
+/// exports: `nanoda_bin` accepts 99 of 99; `checker` accepts 96, declines 3, and
+/// one of the three is `init-prelude`, the largest file in the corpus. So "the
+/// corpus is fully accepted" was true of the gated binary and false of the
+/// shipped one, and nothing in the suite could tell them apart. That is what
+/// this test exists to stop being true again.
+///
+/// # The decline is correct, and pinning it is not papering over a bug
+///
+/// `MODEL-BASIS.md` states the owner's dispatch rule as three-way and total:
+/// basis inductives get our own clauses; a non-basis inductive **with** a
+/// `_model` is recognised and cased on; a non-basis inductive **without** one is
+/// *"decline, loudly and by name — there is no construction to fall back to,
+/// because the construction is gone."* `Lean.Syntax` is non-basis, and the
+/// export carries no model of it until `modelgen` splices one in.
+///
+/// The tempting repair is `--mutual --nested`, which does turn this into an
+/// acceptance. **Measured, that acceptance is worse than the decline**: 1 822
+/// declarations accepted while *91 declarations and 10 eliminators are
+/// untranslated* and 11 556 TG steps are gapped. It opens the legacy
+/// construct-it-ourselves path that the model-basis pivot exists to retire, and
+/// it accepts a file containing declarations it never interpreted — an
+/// acceptance that certifies strictly less than this decline states. Those two
+/// flags appear nowhere outside `mini_nested.rs` and `mini_mutual.rs`.
+///
+/// # What will change this, and what to do then
+///
+/// `MODEL-BASIS.md` is a scoping document — *"a design and measurement tranche,
+/// not a build"* — so rule 2 is not operative yet: with `modelgen` on and both
+/// gates open, `Lean.Syntax` is still untranslated. The splicer seat is building
+/// the model projection now. When it lands, the intended verdict here becomes an
+/// acceptance with the model consumed, and this test should be **updated to that
+/// verdict, with its reason**, not deleted. A green test here means the gate and
+/// the product still agree about what happens to the prelude.
+#[test]
+fn the_production_checker_declines_the_prelude_at_a_named_gate() {
+    let f = repo_root().join("vendor/arena-tests/good/init-prelude.ndjson");
+    if skip_guard::absent(&f) {
+        return
+    }
+    let run = |args: &[&std::ffi::OsStr]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_checker")).args(args).output().expect("spawn checker");
+        let mut t = String::from_utf8_lossy(&o.stderr).into_owned();
+        t.push_str(&String::from_utf8_lossy(&o.stdout));
+        (o.status.code(), t)
+    };
+    let path = f.as_os_str();
+    let (mut code, mut text) = run(&[path]);
+    // `modelgen` is an optional input, and without it the default route refuses
+    // to start at all — which is exit 2 with a *different* message, and would
+    // otherwise satisfy the assertions below having measured nothing. Fall back
+    // to the unfiltered configuration and pin that instead.
+    if text.contains("modelgen not found") {
+        let r = run(&[std::ffi::OsStr::new("--no-modelgen"), path]);
+        code = r.0;
+        text = r.1;
+    }
+    assert_eq!(
+        code,
+        Some(2),
+        "the production checker no longer declines init-prelude (exit {code:?}). If the \
+         model projection has landed this is the expected improvement — re-pin this test at \
+         the new verdict and its reason rather than deleting it.\n{text}"
+    );
+    let hit: Vec<&str> = PRELUDE_GATES.iter().copied().filter(|g| text.contains(g)).collect();
+    assert_eq!(
+        hit.len(),
+        1,
+        "init-prelude declined, but not at either gate this pins — so the reason moved and \
+         nobody would have noticed. Wanted exactly one of {PRELUDE_GATES:?}, matched \
+         {hit:?}.\n{text}"
+    );
+    eprintln!("production checker on init-prelude: exit 2, {}", hit[0]);
+}
+
 #[test]
 fn arena_corpus() {
     let corpus = repo_root().join("vendor/arena-tests");

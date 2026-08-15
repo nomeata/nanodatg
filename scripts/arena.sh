@@ -1,10 +1,38 @@
 #!/usr/bin/env bash
-# Run the Lean Kernel Arena corpus through the checker and report, for every
+# Run the Lean Kernel Arena corpus through **`nanoda_bin`** and report, for every
 # file, whether the outcome matched expectation:
 #
 #   vendor/arena-tests/good/**  must be ACCEPTED — a plain, unwaivable rule
 #   vendor/arena-tests/bad/**   must be REJECTED — *unless* the file is on
 #                               `scripts/arena-accept.txt`, with a reason
+#
+# ── WHICH BINARY THIS GATES, AND WHICH ONE SHIPS ─────────────────────────────
+#
+# `$BIN` is `nanoda_bin`. **That is not the production checker.** `checker` is
+# (`checker/src/bin/checker.rs:71`: "This is the production checker — every
+# integration suite spawns it through `CARGO_BIN_EXE_checker` and the split
+# dispatch is its default"). They take different routes and they do not agree
+# on this corpus.
+#
+# Measured 2026-08-15 over all 99 non-`perf` `good/` exports, in each binary's
+# own default configuration:
+#
+#   nanoda_bin   99 accepted, 0 declined
+#   checker      96 accepted, 3 declined, and 20 of the 96 carry debt (exit 4)
+#
+# The third decline is `good/init-prelude.ndjson`, the largest file here, at a
+# closed `--mutual`/`--nested` gate. **That decline is correct** —
+# `MODEL-BASIS.md`'s dispatch rule says a non-basis inductive with no usable
+# model declines loudly and by name — so pointing this script at `checker` would
+# turn a right answer into a red `good/` row, because the rule at the top of this
+# file ("good must be accepted") is nanoda's contract and not the pivot's.
+#
+# So this script keeps gating `nanoda_bin`, deliberately, and the sentence it
+# licenses is **"nanoda accepts the arena"** — not "the product accepts the
+# arena". The product's own verdict on the prelude is pinned separately, with its
+# reason, by `corpus.rs::the_production_checker_declines_the_prelude_at_a_named_gate`.
+# Before 2026-08-15 neither statement was written down and the two were read as
+# one; see `TEST-INVENTORY.md` §7.1.
 #
 # The `bad` half is the part that matters. A checker that accepts everything
 # passes `good` trivially; only `bad` shows the checker is actually checking.

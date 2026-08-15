@@ -1401,17 +1401,47 @@ Measured, on the same 99 files:
 | of the accepted, carrying debt (exit 4) | — | **20** |
 
 **The production checker declines `good/init-prelude.ndjson`** — the corpus's
-flagship file, 1 774 declarations — with `declined: Nested inductive Lean.Syntax
-not supported`. The arena cannot see this, because `nanoda_bin` takes the nanoda
-path and accepts. So the sentence "the corpus is fully accepted" is true of the
-binary the gate runs and false of the binary the project ships, and no check in
-§2 can tell them apart.
+flagship file — at a closed gate. The arena cannot see this, because
+`nanoda_bin` takes the nanoda path and accepts. So the sentence "the corpus is
+fully accepted" is true of the binary the gate runs and false of the binary the
+project ships, and no check in §2 could tell them apart. Now pinned, by
+`corpus.rs::the_production_checker_declines_the_prelude_at_a_named_gate`.
 
-`--nested` turns it into an acceptance, and `--nested`/`--mutual` are used
-nowhere except `mini_nested.rs` and `mini_mutual.rs`, on designed fixtures. This
-is not a hidden bug — `mini_nested.rs:206` asserts the decline as intended
-behaviour — but *"the default route declines the prelude"* is a completeness
-statement that no corpus-level check makes.
+**Which gate fires depends on `modelgen`, and the first version of this section
+got that wrong.** The counts above were taken with `--no-modelgen`, because the
+tool was not built on this machine — and `mini/modelgen.rs:18` says the filter
+pass is **on by default**, so that was a non-default configuration. `modelgen`
+was then built (`lake build`, Lean is available here) and the census re-run in
+the true default: **the counts are identical — 76 clean, 3 declined, 20 carrying
+debt** — and only `init-prelude`'s reason moves.
+
+| configuration | verdict | reason |
+| --- | --- | --- |
+| default (`modelgen` on) | decline, exit 2 | `Mutual inductive Lean.Syntax._model.0 not supported` |
+| `--no-modelgen` | decline, exit 2 | `Nested inductive Lean.Syntax not supported` |
+| `--mutual` (modelgen on) | decline, exit 2 | `Nested inductive Lean.Syntax not supported` |
+| `--mutual --nested` | **accept**, exit 4 | 1 822 declarations, **91 declarations and 10 eliminators untranslated**, 11 556 TG gaps |
+
+`modelgen` splices the model in as `T._model.0 … T._model.{n−1}`, a
+`mutual … end` block, so with the filter on the *mutual* gate refuses that block
+before the nested declaration is reached. Both are declines at exit 2 and both
+name what stopped the file. `mini_nested.rs:204-206` already asserts exactly this
+two-gate ladder on designed fixtures; the new test asserts it on the real export.
+
+**The decline is correct, and the acceptance is the wrong number.**
+`MODEL-BASIS.md` states the dispatch rule as three-way and total — basis
+inductives get our own clauses, a non-basis inductive with a `_model` is
+recognised and cased on, and one **without** is *"decline, loudly and by name;
+there is no construction to fall back to, because the construction is gone."*
+Measured, `--mutual --nested` accepts the file while leaving 91 declarations and
+10 eliminators untranslated and 11 556 steps gapped: an acceptance that certifies
+strictly less than the decline states, reached by opening the legacy
+construct-it-ourselves path the pivot exists to retire. Rule 2 is not operative
+yet — `MODEL-BASIS.md` is *"a design and measurement tranche, not a build"*, and
+with the model spliced in and both gates open `Lean.Syntax` is still
+untranslated. The splicer seat is building that projection now, and when it lands
+the intended verdict becomes an acceptance with the model consumed; the test says
+so at the assertion and asks to be re-pinned rather than deleted.
 
 ### 7.2 The three categories, and how they actually partition
 
@@ -1424,7 +1454,7 @@ worth stating before the numbers.
 | --- | --- | --- |
 | `good/level-index-out-of-order.ndjson` | `Back-refs must be continuous` | both binaries |
 | `good/sparse-name-index.ndjson` | `Back-refs must be continuous` | both binaries |
-| `good/init-prelude.ndjson` | `Nested inductive Lean.Syntax not supported` | `checker` only, default route |
+| `good/init-prelude.ndjson` | a closed gate — see §7.1 for which, and why it is the right verdict | `checker` only |
 
 The first two are a **parser policy**: the export format nowhere requires
 back-reference indices to be dense or increasing, and this parser requires both.
@@ -1444,19 +1474,27 @@ ledgers, and both had to be read:
   K-like eliminator` (7), `— an indexed family` (6), `— several constructors`
   (1) — and the source carries **ten** such labels, so four have no occurrence
   on this corpus at all.
-* *Interpretation.* Even with `--nested --mutual`, `init-prelude` is accepted
-  carrying **89 untranslated declarations and 10 untranslated eliminators**.
-  By reason: `type former spine` on 31 class-like inductives (`HAdd`, `HMul`,
-  `MonadState`, …), `field type uninterpretable` on ~24 (`String`, `Char`,
-  `Fin`, `BitVec`, `UInt*`, `Lean.Name`, …), `parameter type uninterpretable` on
-  4, `class (S) eliminator: no constructors` on `False` and `PEmpty`, `class (S)
-  indexed eliminator: a result index is not a bare field` on `HEq`, and
-  `Lean.Syntax: no nested model in the export`.
+* *Interpretation.* Even with both gates open, `init-prelude` is accepted
+  carrying untranslated declarations — **89 declarations and 10 eliminators**
+  with `--no-modelgen` (1 774 accepted), **91 and 10** in the default
+  configuration with the model spliced in (1 822 accepted). By reason: `type
+  former spine` on 31 class-like inductives (`HAdd`, `HMul`, `MonadState`, …),
+  `field type uninterpretable` on ~24 (`String`, `Char`, `Fin`, `BitVec`,
+  `UInt*`, `Lean.Name`, …), `parameter type uninterpretable` on 4, `class (S)
+  eliminator: no constructors` on `False` and `PEmpty`, `class (S) indexed
+  eliminator: a result index is not a bare field` on `HEq`, and — in the
+  unfiltered case only — `Lean.Syntax: no nested model in the export`.
 
   This is the literal form of "an implementation shortcut wearing an
-  acceptance": the file exits `accept`, and 99 declarations inside it were never
-  translated. `ledger.rs:339-345` already says so in as many words — *"an
-  untranslated declaration sits in a file mini **accepted**"*.
+  acceptance": the file exits `accept`, and ~100 declarations inside it were
+  never translated. `ledger.rs:339-345` already says so in as many words — *"an
+  untranslated declaration sits in a file mini **accepted**"*. **It is also the
+  reason §7.1 concludes the decline is the right verdict**: this acceptance is
+  what the gates are keeping out.
+
+  *(By-reason figures are from the `--no-modelgen` run; the default-configuration
+  totals were re-measured and are two declarations higher. The breakdown was not
+  re-taken by reason, and is not claimed to be.)*
 
 **(c) Lean rejects, we reject — complete.** All 55 `bad/` files are rejected and
 `scripts/arena-accept.txt` is **empty**, so there is not one known lost
