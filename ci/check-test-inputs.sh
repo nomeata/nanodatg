@@ -37,10 +37,13 @@
 #
 # # The feature matrix (the top half)
 #
-# `ci/check.sh` runs the two feature variants over `-p nanoda_lib` rather than
-# over the whole workspace, because `stepcount` is the checker's
-# features and nothing else can observe them. The saving is two thirds of the
-# heaviest thing in the run. What is checked here is the *premise*:
+# `ci/check.sh` runs its one narrowed feature step over `-p nanoda_lib` rather
+# than over the whole workspace, because `stepcount` is the checker's only
+# feature and nothing else can observe it. (This read "the two feature variants"
+# and "the checker's features" while `tg` existed; that feature was deleted with
+# the `Certifier` trait at `d746251`, and a comment describing a matrix of two
+# where there is one is the same rot this script exists to catch.) What is
+# checked here is the *premise*:
 #
 #   A. every feature the matrix names is declared by exactly one workspace
 #      member, and that is the member the step selects;
@@ -345,8 +348,8 @@ while read -r d p f; do
 done < <(declared_features)
 
 # B. …and no *other* member may carry a `cfg(feature = …)` of its own. The two
-#    feature steps are `-p nanoda_lib`, so `kernel`, `derived` and `mini` are
-#    built exactly once; that is only harmless while none of their own code
+#    feature step is `-p nanoda_lib`, so `kernel` and `derived` are built
+#    exactly once; that is only harmless while none of their own code
 #    varies with a feature. The day one of them grows a `cfg(feature)`, this
 #    fails the build instead of the matrix quietly not covering it.
 #

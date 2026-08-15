@@ -154,6 +154,23 @@ EOF
   sed 's/assert!(/let _ = (/' "$GUARD" > "$TMP/toothless.rs"
   expect fail "a guard with no failing path" "$d" GUARD="$TMP/toothless.rs"
 
+  # C: a scan directory that is not there. On the real tree the aggregate floor
+  # cannot see this — 60 of 60 sites are in `checker/tests`, so `derived/tests`
+  # and `kernel/tests` could both be renamed away and the count would not move.
+  # Measured against master's copy: rc=0, "skip guards OK (60 call sites)".
+  #
+  # Falsifier: restore `[[ -d "$d" ]] || continue` as the only handling of a
+  # missing directory and this cell goes green-when-it-should-be-red, because a
+  # present clean directory beside an absent one still clears `MIN_SITES`.
+  d="$TMP/c_absent"; mk_clean "$d"
+  expect fail "a scan directory that does not exist" "$d $TMP/no-such-tests"
+  # …and the complement, which is the reason this is not a per-directory floor:
+  # a directory that exists and correctly holds nothing to guard must pass.
+  # `derived/tests` and `kernel/tests` are exactly this on the real tree.
+  d="$TMP/c_emptyok"; mk_clean "$d"; mkdir -p "$TMP/c_noguard"
+  printf '// no optional inputs here, so nothing to guard\n' > "$TMP/c_noguard/lib.rs"
+  expect pass "a scanned directory with no guarded sites of its own" "$d $TMP/c_noguard"
+
   echo
   if (( sfails )); then echo "$sfails self-test failure(s)" >&2; return 1; fi
   echo "skip-guard self-test OK"
@@ -164,6 +181,26 @@ if [[ "${1:-}" == --self-test ]]; then self_test; exit $?; fi
 fails=0
 fail() { echo "SKIP-GUARD VIOLATION: $*" >&2; fails=$((fails+1)); }
 ok()   { echo "  ok: $*"; }
+
+# ── A configured scan directory that is not there is a configuration error ───
+# `[[ -d "$d" ]] || continue` used to drop a missing directory in silence, and
+# the only floor was the aggregate `MIN_SITES`. Measured: all 60 sites are in
+# `checker/tests`; `derived/tests` and `kernel/tests` hold zero. So the aggregate
+# is satisfied by one directory alone, and renaming either of the other two
+# changed nothing observable — 0 before, 0 after.
+#
+# A per-directory *floor* would be the wrong fix and is not what this does.
+# `derived/tests` and `kernel/tests` have no optional inputs to guard, so zero is
+# their correct and permanent answer; flooring them would demand a guard that
+# should not exist. The defect is narrower: a directory that is **absent** and a
+# directory that is **present with nothing to find** were the same observation.
+# So absence is now a failure, presence with zero is reported as such, and the
+# per-directory counts are printed either way — `ci/check-test-inputs.sh` leg C
+# (task #169) is the same distinction one script over.
+missing_dirs=""
+for d in $SCAN_DIRS; do
+  [[ -d "$d" ]] || missing_dirs="$missing_dirs $d"
+done
 
 sources() {
   local d
@@ -224,6 +261,26 @@ done < <(sources)
 (( s3 )) || ok "S3 every \`mod skip_guard\` is declared where used and used where declared"
 
 # ── C: the scan and the guard are both non-vacuous ───────────────────────────
+if [[ -n "$missing_dirs" ]]; then
+  fail "a scan directory in SCAN_DIRS does not exist:${missing_dirs}"
+  echo "        The scan read nothing from it and said nothing about that, so a" >&2
+  echo "        renamed or deleted test tree is indistinguishable from one with" >&2
+  echo "        no guarded call sites. Fix the path or drop it from SCAN_DIRS." >&2
+else
+  ok "C every scan directory in SCAN_DIRS exists"
+fi
+# Per directory, so a zero that is correct (no optional inputs to guard) reads
+# differently from a tree that stopped being scanned.
+for d in $SCAN_DIRS; do
+  [[ -d "$d" ]] || continue
+  n=$(find "$d" -name '*.rs' -type f | grep -vF "$GUARD" | xargs -r grep -hvE '^[[:space:]]*(//|\*)' \
+      | grep -cE 'skip_guard::(absent|no_inputs|tool_absent)\b')
+  if (( n == 0 )); then
+    echo "  ok: C ${d#$ROOT/}: 0 call sites — scanned, and it has no optional inputs to guard"
+  else
+    echo "  ok: C ${d#$ROOT/}: $n call site(s)"
+  fi
+done
 if (( sites < MIN_SITES )); then
   fail "the scan found $sites guard call site(s), expected at least $MIN_SITES — the guard is wired to nothing, so this check proves nothing"
 else
