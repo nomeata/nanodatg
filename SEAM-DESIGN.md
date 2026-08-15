@@ -474,7 +474,12 @@ Recorded because a brief is a hypothesis and this project keeps the refutations.
    `NAT-CHAR-CENSUS.md` §4 established that the fixture's wall is `PProd`
    projection in the `brecOn` nest; the bridge is 11 ≤ prize ≤ 26.
 
-## 9. What this document does not establish
+## Caveats — what this document does not establish
+
+*Unnumbered deliberately. This was a second `## 9`, colliding with the inventory
+below, and "§9" is cited elsewhere — including in briefs — to mean the inventory
+and its MEETABILITY column. Unnumbering this one leaves every existing citation
+valid; renumbering the inventory would have invalidated them.*
 
 * **[unverified, 2026-08-14]** No build, test or corpus run was performed for
   this tranche — it is a read of the code at `ea81018`. Every claim above is
@@ -555,6 +560,98 @@ Only the indexed publications. The projection translation, `DepElim`, the shared
 the same three-column treatment would apply to each. **Do not read the absence
 of a row as a zero.**
 
+
+### 9.5 The projection translation, priced — the row §9.4 said was missing
+
+*§9.4 says the projection translation is unmeasured here and warns "do not read
+the absence of a row as a zero". This is that row, taken 2026-08-15 for the
+decision in `MODEL-BASIS.md` §8.8: `tg.rs::ty_proj` hands back `imp_refl(f)` — an
+**assumption** — for **669** projections on `init-prelude` whose structures the
+general path has already translated, while
+`derived::inductive::decl_proj::DeclProj::typed[j]` **proves** that membership
+and mini's `proj_data::typing` already consumes it. Nothing below is built.*
+
+| what TG would reach for | mini | TG | meetable by TG? |
+| --- | ---: | ---: | --- |
+| `proj_data::typing`, as a call | 1 | **0** | **NO** — its first third is `c.infer_type(s)` and `c.whnf_typing(te)` (`proj_data.rs:531-532`), which §4(d) names as exactly what must not cross |
+| `Translated::field_abbrev` (`interp.rs:758,821`) | 18 | **0** | **already met** — TG holds `GenInd::betas`, *"the βⱼ symbols themselves with their defining equations"*, the same content plus the symbol |
+| `DeclProj::{typed, computes, eta}` | via `proj_data` | **0** | **yes** — they live in `derived/`, stated over `Term`/`Thm`, engine-agnostic |
+| the premise `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)` | `interp.rs:2176` `beta_spine` | — | **already met** — TG has its own `beta_spine` (`tg.rs:16638`) and `ind_mems` (`tg.rs:3417`) |
+
+#### Applying §4(d)'s rule, and it decides this
+
+> *A mini-minted **symbol** obliges a publication; a mini-computed **inference**
+> obliges a TG-native re-derivation… Never publish, and never reach for, the
+> **ability to infer**.*
+
+`proj_data::typing` is an **inference** — it infers the subject's type before it
+does anything else. So the rule says TG owes a native re-derivation, and the
+bridge would import `infer_type`/`whnf_typing`, the capability §4(d) names by
+name. **The rule and the seam agree, and they agree against the bridge.**
+
+#### The "second spelling" tension, and why it dissolves
+
+`proj_data.rs:139,293` record that a second spelling was **deleted**, which reads
+as an argument against TG writing its own. It is not, and `decl_proj.rs`'s own
+header says why: what was deleted was `proj_data`'s **hand-built spine and
+computes chain**, replaced by calls *down into* `derived/` —
+
+> *"the derivation moved down rather than being copied up, and
+> `mini::proj_data::computes` now delegates"* — because `derived::degen`, which
+> *"is in this crate and has no `mini` to ask"*, needed the same equation.
+
+**So `derived/` already has a second consumer with no mini to ask; TG would be a
+third caller of one spelling, not a second copy.** The precedent is exact and it
+points native.
+
+#### What the native route actually duplicates: the driver, not the chain
+
+`proj_data::typing` splits cleanly:
+
+* **driver** (`:531-580`) — `infer_type`/`whnf_typing`, mini `Expr` unpacking,
+  ground level evaluation, environment lookup, apparatus fetch. **TG has its own
+  equivalent of every line**: `syn_type` for the subject's type, `gen_inds` →
+  `GenInd { ind, betas, beta_bodies }`, and the shared `Machine`.
+* **chain** (`:618-660`) — `inst_all(typed[j], p⃗ ++ [subject])`, `mp` against the
+  carrier membership, the `field_abbrev` unfold carrying `βⱼ` onto `⟦βⱼ⟧`, and
+  the comparison that pins the two argument lists. **Pure `derived/` over
+  `Term`/`Thm`.**
+
+The duplication is therefore the **driver**, and the driver is the half TG must
+own anyway under §4(d). **Zero publication is required**, which makes this **pure
+(c)** in §4's taxonomy — the same shape as site 2, not site 1.
+
+#### Recommendation, with the dissent stated
+
+**Re-derive natively in `tg.rs`.** Three independent reasons, in decreasing
+strength: §4(d)'s rule classifies it as an inference; the bridge would carry the
+one capability the seam forbids; and every input is already TG-side, so the
+bridge buys nothing that is missing.
+
+**The dissent, honestly.** A bridge that served *several* consumers would be a
+different proposition, and §9.1 lists candidates — `rec_dom_abbrev`,
+`IndexedGuardedMinors::hyp`, `::typed`, all "meetable" at TG **0**. If those want
+the same name/expression translation, a bridge amortises and the native route
+becomes four separate drivers.
+
+**One other consumer is already named in the tree, and it weakens the
+amortisation rather than strengthening it.** `tg.rs:4452` wants
+`crate::mini::direct::clause_for` to separate `Acc.rec` from the indexed-family
+row, and says it is *"not reachable here without a name bridge that would be a
+tranche of its own"*. But what that bridge buys there is a **label**: the row is
+already counted apart by `IOTA_LABEL_OVERLAP` (`tg.rs:4454,4490`) so the next
+seat can read the overlap off the report. A bridge whose second known consumer
+buys a correct *name* for gaps that stay gaps is not amortising much.
+
+So the honest position: **one consumer measured and needing no bridge; one named
+and buying a label; the §9.1 three unmeasured.** That is what would change the
+recommendation, and it is the measurement to take before anyone funds a bridge —
+not after.
+
+**Not priced here:** the line count. §4(c) sized a comparable TG-native walk at
+~150 lines *given one publication*; this needs none and its chain already exists,
+so that figure is an upper bound rather than an estimate, and I would not hand it
+to a seat as one.
 
 ## 10. Rank 3, censused: the named row is worth −1, and the −35 is one wall behind it
 
