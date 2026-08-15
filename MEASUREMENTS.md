@@ -10408,11 +10408,22 @@ which is what makes a memo there evidence-neutral rather than delicate.
 
 A frame-local decision-only memo (positive answers only; an `Err` here is
 overloaded with depth-dependent budget refusals) was implemented and measured:
-**8.1 M hits against 20.0 M misses**, ~29 %, and *the wall does not move*. Worse,
-it **removes the verdict**: with the memo in, the run no longer reaches the
-depth bound at all and grinds indefinitely with no output, where the baseline at
-least declined. A bound whose whole purpose is to report cannot be traded for a
-hang, so the memo is reverted and only the instrumentation is kept.
+**8.1 M hits against 20.0 M misses**, ~29 %, and *the wall does not move*: the
+declaration still does not finish, and the shape of the grinding
+(`defeq-census` rows, distinct pairs flat, depth climbing) is unchanged. So the
+memo is reverted and only the instrumentation is kept.
+
+**One thing that was claimed here and is *not* established.** The first write-up
+said the memo "removes the verdict", on the grounds that the memo run produced
+no decline. That comparison is unsound: the memo run was stopped after ~4
+minutes, and the *baseline* does not reach its decline for far longer than that
+(a clean release run was still going at 22 minutes). Not-yet-declined is not
+the same as will-not-decline, and the two runs were never given the same
+budget. What is measured is only that the memo does not remove the wall; what
+it does to the verdict is **open**, and settling it needs two runs to
+completion under the same conditions. Recorded rather than quietly dropped
+because the reverted-because-it-loses-the-verdict reasoning would otherwise be
+inherited as a finding.
 
 For the record, the pre-existing `infer_type` frame memo on the same run
 measures **24.0 M hits / 100.2 M misses** — a 19 % hit rate.
