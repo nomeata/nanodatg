@@ -1374,21 +1374,24 @@ Four things were measured that this section had marked open or got wrong.
    obstruction.** `ICOD(m,T)`'s discharge needs `⊢ ⟦T p⃗ → … → Sort u₁⟧ ∈ Uℓ` —
    the motive's own *type* in the rung, which is what
    `crate::mini::rec_ix_dep::icod_at_rung` starts from. Asking `has_type_a` for
-   it **fails at every rung**, measured: the motive's type mentions the indexed
-   family, and TG has no interpretation of an indexed type former (`gen_scope`
-   returns `Decline::Indices`). The rung itself is found correctly, so this is
-   not a target-availability failure of the kind §6 analysed — it is the
-   original "no interpretation — an indexed family" obstruction resurfacing one
-   level up, at the *motive's type* rather than at the recursor.
+   it **fails at every rung**, measured. The rung itself is found correctly, so
+   this is not a target-availability failure of the kind §6 analysed.
 
-   So `ICOD` is **not** the cheap conjunct, and a seat should not size it as
-   `mini_cod_at_rung` at a longer arity. Two routes, neither costed here:
-   derive `doms[np] ∈ Uℓ` from mini's published carrier typing
-   (`IndexedTranslation::ii.carrier`) through the rung's closure lemmas, the
-   motive's type being a `dprod` over `⟦ind(p⃗,d⃗)⟧`; or publish the typing.
-   The first keeps the seam rule (`ICOD` is an inference, not a symbol) and is
-   the one to try. **Do not** route it through `has_type_a` — that is measured
-   and it does not work.
+   *This item then attributed the failure to `gen_scope`'s `Decline::Indices`
+   and concluded that `has_type_a` was the wrong route. **Both halves are wrong,
+   and §8.4 is the measurement that refutes them.** The top-level miss is
+   `HtMiss::Pi`, "a `Π` — needs `dprod_in_universe`": `has_type_uncached`'s
+   structural match has no `Expr::Pi` arm at all, indexed or not, so the ask
+   dies before any indexed family is looked at. `Decline::Indices` is real but
+   one level down and reached by a different path — `typeable_shape` →
+   `interpreted_shape` → `gen_scope` — where it is a documented **cost** guard,
+   not a soundness one. And the recommended remedy, deriving `doms[np] ∈ Uℓ`
+   from `IndexedTranslation::ii.carrier` through the rung's closure lemmas, is
+   not the route that works: `ii.carrier` carries `subset_w` but no universe
+   membership, `IndexedUniverse::ty_in_u1` never crosses the seam, and the
+   skeleton's own `W ∈ Uₙ` is not published either, so that route bottoms out
+   in re-deriving mini's whole `decl_universe`. The route that works needs
+   neither — see §8.4.*
 
 The site declines naming the premise, and the row now prices exactly the
 tranche: `ctor_abbrev_major` 2 firings −23, `mutual_aux_encoding` 3 firings −47,
@@ -1405,6 +1408,68 @@ step 4's reverse chain carries an index vector per child. `fire_ix_dep` is
 *simpler* than `fire_dep` in one respect that partly pays for this:
 `IndexedDepRecursor`'s theorems are already `∀`-closed, so none of
 `DepBottom`'s `iota_gen`/`refl_gen`/`gvars` hoisting is needed.
+
+### 8.4 `ICOD` discharged, 8 of 8 — measured, 2026-08-15
+
+`TgBackend::ix_icod` re-derives `ICOD(⟦C⟧, T)` at the rung `DepElim::target`
+names and checks it against `subst_f(&dr.guards.cod, &sub)`, `derived`'s own
+formula at this site's substitution. It fires at **8 of 8** firings of the
+tranche — `Ix.rec` 2, `Aux.rec` 3, `RBTree.rec` 3 — and **no publication was
+added**. The seam rule holds: `ICOD` is an inference and it was re-derived
+TG-side from published *objects* only.
+
+**What §8.3 item 4 got wrong, and what the obstruction actually was.** Asking
+`has_type_a` for the motive's type dies at `HtMiss::Pi` — there is no `Expr::Pi`
+arm in `has_type_uncached`, so the *whole file* had no `Π`-formation rule, for
+any declaration. Walking the telescope leaf by leaf separates two further
+failures that item 4 read as one:
+
+| leaf | at `U₂`, the motive's type's rung | at `U₁` |
+| --- | --- | --- |
+| each index domain (`Nat`, …) | **not** typed | typed |
+| the major's domain `T p⃗ x⃗` | not typed | **not** typed |
+| the body `Sort u₁` | typed | — |
+
+So there were **three** missing facts, not one, and only the second is about
+indices at all:
+
+1. **`Π`-formation.** `crate::pi_store::Full::rule` —
+   `⊢ ∀q⃗ ∀c ∀A. ((A ∈ U(c) ∧ ∀x. (x ∈ A → b(q⃗,x) ∈ U(c))) → dprod(q⃗,A) ∈ U(c))`
+   — already exists on the **shared** `Π` store both engines mint into; the
+   checker simply passed `want_full = false` and never asked. `pi_in_rung` asks,
+   and nothing new is minted by asking: the `dprod` symbol is the one `interp_pi`
+   built and only the proofs about it are added.
+2. **`⟦T p⃗ x⃗⟧ ∈ U₁`.** Mini already publishes the type former's own typing
+   `⊢ ⟦T⟧ ∈ ⟦Π p⃗ x⃗. Sort ℓ⟧` through the shared `ConstStore` — measured
+   present at every firing before anything was changed. What blocked the
+   application rule from standing on it was `typeable_shape`'s cheap screen,
+   which routes an inductive through `interpreted_shape` → `gen_scope` →
+   `Decline::Indices`. That guard is documented in its own header as **a cost
+   guard, not a soundness one** ("answering `true` only lets a rule be
+   attempted"), so it is widened for exactly the families mini has published an
+   `IndexedTranslation` for. The walk then fires `ApStep::FiredDProd` and the
+   family's domain types.
+3. **Cumulativity.** `X ∈ Uₖ → X ∈ Uₙ`, one `Rung::transitive` at the rung below
+   per step (`lift_rung`). This is what the index domains needed and nothing in
+   `checker/` had ever consumed a rung closure lemma before.
+
+**The prize is not only `ICOD`.** Item 2's widening is a general fact about
+typing an indexed family's applications, and it moves the ratchet on its own:
+`077_RBTree.id_spec` **41 → 28** gaps and its escapes **19 → 6**, with the
+export corpus **185 → 172** over 91 exports and 16 still holding gaps. The other
+two declarations of the tranche do not move yet — `ctor_abbrev_major` 46 and
+`mutual_aux_encoding` 96 are unchanged — because their remaining gaps are the ι
+sites themselves, which still decline on `IDEP`.
+
+**Falsified three ways**, each dying where predicted: one `Rung::app` step
+dropped from `ICOV`'s spine dies at the statement check against
+`dr.guards.cod` (a *true* theorem, the wrong one); the `interpreted_shape`
+widening removed puts 077 back at 41 gaps and 19 escapes with `ICOD`
+discharged 0; the cumulativity clause disabled fails the `mini_designed` test at
+its first assertion.
+
+**What is left is `IDEP` alone**, and the ~800–1000 lines above are its size.
+The decline now says so.
 
 ---
 

@@ -3059,6 +3059,21 @@ fn published_indexed(stdout: &str) -> (u64, u64) {
     (n[0], n[1])
 }
 
+/// `(asked, discharged)` off the `ICOD` readiness row. The third number on the
+/// row — how many owe nothing — is deliberately *not* asserted on: every
+/// discharge stands under the nest's own motive-typing assumptions, which is
+/// the shape `fire_dep` already carries, and pinning it here would pin an
+/// accounting artefact rather than the conjunct.
+fn icod_counts(row: &str) -> (u64, u64) {
+    let n: Vec<u64> = row
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().expect("digits"))
+        .collect();
+    assert_eq!(n.len(), 3, "the ICOD readiness row changed shape: {row}");
+    (n[0], n[1])
+}
+
 /// **TG consumes the published indexed evidence as far as the rule itself.**
 ///
 /// The sibling test above pins the *producing* side; this pins the consuming
@@ -3069,8 +3084,12 @@ fn published_indexed(stdout: &str) -> (u64, u64) {
 /// `IndexedDepRecursor::iota[i]`, instantiates it at the use site's own
 /// parameters, motive, minors and target, and checks that its antecedent is the
 /// conjunction `ICOD ∧ IDEP` — everything route (A) must do *before* the
-/// premise. What is left is the premise, so the honest outcome is a gap that
-/// **names the premise**.
+/// premise. **The first conjunct is now discharged**: `TgBackend::ix_icod`
+/// re-derives `ICOD` at the rung `DepElim::target` names, so the honest outcome
+/// is a gap naming the conjunct that is *left*, `IDEP`. The row asserted here
+/// moved with it, and the readiness counter `ICOD ... discharged` is asserted
+/// beside it so that "ICOD is derived" and "the site still declines" stay two
+/// observations rather than one.
 ///
 /// That naming is the whole content. Before this, an indexed recursor declined
 /// as `iota: no interpretation — an indexed family`, a label
@@ -3090,10 +3109,28 @@ fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
     for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
         let out = run_unified(name);
         assert!(
-            out.contains("iota: the indexed premise PRE = ICOD ∧ IDEP is not discharged"),
-            "{name}: TG did not reach mini's indexed iota rule. The rule is published and \
-             `IndexedDepRecursor::iota` concludes it; not reaching it means the nest, not \
-             the premise discharge, is the wall — which is a different tranche.\n{out}"
+            out.contains("iota: ICOD is discharged; IDEP, the indexed minor premises, is not"),
+            "{name}: TG did not reach mini's indexed iota rule with `ICOD` in hand. The rule \
+             is published and `IndexedDepRecursor::iota` concludes it; not reaching it means \
+             the nest, not the premise discharge, is the wall — which is a different \
+             tranche.\n{out}"
+        );
+        // The conjunct itself, from the readiness row: a decline that named
+        // `IDEP` while `ICOD` silently stopped being derived would read exactly
+        // the same, and that is the regression this catches.
+        assert!(
+            out.contains("indexed premise ICOD at the motive's own rung — asked"),
+            "{name}: no ICOD readiness row — the conjunct is not being asked for at all.\n{out}"
+        );
+        let row = out
+            .lines()
+            .find(|l| l.contains("indexed premise ICOD at the motive's own rung"))
+            .expect("the row was just found");
+        let (asked, done) = icod_counts(row);
+        assert!(asked > 0, "{name}: ICOD was never asked for: {row}");
+        assert_eq!(
+            done, asked,
+            "{name}: ICOD is no longer discharged at every firing of the rule: {row}"
         );
         assert!(
             !out.contains("iota: no interpretation — an indexed family"),
