@@ -3163,12 +3163,44 @@ fn tg_discharges_the_indexed_iota_rules_premise() {
             .lines()
             .find(|l| l.contains("indexed premise PRE = ICOD ∧ IDEP discharged"))
             .unwrap_or_else(|| panic!("{name}: no PRE readiness row\n{out}"));
-        let np: u64 = pre
-            .split_whitespace()
-            .last()
+        let pn: Vec<u64> = pre
+            .split(|ch: char| !ch.is_ascii_digit())
+            .filter(|w| !w.is_empty())
+            .map(|w| w.parse().expect("digits"))
+            .collect();
+        assert_eq!(pn.len(), 2, "{name}: the PRE readiness row changed shape: {pre}");
+        assert!(pn[0] > 0, "{name}: PRE is not discharged at any use site: {pre}");
+        // **And the composite is built at every one of them.** `PRE` discharged
+        // with the composite unbuilt was a real intermediate state of this
+        // clause and looked identical on every other row, so the two are
+        // asserted apart.
+        assert_eq!(
+            pn[1], pn[0],
+            "{name}: the indexed composite is no longer built at every site whose premise is \
+             discharged: {pre}"
+        );
+        // **The end-to-end result, which neither row above pins.** Building the
+        // composite is not the same as the site certifying: `derive_iota_core`
+        // still joins it against the reduct's own contraction, and a mutation
+        // that dropped step 4 left every row above unchanged while the join
+        // failed. The gap count is what noticed, so the gap count is asserted.
+        let want = match name {
+            "ctor_abbrev_major.ndjson" => 23,
+            "mutual_aux_encoding.ndjson" => 49,
+            other => panic!("no indexed ratchet recorded for {other}"),
+        };
+        let got: u64 = out
+            .lines()
+            .next()
+            .and_then(|l| l.rsplit("tg gaps:").next().map(|w| w.trim().to_string()))
             .and_then(|w| w.parse().ok())
-            .unwrap_or_else(|| panic!("{name}: the PRE readiness row changed shape: {pre}"));
-        assert!(np > 0, "{name}: PRE is not discharged at any use site: {pre}");
+            .unwrap_or_else(|| panic!("{name}: no `tg gaps:` on the verdict line\n{out}"));
+        assert_eq!(
+            got, want,
+            "{name}: the indexed iota ratchet moved. Every remaining gap on these two \
+             fixtures is an escaped assumption at the boundary; a change here is either \
+             the tranche regressing or the escape ledger moving, and both need saying.\n{out}"
+        );
         assert!(
             !out.contains("iota: no interpretation — an indexed family"),
             "{name}: the declaration still declines under the label that prices three \

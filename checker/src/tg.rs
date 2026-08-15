@@ -11634,9 +11634,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// than under loose `BVar`s, so the parameters are `ExprPtr` locals and no
     /// shifting arises — which is the one thing this spelling has easier than
     /// mini's.
-    /// Gated with its only consumer today (the census). The route-(A)
-    /// discharge is its second and unconditional one.
-    #[cfg(feature = "stepcount")]
+    /// Un-gated: the census was its first consumer and `ix_field_indices` — the
+    /// composite's step 4 — is its second and unconditional one.
     fn ix_spine_at(
         &self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -12133,6 +12132,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut f_terms: Vec<Term> = Vec::with_capacity(fields.len());
         let mut f_decl: Vec<Term> = Vec::with_capacity(fields.len());
         let mut f_mems: Vec<Thm> = Vec::with_capacity(fields.len());
+        let mut f_used: Vec<Vec<Formula>> = Vec::with_capacity(fields.len());
         for fe in fields.iter() {
             let t = self.interp(ctx, *fe);
             let Expr::Local { binder_type, .. } = ctx.read_expr(*fe) else {
@@ -12142,10 +12142,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let Some((thm, used)) = self.has_type_a(ctx, *fe, &dt, &f_hyps, 0) else {
                 return Err("iota: a constructor field at this use site has no typing")
             };
-            f_hyps = used;
+            f_hyps = used.clone();
             f_terms.push(t);
             f_decl.push(dt);
             f_mems.push(thm);
+            f_used.push(used);
+        }
+        // **The recursor's own arguments join the list before it is frozen.**
+        // Step 4 re-enters mini's nest at a child's index vector and needs a
+        // typing per level; those stand under the nest's own assumptions, and a
+        // list closed before they arrive cannot take them.
+        for (_, phs) in _obligations[..np + 1 + n].iter() {
+            f_hyps = merge_hyps(&f_hyps, phs);
         }
         // Restate every field typing on the final list, and add the
         // parameters', which the constructor's own nest wants first.
@@ -12158,14 +12166,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             };
             ctor_mems.push(p);
         }
+        // Each field was typed under the list as it stood at *its* rung, so
+        // that list is what it is restated from.
+        let f_mems: Vec<Thm> = f_mems
+            .iter()
+            .zip(f_used.iter())
+            .map(|(t, from)| reassume(t, from, &f_hyps))
+            .collect::<Option<Vec<_>>>()
+            .ok_or("iota: restating the fields' typings on the final list failed")?;
         for (l, thm) in f_mems.iter().enumerate() {
             let want = Formula::mem(f_terms[l].clone(), f_decl[l].clone());
-            let Some(t) = reassume(thm, &f_hyps, &f_hyps).filter(|t| {
-                u_concl(t, fh.as_ref()) == Some(want.clone())
-            }) else {
+            if u_concl(thm, fh.as_ref()) != Some(want) {
                 return Err("iota: a field's typing is not about the field")
-            };
-            ctor_mems.push(t);
+            }
+            ctor_mems.push(thm.clone());
         }
         let (mut ys, mut ts) = (Vec::new(), Vec::new());
         for (pos, sl) in order.iter().enumerate() {
@@ -12173,6 +12187,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 Slot::Plain => ys.push(f_terms[pos].clone()),
                 Slot::Rec => ts.push(f_terms[pos].clone()),
             }
+        }
+        let m_recs = ts.len();
+        let su_i = minors[idx].clone();
+        let ni = d.dr.xvs.len();
+        // Mini's own `⟦T.rec⟧`, which the adopted nest is stated over, and the
+        // recursor's own arguments' typings — both are what a child's leg
+        // re-enters the nest with.
+        let head_t = self
+            .mini_const(ctx, _cfun_name, _cfun_levels)
+            .ok_or("iota: mini's own recursor term is not available at this site")?;
+        let mut prefix_mems: Vec<Thm> = Vec::with_capacity(np + 1 + n);
+        for (pt, phs) in _obligations[..np + 1 + n].iter() {
+            let Some(p) = reassume(pt, phs, &f_hyps) else {
+                return Err("iota: restating a recursor argument's typing at this site failed")
+            };
+            prefix_mems.push(p);
         }
 
         // ── Step 2: `⊢ ⟦major⟧ = ctorᵢ(y⃗,t⃗)` ────────────────────────────────
@@ -12196,8 +12226,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Some(b) => b,
             None => self.ix_ctor_spine(&major_t, &ctor_args, &ctor_mems, &c_sym, &f_hyps)?,
         };
+        let Some(spine_t) = reassume(&spine.thm, &spine.hyps, &f_hyps) else {
+            return Err("iota: restating the major's spine on the site's assumptions failed")
+        };
         let joined = self
-            .u_eq_trans(&spine.thm, &u_a1i(&cab, fh.as_ref()), fh.as_ref())
+            .u_eq_trans(&spine_t, &u_a1i(&cab, fh.as_ref()), fh.as_ref())
             .ok_or("iota: composing the major's spine with mini's constructor failed")?;
         let major_eq = CondEq::new(joined, f_hyps.clone())
             .ok_or("iota: the major premise's bridge is not an equation")?;
@@ -12319,6 +12352,76 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         let fired = CondEq::new(fired, hyps.clone())
             .ok_or("iota: the fired indexed rule is not an equation")?;
+
+        // ── Step 4: the reverse chain, one leg per recursive child ──────────
+        //
+        // The rule's right-hand side spells each recursive call `app(irec,tⱼ)`;
+        // the reduct spells it `⟦T.rec p⃗ C S⃗ d⃗ᵢⱼ tⱼ⟧`, at the **child's own**
+        // index vector. Each leg is step 1 re-run at a different `ni`-slice of
+        // the argument list, and there is no non-indexed analogue: `fire_dep`
+        // re-enters at `args[..major] ++ [field]` with no index positions to
+        // vary.
+        //
+        // Assembled by congruence from the minor applied to its fields alone,
+        // one `app` per induction hypothesis, rather than by rewriting inside a
+        // term — `applied_minor`'s own shape, so the two ends are the rule's
+        // and the reduct's by construction.
+        let fired = if m_recs == 0 {
+            fired
+        } else {
+            let ind_name = match self.decls.get_declar(&_cfun_name) {
+                Some(Declar::Recursor(r)) => r.all_inductives[0],
+                _ => return Err("iota: the redex head is not a recursor after all"),
+            };
+            let mut acc = CondEq::refl(derived::inductive::applied_minor(
+                &ap, &order, &su_i, &ys, &ts, &[],
+            ));
+            for (pos, sl) in order.iter().enumerate() {
+                if !matches!(sl, Slot::Rec) {
+                    continue
+                }
+                let Expr::Local { binder_type, .. } = ctx.read_expr(fields[pos]) else {
+                    return Err("iota: a recursive field at this use site is not a local")
+                };
+                let idx_exprs = self
+                    .ix_field_indices(ctx, &ind_name, binder_type, &_args[..np], ni)
+                    .ok_or("iota: a recursive field's index vector is not readable here")?;
+                // Everything the leg stands on is restated on the composite's
+                // own list: the prefix typings and the field's were proved
+                // under the site's, and `hyps` has `PRE`'s beside them.
+                let pm: Vec<Thm> = prefix_mems
+                    .iter()
+                    .map(|t| reassume(t, &f_hyps, &hyps))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or("iota: restating the nest's typings for a child's leg failed")?;
+                let fm = reassume(&f_mems[pos], &f_hyps, &hyps)
+                    .ok_or("iota: restating a field's typing for a child's leg failed")?;
+                let leg = self.ix_child_leg(
+                    ctx,
+                    d,
+                    &head_t,
+                    &ta[..np + 1 + n],
+                    &pm,
+                    &idx_exprs,
+                    &f_terms[pos],
+                    &fm,
+                    &hyps,
+                )?;
+                acc = self
+                    .ceq_congr(ap.app, &[acc, leg])
+                    .ok_or("iota: congruence along the reverse chain refused")?;
+            }
+            // `acc : ⊢ H → applied_minor(…, ⟦T.rec … tⱼ⟧) = applied_minor(…, app(irec,tⱼ))`,
+            // so the rule's own right-hand side is its *right* end.
+            let ah = conj_of(&acc.hyps);
+            let back = self
+                .u_eq_symm(&acc.thm, ah.as_ref())
+                .ok_or("iota: reversing the chain of recursive calls failed")?;
+            let back = CondEq::new(back, acc.hyps)
+                .ok_or("iota: the reversed chain is not an equation")?;
+            self.ceq_trans(&fired, &back)
+                .ok_or("iota: chaining the fired rule onto the reduct's spelling failed")?
+        };
 
         // Join step 2 onto step 3: the rule speaks of `ctorᵢ(y⃗,t⃗)` and the
         // nest arrived at `app(irec, ⟦major⟧)`.
@@ -13098,6 +13201,157 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: the conclusion bridge does not join the two spines")
         }
         Ok(acc)
+    }
+
+    /// The `ni` index **expressions** of a field whose declared type is the
+    /// family, δ-unfolding the head until the spine is visible.
+    ///
+    /// [`Self::ix_spine_at`] matches `T p⃗ d⃗` written out; a use site writes
+    /// `IxA`. The unfolding is bounded by `DELTA_FUEL` and each step is the
+    /// declaration's own value at these levels, so this reaches exactly what
+    /// δ would and nothing else.
+    fn ix_field_indices(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: &NamePtr<'t>,
+        e: ExprPtr<'t>,
+        params: &[ExprPtr<'t>],
+        ni: usize,
+    ) -> Option<Vec<ExprPtr<'t>>> {
+        let mut cur = e;
+        for _ in 0..DELTA_FUEL {
+            if let Some(ds) = self.ix_spine_at(ctx, ind_name, cur, params, ni) {
+                return Some(ds)
+            }
+            let (h, args) = ctx.unfold_apps(cur);
+            let Expr::Const { name, levels, .. } = ctx.read_expr(h) else { return None };
+            let (uparams, val) = self.decls.get_declar_val(&name)?;
+            if ctx.read_levels(levels).len() != ctx.read_levels(uparams).len() {
+                return None
+            }
+            let val = ctx.subst_expr_levels(val, uparams, levels);
+            cur = ctx.foldl_apps(val, args.iter().copied());
+        }
+        None
+    }
+
+    /// **Step 4** — `⊢ H → ⟦T.rec p⃗ C S⃗ d⃗ᵢⱼ tⱼ⟧ = app(irec, tⱼ)`, the leg that
+    /// puts a recursive call back into the spelling the reduct uses.
+    ///
+    /// This is step 1 re-run at a **different `ni`-slice of the argument
+    /// list** — the child's own index vector rather than the site's — and it is
+    /// the step with no non-indexed analogue: `fire_dep`'s recursive call
+    /// re-enters the nest at `args[..major] ++ [field]`, with no index
+    /// positions to vary.
+    #[allow(clippy::too_many_arguments)]
+    fn ix_child_leg(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        head: &Term,
+        prefix: &[Term],
+        prefix_mems: &[Thm],
+        idx_exprs: &[ExprPtr<'t>],
+        field: &Term,
+        field_mem: &Thm,
+        hyps: &[Formula],
+    ) -> Result<CondEq, &'static str> {
+        if prefix.len() != prefix_mems.len() {
+            return Err("iota: the child's leg prefix and its premises disagree")
+        }
+        let hh = conj_of(hyps);
+        // The whole argument list of the child's call: the recursor's own
+        // prefix, then the **child's** index vector, then the field. Only the
+        // middle differs from the site's own call, and that is the whole of
+        // what makes this step indexed.
+        let mut jargs: Vec<Term> = prefix.to_vec();
+        let mut jmems: Vec<Thm> = prefix_mems.to_vec();
+        for e in idx_exprs.iter() {
+            jargs.push(self.interp(ctx, *e));
+            jmems.push(Thm::eq_refl(Term::var(self.env_mut().fresh_var())));
+        }
+        jargs.push(field.clone());
+        jmems.push(field_mem.clone());
+
+        // Walk mini's nest level by level, reading each domain off the graph
+        // rather than rebuilding it, and typing an index argument at the domain
+        // the graph declares — the census's judgement, at the child's indices.
+        let mut cur = head.clone();
+        // Conditional from the start: every step below stands under `hyps`, and
+        // an unconditional `refl` cannot be chained onto one that does.
+        let mut acc = CondEq::new(
+            u_a1i(&Thm::eq_refl(cur.clone()), hh.as_ref()),
+            hyps.to_vec(),
+        )
+        .ok_or("iota: the child's leg could not start")?;
+        let n_pre = prefix.len();
+        for (l, arg) in jargs.iter().enumerate() {
+            let dom = cur
+                .as_app()
+                .and_then(|(_, a)| a.last().cloned())
+                .ok_or("iota: the child's leg ran out of lambda graph")?;
+            let mem = if l >= n_pre && l < n_pre + idx_exprs.len() {
+                let e = idx_exprs[l - n_pre];
+                let Some((m, used)) = self.has_type_a(ctx, e, &dom, hyps, 0) else {
+                    return Err("iota: a child index at this use site has no typing")
+                };
+                if used != hyps {
+                    return Err("iota: a child index's typing acquired an assumption")
+                }
+                m
+            } else {
+                // The membership the caller holds is at the set *its* own
+                // binder declares; the graph's level declares its own spelling
+                // of the same set, and at the major they genuinely differ — the
+                // site wrote `IxA` and the nest binds `T p⃗ x⃗`. One bridge, and
+                // a decline naming the level if there is none.
+                let have = jmems[l].clone();
+                let at = u_concl(&have, hh.as_ref())
+                    .and_then(|f| f.as_mem())
+                    .map(|(_, s)| s)
+                    .ok_or(if l == 0 {
+                        "iota: a child's leg premise (level 0) is not a membership"
+                    } else if l < n_pre {
+                        "iota: a child's leg premise (a motive or minor) is not a membership"
+                    } else {
+                        "iota: a child's leg premise (the major) is not a membership"
+                    })?;
+                if at == dom {
+                    have
+                } else {
+                    let b = self
+                        .ix_arg_bridge(ctx, &at, &dom, hyps, true)
+                        .ok_or("iota: a child's leg premise has no bridge to its domain")?;
+                    let bb = reassume(&b.thm, &b.hyps, hyps)
+                        .ok_or("iota: restating a child's leg bridge failed")?;
+                    self.uu_mem_along(&have, &bb, hh.as_ref())
+                        .ok_or("iota: moving a child's leg premise onto its domain failed")?
+                }
+            };
+            let (step, next) = self.adopted_lam_step(&cur, arg, &dom, &mem, hyps)?;
+            // `acc` ends at the *unapplied* level and the beta step starts at
+            // the applied one, so the accumulated equation is carried under one
+            // `app` congruence first — `ix_ctor_spine`'s shape.
+            let applied = self
+                .ceq_congr(self.pre.ap.app, &[acc, CondEq::refl(arg.clone())])
+                .ok_or("iota: congruence along the child's leg refused")?;
+            let ah = conj_of(&applied.hyps);
+            let Some(rhs) = reassume(&step.thm, &step.hyps, &applied.hyps) else {
+                return Err("iota: restating a child's beta step failed")
+            };
+            let j = self
+                .u_eq_trans(&applied.thm, &rhs, ah.as_ref())
+                .ok_or("iota: composing the child's leg failed")?;
+            acc = CondEq::new(j, applied.hyps)
+                .ok_or("iota: the child's leg is not an equation")?;
+            cur = next;
+        }
+        let unfold = derived::inst_all(&d.elim.ax, &jargs)
+            .ok_or("iota: mini's nest bottom did not instantiate at the child")?;
+        let out = self
+            .u_eq_trans(&acc.thm, &u_a1i(&unfold, hh.as_ref()), hh.as_ref())
+            .ok_or("iota: composing the child's leg with mini's bottom failed")?;
+        CondEq::new(out, hyps.to_vec()).ok_or("iota: the child's leg is not an equation")
     }
 
     /// `⊢ H → ⟦cᵢ p⃗ f⃗⟧ = cᵢ(p⃗,f⃗)` — mini's `beta_spine` down the constructor's
@@ -23482,7 +23736,15 @@ static IDEP_FIELDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// conjunct so that "every conjunct is in hand" and "the rule fired" stay two
 /// observations.
 static PRE_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// **The indexed ι rule fired end to end at a use site.**
+/// **The composite was built at a use site** — `fire_ix_dep` returned an
+/// equation.
+///
+/// Deliberately *not* "the site certified": the composite is handed back to
+/// `derive_iota_core`, which still has to join it against the reduct's own
+/// contraction, and skipping step 4 leaves this counter unchanged while the
+/// join fails. That was measured, by a mutation that dropped step 4 and left
+/// the row reading `FIRED 2` — so what pins the end-to-end result is the
+/// fixture's own gap count, not this.
 static IX_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "stepcount")]
@@ -23617,11 +23879,70 @@ fn origin_mask(cs: &[&TgCert]) -> u32 {
 /// origin naming it closes. The excess is bounded by the `MULTI` row, so
 /// `sum ≤ joint ≤ sum + MULTI`, and confirmation is still needed once per
 /// origin rather than once per combination.
+/// **The indexed tranche's readiness rows** — publication, `ICOD`, `IDEP`,
+/// `PRE`, and whether the rule fired.
+///
+/// Kept out of [`origin_report`]'s body because that function returns early
+/// when there are no gap origins at all — which is *exactly* the state this
+/// tranche is trying to reach. The rows vanished the moment the indexed ι
+/// rule started certifying, and the two tests that read them went red on
+/// **success**. A readiness counter whose only witness is a failure is not a
+/// readiness counter.
+fn ix_readiness_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut seam = String::new();
+    // The seam readiness row. Printed whenever mini published anything
+    // indexed, so that "the indexed consumer never fired" and "mini never
+    // handed it anything" are two distinguishable observations rather than
+    // one silence. See [`IX_PUBLISHED`].
+    let (t, e) = (IX_PUBLISHED[0].load(Relaxed), IX_PUBLISHED[1].load(Relaxed));
+    let nk = PUBLISH_NO_KEY.load(Relaxed);
+    if t > 0 || e > 0 || nk > 0 {
+        seam.push_str(&format!(
+            "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
+             translations {t}, eliminators {e}\n"
+        ));
+    }
+    let (a, dn, un) =
+        (ICOD_ASKED.load(Relaxed), ICOD_DONE.load(Relaxed), ICOD_UNCOND.load(Relaxed));
+    if a > 0 {
+        seam.push_str(&format!(
+            "  indexed premise ICOD at the motive's own rung — asked {a}, \
+             discharged {dn} ({un} owing nothing)\n"
+        ));
+    }
+    let ia = IDEP_ASKED.load(Relaxed);
+    if ia > 0 {
+        seam.push_str(&format!(
+            "  indexed premise IDEP, by CONSTRUCTOR — asked {ia}, declarations complete {}; \
+             fieldless {}, with fields {}\n",
+            IDEP_DONE.load(Relaxed),
+            IDEP_NULLARY.load(Relaxed),
+            IDEP_FIELDED.load(Relaxed),
+        ));
+        seam.push_str(&format!(
+            "  indexed premise PRE = ICOD ∧ IDEP discharged at a use site — {}, \
+             rule FIRED {}\n",
+            PRE_DONE.load(Relaxed),
+            IX_FIRED.load(Relaxed)
+        ));
+    }
+    // A routed run names every declaration off the export file, so this is
+    // zero there and any other value is a real gap in the channel — see
+    // [`PUBLISH_NO_KEY`].
+    if nk > 0 {
+        seam.push_str(&format!(
+            "  publications SKIPPED for want of an export-name identity — {nk}\n"
+        ));
+    }
+    seam
+}
+
 pub fn origin_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let v = ORIGINS.lock().expect("tg origins poisoned").clone();
     if v.is_empty() {
-        return String::new()
+        return ix_readiness_report()
     }
     let mut rows: Vec<(u64, u64, u64, &'static str)> = v
         .iter()
@@ -23683,52 +24004,7 @@ pub fn origin_report() -> String {
             }
         }
     }
-    {
-        // The seam readiness row. Printed whenever mini published anything
-        // indexed, so that "the indexed consumer never fired" and "mini never
-        // handed it anything" are two distinguishable observations rather than
-        // one silence. See [`IX_PUBLISHED`].
-        let (t, e) = (IX_PUBLISHED[0].load(Relaxed), IX_PUBLISHED[1].load(Relaxed));
-        let nk = PUBLISH_NO_KEY.load(Relaxed);
-        if t > 0 || e > 0 || nk > 0 {
-            s.push_str(&format!(
-                "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
-                 translations {t}, eliminators {e}\n"
-            ));
-        }
-        let (a, dn, un) =
-            (ICOD_ASKED.load(Relaxed), ICOD_DONE.load(Relaxed), ICOD_UNCOND.load(Relaxed));
-        if a > 0 {
-            s.push_str(&format!(
-                "  indexed premise ICOD at the motive's own rung — asked {a}, \
-                 discharged {dn} ({un} owing nothing)\n"
-            ));
-        }
-        let ia = IDEP_ASKED.load(Relaxed);
-        if ia > 0 {
-            s.push_str(&format!(
-                "  indexed premise IDEP, by CONSTRUCTOR — asked {ia}, declarations complete {}; \
-                 fieldless {}, with fields {}\n",
-                IDEP_DONE.load(Relaxed),
-                IDEP_NULLARY.load(Relaxed),
-                IDEP_FIELDED.load(Relaxed),
-            ));
-            s.push_str(&format!(
-                "  indexed premise PRE = ICOD ∧ IDEP discharged at a use site — {}, \
-                 rule FIRED {}\n",
-                PRE_DONE.load(Relaxed),
-                IX_FIRED.load(Relaxed)
-            ));
-        }
-        // A routed run names every declaration off the export file, so this is
-        // zero there and any other value is a real gap in the channel — see
-        // [`PUBLISH_NO_KEY`].
-        if nk > 0 {
-            s.push_str(&format!(
-                "  publications SKIPPED for want of an export-name identity — {nk}\n"
-            ));
-        }
-    }
+        s.push_str(&ix_readiness_report());
     #[cfg(feature = "stepcount")]
     {
         let fired = IX_FIRE.load(Relaxed);
