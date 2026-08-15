@@ -692,25 +692,59 @@ fn zeta_with_a_free_variable_expansion() {
 /// Carrying the beta typing obligation `⟦a⟧ ∈ ⟦A⟧` as a genuine antecedent is
 /// what turns most of those obligations into complete conditional derivations;
 /// the ones that are never discharged are the residue, and the whole design is
-/// only honest if the residue is visible. So this asserts the ledger balances:
-/// the number of escaped certificates the report prints is exactly the count of
-/// the escape gap row, and that row is in the total.
+/// only honest if the residue is visible.
 ///
-/// `028_peano2` and `029_peano3` are the two files this machinery was measured
-/// on — 32 gaps down to 8 and 59 down to 9 — and between them they cover both
-/// cases: `028` discharges every one of its conditional derivations, `029`
-/// leaves one over.
+/// **The residue itself is what is pinned, per file.** The ledger-balance
+/// assertions below cannot do it: `global_report` computes `let escapes =
+/// escaped()` once (`tg.rs:26801`) and prints it three times — as the
+/// `undischarged assumption` gap row, as a term of the `TOTAL gaps` sum, and as
+/// the `… {} escaped` field. So `counted == escaped` is `escapes == escapes`
+/// and `total >= escaped` is "a sum of non-negatives is at least one of its
+/// terms"; **no behavioural mutation, no assumption actually leaking to the
+/// boundary, can trip either.** They are kept because they *do* separate a
+/// reporting regression — the row dropped, renamed, or left out of the sum, and
+/// the three numbers are read back through three independent subprocess runs —
+/// but that is a different subject from the one this test is named for, and it
+/// is asserted here rather than assumed.
+///
+/// The counts are **measured, not chosen**, on this tree:
+///
+/// | file | escaped | what it covers |
+/// | --- | --- | --- |
+/// | `028_peano2` | 0 | 20 conditional derivations, all accounted for by a rule |
+/// | `029_peano3` | 0 | 48 made, all accounted for — the larger clean case |
+/// | `075_nRecReduction` | 3 | 95 made, 92 accounted for; the residue is real |
+///
+/// So the two branches of the `match` are both live: `028`/`029` exercise "no
+/// escape, therefore no row", `075` exercises "escapes, therefore a row saying
+/// how many".
+///
+/// **A correction.** This header used to say that `028` discharges everything
+/// "and `029` leaves one over". Measured: `029` leaves **nothing** over either —
+/// both clean files are at 0, and the file that carries a residue is `075`,
+/// at 3. The claim had never been asserted, which is why it could be wrong.
 #[test]
 fn escaped_assumptions_are_reported_as_gaps() {
     let dir = corpus().join("good/tutorial");
     if skip_guard::absent(&dir) {
         return
     }
-    for name in ["028_peano2", "029_peano3", "075_nRecReduction"] {
+    for (name, want) in [("028_peano2", 0u64), ("029_peano3", 0), ("075_nRecReduction", 3)] {
         let f = dir.join(format!("{name}.ndjson"));
         assert!(f.exists(), "missing corpus file {}", f.display());
         let (_, _, total) = check(&f);
         let escaped = escaped_count(&f);
+        // **The behavioural claim, and the only assertion here that is one.**
+        // Everything below reads one number of `global_report`'s three times
+        // over; this reads it against a value measured off the tree. Moving it
+        // in either direction is a real change and wants a written trade: up
+        // means an obligation stopped being discharged, down means one started.
+        assert_eq!(
+            escaped, want,
+            "{name}: {escaped} assumption(s) reached the boundary, not the {want} this file is \
+             pinned at. Up is a discharge that regressed; down is one that improved — either \
+             way the ratchet moves only with the reason recorded."
+        );
         let rows = gap_reasons(&f);
         let row = rows.iter().find(|r| r.contains("undischarged assumption"));
         match escaped {
