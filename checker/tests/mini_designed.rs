@@ -3059,6 +3059,51 @@ fn published_indexed(stdout: &str) -> (u64, u64) {
     (n[0], n[1])
 }
 
+/// **TG consumes the published indexed evidence as far as the rule itself.**
+///
+/// The sibling test above pins the *producing* side; this pins the consuming
+/// side, and the two together are what make "the indexed consumer never fired"
+/// and "mini handed it nothing" distinguishable observations.
+///
+/// What is asserted is a decline, deliberately. `RecBottom::IxDep` reaches
+/// `IndexedDepRecursor::iota[i]`, instantiates it at the use site's own
+/// parameters, motive, minors and target, and checks that its antecedent is the
+/// conjunction `ICOD ∧ IDEP` — everything route (A) must do *before* the
+/// premise. What is left is the premise, so the honest outcome is a gap that
+/// **names the premise**.
+///
+/// That naming is the whole content. Before this, an indexed recursor declined
+/// as `iota: no interpretation — an indexed family`, a label
+/// `ORIGIN-RANKING.md` measured at −117 and then had to split by hand into a
+/// genuine −89, a K-like `Eq.rec` −20 and an `Acc.rec` −8 on a different
+/// engine, because `num_indices != 0` was tested ahead of `is_k` and every
+/// indexed declaration got the same row whatever its real blocker was. A row
+/// that prices three tranches is a row that prices none of them. This decline
+/// is reached only through `mini_ix_dep_rec_bottom`, which tests `is_k` and the
+/// motive count, so it counts the −89 and nothing else.
+///
+/// Both fixtures, because they fail differently: `Ix` is tag-indexed with two
+/// firings and `Aux` is the six-constructor mutual encoding with three, so a
+/// consumer that happened to work at one arity is caught at the other.
+#[test]
+fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
+    for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
+        let out = run_unified(name);
+        assert!(
+            out.contains("iota: the indexed premise PRE = ICOD ∧ IDEP is not discharged"),
+            "{name}: TG did not reach mini's indexed iota rule. The rule is published and \
+             `IndexedDepRecursor::iota` concludes it; not reaching it means the nest, not \
+             the premise discharge, is the wall — which is a different tranche.\n{out}"
+        );
+        assert!(
+            !out.contains("iota: no interpretation — an indexed family"),
+            "{name}: the declaration still declines under the label that prices three \
+             separate causes as one. `mini_ix_dep_rec_bottom` is what takes it out of \
+             that row, and it must, or the −89 is unmeasurable again.\n{out}"
+        );
+    }
+}
+
 /// **Mini's indexed class-(T) evidence reaches the shared core.**
 ///
 /// `derived::inductive::family::IndexedDepRecursor::iota` concludes the indexed

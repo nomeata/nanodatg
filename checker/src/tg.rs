@@ -3684,6 +3684,11 @@ fn same_bottom(a: &RecBottom, b: &RecBottom) -> bool {
         (RecBottom::Dep(gx, tx), RecBottom::Dep(gy, ty)) => {
             pair_ptr_eq((gx, tx), (gy, ty))
         }
+        // One `Rc`, for [`RecBottom::Degen`]'s reason: the bundle is mini's
+        // published package and the nest's bottom is a term over *its* symbols,
+        // so a second `Rc` is a second `w_rect` Separation and a term no
+        // equation here relates to the first.
+        (RecBottom::IxDep(x), RecBottom::IxDep(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
 }
@@ -3781,6 +3786,18 @@ enum RecBottom {
     /// premises sit at `vars[2]`/`vars[3]` and `T` is `doms[2]` — the motive at
     /// `List.nil α` rather than at a closed constructor.
     List(Rc<ListRecursor>),
+    /// **The indexed dependent path** — mini's `IndexedDepRecursor`, adopted
+    /// whole across the `EnvCore` seam. `app(irec(p⃗,C,S⃗,T), b)`, and the `ni`
+    /// index binders between the minors and the major are **inert at the
+    /// bottom**: `IndexedDepRecursor::iota` eliminates the index vector, so the
+    /// rule's left-hand side is the recursor applied to the major premise
+    /// alone. That is the whole of the nest's difference from
+    /// [`RecBottom::Dep`], and it is an arity difference. The *premise*
+    /// discharge is not — see [`TgBackend::fire_ix_dep`].
+    ///
+    /// One `Rc` and not two: the bundle carries mini's translation, so there is
+    /// no separate `GenTyNest` to agree with.
+    IxDep(Rc<IxDepBottom>),
     /// **The general path**: `derived::inductive`'s carrier and
     /// [`derived::inductive::GenRecursor`], at whatever arity the declaration
     /// has. The three arms above are the hand-written stacks and stay ahead of
@@ -4041,6 +4058,37 @@ struct DegenBottom {
 ///
 /// # Why the target is not `t_policy`'s
 ///
+/// **Mini's indexed dependent eliminator package, on TG's side of the seam.**
+///
+/// Everything here was minted by mini and crosses whole; nothing is rebuilt.
+/// The contrast with [`DepBottom`] is the point: that one carries a `GenInd`
+/// and a `GenTyNest` because TG *builds* the non-indexed carrier itself, while
+/// an indexed carrier is mini's alone (`derived::inductive::family`) and
+/// arrives as `tr`.
+struct IxDepBottom {
+    /// The ι rules, the premise `PRE = ICOD(m,T) ∧ IDEP(m,S⃗)`, Lean's own
+    /// minor variables and the index variables the typing quantifies.
+    dr: Rc<derived::inductive::family::IndexedDepRecursor>,
+    /// The indexed class-(T) translation `dr` is stated over — the carrier a
+    /// major premise must reach and the index abbreviations a recursive child
+    /// is stated at.
+    tr: Rc<crate::mini::zoneb::IndexedTranslation>,
+    /// The Lean-facing nest bottom: `⟦T.rec.{σ}⟧`'s symbol, its defining
+    /// equation, and the target.
+    ///
+    /// **`target` means something different here** than on the non-indexed
+    /// row, and the `DepElim` doc says so: `rec_ix_dep` stores the rung the
+    /// motive's own *type* inhabits, not the sort the motive lands in. So it is
+    /// consumed as mini's authoritative choice and never checked against
+    /// `motive_codomain`.
+    elim: Rc<crate::mini::interp::DepElim>,
+    /// `⊢ ∀p⃗ ∀m ∀S⃗ ∀T. irec = irec`.
+    refl_gen: Thm,
+    /// The order `refl_gen` and `dr.iota` are closed in: parameters, motive,
+    /// minors, target.
+    gvars: Vec<kernel::FreeVar>,
+}
+
 /// `GenRecursor` lands in one target *set* `T` and `t_policy` finds it by
 /// reading the motive's value at a **nullary constructor** — which is why a
 /// declaration with none declines. `DepRecursor` does not need one: its
@@ -7388,6 +7436,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         name: &NamePtr<'t>,
         levels: LevelsPtr<'t>,
     ) -> Option<RecBottom> {
+        // **Ahead of everything, and disjoint from all of it by
+        // `num_indices != 0`** — every arm below tests `num_indices == 0`, so
+        // this is a dispatch on the declaration's shape and not a priority.
+        if let Some(d) = self.mini_ix_dep_rec_bottom(ctx, name, levels) {
+            return Some(RecBottom::IxDep(d))
+        }
         if let Some((dp, tn)) = self.mini_dep_rec_bottom(ctx, name, levels) {
             return Some(RecBottom::Dep(dp, tn))
         }
@@ -8135,6 +8189,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // from pieces — which is what lets a constructor with `mᵢ > 0`
             // through at all, its guarded minor being a `define_abbrev` nest
             // with no exported builder. See that method.
+            // `t_last(p⃗,C,S⃗,d⃗,b) := app(irec(p⃗,C,S⃗,T), b)`. Two things are
+            // different from the arm below and both are arity:
+            //
+            // * the telescope is `ni` longer — `depth == np + n + ni + 2` — and
+            //   the index binders sit *between* the minors and the major,
+            //   which is Lean's order;
+            // * **the index binders are inert.** `IndexedDepRecursor::iota`
+            //   eliminates the index vector, so `irec` is applied to the major
+            //   premise alone and `vars[np+1+n .. np+1+n+ni]` are mentioned
+            //   nowhere in the bottom. A nest that tried to apply them would be
+            //   spelling a term no published rule is about.
+            //
+            // The target is **mini's**, off the published `DepElim`, not
+            // `dep_target`: the indexed row stores the rung the motive's own
+            // type inhabits and the two choices are different terms.
+            RecBottom::IxDep(d) => {
+                let n = d.dr.minors.len();
+                let ni = d.dr.xvs.len();
+                if depth != np + n + ni + 2 {
+                    return None
+                }
+                let ps: Vec<Term> = vars[..np].iter().map(|v| Term::var(*v)).collect();
+                let motive = Term::var(vars[np]);
+                let minors: Vec<Term> =
+                    vars[np + 1..np + 1 + n].iter().map(|v| Term::var(*v)).collect();
+                let t = d.elim.target.clone();
+                let rec_term = self.ix_dep_rec_at(d, &ps, &motive, &minors, &t)?;
+                ap.apply(rec_term, major)
+            }
             RecBottom::Dep(d, _) => {
                 let n = d.gi.ind.spec.ctors.len();
                 if depth != np + n + 2 {
@@ -11737,6 +11820,167 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(())
     }
 
+    /// **Mini's indexed dependent eliminator, adopted whole** — the consumer
+    /// `73307c7`'s publication was built for and never had.
+    ///
+    /// Every identity check here is an equality of *objects mini minted*, never
+    /// a rebuild: `IndexedDepRecursor::over_family` mints a `w_rect` Separation
+    /// per call, so a second build is a second family of symbols no theorem
+    /// relates to the first. This is why the package crosses the seam whole.
+    ///
+    /// `None` is a fall-through, not a decline: every other arm of
+    /// [`Self::rec_bottom`] tests `num_indices == 0`, so a refusal here lands
+    /// at the same `iota_decline_label` the declaration reached before.
+    fn mini_ix_dep_rec_bottom(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<IxDepBottom>> {
+        let Declar::Recursor(r) = self.decls.get_declar(name)? else { return None };
+        // The tranche's own population, and not the label's: `is_k` keeps
+        // `Eq.rec` out (it is `num_indices == 1` *and* K-like, a different
+        // rule) and the motive count keeps a nested block's recursor out.
+        if r.num_indices == 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return None
+        }
+        let ind_name = r.all_inductives[0];
+        // `rec.levelParams` is `[motive, ind…]` — the motive's level is first,
+        // so the declaration's own instantiation is the **tail**
+        // (`INDEXED-DESIGN.md` §8.1, decoded against `042` and `076`).
+        let given = ctx.read_levels(levels).to_vec();
+        let ind_levels = ctx.alloc_levels_slice(given.get(1..)?);
+        let ind_key = self.const_key(ctx, ind_name, ind_levels)?;
+        let tr = self.core.indexed_translation(&ind_key)?;
+        let rec_key = self.const_key(ctx, *name, levels)?;
+        let (dep, elim) = self.core.ix_dep_elim(&rec_key)?;
+        // The package and the translation must be the *same* build. `IxDepRec`
+        // carries the translation it was derived over, so this is a pointer
+        // comparison and not a re-derivation.
+        if !Rc::ptr_eq(&dep.tr, &tr) {
+            return None
+        }
+        if dep.dr.minors.len() != tr.ii.spec.base.ctors.len()
+            || r.num_minors as usize != dep.dr.minors.len()
+            || r.num_indices as usize != dep.dr.xvs.len()
+            || r.num_params as usize != tr.base.params.len()
+        {
+            return None
+        }
+        // `⊢ ∀p⃗ ∀m ∀S⃗ ∀T. irec = irec`, so a use site can read the recursor
+        // term back at its own arguments by one `inst_all` — `DepBottom`'s
+        // `refl_gen` trick, which is what avoids substituting into a term.
+        let mut gvars: Vec<kernel::FreeVar> = tr.base.params.clone();
+        gvars.push(dep.dr.motive);
+        gvars.extend(dep.dr.minors.iter().copied());
+        gvars.push(dep.dr.target);
+        let refl_gen =
+            derived::gen_all(&gvars, &Thm::eq_refl(dep.dr.rec.clone()));
+        Some(Rc::new(IxDepBottom { dr: dep.dr.clone(), tr, elim, refl_gen, gvars }))
+    }
+
+    /// [`Self::mini_ix_dep_rec_bottom`]'s `⊢ irec = irec` read back as the term
+    /// at a use site's own parameters, motive, minors and target.
+    fn ix_dep_rec_at(
+        &mut self,
+        d: &IxDepBottom,
+        ps: &[Term],
+        c: &Term,
+        minors: &[Term],
+        t: &Term,
+    ) -> Option<Term> {
+        let mut at: Vec<Term> = ps.to_vec();
+        at.push(c.clone());
+        at.extend(minors.iter().cloned());
+        at.push(t.clone());
+        if at.len() != d.gvars.len() {
+            return None
+        }
+        derived::inst_all(&d.refl_gen, &at)?.concl().as_eq().map(|(l, _)| l)
+    }
+
+    /// **Fire mini's indexed dependent ι at a use site.**
+    ///
+    /// The rule is `IndexedDepRecursor::iota[i]`, already `∀`-closed:
+    ///
+    /// ```text
+    /// ⊢ ∀p⃗ ∀m ∀S⃗ ∀T. (PRE → ∀y⃗ ∀t⃗. (Hᵢ → app(irec, ctorᵢ(y⃗,t⃗))
+    ///                                    = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗)))
+    /// ```
+    ///
+    /// so none of [`DepBottom`]'s `iota_gen`/`refl_gen`/`gvars` hoisting is
+    /// needed — one `inst_all` puts it at this site's own terms. What it is
+    /// **not** is dischargeable yet: `PRE = ICOD(m,T) ∧ IDEP(m,S⃗)`, and
+    /// `INDEXED-DESIGN.md` §8.2's route (A) is the two derivations that supply
+    /// it. Until they exist this reaches the rule, checks its shape against
+    /// this site, and declines **naming the premise** rather than falling back
+    /// to the general label — a decline that says which conjunct is missing is
+    /// the difference between a measured tranche and a re-measured one.
+    ///
+    /// Why `IDEP` is not `DEP` at a longer arity, which is the question that
+    /// scoped this work: `minor_atoms_general`'s plain atoms
+    /// `yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)` are the non-indexed ones exactly, but a recursive
+    /// atom is `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` — a **different set per slot**, at the
+    /// child's own index vector — where `DEP`'s is `tⱼ ∈ W` at one fixed
+    /// carrier moved along one bridge; and the induction hypothesis is
+    /// `vⱼ ∈ app(m, d⃗ᵢⱼ, tⱼ)`, the motive applied at those indices too. The
+    /// index *terms* come from `IndexedDeclSpec::rec_index_vec` and need no
+    /// Lean syntax; the *memberships* `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` that the β step between
+    /// the two spellings consumes exist nowhere but inference, which is what
+    /// [`Self::ix_index_census`] measured at 35 of 35.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_ix_dep(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        _nest: &RecNest,
+        _cfun: ExprPtr<'t>,
+        _args: &[ExprPtr<'t>],
+        ta: &[Term],
+        _doms: &[Term],
+        _dom_exprs: &[ExprPtr<'t>],
+        _obligations: &[(Thm, Vec<Formula>)],
+        idx: usize,
+        _cfun_name: NamePtr<'t>,
+        _cfun_levels: LevelsPtr<'t>,
+    ) -> Result<CondEq, &'static str> {
+        let n = d.dr.minors.len();
+        let ni = d.dr.xvs.len();
+        let np = d.tr.base.params.len();
+        if ta.len() != np + n + ni + 2 {
+            return Err("iota: an indexed dependent recursor's arity is not its declaration's")
+        }
+        let ps: Vec<Term> = ta[..np].to_vec();
+        let c = ta[np].clone();
+        let minors: Vec<Term> = ta[np + 1..np + 1 + n].to_vec();
+        // The rule at this site's own terms. Reaching it is what the seam
+        // publication bought; it is checked here rather than assumed, so that a
+        // package whose shape drifted is a decline and not a wrong `Proved`.
+        let mut at: Vec<Term> = ps.clone();
+        at.push(c.clone());
+        at.extend(minors.iter().cloned());
+        at.push(d.elim.target.clone());
+        let Some(rule) = d.dr.iota.get(idx).and_then(|r| derived::inst_all(r, &at)) else {
+            return Err("iota: mini's indexed iota rule did not instantiate at this site")
+        };
+        let Some((pre, _)) = rule.concl().as_imp() else {
+            return Err("iota: mini's indexed iota rule has no premise to discharge")
+        };
+        if as_and(&pre).is_none() {
+            return Err("iota: the indexed premise is not the conjunction ICOD ∧ IDEP")
+        }
+        #[cfg(feature = "stepcount")]
+        {
+            IX_FIRE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // The census now lives on *this* path: once the bottom builds, the
+            // site no longer reaches `iota_decline_label`, and a measurement
+            // that silently stops measuring is worse than none.
+            let _ = self.ix_index_census(ctx, _cfun_name, _cfun_levels);
+        }
+        let _ = ctx;
+        Err("iota: the indexed premise PRE = ICOD ∧ IDEP is not discharged")
+    }
+
     /// Mini's exact dependent recursor for the parameterless fieldless family
     /// and its narrow plain-recursive extension (`N.z` / `N.s n`).
     fn mini_dep_rec_bottom(
@@ -15158,6 +15402,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let n_ctors = match &nest.bottom {
             RecBottom::General(g, _) => g.gi.ind.spec.ctors.len(),
             RecBottom::Dep(d, _) => d.gi.ind.spec.ctors.len(),
+            RecBottom::IxDep(d) => d.dr.minors.len(),
             RecBottom::Degen(_) => 1,
             _ => 2,
         };
@@ -15213,6 +15458,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
         }
         let fired = match nest.bottom.clone() {
+            RecBottom::IxDep(d) => self.fire_ix_dep(
+                ctx, &d, nest, cfun, args, &ta, &doms, &dom_exprs, &obligations, idx, name,
+                levels,
+            )?,
             RecBottom::Enum(br) => self.fire_enum(&br, &ta, idx)?,
             // `obligations` is not passed, and the absence is load-bearing:
             // they are what the W presentation discharged `HYP` from, and ω's
@@ -21672,6 +21921,12 @@ static IX_CENSUS: [std::sync::atomic::AtomicU64; 8] =
 /// (`Aux.rec`, `Ix.rec`, `RBTree.rec`) can be read apart rather than summed —
 /// the row-is-three-populations lesson applied to the measurement of its own
 /// remedy.
+/// **How often the indexed ι rule was reached at a use site and found in the
+/// shape this site needs** — everything route (A) has to do *before* the
+/// premise, counted apart from the premise. Zero here and a nonzero census
+/// would mean the nest, not the discharge, is the wall.
+#[cfg(feature = "stepcount")]
+static IX_FIRE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[cfg(feature = "stepcount")]
 static IX_CENSUS_ROWS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
@@ -21898,6 +22153,12 @@ pub fn origin_report() -> String {
     }
     #[cfg(feature = "stepcount")]
     {
+        let fired = IX_FIRE.load(Relaxed);
+        if fired > 0 {
+            s.push_str(&format!(
+                "  indexed iota rule REACHED at a use site, premise outstanding — {fired}\n"
+            ));
+        }
         let c: Vec<u64> = IX_CENSUS.iter().map(|a| a.load(Relaxed)).collect();
         if c.iter().any(|n| *n > 0) {
             s.push_str(&format!(
