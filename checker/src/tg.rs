@@ -21422,6 +21422,33 @@ static NO_NEST: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
 /// empty store and concludes the consumer is broken.
 static IX_PUBLISHED: [std::sync::atomic::AtomicU64; 2] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+/// **Publications that could not be named** — a package mini was ready to hand
+/// over whose `Name` lives in a per-declaration `TcCtx` arena, so
+/// [`export_name_key`] gives it no cross-engine identity and nothing can cross.
+///
+/// The same argument as [`IX_PUBLISHED`], one step earlier in the channel. A
+/// skip here is correct in a unit test (which is where every one of them comes
+/// from today) and would be a real defect in a routed run, where every name
+/// comes off the export file — so the number must be visible rather than
+/// inferred. Not behind `stepcount`, for [`IX_PUBLISHED`]'s reason.
+static PUBLISH_NO_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// One publication skipped for want of an export-name identity. Called by
+/// `crate::mini::interp::IndApparatus::crossed`, which is where the decision
+/// that it is a skip and not a divergence is made and argued.
+pub(crate) fn note_publication_without_key() {
+    PUBLISH_NO_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many publications have been skipped for want of a key, for the test
+/// that pins the skip as a skip. Reading it is the only way to tell a counted
+/// skip from an uncounted one, which is the difference the counter exists for.
+/// A production run reads the same number off the `--verbose` report line, so
+/// this reader is the test's alone.
+#[cfg(test)]
+pub(crate) fn publications_without_key() -> u64 {
+    PUBLISH_NO_KEY.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// **The label a declaration got, against every other label its shape also
 /// satisfies** — the standing guard against the defect [`iota_decline_label`]
 /// has now shipped twice.
@@ -21593,10 +21620,19 @@ pub fn origin_report() -> String {
         // handed it anything" are two distinguishable observations rather than
         // one silence. See [`IX_PUBLISHED`].
         let (t, e) = (IX_PUBLISHED[0].load(Relaxed), IX_PUBLISHED[1].load(Relaxed));
-        if t > 0 || e > 0 {
+        let nk = PUBLISH_NO_KEY.load(Relaxed);
+        if t > 0 || e > 0 || nk > 0 {
             s.push_str(&format!(
                 "  indexed class-(T) evidence PUBLISHED across the EnvCore seam — \
                  translations {t}, eliminators {e}\n"
+            ));
+        }
+        // A routed run names every declaration off the export file, so this is
+        // zero there and any other value is a real gap in the channel — see
+        // [`PUBLISH_NO_KEY`].
+        if nk > 0 {
+            s.push_str(&format!(
+                "  publications SKIPPED for want of an export-name identity — {nk}\n"
             ));
         }
     }

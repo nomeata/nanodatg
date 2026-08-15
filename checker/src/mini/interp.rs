@@ -913,6 +913,35 @@ pub struct DepElim {
 }
 
 impl IndApparatus {
+    /// **A key with no export identity is not a divergence.** Every publication
+    /// below returns `bool`, and every caller reads `false` as *divergent
+    /// shared evidence* and refuses the declaration. [`joint_key`] returns
+    /// `None` for a different reason entirely: a `Name` interned in a
+    /// per-declaration `TcCtx` arena has no identity outside it and therefore
+    /// **cannot cross the seam at all** — see [`crate::tg::export_name_key`].
+    /// There is nothing to publish and nothing at the far end to disagree
+    /// with, so the honest answer is "published, vacuously".
+    ///
+    /// Conflating the two with `joint_key(..).is_some_and(..)` turned 16
+    /// `--lib` unit tests red — every mini test builds its declarations in a
+    /// `TcCtx` arena, so every one of them took the `None` branch and was told
+    /// its own evidence diverged. [`crate::mini::zoneb`]'s non-indexed
+    /// translation publication has always had the shape below.
+    ///
+    /// The skip is **counted**, not silent: the failure mode of a publication
+    /// channel is a consumer that never fires, and "mini published nothing"
+    /// and "mini could not name what it published" have to stay
+    /// distinguishable. See [`crate::tg::note_publication_without_key`].
+    fn crossed(joint: Option<crate::const_store::ConstKey>, publish: impl FnOnce(crate::const_store::ConstKey) -> bool) -> bool {
+        match joint {
+            None => {
+                crate::tg::note_publication_without_key();
+                true
+            }
+            Some(joint) => publish(joint),
+        }
+    }
+
     /// Hand the exact dependent-recursor package and its Lean-facing nest
     /// bottom to the shared semantic core. The publication is performed only
     /// after `rec_dep` has checked the abbreviation's endpoints.
@@ -922,7 +951,7 @@ impl IndApparatus {
         dep: Rc<DepRec>,
         elim: Rc<DepElim>,
     ) -> bool {
-        joint_key(&key).is_some_and(|joint| self.core.publish_dep_elim(joint, dep, elim))
+        Self::crossed(joint_key(&key), |joint| self.core.publish_dep_elim(joint, dep, elim))
     }
 
     /// The same, for an **indexed** family: hand the exact
@@ -947,7 +976,7 @@ impl IndApparatus {
         dep: Rc<IxDepRec>,
         elim: Rc<DepElim>,
     ) -> bool {
-        joint_key(&key).is_some_and(|joint| self.core.publish_ix_dep_elim(joint, dep, elim))
+        Self::crossed(joint_key(&key), |joint| self.core.publish_ix_dep_elim(joint, dep, elim))
     }
 
     /// Hand mini's indexed class-(T) translation to the shared semantic core,
@@ -958,7 +987,7 @@ impl IndApparatus {
         key: ConstKey,
         tr: Rc<crate::mini::zoneb::IndexedTranslation>,
     ) -> bool {
-        joint_key(&key).is_some_and(|joint| self.core.publish_indexed_translation(joint, tr))
+        Self::crossed(joint_key(&key), |joint| self.core.publish_indexed_translation(joint, tr))
     }
 
     fn build(core: &EnvCore, p: &Prelude) -> Option<IndApparatus> {
@@ -3130,6 +3159,61 @@ impl Interp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A name with no export identity is a skip, not a divergence, and the
+    /// skip is counted.**
+    ///
+    /// Every publication channel across the `EnvCore` seam returns `bool`, and
+    /// every caller reads `false` as *divergent shared evidence* and refuses
+    /// the declaration outright. [`joint_key`] returns `None` for an unrelated
+    /// reason — a `TcCtx`-arena name cannot cross the seam at all — and
+    /// [`IndApparatus::crossed`] is the one place that distinction is made.
+    ///
+    /// Writing it as `joint_key(&key).is_some_and(…)` cost **16** `--lib` unit
+    /// tests, which build their declarations in a `TcCtx` arena and so take the
+    /// `None` branch on every publication: 11 in `ctor_ix`, `iota_ix_dep`,
+    /// `rec_ix_dep`, `rec_ix_prop` and `zoneb` from the indexed channels, and 5
+    /// in `rec_dep`, `iota_dep` and `eq_cash` that the non-indexed
+    /// `publish_dep_elim` had already been failing under the same defect. The
+    /// three assertions below are the three things that regression needed:
+    /// a missing key succeeds, it does **not** reach the store, and it is
+    /// counted rather than silent.
+    ///
+    /// The `Some` arm is here because "always return `true`" passes the first
+    /// three assertions and would destroy the channel's actual guarantee.
+    #[test]
+    fn a_publication_with_no_export_name_is_a_counted_skip_and_not_a_divergence() {
+        let before = crate::tg::publications_without_key();
+        let mut reached = false;
+        assert!(
+            IndApparatus::crossed(None, |_| {
+                reached = true;
+                false
+            }),
+            "a key with no export identity must publish vacuously: there is nothing at the far \
+             end to disagree with"
+        );
+        assert!(!reached, "the store must not be consulted for a key that cannot name anything");
+        assert_eq!(
+            crate::tg::publications_without_key(),
+            before + 1,
+            "the skip must be counted — a publication channel's failure mode is silence"
+        );
+
+        // And a real key still delegates, in both directions, or the fix has
+        // turned the channel into an unconditional `true`.
+        let k: crate::const_store::ConstKey = (7u32, vec![]);
+        assert!(IndApparatus::crossed(Some(k.clone()), |j| {
+            assert_eq!(j, k);
+            true
+        }));
+        assert!(!IndApparatus::crossed(Some(k.clone()), |_| false));
+        assert_eq!(
+            crate::tg::publications_without_key(),
+            before + 1,
+            "delegating to the store is not a skip and must not be counted as one"
+        );
+    }
 
     /// The tower's two typing cases, both pinned against the statement they
     /// are supposed to make. The `n = 0` case is the one a "just use `mem_u`"
