@@ -40,9 +40,28 @@ fn accepts(export: &Path) -> bool { outcome(export).0 }
 /// "we turned this away *for the reason we think*" are different claims, and
 /// only the second notices a file that starts failing for a new reason.
 fn outcome(export: &Path) -> (bool, String) {
+    // **The path is unique per call, and the counter is not decoration.**
+    //
+    // This was `process::id()` plus the file's *basename*, which is unique only
+    // while no two tests in this binary look at two different files with the
+    // same name. `tests/fixtures/declined/` broke that the day it landed: its
+    // two files are copies of `good/sparse-name-index.ndjson` and
+    // `good/level-index-out-of-order.ndjson`, so
+    // `declined_fixtures_are_declined_for_the_stated_reason` and `arena_corpus`
+    // — which cargo runs as parallel threads of one process — computed the
+    // *same* temp path. This function ends by `remove_file`ing it, so one test
+    // could delete the other's config between the `write` and the spawned
+    // checker's `read`, and the victim failed to open its own configuration.
+    //
+    // That is the shape of the gate failures that would not reproduce: one
+    // test, never the same one twice, always green when run alone. It is the
+    // same fix `tg_tutorial.rs::tmp_cfg` already carries, and this file should
+    // have had it when the fixtures were copied in.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let cfg_path = std::env::temp_dir().join(format!(
-        "nanodatg-corpus-{}-{}.json",
+        "nanodatg-corpus-{}-{}-{}.json",
         std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         export.file_name().unwrap().to_string_lossy()
     ));
     // `unsafe_permit_all_axioms` keeps the corpora's own axioms from counting as
