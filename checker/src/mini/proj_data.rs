@@ -404,15 +404,16 @@ fn model_proj_of(
 /// params and indices together, then the subject
 /// (`vendor/lean-inductive-models/src/InductiveModels/Check.lean:1310-1326`).
 ///
-/// # This does not fire yet, and the reason is measured rather than guessed
+/// # Why this applies at the evidence level and not by `infer_type`
 ///
-/// [`Checker::infer_type`] **type-checks** the application it is handed, and
-/// its `Expr::App` clause retargets the argument's membership *along a
-/// definitional equality between the argument's inferred type and the
-/// function's domain*. The argument here has type `T` and the domain is
-/// `T._model`, and those are deliberately not definitionally equal — the model
-/// is a transparent `def` over the specialised block, so it δ-unfolds away from
-/// the primitive inductive. Measured on `tool_nested_proj`:
+/// The first version built the application as an `Expr` and handed it to
+/// [`Checker::infer_type`], which **type-checks** it: its `Expr::App` clause
+/// retargets the argument's membership *along a definitional equality between
+/// the argument's inferred type and the function's domain*. The argument here
+/// has type `T` and the domain is `T._model`, and those are deliberately not
+/// definitionally equal — the model is a transparent `def` over the specialised
+/// block, so it delta-unfolds away from the primitive inductive. Measured, on
+/// `tool_nested_proj`:
 ///
 /// ```text
 /// Expected definitional equality between
@@ -420,40 +421,85 @@ fn model_proj_of(
 /// and Wrap, but they differ.
 /// ```
 ///
-/// **The interpretation argument above is untouched by this** and is still what
-/// makes the route right: the two carriers are one *stored term*, so no
-/// retargeting is needed at the set level at all. What stands in the way is
-/// only mini's syntactic check on the way there, and the fix is to apply at the
-/// evidence level — `Checker::app_evidence` over `Interp::dprod_app`, with the
-/// domain conversion discharged by the two interpretations being identical
-/// rather than by `assert_def_eq`. That helper is in `kernel.rs`.
+/// **And no such retargeting is needed**, which is the whole point: `⟦T⟧` and
+/// `⟦T._model⟧` are one stored term, so the argument's membership already *is*
+/// a membership in the domain, on the nose. Applying over
+/// [`crate::mini::interp::Interp::dprod_app`] — the idiom
+/// `crate::mini::rec_trunc` already uses, one binder at a time off
+/// `Interp::as_pi` — spends exactly that and asks `def_eq` nothing.
 ///
-/// **What must not be done instead** is to teach `def_eq` that `T ≡ T._model`.
-/// `zoneb::model_alias` refuses to carry the model's defining equation across
-/// for exactly this reason: `T` is a primitive inductive with no δ step, and
-/// offering one would be offering a reduction Lean does not have.
+/// **What must not be done instead** is to teach `def_eq` that `T` and
+/// `T._model` are definitionally equal. [`crate::mini::zoneb::model_alias`]
+/// refuses to carry the model's defining equation across for exactly this
+/// reason: `T` is a primitive inductive with no delta step, and offering one
+/// would be offering a reduction Lean does not have.
+///
+/// # It still does not certify, and the blocker is `PSigma'`
+///
+/// The route is complete and is not what stops it. **The producer's projection
+/// declarations do not themselves interpret**: their values go through the
+/// basis Σ, and `PSigma'` is red on our side above `Prop` (`MODEL-BASIS.md`
+/// §8.2). Dumped, and it is not a nesting artefact — a nested owner and a
+/// non-nested one give the same answer, at every σ:
+///
+/// ```text
+/// Wrap._model.proj_0        typing (waiting on ind-spec(PSigma': class (P) above Prop))
+/// Dep._model.proj_0 {0,0}   typing (waiting on ind-spec(PSigma': class (P) above Prop))
+/// Dep._model.proj_0 {1,1}   typing (waiting on ind-spec(PSigma': class (P) above Prop))
+/// ```
+///
+/// while `Wrap.mk._model` — the same tower, a different family — certifies. So
+/// the structure half of the model basis is gated on that one basis member, and
+/// this route starts returning `Ok` the moment it lands, with no change here.
 fn model_typing(
     c: &mut Checker<'_, '_>,
     ind: &Name,
     proj: &Name,
-    us: &std::rc::Rc<[crate::mini::expr::Level]>,
+    inst: &[u32],
     args: &[E],
     s: &E,
 ) -> Result<(Term, Thm), Gap> {
-    let mut e = crate::mini::expr::konst(*proj, us.clone());
-    for a in args {
-        e = crate::mini::expr::app(e, *a);
+    let bad = || Gap::StructProj(*ind);
+    // ── the arguments, by the ordinary machinery ────────────────────────────
+    //
+    // Interpreted **before** the interpretation is borrowed, because
+    // `infer_type` borrows the checker. The subject comes last, which is the
+    // producer's order (`Check.lean:1310-1326`): the owner's full telescope,
+    // params and indices together, then `self`.
+    let mut argv: Vec<(Term, Thm)> = Vec::new();
+    for a in args.iter().chain(std::iter::once(s)) {
+        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
+        let reason = t.ev.reason(bad());
+        let (Some(tm), crate::mini::ev::Ev::Proved(thm)) = (t.tm, t.ev) else {
+            return Err(reason)
+        };
+        argv.push((tm, thm));
     }
-    e = crate::mini::expr::app(e, *s);
-    let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
-    let fallback = Gap::StructProj(*ind);
-    match (t.tm, t.ev) {
-        (Some(tm), crate::mini::ev::Ev::Proved(thm)) => Ok((tm, thm)),
-        // The model's own declaration did not certify. Forward *its* reason
-        // rather than stamping `proj(T)` on it: the projection is not what is
-        // wrong, and §0.4's rule is that the first reason wins.
-        (_, ev) => Err(ev.reason(fallback)),
+
+    // ── the application, one binder at a time ───────────────────────────────
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let ci = ip.get_const(&(*proj, inst.to_vec())).cloned().ok_or_else(bad)?;
+    let mut f_tm = ci.term;
+    let mut f_mem = match &ci.typing {
+        Ok(sealed) => sealed.thm().clone(),
+        Err(g) => return Err(g.clone()),
+    };
+    for (a_tm, a_mem) in &argv {
+        let set = f_mem.concl().as_mem().ok_or_else(bad)?.1;
+        let shape = ip.as_pi(&set).ok_or_else(bad)?;
+        let out = match &shape {
+            crate::mini::interp::PiShape::Dep { site, dom } => {
+                ip.dprod_app(site, dom, &f_tm, a_tm, &f_mem, a_mem)
+            }
+            crate::mini::interp::PiShape::Prop { site, dom } => {
+                ip.cond_app(site, dom, &f_mem, a_tm, a_mem)
+            }
+        }
+        .ok_or_else(bad)?;
+        f_tm = out.concl().as_mem().ok_or_else(bad)?.0;
+        f_mem = out;
     }
+    Ok((f_tm, f_mem))
 }
 
 pub(crate) fn typing(
@@ -526,7 +572,7 @@ pub(crate) fn typing(
             // declaration with one that names nothing. The loud decline stays
             // until the replacement works.
             if let Some((proj, _)) = model_proj_of(c, ind, &key.1, idx) {
-                if let Ok(done) = model_typing(c, ind, &proj, us, &args, s) {
+                if let Ok(done) = model_typing(c, ind, &proj, &key.1, &args, s) {
                     return Ok(done)
                 }
             }
