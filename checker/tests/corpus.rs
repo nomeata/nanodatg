@@ -30,7 +30,16 @@ mod skip_guard;
 fn repo_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf() }
 
 /// Run the checker on one export file; `true` means accepted.
-fn accepts(export: &Path) -> bool {
+fn accepts(export: &Path) -> bool { outcome(export).0 }
+
+/// The same, keeping the checker's own output, so a refusal can be checked
+/// against **its stated reason** and not merely counted.
+///
+/// The distinction matters for the one shape this repository declines that the
+/// arena considers valid (see [`DECLINED_REASON`]): "we turned this away" and
+/// "we turned this away *for the reason we think*" are different claims, and
+/// only the second notices a file that starts failing for a new reason.
+fn outcome(export: &Path) -> (bool, String) {
     let cfg_path = std::env::temp_dir().join(format!(
         "nanodatg-corpus-{}-{}.json",
         std::process::id(),
@@ -50,9 +59,11 @@ fn accepts(export: &Path) -> bool {
         serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
     );
     std::fs::write(&cfg_path, cfg).unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn checker");
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn checker");
     let _ = std::fs::remove_file(&cfg_path);
-    status.status.success()
+    let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stdout));
+    (out.status.success(), text)
 }
 
 fn ndjson_files(dir: &Path) -> Vec<PathBuf> {
@@ -70,13 +81,33 @@ fn ndjson_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Upstream nanoda *declines* export files whose name/level back-references are
-/// not densely numbered. That is a parser policy, not a judgement that the file
-/// is ill-typed, so such files are not counted as type-checking failures.
-fn is_declined(export: &Path) -> bool {
-    let name = export.file_name().unwrap().to_string_lossy();
-    name == "sparse-name-index.ndjson" || name == "level-index-out-of-order.ndjson"
-}
+/// **The one shape Lean accepts and this checker turns away.**
+///
+/// The export format numbers names, levels and expressions by back-reference,
+/// and nothing in it requires those indices to be dense or increasing. This
+/// checker's parser requires both, and declines a file that is neither — a
+/// *parser policy*, not a judgement that the file is ill-typed, which is why
+/// the arena counts such a file apart rather than as a failure
+/// (`scripts/arena.sh`, "the arena considers such files valid").
+///
+/// Measured 2026-08-15 over all 99 non-`perf` `good/` exports, **through
+/// `nanoda_bin`, which is the binary this file spawns and the one
+/// `scripts/arena.sh` gates**: exactly two files are turned away, both by this
+/// policy, and no other `good/` file is refused for any reason.
+///
+/// Scoped to that binary deliberately. The *production* checker
+/// (`CARGO_BIN_EXE_checker`, `bin/checker.rs:71`) declines a third —
+/// `good/init-prelude.ndjson`, `declined: Nested inductive Lean.Syntax not
+/// supported`, unless `--nested` — so "the corpus is fully accepted" is true of
+/// the binary the gate runs and false of the binary the project ships. See
+/// `TEST-INVENTORY.md` §7.1; it is not this test's subject and is not asserted
+/// here.
+///
+/// `checker/tests/fixtures/declined/` holds a copy of both, because the arena
+/// corpus is gitignored and a gap that is only visible when an optional
+/// download is present is not documented. See
+/// [`declined_fixtures_are_declined_for_the_stated_reason`].
+const DECLINED_REASON: &str = "Back-refs must be continuous";
 
 #[test]
 fn committed_fixtures_good_are_accepted() {
@@ -95,6 +126,55 @@ fn committed_fixtures_bad_are_rejected() {
     assert!(!files.is_empty(), "no committed bad fixtures found in {}", dir.display());
     for f in files {
         assert!(!accepts(&f), "expected {} to be REJECTED, but it was accepted", f.display());
+    }
+}
+
+/// **The completeness gap, documented in the repository rather than in an
+/// optional download.**
+///
+/// These two exports are `good/` corpus files — Lean accepts them — and this
+/// checker refuses them, for the reason in [`DECLINED_REASON`]. Committed here
+/// so the gap is visible with no corpus present, and asserted *with its reason*
+/// so that three different futures are three different outcomes:
+///
+/// * the parser learns sparse back-refs — this test fails, saying the file is
+///   now accepted, and the right response is to delete it and move both files
+///   into `fixtures/good/`;
+/// * the parser refuses them for some *new* reason — this test fails on the
+///   message, rather than staying green on "still refused";
+/// * nothing changes — green, and the repository still states what is missing.
+///
+/// The files are 4 and 6 lines and are the corpus's own; both are `axiom`
+/// declarations over a `Sort`, so nothing about typing is involved and the only
+/// thing under test is the index policy.
+#[test]
+fn declined_fixtures_are_declined_for_the_stated_reason() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/declined");
+    let files = ndjson_files(&dir);
+    assert_eq!(
+        files.len(),
+        2,
+        "expected the two committed declined fixtures in {}, found {}",
+        dir.display(),
+        files.len()
+    );
+    for f in files {
+        let (accepted, why) = outcome(&f);
+        assert!(
+            !accepted,
+            "{} is now ACCEPTED. That is an improvement, not a failure: the parser has \
+             learned a back-reference shape it used to decline. Move both fixtures to \
+             tests/fixtures/good/, drop this test, and remove the skip in `arena_corpus` \
+             and in scripts/arena.sh.",
+            f.display()
+        );
+        assert!(
+            why.contains(DECLINED_REASON),
+            "{} is refused, but not for the reason this gap is documented under.\n\
+             wanted a message containing: {DECLINED_REASON}\n\
+             got:\n{why}",
+            f.display()
+        );
     }
 }
 
@@ -124,12 +204,21 @@ fn arena_corpus() {
             if f.components().any(|c| c.as_os_str() == "perf") {
                 continue
             }
-            if expect_accept && is_declined(&f) {
+            // **Matched by reason, not by filename.** This used to be
+            // `is_declined(&f)`, a hardcoded list of two names tested *before*
+            // the checker ran — so `declined` was the constant 2 whatever the
+            // checker did. A file that started being accepted (an improvement)
+            // and a file that started failing for a new reason (a regression)
+            // were both invisible: neither could move a number that was decided
+            // by `file_name()`. Running it first and matching the message makes
+            // the exclusion a measurement, and lets both of those fall through
+            // to the ordinary check below.
+            let (got, why) = outcome(&f);
+            if expect_accept && !got && why.contains(DECLINED_REASON) {
                 declined += 1;
                 continue
             }
             checked += 1;
-            let got = accepts(&f);
             if got != expect_accept {
                 let want = if expect_accept { "accept" } else { "reject" };
                 let had = if got { "accept" } else { "reject" };

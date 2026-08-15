@@ -1371,3 +1371,127 @@ stays recorded there as a stated lower bound. If it becomes the right work the
 note will still be there; the priority is end-to-end completeness — whether the
 checker handles what Lean handles, and whether anything is accepted by a
 shortcut rather than certified.
+
+---
+
+## 7. End-to-end completeness — measured against the corpus, 2026-08-15
+
+The owner's priority is *"end-to-end completeness and no implementation
+shortcuts"*, and the standing rule is that a completeness claim needs an
+**external** reference. This section is that measurement: the production route
+run over all 99 non-`perf` `good/` exports of the Lean Kernel Arena corpus,
+every refusal collected and grouped by reason. Nothing here is inferred from a
+fixture or from the gap ledger's own totals.
+
+### 7.1 The finding that reframes the rest: the gate and the product are two programs
+
+`scripts/arena.sh` — the corpus gate, and the thing that licenses "102 good, all
+accepted" — drives **`target/release/nanoda_bin`** (`ARENA_BIN`, `arena.sh:57`).
+The production checker is **`target/release/checker`**: its own header says so
+(`bin/checker.rs:71`, *"This is the production checker — every integration suite
+spawns it through `CARGO_BIN_EXE_checker` and the split dispatch is its
+default"*). They are different binaries taking different routes.
+
+Measured, on the same 99 files:
+
+| | `nanoda_bin` (what the arena gates) | `checker` (what ships) |
+| --- | ---: | ---: |
+| accepted | **99** | **96** |
+| declined | 0 | **3** |
+| of the accepted, carrying debt (exit 4) | — | **20** |
+
+**The production checker declines `good/init-prelude.ndjson`** — the corpus's
+flagship file, 1 774 declarations — with `declined: Nested inductive Lean.Syntax
+not supported`. The arena cannot see this, because `nanoda_bin` takes the nanoda
+path and accepts. So the sentence "the corpus is fully accepted" is true of the
+binary the gate runs and false of the binary the project ships, and no check in
+§2 can tell them apart.
+
+`--nested` turns it into an acceptance, and `--nested`/`--mutual` are used
+nowhere except `mini_nested.rs` and `mini_mutual.rs`, on designed fixtures. This
+is not a hidden bug — `mini_nested.rs:206` asserts the decline as intended
+behaviour — but *"the default route declines the prelude"* is a completeness
+statement that no corpus-level check makes.
+
+### 7.2 The three categories, and how they actually partition
+
+They do **not** partition as a completeness audit would expect, and the shape is
+worth stating before the numbers.
+
+**(a) Lean accepts, we refuse — three files, two causes.**
+
+| file | reason | seen by |
+| --- | --- | --- |
+| `good/level-index-out-of-order.ndjson` | `Back-refs must be continuous` | both binaries |
+| `good/sparse-name-index.ndjson` | `Back-refs must be continuous` | both binaries |
+| `good/init-prelude.ndjson` | `Nested inductive Lean.Syntax not supported` | `checker` only, default route |
+
+The first two are a **parser policy**: the export format nowhere requires
+back-reference indices to be dense or increasing, and this parser requires both.
+Both files are four and six lines of handcrafted `axiom` over a `Sort`, so
+nothing about typing is involved.
+
+**(b) We accept without certifying — this is nearly everything.** Two separate
+ledgers, and both had to be read:
+
+* *TG certificates.* **11 279 gaps across 26 of 99 files, 28 distinct reasons.**
+  92 % of them (10 386) are `init-prelude`; 6.5 % (737) are the four
+  `undecidability/` files; 1.4 % (156) are 21 tutorial files. The largest
+  reasons are `trans over an admitted premise` (5 740), the escape ledger
+  (1 278), `proj_reduce` (804), `pi congruence over an admitted body premise`
+  (792) and `congruence over an admitted premise` (609). Six of the 28 are
+  *shape* declines — `iota: no interpretation — a nested inductive` (100), `— a
+  K-like eliminator` (7), `— an indexed family` (6), `— several constructors`
+  (1) — and the source carries **ten** such labels, so four have no occurrence
+  on this corpus at all.
+* *Interpretation.* Even with `--nested --mutual`, `init-prelude` is accepted
+  carrying **89 untranslated declarations and 10 untranslated eliminators**.
+  By reason: `type former spine` on 31 class-like inductives (`HAdd`, `HMul`,
+  `MonadState`, …), `field type uninterpretable` on ~24 (`String`, `Char`,
+  `Fin`, `BitVec`, `UInt*`, `Lean.Name`, …), `parameter type uninterpretable` on
+  4, `class (S) eliminator: no constructors` on `False` and `PEmpty`, `class (S)
+  indexed eliminator: a result index is not a bare field` on `HEq`, and
+  `Lean.Syntax: no nested model in the export`.
+
+  This is the literal form of "an implementation shortcut wearing an
+  acceptance": the file exits `accept`, and 99 declarations inside it were never
+  translated. `ledger.rs:339-345` already says so in as many words — *"an
+  untranslated declaration sits in a file mini **accepted**"*.
+
+**(c) Lean rejects, we reject — complete.** All 55 `bad/` files are rejected and
+`scripts/arena-accept.txt` is **empty**, so there is not one known lost
+rejection. This category needs nothing.
+
+**Why they do not partition.** The design admits rather than refuses — the
+documented position is that being *more permissive* than the official kernel
+costs nothing while the certificate is the guarantee (`scripts/arena.sh:16-20`).
+So almost nothing lands in (a): an unsupported shape becomes a *gap* on an
+accepted file, not a refusal. (a) and (b) are therefore not two sizes of the
+same thing; (a) is three files and (b) is the entire remaining surface, and the
+useful question is not "which category" but **"which of (b) is held by an
+assertion"**.
+
+### 7.3 What is held, and what is not
+
+| population | gaps | ratcheted by |
+| --- | ---: | --- |
+| `init-prelude` | 10 386 | `GAP_LEDGER`, row by row, in `tg_tutorial.rs` |
+| `undecidability/` (4 files) | 737 | **nothing** — no test names these files |
+| `tutorial/`, 8 files | 39 | `GAP_BUDGET` |
+| `tutorial/`, 13 files | 117 | **nothing** |
+
+**854 gaps (7.6 %) carry no assertion of any kind**, including
+`077_RBTree.id_spec` at 45 — the largest single tutorial file — and
+`118_accRecReduction` and `105_structEta` at 12 each.
+
+The zero side is looser still. Measured, **70 of 91 tutorial exports have zero
+gaps**; `FULLY_DERIVED` and `RECURSOR_DERIVED` together assert 28 of them. So
+**42 files sit at zero with nothing holding them there**, and a regression in
+any of the 42 is a silent one. (The `README.md` figure "69 of 91" is a
+measurement of the same quantity and is off by one today.)
+
+*Method, and its cross-check.* Each file was run through `nanoda_bin` with the
+arena's own config, and the `gap:` rows parsed. The eight files in `GAP_BUDGET`
+reproduced their pinned numbers **exactly** — 3, 9, 1, 2, 2, 10, 10, 2 — which is
+what says the harness measures the same quantity the tests pin. Release and
+debug agree (`077` at 45 in both).
