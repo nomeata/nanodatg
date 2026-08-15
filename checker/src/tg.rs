@@ -4645,7 +4645,30 @@ fn gen_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let built = GEN_BUILT.load(Relaxed);
     let declined: u64 = DECLINES.iter().map(|c| c.load(Relaxed)).sum();
-    if built == 0 && declined == 0 {
+    // **The degenerate and dependent arms count towards this gate, and did
+    // not.** Their rows live in this section and are deliberately printed at
+    // zero so that "a wired arm which is never reached cannot pass unnoticed"
+    // — but the early return above them was asking only about the *general*
+    // path, so an arm that fired while the general path was never consulted
+    // printed nothing at all. That is the shadowed assertion of
+    // `TEST-INVENTORY.md` §4.5 in reporting code: `unified_cli`'s
+    // `ι sites the DEPENDENT rule computed` assertion witnessed only runs in
+    // which the general path had also been asked.
+    //
+    // It became reachable when [`TgBackend::mini_adoptable_translation_at`]
+    // let a parameterised declaration adopt mini's carrier: adoption returns
+    // before `GEN_BUILT` is incremented and notes no `Decline`, so
+    // `proj_reduced_subject` — which still computes its `Two.rec` ι through
+    // the dependent rule — lost the whole section.
+    let degen: u64 = [&DEGEN_RECS, &DEGEN_GUARD_MISS, &DEGEN_IOTAS, &DEGEN_PROJS, &DEGEN_PROJ_RED]
+        .iter()
+        .map(|c| c.load(Relaxed))
+        .sum();
+    let dep: u64 = [&DEP_RECS, &DEP_REC_GUARD_MISS, &DEP_IOTAS, &DEP_ASKED, &DEP_MINOR_DERIVED]
+        .iter()
+        .map(|c| c.load(Relaxed))
+        .sum();
+    if built == 0 && declined == 0 && degen == 0 && dep == 0 {
         return String::new()
     }
     let width = Decline::ALL.iter().map(|d| d.name().len()).max().unwrap_or(24) + 6;
@@ -9328,26 +9351,31 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             note_decline(Decline::Build);
             return None
         }
-        // Mini is the sole declaration checker. For the parameterless family
-        // whose only fields are at most one plain recursive occurrence, adopt
-        // its exact carrier instead of building a parallel enum/Peano carrier.
-        if np == 0
-            && spec
-                .ctors
-                .iter()
-                .all(|c| c.args.is_empty() && c.recs <= 1 && c.rec_dom(0).is_empty())
-        {
-            if let Some(translated) =
-                self.mini_plain_recursive_translation_at(ctx, ind_name, levels)
-            {
+        // Mini is the sole declaration checker. Where its translation is one
+        // this backend can consume whole, adopt its exact carrier instead of
+        // building a parallel enum/Peano carrier.
+        //
+        // **The parameter count is checked, not assumed.** This clause used to
+        // require `np == 0` and fieldless constructors; both are now decided by
+        // [`Self::mini_adoptable_translation_at`] and by the `same` test
+        // below, which compares mini's `DeclSpec` against the one this walk
+        // built — parameter count, constructor count, and each constructor's
+        // field order, recursive-occurrence count and plain-field arity. An
+        // adoption that passes `same` is the *same declaration*, so the
+        // `Rc::ptr_eq` its consumers perform is an identity and not a guess.
+        if spec.ctors.iter().all(|c| c.recs <= 1 && c.rec_dom(0).is_empty()) {
+            if let Some(translated) = self.mini_adoptable_translation_at(ctx, ind_name, levels) {
                 let same = translated.ind.spec.ctors.len() == spec.ctors.len()
+                    && translated.ind.spec.params == np
                     && translated
                         .ind
                         .spec
                         .ctors
                         .iter()
                         .zip(&spec.ctors)
-                        .all(|(a, b)| a.order == b.order && a.recs == b.recs);
+                        .all(|(a, b)| {
+                            a.order == b.order && a.recs == b.recs && a.args.len() == b.args.len()
+                        });
                 if same {
                     return Some(Rc::new(GenInd {
                         param_vars: walk.param_vars,
@@ -9493,9 +9521,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         // Mini already owns the Lean-facing name for an adopted parameterless
         // declaration. Its defining equation is the entire type-former bridge.
+        //
+        // **Parameterless only, and this is the wall the `076`/`074` tranche
+        // ends at.** At `np > 0` there is no stored equation to adopt: mini
+        // publishes `defeq: None` for every inductive type former
+        // (`mini/zoneb.rs:3875`), derives `app-spine(⟦T⟧,p⃗) = ind(p⃗)` on
+        // demand in `Interp::beta_spine` and discards it every time, and
+        // `derived::inductive::Inductive` cannot state it — `ind` is a
+        // first-order `FnSym`, so the graph wrapping is entirely checker-side.
+        // The fall-through below therefore mints a *third* spelling of `⟦T⟧`,
+        // and [`Self::gen_ty_bridge`] then declines against the one `interp`
+        // produced from mini's carrier. See `SEAM-DESIGN.md` §10.
         if gi.param_vars.is_empty()
             && self
-                .mini_plain_recursive_translation_at(ctx, ind_name, levels)
+                .mini_adoptable_translation_at(ctx, ind_name, levels)
                 .is_some_and(|tr| Rc::ptr_eq(&tr.ind, &gi.ind))
         {
             let head = self.mini_const(ctx, ind_name, levels)?;
@@ -10233,6 +10272,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// fields, and at most one plain recursive field per constructor. This
     /// includes the fieldless family and the `N.s : N -> N` shape; a
     /// function-typed recursive field remains outside the gate.
+    ///
+    /// **This is the *readiness* predicate and it stays narrow.** It is what
+    /// [`Self::wants_proj_red_iota`] mirrors, and that gate is a *prediction*:
+    /// anything it readies must actually certify, or the ledger trades a
+    /// projection gap for an ι one. Widening it to match
+    /// [`Self::mini_adoptable_translation_at`] was measured and is why the two
+    /// are separate functions — `proj_reduced_subject` goes **2 → 8** and
+    /// `proj_reduced_carrier` **13 → 169**, because structures whose ι cannot
+    /// be certified get readied anyway.
     fn mini_plain_recursive_translation_at(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -10245,6 +10293,63 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             && translated.ind.spec.ctors.iter().all(|c| {
                 c.args.is_empty() && c.recs <= 1 && c.rec_dom(0).is_empty()
             }))
+        .then_some(translated)
+    }
+
+    /// The same translation, for the *carrier-adoption* question rather than
+    /// the readiness one: which declarations may TG take mini's `Inductive`
+    /// for, wholesale, instead of building a parallel one.
+    ///
+    /// Strictly wider than [`Self::mini_plain_recursive_translation_at`] — it
+    /// keeps that clause verbatim as its first disjunct, so every declaration
+    /// adopted before this existed is adopted now by the same test, and drops
+    /// only `params == 0` and `args.is_empty()`. Neither was load-bearing
+    /// *here*: what [`Self::mini_dep_rec_bottom`] needs is that mini's `ind` be
+    /// the very object [`Self::gen_ind`] returns, and that is settled by
+    /// `Rc::ptr_eq` against a `DeclSpec` comparison, not by counting
+    /// parameters.
+    ///
+    /// **A declaration a hand-written recogniser owns is excluded** from the
+    /// widening (never from the original clause). [`Self::rec_bottom`] consults
+    /// [`Self::mini_dep_rec_bottom`] *before* `Bool`/`N`/`List`, so without the
+    /// exclusion `List.rec` is diverted off [`Self::fire_list`] onto
+    /// [`Self::fire_dep`], which then declines in [`Self::gen_ty_bridge`]:
+    /// at `np > 0` [`Self::gen_ty_nest`] mints its own type-former
+    /// abbreviation rather than adopting mini's published carrier, so the
+    /// bridge's `⟦T p⃗⟧` is a third spelling of the same constant. Measured:
+    /// without the exclusion `076_listRecReduction` goes **45 → 48**.
+    ///
+    /// Measured with it: `074_prodRecEqns` **14 → 10**, every other export and
+    /// every fixture byte-identical.
+    fn mini_adoptable_translation_at(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ty_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<crate::mini::interp::Translated>> {
+        if let Some(t) = self.mini_plain_recursive_translation_at(ctx, ty_name, levels) {
+            return Some(t)
+        }
+        if self.recognised_ind(ctx, &ty_name) {
+            return None
+        }
+        let translated = self.mini_translation_at(ctx, ty_name, levels)?;
+        // **`params > 0`, so the widening is purely additive.** Every
+        // parameterless declaration is decided by the clause above, exactly as
+        // it was before this function existed. Dropping this conjunct newly
+        // adopts mini's carrier for a parameterless *structure* — `Pair` in
+        // `proj_reduced_subject` — which leaves the ledger at 2 gaps but routes
+        // `Two.rec` off [`Self::fire_dep`] onto the enumeration arm, taking
+        // `ι sites the DEPENDENT rule computed` from 1 to 0. The gap count
+        // cannot see that; `unified_cli`'s counter assertion can, and did.
+        (translated.ind.spec.params > 0
+            && !translated.ind.spec.ctors.is_empty()
+            && translated
+                .ind
+                .spec
+                .ctors
+                .iter()
+                .all(|c| c.recs <= 1 && c.rec_dom(0).is_empty()))
         .then_some(translated)
     }
 
@@ -13758,8 +13863,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let ind_name = r.all_inductives[0];
         let given = ctx.read_levels(levels).to_vec();
         let ind_levels = ctx.alloc_levels_slice(given.get(1..)?);
-        let translated =
-            self.mini_plain_recursive_translation_at(ctx, ind_name, ind_levels)?;
+        let translated = self.mini_adoptable_translation_at(ctx, ind_name, ind_levels)?;
         let rec_key = self.const_key(ctx, *name, levels)?;
         let (dep, elim) = self.core.dep_elim(&rec_key)?;
         let gi = self.gen_ind(ctx, ind_name, ind_levels)?;

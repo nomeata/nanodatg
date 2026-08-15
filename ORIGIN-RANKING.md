@@ -201,6 +201,10 @@ family`** (rank 1, −117 combined, −34 on exports), and the one after it
 (rank 3, −35, **all of it on exports**, all of it on one file,
 `076_listRecReduction`). Together with the two small iota rows that is −168.
 
+*Corrected: rank 1 landed at −70. Rank 3 was then censused and its construction
+reaches **−1**, not −35 — the row is a symptom of a carrier-spelling collision,
+and the −35 sits one wall behind it. `SEAM-DESIGN.md` §10.*
+
 Where the iota origins live:
 
 | cause | file | own | sub-tree |
@@ -273,11 +277,22 @@ The distinction the project keeps paying for skipping: `Δ` prices *the equation
 being true*; a construction has to *derive* them, and may not reach the same
 number.
 
+**Rank 3 has since been censused and the estimate below was wrong by 34.** The
+row is one cause on one recursor as predicted (`List.rec`, 3 × `cons` + 2 ×
+`nil`), but it is the *first* of three consecutive matching points inside the
+same ι engine, and clearing it is worth **−1** measured two independent ways.
+The cause is a spelling collision — three independent mints of `⟦List⟧` in one
+binary — not a missing rule. `SEAM-DESIGN.md` §10 has the census, the two
+probes, and what the remaining −35 actually needs. Read "terminal, one file,
+one recursor shape" as *necessary* conditions for a construction to reach `Δ`,
+never sufficient ones: none of them says the rule *completes* once the named
+check passes.
+
 | origin | expect a construction to reach `Δ`? |
 | --- | --- |
 | `indexed family` (−89 true) | **Yes — and no new derivation is needed.** See below. |
 | `proj_reduce` (−74) | Likely yes on its own fixture; already in flight. |
-| `major premise's domain` (−35) | Probably. Terminal, 5 % overshoot, one file, one recursor shape. |
+| `major premise's domain` (−35) | **No — measured at −1.** See `SEAM-DESIGN.md` §10. |
 | `constructor's bridge` / `several ctors` (−9 / −7) | Probably; both terminal, single-file, single-recursor. |
 | `unit_like` / `eq_cache` (−15 / −10) | **Partly.** Both mid-chain (25–29 % over), so the derivation runs on into the next wall rather than ending the conversion. Expect noticeably under `Δ`. |
 | `quot` (−18, LB) | Unknown — two thirds of it does not acquire, so it is not yet priced. |

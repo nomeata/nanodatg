@@ -555,3 +555,140 @@ Only the indexed publications. The projection translation, `DepElim`, the shared
 the same three-column treatment would apply to each. **Do not read the absence
 of a row as a zero.**
 
+
+## 10. Rank 3, censused: the named row is worth −1, and the −35 is one wall behind it
+
+*Measured 2026-08-15 on `joachim/major-premise-domain`, binary
+`cargo build -p nanoda_lib --features tg,stepcount --bin checker`,
+`ci/corpus-dir.sh --link` run first. `stepcount` is mandatory: without it
+`NANODA_ASSUME` is compiled out and every setting reports the baseline.*
+
+### 10.1 The deletion reproduces, and the label is one cause
+
+`ORIGIN-RANKING.md` rank 3,
+`iota: the major premise's domain is not this inductive at this parameter`:
+`076_listRecReduction` **45 → 10** under `NANODA_ASSUME` on that row alone,
+own 5 / relayed 32 / sub-tree 37. Exactly as ranked.
+
+**It is one cause on one recursor**, unlike rank 1. The string is raised at a
+single site, `tg.rs:20197`, inside `fire_list`, and instrumenting it gives five
+declines: **3 × `List.cons`, 2 × `List.nil`, all `List.rec`**. `IOTA_LABEL_OVERLAP`
+does not cover this row — it censuses only the `iota: no interpretation — *`
+chain — so the split was taken by instrumenting the site directly.
+
+### 10.2 The cause: three independent mints of `⟦List⟧`
+
+The check that fails is `app(⟦List⟧, α) == doms[major]`. Both sides are
+`app(head, α)` with the *same* `α`; only the heads differ, and there are **three
+different heads for one constant** in this binary:
+
+| spelling | who mints it | who insists on it |
+| --- | --- | --- |
+| mini's published carrier, `L(S)` applied to the sort | `mini_const`, off the shared `const_store` | `interp` — so *every* domain term the nest walked |
+| `derived::wlist_fun`'s hand-written abbreviation | `ind_const` → `list_const` | `fire_list` |
+| a fresh nullary abbreviation | `gen_ty_nest` at `np > 0` | `fire_dep` → `gen_ty_bridge` |
+
+`interp`'s `Const` arm consults `mini_const` **first**, above the elaborate guard
+at `tg.rs:8452-8468` that exists to stop a second `⟦List⟧` being minted — the
+guard's own comment records that losing injectivity of `interp` on that constant
+"cost 54 ι sites". `mini_const` sits above it and does exactly what it forbids,
+while `rec_bottom` still routes `List.rec` to the hand-written `fire_list`.
+**Carrier from mini, recursor from `derived`.** Not one of `fire_list`'s five
+sites can ever match, so on this file `fire_list` is structurally dead code.
+
+### 10.3 The census inside the rule: the reachable prize is −1
+
+`Δ = −35` prices *the equation being true*. What a construction can reach was
+measured two ways, and both move the wall rather than remove it:
+
+| probe | what it does | `076` | exports total |
+| --- | --- | ---: | ---: |
+| baseline | — | 45 | 172 |
+| let the recogniser own `List` (`interp` tries `ind_const` first) | `fire_list` and `interp` agree | **44** | **247** |
+| route `List.rec` to mini (`fire_dep`) | widen the two `np == 0` gates | **48** | 171 |
+
+* **Recogniser-first**: the named row vanishes completely and the file falls by
+  **one**. The 37-gap sub-tree survives, redistributed onto two successor walls
+  inside the same ι engine — `iota: the reduct does not contract to what the
+  recursor computes` (own 3, sub-tree 25) and `iota: the core equation does not
+  match the reduction` (own 2, sub-tree 12). It also costs **+75 across the
+  exports**, which is the ownership rule being right.
+* **Route to `fire_dep`**: `mini_dep_rec_bottom` fully succeeds for `List.rec`
+  once the gates are widened — mini *does* publish the `DepElim` (`dep_elim=true`),
+  the adopted `GenInd` is pointer-identical, `gen_ty_nest` builds — and then
+  `gen_ty_bridge` declines with `rhs_eq=true, lhs_eq=false`: mini's `ind(p⃗)`
+  matches, and the `⟦T p⃗⟧` does not, because it is spelling three.
+
+**So the row is worth −1, not −35.** The −35 is the value of the ι rule
+*completing*, and the named decline is the first of at least three consecutive
+matching points that all fail for the same reason.
+
+### 10.4 What the −35 actually needs, and what exists for it
+
+One wall, and it now carries `074` as well as `076`: **`gen_ty_nest` mints its
+own type-former abbreviation at `np > 0` instead of adopting mini's published
+carrier.** After §10.5's change, `074_prodRecEqns`' remaining origin is
+`iota: the major premise's domain is not this inductive` (own 1, sub-tree 10) —
+the same `gen_ty_bridge` decline. Sub-tree 10 there plus 37 on `076`.
+
+Checked before concluding anything is missing, per §9.3:
+
+* **No stored theorem `app(mini's ⟦T⟧, p⃗) = ind(p⃗)` exists anywhere.**
+  `Translated` (`mini/interp.rs:742`) has `field_abbrev`, `ctor_abbrev`,
+  `rec_dom_abbrev` and **no type-former field** — unlike its sibling
+  `TruncTranslation`, whose `abbrev` doc says outright "without it nothing can
+  get from `⟦T p⃗⟧` to anything `derived` states". `ConstEntry::defeq` is
+  `None` for every inductive type former (`mini/zoneb.rs:3875`, `:321`), so
+  `mini_const`'s `abbrev_defs` insertion never fires for `List`.
+  `derived::inductive::Inductive` *cannot* state it: `ind` is a first-order
+  `FnSym` applied to parameter terms, so there is no set-theoretic `⟦T⟧` in
+  `derived` at all. Mini derives the equation on demand in `Interp::beta_spine`
+  (`mini/interp.rs:2164`) and discards it at ~60 call sites.
+* **But both halves of the wiring already exist on the TG side.**
+  `adopted_lam_step` (`tg.rs:16580`) is one level of mini's `beta_spine` in TG's
+  conditional-equation discipline, reading the graph identity and both defining
+  certificates out of the **shared** lambda store; `adopted_nest_chain`
+  (`:16652`) and `adopted_const_spine` (`:16691`) already iterate it over a
+  spine and return the `(CondEq, obligations)` pair `gen_ty_bridge` wants.
+  `gen_ty_nest` already has an adoption path — gated on `np == 0`
+  (`tg.rs:9506`).
+
+**So this is a wiring tranche, not a derivation tranche**: an `np > 0` analogue
+of the `tg.rs:9506` block. Two caveats for whoever takes it: on the adopted path
+`head_sym` is `head.as_app().map(|(f,_)| f)` rather than a `self.parts` lookup,
+and the shared-cache write at `tg.rs:9591` is gated on it being `Some`; and the
+`head_ax` slot has no filler at `np > 0`, so any reader of `GenTyNest::head_ax`
+rather than `spine_eq*` needs auditing.
+
+**Do not price it at −47.** Every measurement in §10.3 moved a wall without
+moving the ledger, and the honest expectation is that this one ends at
+`fire_dep`'s *next* matching point too. Price it by building the bridge behind a
+switch and reading the row, before writing the tranche.
+
+### 10.5 What landed instead
+
+The census turned up an adjacent defect worth taking on its own terms:
+`gen_ind_build`'s adoption clause required `params == 0`, so TG built a **second
+carrier** for parameterised declarations mini had already published and
+`interp` was already using. `mini_adoptable_translation_at` splits the
+predicate — the readiness mirror stays narrow, adoption widens to `params > 0`
+declarations no hand-written recogniser owns. **Exports 172 → 168**, all of it
+`074_prodRecEqns` 14 → 10; every fixture byte-identical.
+
+Two guard rails, both measured rather than reasoned:
+
+* widening the *shared* predicate takes `proj_reduced_subject` 2 → 8 and
+  `proj_reduced_carrier` 13 → 169. `wants_proj_red_iota` is a **prediction**, and
+  readying a structure whose ι cannot be certified trades a projection gap for
+  an ι one;
+* the recogniser exclusion is what keeps `076` at 45 rather than 48.
+
+And one reporting defect, which is `TEST-INVENTORY.md` §4.5 in reporting code.
+The degenerate and dependent rows all live in `gen_report`, whose early return
+asked only about the **general** path. Adoption returns before `GEN_BUILT` is
+incremented and notes no `Decline`, so a fixture that adopts every carrier lost
+the entire section — the dependent arm fired and printed nothing, and
+`unified_cli`'s `ι sites the DEPENDENT rule computed` assertion read
+"no report row" instead of a wrong number. It had been witnessing only runs in
+which the general path had also been consulted. The gate now counts the arms
+whose rows it guards.
