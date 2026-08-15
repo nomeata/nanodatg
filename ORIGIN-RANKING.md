@@ -490,10 +490,17 @@ escapes 1 074 → **1 777**. Every future quotation of this row should be −2 6
 > `⟦T p⃗⟧` is the third spelling. `074`'s single firing is the same thing at
 > `Prod.mk`, `np = 2`. Full measurement in "Rank 2, censused" below.
 > **Reachable prize of the one-leg construction: 0 of 249 sites.**
-> **Second:** `proj_reduce` at −890, whose construction already landed once
-> (`3eab691`) on `nat_char_equations` and would be an extension rather than a
-> new derivation — and it is now the largest row in the tree with no known
-> structural obstruction.
+> **Second — also withdrawn, 2026-08-15, measured at 12 of 213.**
+> This recommended `proj_reduce` at −890 as "an extension rather than a new
+> derivation" with "no known structural obstruction". Both halves are false.
+> `3eab691` extended no consumer: it added a disjunct to the *readiness
+> predicate* `wants_proj_red_iota`, and `proj.subject` is the master switch for
+> the whole rule. The obstruction is known and is written in the run's own
+> output — **146 of 231 declines name a declaration in the `untranslated:`
+> census**, 46 need `Eq.rec`, 27 are the readiness gate over-promising, and the
+> 12 that are the `3eab691` shape sit behind `derive_iota`'s `usable`
+> (`tg.rs:17025`), which rejects `RecBottom::List`. The projection composition
+> itself declines **zero** times. See "`proj_reduce`, censused" below.
 
 ## Question (b), answered: the `np == 0` layer in `fire_dep` is **twelve** constructions
 
@@ -675,6 +682,76 @@ export. **The decline stands for any seat that cannot commit to all ten sites;
 the layer is now the largest reachable prize in the tree and should be scheduled
 as one piece or not at all.**
 
+## `proj_reduce`, censused: the composition is never at fault, and the prize is 12
+
+*Measured 2026-08-15 on `joachim/proj-reduce-rank3` at master `ef29bde`. Full
+numbers in `MEASUREMENTS.md`, "`proj_reduce`, refuted inside its own rule".
+Two temporary censuses added, measured, and **reverted**; `git diff` is empty.*
+
+The deletion reproduces exactly — 10 262 → **9 372**, escapes 1 074 → 1 127.
+
+**Its three named development fixtures no longer carry it.**
+`proj_reduced_carrier` is 13/13 escape ledger, `proj_stuck_subject` 6/6,
+`proj_reduced_subject` 2 — zero `proj_reduce` on all three. The goal
+population is the only signal this origin has.
+
+**Every decline is at the rule's first four lines.** Of 231 declines of
+`derive_projection_computation`, 140 are "the structure head is not a
+constructor", 79 "the redex is not a projection", 12 "mini published no
+class-(T) package", and **0 anywhere at or past `adopted_const_spine`**.
+Tagging each decline with whether a subject leg was offered *and consumed*
+gives "offered, consumed, then declined" = **0**: the composition succeeds
+every time it is reached with its premises. The origin lives in the **subject
+reduction**; `proj_reduce` is the label of the rule that noticed.
+
+### The census inside the rule
+
+| what the site would need built | gaps |
+| --- | ---: |
+| mini to translate `Lean.ParserDescr`, `Lean.Syntax`, `Lean.Name` | 92 |
+| mini to translate the untranslated **structures** (`HAdd`…, `Fin`, `Char`, `String`, `UInt32`, `BitVec`, `ByteArray`) | 54 |
+| an ι interpretation for **`Eq.rec`** — K-like **and** indexed (rank 9's origin) | 46 |
+| `consume` refused an **admitted** subject certificate — the readiness gate over-promised | 27 |
+| a **`List.rec`** readiness arm — the only `3eab691`-shaped site | **12** |
+| | **231** |
+
+**146 of 231 (63 %) name a declaration that the same run's own `untranslated:`
+line already declines, with mini's reason attached.** Those are the mini
+translation frontier, not a `proj_reduce` tranche.
+
+### The downstream gate, checked in advance
+
+The rank-2 trap does not repeat in its exact form — `wants_proj_red_subject`
+and the consumer's `mini_projection_at` read the same store but are *nested*,
+the consumer's test being the stronger. The gate that does bite is one further
+down: readying `List.rec` makes `wants_proj_red_iota` promise a certificate
+`derive_iota`'s `usable` cannot produce, because it accepts `RecBottom::Nat`,
+`Dep`, `IxDep` and closes `_ => false`. **That is measurable in advance and it
+is the second time this week the deciding gate was one line of `match`.**
+
+### Conditionality, and a number that is new
+
+`consume` returns `None` only on `TgCert::Admitted`. At **27 of 231** the leg
+was offered — readiness predicted the subject's ι would certify — and the
+derivation returned an admission. **12 % of this origin's gaps exist because
+the readiness gate promised what `iota` could not deliver**, which is
+`SEAM-DESIGN.md` §10.5's warning measured on the goal population for the first
+time, and is evidence *against* widening that gate.
+
+### Not blocked behind rank 1
+
+Checked, because `authoritative_reduction_ready` refuses on
+`Node::One(Rule::Admitted(_))`: **zero** `Admitted(…)` refusals. All 192
+firing-level refusals are `Iota: not ready`. This origin does not inherit rank
+1's obstruction — it has its own.
+
+### And the 678 in `tg_tutorial`'s ledger is a different programme
+
+`GAP_LEDGER`'s `gap: proj_reduce` 678 is read from `nanoda_bin` — kernel plus
+TG backend, **no mini dispatch** — while Ranking B's 213 is the unified
+`checker`. The 3× is mini's published class-(T) packages, not modelgen. The
+ratchet is one-sided (`<= 678`), so the divergence never surfaced.
+
 ## Construction reachability, per row
 
 `Δ` prices *the equations being true*; a construction has to *derive* them.
@@ -683,7 +760,7 @@ as one piece or not at all.**
 | --- | --- |
 | `major premise is not a constructor` (−3 780) | **No — measured at 0, 2026-08-15.** The route's own ceiling is **−2 630** (the numeral equation, not the ι equation), and nothing reaches it: the numeral step has no backend rule to certify, and `Nat.ble`'s three clauses escape with 16/23/24 raw-beta atoms in the program that owns the ledger, so `ble_transfer` returns a conditional equation. Declined. |
 | `…domain is not this inductive` (−1 609) | **No — measured at 0, 2026-08-15.** All 249 firings are `gen_ty_bridge`'s `np > 0` arm, so the row *is* the layer of question (b), and the construction that concludes its equation is the whole layer. The one-leg construction (wall #1, the `gen_ty_nest` carrier adoption) reaches **0 of 249**: the next gate, `mini_ctor_spine_bridge`, tests the same `param_vars.is_empty()` predicate. See "Rank 2, censused". |
-| `proj_reduce` (−890) | Likely — the construction landed once at `3eab691` and beat its own price (−87 against −74). |
+| `proj_reduce` (−890) | **No — measured at 12 of 213, 2026-08-15.** Every one of the 231 declines is at the rule's first four lines; the projection composition produces **zero** declines and succeeds whenever it is reached with its premises. 146 of 231 need mini to translate a declaration named in the run's own `untranslated:` census, 46 need `Eq.rec` (rank 9's own origin), 27 are the readiness gate over-promising, and **12** are the `3eab691` shape — behind `derive_iota`'s `usable`, which rejects `RecBottom::List`. See "`proj_reduce`, refuted inside its own rule". |
 | `eq_cache` (−511) / `nested inductive` (−525) | Partly. 23 % / 11 % over; both mid-chain at scale. |
 | `…at this parameter` (−35 small / −283 goal) | **No on the small population — measured at −1**, `SEAM-DESIGN.md` §10, and behind the ten-wall layer above. The goal population's −283 is the same cause and inherits the same obstruction. |
 | `IDEP undischargeable` (−19) | Priced at `INDEXED-DESIGN.md` §8.7; the wall is a constructor typing for an indexed family and `mem_lean`'s protocol **cannot** be met from a use site (task #38). Not reachable as scoped. |
@@ -716,6 +793,15 @@ this document is net of it.
   see — the goal population's Nat family looks like **−3 961** (rank 1 −3 780,
   `nat_reduce` −119, `nat_eq` −62) and *reaches* none of it. The fixture's
   verdict was right twice and well-founded once.
+* **Take `proj_reduce` as a tranche.** Measured and declined, 2026-08-15 —
+  reachable prize **12 of 213**, and the projection composition it is named for
+  declines zero times. See "`proj_reduce`, censused". Two thirds of the row is
+  the mini translation frontier wearing this origin's label; the honest way to
+  price those 146 gaps is against `untranslated:`, not against −890.
+* **Widen `wants_proj_red_iota` to reach a projection subject.** It is a
+  *prediction*, and it already over-promises at 27 of this origin's 231 sites.
+  Any new arm needs the matching arm in `derive_iota`'s `usable` first, or it
+  trades a projection gap for an ι one — `proj_reduced_carrier` 13 → 169.
 * **Bundle tranches.** Excess over the sum is 2.5–4 %.
 * **Plan anything off the `SUBTREE` column alone**, or off the old 10 %/30 %
   bands — they are 2× pessimistic on the rows that now matter.

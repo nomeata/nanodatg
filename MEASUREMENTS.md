@@ -11243,3 +11243,165 @@ recorded +512. Neither is a wiring opportunity; both switches were reverted.
 arithmetic at all — δ, β and a projection reach the literal. They are excluded
 by the same gate, and the `ProjRed` row above is the measurement that says
 opening it for them buys nothing.
+
+## `proj_reduce`, refuted inside its own rule: −890 is 12 reachable, and the composition is never at fault — 2026-08-15
+
+*Measured on `joachim/proj-reduce-rank3` at master `ef29bde`, release binary
+`cargo build -p nanoda_lib --features tg,stepcount --release --bin checker`
+copied to `_tmp_census_checker` after every rebuild so the gates could not
+overwrite it (`ORIGIN-RANKING.md` defect 3), `ci/corpus-dir.sh --link` run
+first. Two temporary censuses were added — one splitting
+`TypeChecker::reduce_proj`'s subject gate into its three conjuncts and keying
+the refusing rule to the redex, one distinguishing `consume`'s refusal from an
+absent leg — measured, and **reverted**; `git diff` is empty and no file under
+`checker/`, `kernel/`, `derived/` or `modelgen/` is modified.*
+
+### The deletion reproduces, and the origin's own row is exact
+
+| probe | `init-prelude` | escapes |
+| --- | ---: | ---: |
+| baseline (`--nested --no-modelgen`, modelgen not built) | 10 262 | 1 074 |
+| `NANODA_ASSUME=proj_reduce` | **9 372** | 1 127 |
+| Δ | **−890** | +53 |
+
+`gap: proj_reduce` 213, and `PROJ_RED`'s exit split accounts for all of it —
+206 "the checker handed over no proof pair", 7 "the redex is not a proof".
+
+### The wall is the subject, not the projection — and this was already the tree's own finding
+
+`derive_projection_computation` declines **231** times, of which 213 become the
+origin's own gaps. **Every single decline is at one of the rule's first four
+lines**, before mini's projection package is consulted:
+
+| decline | firings |
+| --- | ---: |
+| `projection: the structure head is not a constructor` | 140 |
+| `projection: the redex is not a projection` (redex is `App(Proj,…)`) | 79 |
+| `projection: mini published no class-(T) package` | 12 |
+| **anything at or past `adopted_const_spine`** | **0** |
+
+`adopted_const_spine`, the constructor abbreviation, `DeclProj::proj_at`,
+`ceq_leibniz`, the computation rule and the final endpoint check produce
+**zero** declines between them. Measured directly rather than inferred: tagging
+each decline with whether a subject leg was offered and consumed gives
+**"offered and consumed, then declined" = 0**. *The projection composition
+succeeds every time it is reached with its premises.* This restates, on the
+goal population, what `NAT-CHAR-CENSUS.md` found on one fixture and what task
+#126's refutation found at 154 of 178 sites: **the origin lives in the subject
+reduction, and `proj_reduce` is the label of the rule that noticed.**
+
+### Why the subject leg is missing, attributed at the gap
+
+`reduce_proj` carries the subject's whnf trace only when three conjuncts hold.
+Splitting them and keying the refusing rule to the redex the dropped step is
+recorded at attributes all 231:
+
+| what the site would need built | gaps |
+| --- | ---: |
+| mini to translate `Lean.ParserDescr` — *`field type uninterpretable`* | 52 |
+| mini to translate the untranslated **structures** (`HAdd`/`HPow`/`HSub`/`HMod`/`HMul` *type former spine*; `Fin`/`Char`/`String`/`UInt32`/`BitVec`/`ByteArray` *field type uninterpretable*) | 52 |
+| an ι interpretation for **`Eq.rec`** — a K-like **and** indexed eliminator | 46 |
+| `consume` refused the subject certificate — **the readiness gate over-promised** | 27 |
+| mini to translate `Lean.Syntax` — *`no nested model in the export`* | 28 |
+| mini to translate `Lean.Name` — *`field type uninterpretable`* | 12 |
+| a **`List.rec`** readiness arm, the parameterised sibling of `iota_nat_clause_ready` | **12** |
+| `ByteArray`'s nested projection subject | 2 |
+| | **231** |
+
+**146 of 231 (63 %) name a declaration that appears verbatim in the same run's
+own `untranslated:` census, with mini's reason attached.** They are not a
+`proj_reduce` tranche at any price; they are the mini translation frontier, and
+each carries a stated obstruction. A further 46 are `Eq.rec`, which
+`wants_proj_red_iota` rejects on its *first* line (`r.num_indices != 0 ||
+r.is_k`) and which is Ranking B's own rank 9 (`K-like eliminator`, −54).
+
+### The one-leg prize of the `3eab691` extension is 12 of 213
+
+The brief for this tranche scoped it as an extension of the consumer that
+landed at `3eab691`. **`3eab691` did not touch the consumer.** It added a
+disjunct to the *readiness predicate* `wants_proj_red_iota`, upstream in
+`reduce_proj`. That matters mechanically: at `tc.rs:1974–1981`, a dropped
+subject leg on a projection applied to arguments records the whole
+`App(Proj …, args)` as the redex, and the consumer's first line rejects any
+non-`Proj` redex — which is why one readiness disjunct closed both the "not a
+projection" and the "head is not a constructor" declines on
+`nat_char_equations`. **`proj.subject` is the master switch for the entire
+rule.**
+
+Of the 231, exactly **12** — `List.rec` — are that shape: a recogniser that
+already exists (`list_rec_shape`, `tg.rs:7443`, **written and uncalled**) and
+that `iota_nat_clause_ready` does not consult. **And it is not a one-line
+addition.** `derive_iota`'s `usable` (`tg.rs:17025`) accepts `RecBottom::Nat`,
+`Dep` and `IxDep` and closes with `_ => false`, which **rejects
+`RecBottom::List`**. Readying `List.rec` without admitting that arm is exactly
+the failure `SEAM-DESIGN.md` §10.5 priced — `wants_proj_red_iota` is a
+*prediction*, and readying a structure whose ι cannot be certified trades a
+projection gap for an ι one, measured at `proj_reduced_carrier` 13 → 169.
+
+**Reachable prize of the one-leg construction: 12 of 213 own gaps (5.6 %)**,
+≈ 50 of the −890 at the row's own 4.18 relay multiplier, and only behind a
+`ListRecursor` ι construction. Declined.
+
+### The readiness gate over-promises at 27 sites, and that is a new number
+
+`consume` returns `None` only for `TgCert::Admitted`. At 27 of the 231 the leg
+*was* offered — `authoritative_reduction_ready` predicted the subject's ι would
+certify — and the derivation came back an admission, so the backend fell to the
+unreduced subject and declined at the head test. **This is §10.5's warning
+measured on the goal population for the first time: 12 % of this origin's gaps
+exist because the readiness gate promised what `iota` could not deliver.** It
+is evidence against widening that gate, and it is why the `List` arm above
+cannot be taken on its own.
+
+### Not blocked behind rank 1, and the composite ceiling does apply
+
+`authoritative_reduction_ready` refuses on `Node::One(Rule::Admitted(_))`, so
+the obvious worry — that these subjects are the numeral admissions rank 1 died
+on — was checked. **Zero `Admitted(…)` refusals**: all 192 firing-level
+refusals are `Iota: not ready` (190) and one nested `ProjRed` (2). `proj_reduce`
+does not inherit rank 1's obstruction.
+
+It *is* composite-reached, in the sense `ORIGIN-RANKING.md`'s second-ceiling
+section names: the equation is (subject reduction) ∘ (projection at a
+constructor), `−890` deletes both legs, and **179 of 231 declines are the
+subject leg**. A construction concluding only the projection leg can price
+none of it — measured as 0, since that leg already succeeds whenever reached.
+
+`reduce_rec`'s split population is unchanged: `reduct::fully_ruled`
+(`reduct.rs:245–263`) still rejects `Iota` and `ProjRed` outright.
+
+### Two corrections to the record
+
+* **`gap: proj_reduce` 678 and own 213 are not the same programme, and neither
+  is a modelgen difference.** `tg_tutorial.rs`'s `GAP_LEDGER` row is read from
+  `nanoda_bin` — the plain kernel plus the TG backend, with no mini dispatch at
+  all — while Ranking B's 213 is the unified `checker`. Mini's published
+  class-(T) packages account for the 3×. Ranking B's caveat about modelgen is
+  correct but does not explain this row; the ratchet is one-sided
+  (`proj_red <= 678`), so the divergence was invisible.
+* **`SEAM-DESIGN.md` §9's meetability table has no projection row**, and §9.4
+  says so explicitly ("Do not read the absence of a row as a zero"). The
+  projection package's meetability is still unmeasured; this census measures
+  its *consumer* instead, and finds the consumer is not the constraint.
+
+### Falsification
+
+The classifier is not a tautology and the census is not a baseline:
+
+* All three gate conjuncts are populated (52 / 152 / 27) and a fourth, the
+  string-literal rescue, is **empty** — the classifier emits values it did not
+  emit here.
+* Two independent instrumentations agree to the digit: the redex-keyed
+  attribution's unattributed bucket is 27, and the leg-tagged census's
+  `CONSUME REFUSED` bucket is 27.
+* Three pre-existing counters cross-check the new one exactly: the ARR refusal
+  sub-census sums to 192 = conjunct 2's firing total; `PROJ_STRUCTS` 152 =
+  the two `redex=Proj` decline rows; `PROJ_RED`'s exits 213 = the `gap:` row.
+* `NANODA_ASSUME` moved the instrumented binary (−890), so defect 3 did not
+  bite.
+
+Gates after the revert: `unified_cli` 6/6, `mini_designed` 34/34,
+`tg_tutorial` 36/36, `--no-default-features --lib` 251/251,
+`cargo check --no-default-features --all-targets` 10 warnings (existing),
+`ci/check-boundary.sh` OK. No ratchet moved; `init-prelude` 10 262, the 14
+gap-bearing fixtures 215, the exports 16 files / 168.
