@@ -2,9 +2,23 @@
 //! [`nanoda_lib::mini::route`]) — the policy split, both crossing directions,
 //! and one-pass ownership and coverage accounting, each against a named file.
 //!
-//! Behind `--features tg` because the checker's evidence path exists only
-//! with its backend compiled in; `ci/check.sh` runs it with
-//! `cargo test -p nanoda_lib --features tg`. Every routed run owns its thread
+//! # The `_tg` in the file name, and what it now means
+//!
+//! This header used to read *"Behind `--features tg` … `ci/check.sh` runs it
+//! with `cargo test -p nanoda_lib --features tg`"*, and both halves are now
+//! false: the feature was retired with the `Certifier` trait at `d746251`
+//! (one backend, nothing to select) and the `ci/check.sh` step that named this
+//! file went with it. The suite is unconditional and `ci/check.sh` reaches it
+//! through the bare `cargo test -p nanoda_lib`, which runs every integration
+//! target in the package.
+//!
+//! The suffix therefore does not mean "needs a special build" — there is one
+//! build, and a name that says otherwise is how a suite gets read as optional
+//! and drops off a gate list. There is nothing left for it to distinguish this
+//! file *from*, so it goes; the subject is routing. Renamed accordingly,
+//! `TEST-INVENTORY.md` §3.2.
+//!
+//! Every routed run owns its thread
 //! (the routed driver installs the shared core as the checker's per-thread
 //! signature), which `check_file_deep_with` provides — so each test below is
 //! one file, one thread, exactly like production.
@@ -87,11 +101,49 @@ fn split_sends_the_definition_to_the_checker_which_certifies_it() {
 /// mini publishes the Bool family at declaration 1 and the checker checks
 /// the definition at declaration 2 *in the same walk* — so the checker's
 /// use-site reads consult mini's entries and the statement guard's verdict
-/// is *counted*: one declined typing offer, none adopted (the B5 skeleton
-/// residue, visible under routing exactly as B4 measured it sequentially).
-/// Goes red if the interleaving breaks (the def checked before mini
-/// published: nothing to consult, `declined = 0`) or if the guard is
-/// loosened (`adopted > 0`).
+/// is *counted*.
+///
+/// # Re-based 0 adopted / 1 declined → 1 adopted / 0 declined at `18212fc`
+///
+/// The cell used to add: *"one declined typing offer, none adopted (the B5
+/// skeleton residue, visible under routing exactly as B4 measured it
+/// sequentially)"*, and to say it goes red *"if the guard is loosened
+/// (`adopted > 0`)"*. The one offer is **adopted** now. Attributed by
+/// measurement, on this fixture and this mode: `8815abb` reads
+/// `declined 1 / adopted 0` and its child **`18212fc` "checker: consume mini
+/// Nat certificates in TG"** reads `declined 0 / adopted 1`. That is the same
+/// commit, in one step, as the two sequential cells in `mini_envshare_cross.rs`
+/// — which is the sentence this cell's own parenthesis predicted: what B4
+/// measures sequentially, routing shows here.
+///
+/// **The offer population is conserved at 1**, so the interleaving is intact
+/// and only the verdict moved; the argument that this is TG consuming mini's
+/// entries rather than a guard that stopped refusing is written out at
+/// `mini_envshare_cross.rs::the_obligation_read_declines_mismatched_typings`,
+/// and is not repeated here.
+///
+/// # What it still catches
+///
+/// The interleaving break, which is the property this cell is named for and
+/// the one that did **not** move: if the definition were checked before mini
+/// published, there would be nothing to consult and the offer total below
+/// would be **0**, not 1. That assertion is now the load-bearing one, so it is
+/// asserted as the sum rather than left implicit in a pair of constants — a
+/// pinned `adopted = 1` alone would also hold if the total had risen and a
+/// decline had appeared beside it.
+///
+/// # Falsified
+///
+/// Mutating `checker/src/tg.rs` so the obligation read records every consulted
+/// offer as *declined* — watched and restored — leaves the offer sum passing
+/// at 1 and dies at `declinedByCheckerTyping`, `mini_route.rs:161`, reading
+/// `left: 1  right: 0`. That is the regression this cell is for, arriving at
+/// the line it is asserted on rather than at the sum above it.
+///
+/// **`adoptedByCheckerTyping = 1` is unfalsifiable from here** and is kept as
+/// a recorded outcome: with the sum pinned at 1 and the declines at 0 it
+/// follows by arithmetic. It is written out because it is the number this
+/// header is about.
 #[test]
 fn the_checker_consults_minis_inductive_entries_under_split() {
     let export = corpus().join("good/tutorial/034_boolType.ndjson");
@@ -100,8 +152,14 @@ fn the_checker_consults_minis_inductive_entries_under_split() {
     }
     let out = routed(&export, Mode::Split);
     let rep = out.route.as_ref().expect("route report");
-    assert_eq!(cross_field(&out, "declinedByCheckerTyping"), 1, "{}", rep.cross);
-    assert_eq!(cross_field(&out, "adoptedByCheckerTyping"), 0, "{}", rep.cross);
+    assert_eq!(
+        cross_field(&out, "adoptedByCheckerTyping") + cross_field(&out, "declinedByCheckerTyping"),
+        1,
+        "the interleaving broke: the checker consulted no mini entry at all:\n{}",
+        rep.cross
+    );
+    assert_eq!(cross_field(&out, "declinedByCheckerTyping"), 0, "{}", rep.cross);
+    assert_eq!(cross_field(&out, "adoptedByCheckerTyping"), 1, "the crossing regressed:\n{}", rep.cross);
     assert_eq!(cross_field(&out, "adoptedByCheckerDefeq"), 0, "{}", rep.cross);
 }
 
@@ -558,7 +616,7 @@ fn skeleton_key_divergence_sweep() {
 }
 
 /// Drive the checker in-process over `export`, on this thread — the same
-/// helper `envshare_tg.rs` uses, for the sequential half of the measurement
+/// helper `mini_envshare_cross.rs` uses, for the sequential half of the measurement
 /// above (the *routed* driver shares mini's parse; this deliberately runs
 /// the checker's own full pass).
 fn run_checker(export: &Path) {

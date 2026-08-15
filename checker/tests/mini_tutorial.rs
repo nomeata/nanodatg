@@ -3037,7 +3037,71 @@ fn tutorial_conversion_split() {
     // same term. Every one of the seven is hypothesis-free, which is why
     // `moved − movedSealed` below is **unchanged**: a closed literal's step has
     // no scope to carry, and if it acquired one that would be the defect.)*
-    assert_eq!(g("moved"), 3461, "the non-trivial conversion population changed");
+    //
+    // *(…and 3461 → **2914**, −547, with `movedSealed` 915 → **638** and
+    // `proved` 797 044 → **156 062**, at **`d263be2` "checker: syntactic
+    // equality before reduction"**. Attributed by measurement and not by
+    // reading: `02581e4`, its parent, reads `moved=3461 movedSealed=915` and
+    // `d263be2` reads `moved=2914 movedSealed=638`, which are master's to the
+    // unit — the whole move is that one commit and nothing after it touches
+    // this row. **The seventh move of the *subtracting* kind, and the largest
+    // by far on `proved`.**
+    //
+    // The mechanism is the commit's own: `def_eq_ev`'s order was proof
+    // irrelevance, nat literals by value, then `whnf_conv` on **both sides
+    // unconditionally**, so a pair that is one expression twice was normalised
+    // twice to discover it. The new fast path decides it on one `u32` arena
+    // comparison and **neither side is reduced** — so every conversion the walk
+    // under an identical pair used to record goes with it, including the two
+    // `whnf` legs, which genuinely move and were therefore counted here.
+    //
+    // **What says this is work with no consumer rather than lost evidence:**
+    // 640 982 conversions stop being proved and only **547** of them were
+    // non-trivial — 99.91 % of the fall is reflexivity, `⟦e⟧ = ⟦e⟧`, which is
+    // what the shortcut replaces and is the one thing it can prove. It cannot
+    // fire on differing endpoints (`eq_refl` proves `⟦e⟧ = ⟦e⟧`, not
+    // `a_tm = b_tm`). And nothing stopped being certified: `gapped` is still
+    // **0**, the reason table below is still empty, and
+    // [`tutorial_the_whole_corpus_certifies`] and [`tutorial_evidence_ledger`]
+    // are unmoved.
+    //
+    // 13 of the 91 exports move, and the population is the one the mechanism
+    // predicts — the files that reduce a lot to discover a term is itself:
+    //
+    // | export | `moved` | `movedSealed` | `proved` |
+    // | --- | --- | --- | --- |
+    // | `027_peano1` | 48 → 12 | 48 → 12 | 943 → 141 |
+    // | `028_peano2` | 140 → 40 | 133 → 33 | 2 520 → 332 |
+    // | `029_peano3` | 157 → 49 | 141 → 33 | 2 746 → 345 |
+    // | `052_reduceCtorParam.mk` | 38 → 30 | 19 → 19 | 317 → 119 |
+    // | `072_sortElimProp2Rec` | 12 → 12 | **1 → 4** | 1 712 → 398 |
+    // | `075_nRecReduction` | 237 → 236 | 77 → 77 | 4 976 → 1 784 |
+    // | `077_RBTree.id_spec` | 1 428 → 1 228 | 8 → 8 | 589 993 → 101 867 |
+    // | `101_proofIrrelevanceWhnf` | 26 → 24 | 22 → 20 | 1 026 → 377 |
+    // | `102_unitEta1` | 35 → 5 | 32 → 2 | 1 007 → 338 |
+    // | `113_reduceCtorParamRefl.mk` | 39 → 31 | 20 → 20 | 450 → 144 |
+    // | `114_reduceCtorParamRefl2.mk` | 43 → 35 | 24 → 24 | 453 → 150 |
+    // | `116_rtreeRecReduction` | 106 → 88 | 55 → 51 | 2 023 → 648 |
+    // | `118_accRecReduction` | 145 → 117 | 1 → 1 | 60 661 → 13 124 |
+    //
+    // **"No row fell only" cannot be written, and this is what replaces it.**
+    // `072_sortElimProp2Rec`'s `movedSealed` **rose**, 1 → 4, with its `moved`
+    // flat at 12 — three non-trivial conversions that carried a `Γ` now carry
+    // none. That is a *tightening*, and it cannot be a bookkeeping artefact:
+    // `free` reads `Thm::hyps()`, the kernel's own list, and the kernel is the
+    // trusted base — a hypothesis cannot be dropped without a discharge rule.
+    // The direction that would be the defect is the other one, `movedSealed`
+    // falling while `moved` holds, which is an equation acquiring scope it did
+    // not have.
+    //
+    // **Why this was not caught when it landed, which is the finding worth
+    // more than the number.** `d263be2`'s own message reports "Gates 6/6,
+    // 34/34, 35/35, 251/251, boundary OK" — the author *did* run the gate
+    // list, and `mini_tutorial` was not on it. Nothing was skipped and nothing
+    // was ignored; the suite was simply outside the list. See the gate list in
+    // `CLAUDE-HANDOFF.md`, which this measurement is the third reason to
+    // widen.)*
+    assert_eq!(g("moved"), 2914, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -3084,8 +3148,28 @@ fn tutorial_conversion_split() {
     // whole `+7`. Stated as a difference for exactly this reason: it is the
     // half that says something about scope discipline, and a change here would
     // mean a closed literal's reduction had picked up a `Γ`.
-    assert_eq!(g("moved") - g("movedSealed"), 2546, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 915, "the hypothesis-free count changed");
+    // *(…and 2546 → **2276**, −270, with `movedSealed` 915 → **638**, −277, at
+    // `d263be2`'s syntactic-equality fast path. Of the 547 that go, **270 carry
+    // `Γ` and 277 do not** — the only split in this list that is near even, and
+    // it is the right shape for what the shortcut removes. Every other entry
+    // above is a *rule* that stopped building one kind of certificate, so its
+    // split says which scopes that rule fires in; this one is a check at the
+    // **top** of `def_eq_ev`, before proof irrelevance, literals or `whnf`, so
+    // it fires wherever a pair is one expression twice — and that is no more a
+    // property of the ambient scope than of anything else. A lopsided split
+    // here would have been the surprising reading, not this one.)*
+    assert_eq!(g("moved") - g("movedSealed"), 2276, "the Γ-carrying conversions changed");
+    // **Unfalsifiable from here, and recorded as such** (`TEST-INVENTORY.md`
+    // §6.2). Given the two assertions above, this one is arithmetic: `moved` is
+    // pinned at 2914 and `moved − movedSealed` at 2276, so `movedSealed = 638`
+    // follows and **no mutation can trip this line without tripping one of
+    // them first**. It was attempted — `note_conv`'s `moved_sealed` bumped on
+    // `moved` alone rather than on `moved && free` — and the run died at the
+    // difference above, not here. Kept because it is the number the paragraphs
+    // in this test are written about and reading it off a subtraction is how
+    // the 915 came to be quoted wrongly once; its honest status is documentation
+    // of the value, not an independent observation.
+    assert_eq!(g("movedSealed"), 638, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

@@ -32,51 +32,76 @@ check that examined nothing are the same fact about the same tree.
 
 ## 1. Rust test targets
 
-`nanoda_lib` declares no default features, so `--no-default-features` and a
-plain build are the same configuration; the two that differ are **plain**
-(`NullCertifier`) and **`--features tg`** (the real Tarski–Grothendieck
-backend). Both are measured, because they are not the same suite: four targets
-compile to nothing without `tg`, and one target is red in the plain build only.
+**Re-measured 2026-08-15 on master `50605c4`, and the shape of this table has
+changed: there is now ONE build configuration.** The two columns below used to
+be **plain** (`NullCertifier`) and **`--features tg`** (the real
+Tarski–Grothendieck backend); retiring the `Certifier` trait left one backend,
+so the feature had nothing to select and was deleted at `d746251`. Every target
+is unconditional, `cargo test -p nanoda_lib` runs all fourteen, and **all 476
+tests pass**. The two suffixed suites were renamed with the feature —
+`mini_envshare_tg` → `mini_envshare_cross`, `mini_route_tg` → `mini_route` —
+because a name that says "needs a special build" is how a suite is read as
+optional; `tg_tutorial` keeps its name, where "tg" is the subject.
 
-| target | covers | plain | `--features tg` | gated? |
-| --- | --- | --- | --- | --- |
-| `src/lib.rs` (unit) | the checker's own modules, `mini::*` | **244/244** (86.0 s) | **292/292** (86.1 s) | plain: yes. `tg`: only via `ci/check.sh` |
-| `tests/corpus.rs` | good/bad export acceptance, arena corpus | **6/6** (0.3 s) | **6/6** (40.9 s) | only via `ci/check.sh` |
-| `tests/mini_budget.rs` | declared budget declines | 1/1 | 1/1 | only via `ci/check.sh` |
-| `tests/mini_designed.rs` | designed-fixture behaviour, indexed seam | **32/32** (was 32/34 — see §3.4) | **34/34** | **yes** (`tg` form only) |
-| `tests/mini_dump.rs` | model dump shapes | 12/12 (18.9 s) | 12/12 (18.7 s) | only via `ci/check.sh` |
-| `tests/mini_envshare.rs` | the ungated half of the `EnvCore` seam | 6/6 | 6/6 | only via `ci/check.sh` |
-| `tests/mini_envshare_tg.rs` | crossing ledger, statement guards | *absent* (0 tests) | **12/15, 2 FAILED** | only via `ci/check.sh` |
-| `tests/mini_infinitary.rs` | infinitary constructors | 1/1 | 1/1 | only via `ci/check.sh` |
-| `tests/mini_mutual.rs` | mutual/nested encodings | 12/12 (71.8 s) | 12/12 (70.7 s) | only via `ci/check.sh` |
-| `tests/mini_nat_equations.rs` | the characteristic Nat equations | 2/2 (14.3 s) | 2/2 (14.0 s) | only via `ci/check.sh` |
-| `tests/mini_nested.rs` | nested declaration interpretation | 20/20, 2 ignored (**177.2 s**) | 20/20, 2 ignored (**175.2 s**) | only via `ci/check.sh` |
-| `tests/mini_route_tg.rs` | the routed driver over one core | *absent* (0 tests) | **9/10, 1 FAILED**, 2 ignored | only via `ci/check.sh` |
-| `tests/mini_tutorial.rs` | tutorial corpus under mini | 16/16 (18.9 s) | 16/16 (18.8 s) | only via `ci/check.sh` |
-| `tests/tg_tutorial.rs` | **every defeq step discharged, no gaps** | *absent* (0 tests) | **31/34, 3 FAILED** | only via `ci/check.sh` |
-| `tests/unified_cli.rs` | the unified CLI's ratchets | *absent* (0 tests) | **6/6** (15.2 s) | **yes** |
-| `src/bin/*.rs` (unit) | — | 0 tests | 0 tests | — |
-| `kernel/tests/*` (8 files) | the trusted base: rules, Tarski, Henkin, choice | **all green** | n/a | **no** |
-| `derived/tests/*` (95 files) | derived rules and constructions | **all green** | n/a | **no** |
+| target | covers | tests | time | gated? |
+| --- | --- | ---: | ---: | --- |
+| `src/lib.rs` (unit) | the checker's own modules, `mini::*` | **299/299** | 8.7 s | yes |
+| `tests/corpus.rs` | good/bad export acceptance, arena corpus | **6/6** | 40.3 s | yes |
+| `tests/tg_tutorial.rs` | **every defeq step discharged, no gaps** | **36/36** | 31.7 s | yes |
+| `tests/mini_mutual.rs` | mutual/nested encodings | **12/12** | 28.2 s | yes |
+| `tests/mini_nested.rs` | nested declaration interpretation | **20/20**, 2 ignored | 17.2 s | yes |
+| `tests/mini_tutorial.rs` | tutorial corpus under mini | **16/16** | 16.4 s | yes |
+| `tests/mini_dump.rs` | model dump shapes | **12/12** | 16.3 s | yes |
+| `tests/unified_cli.rs` | the unified CLI's ratchets | **6/6** | 5.4 s | yes |
+| `tests/mini_nat_equations.rs` | the characteristic Nat equations | **2/2** | 4.2 s | yes |
+| `tests/mini_designed.rs` | designed-fixture behaviour, indexed seam | **34/34** | 2.2 s | yes |
+| `tests/mini_envshare_cross.rs` | crossing ledger, statement guards (was `mini_envshare_tg`) | **14/14**, 1 ignored | 0.3 s | yes |
+| `tests/mini_budget.rs` | declared budget declines | **1/1** | 0.3 s | yes |
+| `tests/mini_envshare.rs` | the mini-side half of the `EnvCore` seam | **6/6** | 0.3 s | yes |
+| `tests/mini_route.rs` | the routed driver over one core (was `mini_route_tg`) | **10/10**, 2 ignored | 0.2 s | yes |
+| `tests/mini_infinitary.rs` | infinitary constructors | **1/1** | 0.2 s | yes |
+| doc-tests | prose examples in `inductive.rs`, `pretty_printer.rs`, `lib.rs` | 0, **8 ignored** | 0.0 s | yes |
+| `src/bin/*.rs` (unit) | — | 0 tests | 0.0 s | — |
+| **`cargo test -p nanoda_lib`** | **all of the above, in one command** | **476 passing** | **171.8 s** | **the gate** |
+| `kernel/tests/*` (8 files) | the trusted base: rules, Tarski, Henkin, choice | **all green** | seconds | yes |
+| `derived/tests/*` (97 files) | derived rules and constructions | **all green** | seconds | yes |
 
-`kernel` and `derived` together are **1047 tests across 109 targets, 0 failed**
-(`cargo test -p kernel -p derived`). They declare no features, so they have one
-configuration. **Nothing in the established gate list runs either of them** —
-including the eight test files covering the trusted computing base, which is the
+`kernel` and `derived` together are **1049 tests across 109 targets, 0 failed**
+(`cargo test -p kernel -p derived`), and both are now on the gate list —
+including the eight files covering the trusted computing base, which is the
 only component that must be correct for soundness.
 
-### 1.1 The suite that runs longer than 60 seconds
+**"gated?" now has one answer for every row**, and that is the whole change of
+2026-08-15: the gate is `cargo test -p nanoda_lib`, unnarrowed, so a target
+cannot be outside it. The column used to read "only via `ci/check.sh`" on
+eleven of these rows. See `CLAUDE-HANDOFF.md`, "Why an enumerated list was the
+defect".
 
-Named, so that it stops being a reason to abandon a run: **`tests/mini_nested.rs`,
-175–177 s**, of which two tests account for nearly all of it —
-`the_iota_dispatch_arm_fires_the_rules_its_model_proved` and
-`the_nested_declarations_interpretation_is_its_models`, each individually over
-60 s (cargo prints the warning). `src/lib.rs` at 86 s and `mini_mutual.rs` at
-71 s are also over the minute.
+### 1.1 The suite that runs longer than 60 seconds — there is none
 
-A full `--features tg` run of every target is about **8 minutes** of test
-execution. That is the real number behind "one unrelated test running longer
-than 60 seconds, so it was stopped".
+**This section said `tests/mini_nested.rs` runs 175–177 s and that a full run
+of every target is about 8 minutes. Both numbers are wrong on master `50605c4`,
+and the first was the sole stated reason for keeping the full run off the
+per-commit gate.**
+
+Measured twice, with the same two tests `#[ignore]`d as when the 175 s was
+taken: **`mini_nested` is 17.2 s** — 17.17 s inside a full package run and
+17.26 s standing alone. It is the *fifth* slowest target, not the first.
+**The whole package — 299 unit tests and all 14 integration suites, 476
+passing — is 171.8 s.** The slowest single target is `corpus.rs` at 40.3 s,
+then `tg_tutorial` at 31.7 s and `mini_mutual` at 28.2 s. Nothing is over the
+minute; `src/lib.rs`, recorded here at 86 s, is **8.7 s**.
+
+The 175 s was quoted as the reason for a decision and never re-checked, and a
+reason that is never re-checked outlives the fact it rests on — the same shape
+as the assertions in §3, one level up. The likely cause is `d263be2`'s
+syntactic-equality shortcut, whose whole subject is not reducing a term to
+discover it equals itself, which is what a nested interpretation does
+constantly; that attribution is a **hypothesis and was not measured**. The
+17.2 s was.
+
+The consequence is in `CLAUDE-HANDOFF.md`: there is no suite too slow to gate,
+so the gate is the package rather than a list of targets.
 
 ### 1.2 Four targets were *absent*, not skipped, in the plain build — fixed
 
@@ -95,10 +120,16 @@ nothing to select and is gone (`checker/src/certify.rs`, "There is one backend,
 and it is not selected"). All four suites and both `mini_designed` tests are
 now unconditional, and there is one build configuration where there were two.
 
-What still holds the *general* shape is `ci/check-test-inputs.sh`, which refuses
-a `cfg(feature)` suite in a package no `--features` step selects. `stepcount` is
-the one feature left for it to be about. That guard is only as good as
-`ci/check.sh` being run.
+What was to hold the *general* shape is `ci/check-test-inputs.sh`, which refuses
+a `cfg(feature)` suite in a package no `--features` step selects. **Measured
+2026-08-15: that leg — leg C — is now vacuous.** Its scan
+(`grep -rlE '^#!\[cfg\(feature = ...\)\]' checker/tests`) matches **zero**
+files, so it iterates zero times; legs A and B still have subjects
+(`stepcount`/`nanoda_lib`, and kernel/derived carrying no `cfg(feature)` of
+their own), so `matrix == 3` and the script's own non-vacuity floor does not
+trip. Its `--self-test` still proves leg C *can* fire against a synthetic tree,
+so it is prospective rather than broken — but it is a leg with no subject,
+which is §2.1 item 5 arriving from the other direction. Open.
 
 ---
 
@@ -170,9 +201,12 @@ Legs that had no floor of their own, in risk order:
 
 ## 3. The reds, and what each one actually is
 
-Four suites are red on master. **Only one of the four is in the improvement
-direction**, which is not what the tranche brief predicted — it expected
-`tg_tutorial`'s three to be improvements, and two of them are not.
+Four suites were red when this section was written. **All are now attributed
+and resolved, and a fifth red — `mini_tutorial` — was found afterwards and is
+recorded in §3.6.** The original entry read: *"Only one of the four is in the
+improvement direction, which is not what the tranche brief predicted."* That
+held for the ratchets; for the crossing assertions it did not, and §3.2 now
+carries their attribution.
 
 ### 3.1 Fixed here: floors, not assertions
 
@@ -253,8 +287,46 @@ order of strength:
 So these three assertions are stale, and the *comments* around them are stale in
 a way that matters more than the numbers: `a_mismatched_typing_is_declined_not_adopted`
 says of `034_boolType` that "the two engines' carriers genuinely differ, so
-nothing may cross", and that sentence is now false. **Left unmoved** for the
-reason in §3.5.
+nothing may cross", and that sentence is now false.
+
+**Attributed and re-based 2026-08-15**, on `joachim/red-suites`. All three move
+at **one commit**, measured by building the suite at each commit of the
+mini-unification block and reading the `cross` row it prints:
+
+| commit | `034` adopted / declined / defeq / converged | `084` adopted / declined |
+| --- | --- | --- |
+| `4e86d46~1`, `4e86d46`, `8815abb` | 0 / 3 / 0 / 0 | 0 / 13 |
+| **`18212fc`** *(checker: consume mini Nat certificates in TG)* | **3 / 0 / 1 / 1** | **9 / 4** |
+| `02ab90f` … master | 3 / 0 / 1 / 1 | 9 / 4 |
+
+The routed cell moves at the same commit: `8815abb` reads 1 declined / 0
+adopted under `Split`, `18212fc` reads 0 / 1. §5 item 3's suspicion of this
+block was right, and the two commits it had already refuted are both far later.
+
+`18212fc` **declared the effect when it landed**, on a different fixture:
+ENV-UNIFY.md B6 records `nat_char_equations.ndjson` at "mini typings adopted by
+TG **0 → 15**, declined typings **16 → 3**" as TG stopped minting a second Nat
+carrier and began reading mini's entries. Nobody re-ran these two suites, so
+the pins outlived the change by 67 commits — which is the §5 item 7 finding
+again, not a new one.
+
+**A fourth assertion was stale behind the first**, and is the §6.1 pattern in
+this very file: `034`'s `adoptedByCheckerDefeq = 0` reads **1**, and it never
+ran because the line above it failed first. Its `converged` went 0 → 1 with no
+decline beside it, so unlike the typing counters that offer is *new* rather
+than re-decided — a weakened guard moves declines into adoptions, and there was
+no decline there to move.
+
+**And two mutations that were expected to bite do not.** Loosening the
+statement guard — the failure these cells are named for — was applied twice
+(accepting any offer at the `ty_const` read; making the obligation read's
+`find` never locate the asked-for statement) and **both leave every test
+green**. The fixtures offer at most one slot per key, so "pick the one whose
+conclusion was asked for" and "pick the first" select the same certificate:
+§6.1's fourth gate, a degenerate instantiation. The old comment's claim that a
+loosened `has_type_const` "shows" on `084` was measured when `084` had 13
+declines; the 9 that converged took the discriminating population with them.
+Recorded at the assertion as a stated gap.
 
 ### 3.3 A real defect, fixed: a guard that could not fire
 
@@ -434,6 +506,54 @@ diff above evidence rather than an anecdote.
 
 ---
 
+### 3.6 The fifth red, found after this document was written
+
+**`mini_tutorial::tutorial_conversion_split`** — `moved` read **2914** against
+a pin of **3461**, stale in the improvement direction. It is the third suite in
+one week to be found red *outside* the gate list, and the one that made the
+gate-list fix structural rather than another entry.
+
+**Attributed to `d263be2` "checker: syntactic equality before reduction"**, one
+commit, measured by building at its parent and at it and running the test's own
+measurement over the 91 tutorial exports:
+
+| commit | `moved` | `movedSealed` | `proved` | `gapped` |
+| --- | ---: | ---: | ---: | ---: |
+| `02581e4` *(parent)* | 3461 | 915 | 797 044 | 0 |
+| **`d263be2`** | **2914** | **638** | **156 062** | 0 |
+
+`d263be2`'s numbers are master's to the unit, so nothing in the 286 first-parent
+commits after it touches this row. Three pins moved: 3461 → 2914, 2546 → 2276,
+915 → 638, each with the trade written at the assertion.
+
+**The trade.** A pointer-equality check now sits at the top of `def_eq_ev`,
+ahead of proof irrelevance, literals and `whnf_conv`; a pair that is one
+expression twice used to be normalised on *both* sides to discover it, and
+those two `whnf` legs genuinely move, so they were counted. 640 982 conversions
+stop being proved and only **547** were non-trivial — **99.91 % of the fall is
+reflexivity**, which is the one thing the shortcut can prove and cannot fire on
+a differing pair. `gapped` is still 0 and the whole corpus still certifies. The
+favourable side is the commit's own: `init-prelude`'s certified prefix went
+44 → 152 and the file ACCEPTS.
+
+**One row rose**: `072_sortElimProp2Rec`'s `movedSealed` 1 → 4 with `moved`
+flat. That is a tightening and cannot be a bookkeeping artefact — `free` reads
+`Thm::hyps()`, the kernel's own list, and a hypothesis cannot be dropped
+without a discharge rule.
+
+**Why it went unobserved is the finding.** `d263be2`'s message reports
+*"Gates 6/6, 34/34, 35/35, 251/251, boundary OK"*. The author **ran the gate
+list**. `mini_tutorial` was not on it. Nothing was skipped and nothing was
+ignored; an enumerated list is a hand-maintained copy of the target list, and a
+copy drifts. That is why the fix in `CLAUDE-HANDOFF.md` is to stop enumerating.
+
+**A §6 instance found in passing**: `assert_eq!(g("movedSealed"), 638)` is
+**unfalsifiable**. With `moved` and `moved − movedSealed` both pinned it
+follows by arithmetic, and the mutation aimed at it (bumping `moved_sealed` on
+`moved` rather than `moved && free`) died at the difference assertion instead.
+Its status is written at the line. The same shape holds for the two `declined`
+constants in §3.2's cells.
+
 ## 4. Task #122: the three builds
 
 **The premise as stated is no longer true.** `ci/check.sh` does not build the
@@ -548,30 +668,51 @@ part.
 
 1. **Per-leg counters in `check-test-guards.sh` and `check-test-inputs.sh`**
    (§2.1 items 4, 5), and a **cell counter** in `test-boundary.sh` (item 6).
+   `check-test-inputs.sh` has acquired a second, sharper form of the same
+   problem since: its leg C now has **zero** subjects (§1.2).
+1b. **`paired_subterm_lam_divergence` (`mini_route.rs`) carries a bare
+   `#[ignore]` with no reason anywhere in its 60-line header.** An ignored test
+   is *absent*, not skipped, and one with no reason is indistinguishable from
+   an abandoned one. The other four ignored tests in the tree all state a cost;
+   only the two in `mini_nested` put it in the `#[ignore]` attribute, where a
+   test listing shows it. **None of the five has been run recently and whether
+   they still pass is unknown** — that is the honest status, and the
+   `mini_nested` pair cannot be run casually (33 min / 12 GB and 26 min /
+   7.5 GB by their own attributes).
+1c. **Six stale test-path references in `checker/src/`** — `lam_store.rs` (3),
+   `routed.rs`, `const_store.rs`, `interp.rs`, `tg.rs` — all naming
+   `mini/tests/…` paths removed at `4e86d46`, and now one degree staler after
+   the `_tg` rename. That file set is another seat's surface, so they are
+   reported here rather than fixed.
 2. ~~The two adverse ratchets~~ — **resolved 2026-08-15** (§3.5). Both are
    population changes, both re-based with the trade written, both totals
    tightened, and a per-row ledger guard added.
-3. **The three stale crossing assertions** (§3.2) — still open, and **two named
-   candidates are now refuted by measurement**. `mini_envshare_tg` was run at
-   `a29aad9^`, `a29aad9`, `887fa10^` and `887fa10`: it fails the same 2 at all
-   four, so neither commit is where those counters converged. The change is
-   earlier than `1fe03a0`. It could not be attributed from §3.5's ledger diff
-   because these are counters on the **unified** checker (`checker.rs`, mini
-   publication) and every number in §3.5 is `nanoda_bin`'s, which never runs
-   mini — so they need a measurement on their own binary. The remaining
-   suspects are the mini-unification commits `4e86d46`…`02ab90f`.
+3. ~~The three stale crossing assertions~~ — **resolved 2026-08-15** (§3.2).
+   All three, plus a fourth that was shadowed behind them, move at **`18212fc`**
+   alone. This entry's instinct was right: it named the block
+   `4e86d46`…`02ab90f` as the remaining suspects and the answer is the third
+   commit in it. The two candidates it had already refuted (`a29aad9`,
+   `887fa10`) are both far later, and the reason §3.5's ledger diff could not
+   see it — these are counters on the **unified** checker, and §3.5's numbers
+   are all `nanoda_bin`'s — was also right, and is why the measurement had to
+   be taken by building the suite itself at each commit.
 4. ~~The `076_listRecReduction` budget~~ — **resolved 2026-08-15** (§3.2), two
    tranches, both attributed, re-based 31 → 9 with the derivation written.
 6. **The shadowed-assertion audit** (§4.5) — the rule is written and its four
    instances are named, but **the tree has not been swept for others**. A
    separate seat owns that; this entry exists so the sweep is not mistaken for
    done.
-7. **The gate list is the real finding, and it is not fixed.** §3.5's two
-   ratchets each fired correctly the first time they were run; nobody ran them
-   for four days. `ci/check.sh`'s step `tests (tg backend)` does cover
-   `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
-   itself is not on the short gate list seats actually run**. Every guard this
-   document adds is downstream of that.
+7. ~~The gate list is the real finding, and it is not fixed.~~ — **fixed
+   2026-08-15**, and not by adding entries. Three suites outside the list went
+   red in one week and each time the remedy was to add the missing one, so the
+   remedy was changed: the per-commit gate is now `cargo test -p nanoda_lib`,
+   unnarrowed, which runs the lib's unit tests and all 14 integration targets
+   and **cannot omit a suite by construction**. Two facts made it possible —
+   one build configuration since `d746251`, and the package running in 171.8 s
+   once §1.1's 175 s claim was re-measured at 17.2 s. `ci/check.sh` remains the
+   merge gate; it needed no widening, which was checked rather than assumed
+   (its steps 24 and 26 are both bare `-p nanoda_lib` runs). See
+   `CLAUDE-HANDOFF.md`, "The gate list".
 6. ~~**Shadowed assertions (§6), the unfixed remainder.**~~ — **resolved
    2026-08-15** on `joachim/shadowed-residue`; see §6.4 for the measurements.
    `origin_report()`'s early return is gone, the `if asked > 0` report gates hang

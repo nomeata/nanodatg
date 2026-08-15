@@ -194,102 +194,202 @@ alongside it for those. And **report rows, not totals**: two ratchets drifted fo
 
 ## The gate list
 
-**Corrected 2026-08-15 against a measured inventory of every test target and
-every `ci/` step; see `TEST-INVENTORY.md` for the table and the method.**
+**Corrected 2026-08-15, for the second time in a day, against a run of *every*
+target on master `50605c4` with the arena corpus linked. The correction is not
+another entry on the list — it is that the list stops naming targets at all.**
 
-The previous wording here said a full no-default unit-test run "is not a gate"
-because it "exposed four pre-existing Mini-test failures and one unrelated test
-running longer than 60 seconds, so it was stopped". Every clause of that
-sentence was load-bearing and three of them were wrong:
+The rule from the previous correction survives and is the right one:
 
-* the four failures were not pre-existing noise. They had **one root cause** —
-  the publication helpers read `joint_key(&key).is_some_and(…)` as "divergent
-  shared evidence" when `joint_key` returns `None` for a `Name` in a
-  per-declaration `TcCtx` arena, which cannot cross the seam at all. One fix
-  took the suite to **244/244**;
-* "one unrelated test" was never named, so nobody could weigh it. It is
-  `checker/tests/mini_nested.rs` at ~175 s, of which two tests are individually
-  over 60 s. A full `--features tg` run of every target is ~8 minutes;
-* and a sentence that tells the next reader a red number is expected is how a
-  real defect stays hidden. It did: the suite was carried as "four known
-  failures" long enough that nobody re-counted, and the fifth was never noticed.
+> **A suite is either a gate or it has a written reason, with a measurement,
+> for not being one.** "Not a gate" must never be readable as "unimportant" or
+> as "expected to be red".
 
-So the rule is now stated the other way round. **A suite is either a gate or it
-has a written reason, with a measurement, for not being one.** "Not a gate" must
-never again be readable as "unimportant" or as "expected to be red".
+### Why an enumerated list was the defect
+
+Three suites outside the gate list have been found red in one week —
+`mini_designed` at 32/34 in the configuration the gate never ran, the two
+crossing suites, and now `mini_tutorial`. Each time the remedy applied was *add
+the missing suite to the list*, and each time it failed again within days,
+because the failure is structural rather than a lapse of care:
+
+**An enumerated gate list is a hand-maintained copy of the target list, and a
+copy drifts.** The evidence that this is not about diligence is `d263be2`'s own
+commit message, which reports *"Gates 6/6, 34/34, 35/35, 251/251, boundary
+OK"*. The author ran the gate list. The list was wrong — `mini_tutorial` was
+not on it — and the suite it omitted went red in that very commit and stayed
+red for 286 commits.
+
+So the gate no longer names targets. **`cargo test -p nanoda_lib`, with no
+`--test` narrowing and no `--features`, runs the lib's unit tests and all 14
+integration targets.** A suite written tomorrow is inside the gate on the day
+it is written and there is no list to forget.
+
+Two facts make that possible, and neither held when the previous list was set:
+
+* **There is one build configuration.** `tg` selected `certify::Backend`
+  between `NullCertifier` and the real backend; retiring the `Certifier` trait
+  left one backend and the feature was deleted at `d746251`. The old list's two
+  `--lib` lines were one configuration each; they are now the same command
+  twice.
+* **The whole package fits in under three minutes.** That was not believed to
+  be true and the reason is the next section.
+
+### Measured, master `50605c4`, corpus linked
+
+| target | tests | time |
+| --- | ---: | ---: |
+| `src/lib.rs` (unit) | 299 | 8.7 s |
+| `tests/corpus.rs` | 6 | **40.3 s** |
+| `tests/tg_tutorial.rs` | 36 | **31.7 s** |
+| `tests/mini_mutual.rs` | 12 | 28.2 s |
+| `tests/mini_nested.rs` | 20, 2 ignored | **17.2 s** |
+| `tests/mini_tutorial.rs` | 16 | 16.4 s |
+| `tests/mini_dump.rs` | 12 | 16.3 s |
+| `tests/unified_cli.rs` | 6 | 5.4 s |
+| `tests/mini_nat_equations.rs` | 2 | 4.2 s |
+| `tests/mini_designed.rs` | 34 | 2.2 s |
+| `tests/mini_envshare_cross.rs` | 14, 1 ignored | 0.3 s |
+| `tests/mini_budget.rs` | 1 | 0.3 s |
+| `tests/mini_envshare.rs` | 6 | 0.3 s |
+| `tests/mini_route.rs` | 10, 2 ignored | 0.2 s |
+| `tests/mini_infinitary.rs` | 1 | 0.2 s |
+| doc-tests | 0, 8 ignored | 0.0 s |
+| **total** | **476 passing** | **171.8 s** |
+
+`kernel` + `derived` are **1049 across 109 targets** and run in seconds.
+
+### The 175-second suite that is 17 seconds
+
+This is the measurement that decides the shape above, and it refutes a number
+this document, `TEST-INVENTORY.md` §1.1 and every recent handoff have repeated.
+
+`mini_nested` was recorded at **175–177 s**, "of which two tests are
+individually over 60 s", and that number was the sole stated reason for keeping
+the full run off the per-commit gate. **It is 17.2 s** — measured twice, 17.17 s
+inside a full package run and 17.26 s standing alone, with the same two tests
+`#[ignore]`d as when the 175 s was taken. It is not the slowest suite in the
+tree; it is the fifth, and `corpus.rs` at 40.3 s is more than twice it.
+
+Nobody re-measured it because nobody needed to: it was quoted as the reason for
+a decision, and a reason that is never re-checked outlives the fact it rests
+on. The most likely cause is `d263be2`'s syntactic-equality shortcut — the same
+commit that moved `mini_tutorial`'s conversion census, and whose whole subject
+is not reducing a term to discover it equals itself, which is what a nested
+interpretation does constantly. That attribution is **not measured** and is
+offered as a hypothesis; the 17.2 s is measured.
+
+**So there is no suite too slow to gate, and the merge-gate carve-out this
+section used to make for `mini_nested` is withdrawn.**
 
 ### Gates — all of these must be green before a commit
 
 ```bash
-cargo test -p nanoda_lib --no-default-features --lib            # 244/244
-cargo test -p nanoda_lib --features tg --lib                    # 292/292
-cargo test -p kernel -p derived                                 # 1047/1047, 109 targets
-cargo check -p nanoda_lib --no-default-features --all-targets   # 5 existing warnings only
-ci/check-boundary.sh                                            # OK
-ci/test-boundary.sh                                             # OK
+ci/corpus-dir.sh --link          # in a worktree, FIRST — vendor/ is gitignored
+cargo test -p nanoda_lib         # 299 unit + all 14 suites = 476, ~172 s
+cargo test -p kernel -p derived  # 1049 across 109 targets, seconds
+ci/check-boundary.sh             # OK
+ci/test-boundary.sh              # OK
 ```
 
-`kernel` and `derived` are on the list because they were on no list at all,
-and `kernel` is the entire trusted computing base — the only component that
-must be correct for soundness. They are 1047 tests, all green, and they run in
-seconds. There was never a reason to exclude them; nobody had looked.
+Five commands, and the second cannot omit a suite by construction. Without the
+`ci/corpus-dir.sh --link` a worktree reports `ok … 0.00s` having checked
+nothing, which is the input-dimension form of the same disease.
 
-`ci/test-boundary.sh` is on the list because it was **red on master** when this
-inventory was taken, and it is the file that proves the boundary check can
-fail.
+`kernel` and `derived` stay on the list for the reason they were added: `kernel`
+is the entire trusted computing base, the only component that must be correct
+for soundness, and it was on no list at all. `ci/test-boundary.sh` stays because
+it was red on master when the inventory was taken and it is the file that proves
+the boundary check can fail.
 
-Before any corpus test, in a worktree: **`ci/corpus-dir.sh --link`**. `vendor/`
-is gitignored, so a worktree otherwise reports `ok … 0.00s` having checked
-nothing.
+### What came off the list, and why
 
-### Ratchets — green, but exact, so run them when you touch the checker
+* `cargo test -p nanoda_lib --features tg --lib` — **the feature does not
+  exist** (`d746251`). Passing it now is an error, not a stricter run.
+* `cargo test -p nanoda_lib --no-default-features --lib` — `nanoda_lib` declares
+  no default features, so this was always the same build as a plain one.
+* `cargo check -p nanoda_lib --no-default-features --all-targets` — subsumed:
+  `cargo test -p nanoda_lib` compiles every target it would have checked.
+* The two "ratchet" lines, `--test unified_cli` and `--test mini_designed`.
+  They were never a separate obligation — they are two of the fourteen, and
+  naming a subset is the habit this correction is about. They are 6/6 and 34/34,
+  inside the package run, in 7.6 s of its 172.
 
-```bash
-cargo test -p nanoda_lib --features tg --test unified_cli       # 6/6
-cargo test -p nanoda_lib --features tg --test mini_designed     # 34/34
-```
+### Nothing is red
 
-### Currently red, with the reason — do not treat these as noise
+All 14 suites and the lib are green on master `50605c4` with the two
+re-baselines on this branch. **The "Currently red, with the reason" block that
+stood here is deleted rather than updated**, because a sentence in a handoff
+telling the next reader that a red number is expected is how a real defect stays
+hidden — this document already says so about its own previous wording, and then
+carried such a block for four more days. The four reds it named are attributed
+and re-based: `mini_tutorial`'s three pins at `d263be2`, and the three crossing
+pins in `mini_envshare_cross` and `mini_route` at `18212fc`, each with the trade
+written at the assertion.
 
-`tg_tutorial` (3), `mini_envshare_tg` (2) and `mini_route_tg` (1) are red on
-master and are **not** gates *yet*, for a reason that is written down rather
-than assumed. Three of the six are stale assertions in the improvement
-direction (carriers that used to differ now converge, with the offer
-populations conserved); two are ratchets that moved *adversely* and need a
-whole-ledger diff to adjudicate; one is a gap budget that improved 31 → 9.
-`TEST-INVENTORY.md` §3 has the evidence for each, including why the adverse
-pair cannot be re-based on the strength of the passing totals ratchet alone.
+If a suite goes red, it is red. There is no list of expected reds.
 
-They are excluded because **nobody can currently say which commit moved them** —
-the ratchets were last set at `43bac38`/`3c4323b` and a dozen checker commits
-have landed since with nothing re-running these suites. That is a debt with an
-owner and a next step, not a standing exemption. The moment the attribution
-exists, they become gates: they are the strongest property in the tree, since
-`tg_tutorial` asserts that *every* definitional-equality step on the listed
-exports was discharged by a real kernel derivation.
+### The five ignored tests, and the eight ignored doctests
+
+A `#[ignore]`d test is **absent**, not skipped, so each one is named here rather
+than left to be discovered:
+
+| test | file | stated reason |
+| --- | --- | --- |
+| `the_iota_dispatch_arm_fires_the_rules_its_model_proved`* | `mini_nested.rs` | `#[ignore = "33m20 and OOM at 12 GB on the filtered export"]` |
+| `the_nested_declarations_interpretation_is_its_models`* | `mini_nested.rs` | `#[ignore = "51.8 M conversions, 26 minutes and over 7.5 GB"]` |
+| `cross_sweep_tutorial` | `mini_envshare_cross.rs` | in the doc: the B4 measurement run, minutes over 91 exports, with the command to reproduce it |
+| `skeleton_key_divergence_sweep` | `mini_route.rs` | in the doc: "a measurement run, minutes over the corpus" |
+| `paired_subterm_lam_divergence` | `mini_route.rs` | **none — a bare `#[ignore]` with no reason anywhere in its 60-line header** |
+
+*(\* the two `mini_nested` names are the two the 175 s figure was attributed to;
+they are `#[ignore]`d for cost, and the suite is 17.2 s without them.)*
+
+Four of the five are measurement sweeps that cost minutes to tens of minutes and
+are right to be ignored — but only the two in `mini_nested` put the cost in the
+`#[ignore]` attribute, where it is visible from a test listing. The fifth,
+`paired_subterm_lam_divergence`, states **no** reason at all, and an ignored
+test with no reason is indistinguishable from an abandoned one. **That is the
+same rule as this section's, one level down: a test is either run or it has a
+written reason, with a measurement, for not being.** None of the five has been
+run recently; whether they still pass is unknown, and that is the honest status.
+
+The 8 ignored doc-tests are prose examples in `inductive.rs` (5),
+`pretty_printer.rs` (2) and `lib.rs` (1) — illustrative pseudo-code inherited
+from nanoda, not assertions.
 
 ### Everything else in `ci/`
 
-`ci/check.sh` runs all 29 steps and is the full check; it is not a per-commit
-gate because it builds three feature configurations and two release binaries
-(4.40 T `instructions:u`, 603 s of task-clock for the compiles alone —
-`TEST-INVENTORY.md` §4). It now fails if its own step count is not the declared
-29, so a step can no longer vanish from the schedule in silence.
+`ci/check.sh` is the merge gate and now has **26 steps**, not 29; it asserts its
+own count, and the count matches. The three that went with the feature were
+`feature-inert guard`, `tests (tg backend)` and `tests (cross-engine core)`.
 
-**It is a merge gate, and that is the correction this section exists for.**
-`ci/check.sh` *does* cover `tg_tutorial`. When the two adverse ratchets were
-adjudicated it turned out **both had fired correctly the first time they were
-run** — nothing was missing from the assertions, and per-row floors were not
-what was needed. What was missing is that nobody ran `ci/check.sh` across 134
-commits, because it was on no list. So:
+**It needed no widening, and that was checked rather than assumed.** Its steps
+24 and 26 are `cargo test -p nanoda_lib` and `cargo test -p nanoda_lib
+--features stepcount`, both **bare** — no step in the file uses `--test` any
+more — so all 14 integration targets run twice per invocation, and step 25
+(`cargo test --workspace --exclude nanoda_lib`) is exactly `kernel` + `derived`.
+Zero of the 14 are un-run. The one thing genuinely lost is
+`ci/check-feature-inert.sh`, a *runtime* falsifier for the premise that let the
+feature steps be `-p nanoda_lib`; with one backend that premise is gone, and
+leg B of `ci/check-test-inputs.sh` covers what remains statically.
 
-* **before a commit** — the gate block above;
+One item is left open by the feature's removal: **leg C of
+`ci/check-test-inputs.sh` is now vacuous.** It refuses a `#![cfg(feature = "X")]`
+suite in a package no `--features X` step selects, and its scan now matches
+**zero** files, so it iterates zero times. Its self-test still proves it can
+fire, so it is prospective rather than broken — but it is a leg with no subject,
+which is item 5 of `TEST-INVENTORY.md` §2.1 arriving from the other direction.
+
+So:
+
+* **before a commit** — the gate block above, ~3 minutes;
 * **before a merge to `master`** — `ci/check.sh`, in full.
 
 A suite that is correct and unrun is indistinguishable from one that is absent.
-The 134-commit gap is the measurement behind that sentence, and 13 of those
-commits have empty message bodies, so `git log` would not have recovered the
-attribution either.
+The measurements behind that sentence are now three: 134 commits with two
+ratchets unobserved, 286 commits with `mini_tutorial` red, and 67 commits with
+the crossing pins stale — and 13 of the commits in the first range have empty
+message bodies, so `git log` would not have recovered the attribution either.
 
 ## What is actually left, 2026-08-15
 
@@ -316,7 +416,7 @@ numbers. What remains now, in the order the measurements put it:
      **−2 630**, with escapes 1 074 → 1 777.
    * **The clauses cannot be had unconditionally.** `ble_transfer` `mp`s its
      three premises, and on the one input that contains them
-     `checker --features tg` certifies `natBleZ`/`natBleSZ`/`natBleSS` only
+     `checker` certifies `natBleZ`/`natBleSZ`/`natBleSS` only
      conditionally — **16 / 23 / 24 raw-beta atoms** from `Nat.ble`'s `brecOn`
      nest. `mini` certifies them unconditionally; `mini` does not own the ledger.
 
@@ -520,19 +620,27 @@ thrust or explicit reprioritisation by the owner.
 
 Useful focused commands:
 
+**`--features tg` is gone** (`d746251`) — passing it is now an error, not a
+stricter run. There is one build configuration, so every command below is a
+plain one. `--no-default-features` is likewise a no-op: `nanoda_lib` declares
+no default features.
+
 ```bash
-cargo test -p nanoda_lib --features tg --test unified_cli
-cargo test -p nanoda_lib --features tg --test mini_designed
-cargo check -p nanoda_lib --no-default-features --all-targets
-cargo run -p nanoda_lib --features tg --bin checker -- \
+cargo test -p nanoda_lib --test unified_cli
+cargo test -p nanoda_lib --test mini_designed
+cargo run -p nanoda_lib --bin checker -- \
   --no-modelgen --verbose checker/tests/fixtures/proj_reduced_carrier.ndjson
 ```
+
+Narrowing with `--test` is for *iterating*, never for gating — see the gate
+list above for why an enumerated target list is the defect it looks like a
+convenience for.
 
 For commands that may use substantial memory, apply an explicit limit. Prior
 work used 8 GiB per process, for example:
 
 ```bash
-(ulimit -v 8388608; cargo test -p nanoda_lib --features tg --test unified_cli)
+(ulimit -v 8388608; cargo test -p nanoda_lib --test unified_cli)
 ```
 
 Keep aggregate resident memory below 50 GB and monitor it with:
