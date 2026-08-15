@@ -10473,3 +10473,129 @@ guard and `Drop` runs during **panic unwinding**, so a `decl-leave … 0.001s`
 line printed by an unwinding instrumentation bug read exactly like a
 declaration that had finished, and was briefly reported as a fix. The guard now
 prints `PANIC` or `ok`.
+
+## What Lean's kernel does with this tower, and the cache mini was missing — 2026-08-15
+
+The section above establishes that the 2 000 refused frames are **one tower**,
+that its height is a unary numeral, and concludes that the fix is therefore the
+binary numeral path in `derived/src/nat/`. Two measurements below refute that
+conclusion. The tower is real and Lean walks it too; what Lean has and mini did
+not is a **cache**.
+
+### Lean's kernel has no acceleration for `Nat.rec` on a literal
+
+Read from the Lean 4.34.0-dev C++ kernel source (the nix-store source behind
+the toolchains — there is no `src/` under `~/.elan/toolchains/*`).
+
+`inductive_reduce_rec` whnfs the major premise and then, at
+`src/kernel/inductive.h:89-99`, converts a literal with `nat_lit_to_constructor`
+(`src/kernel/inductive.cpp:1267-1274`):
+
+```cpp
+expr nat_lit_to_constructor(expr const & e) {
+    nat const & v = lit_value(e).get_nat();
+    if (v == 0u) return *g_nat_zero;
+    else         return mk_app(*g_nat_succ, mk_lit(literal(v - nat(1))));
+}
+```
+
+**One `succ` per step.** `Nat.rec … (lit 2047)` costs 2047 iota steps in Lean's
+kernel exactly as it does in mini. There is no accelerated recursor, and
+`reduce_nat` (`type_checker.cpp:639-668`) accelerates only *arithmetic* on
+literal arguments — `add`, `sub`, `mul`, `pow`, `gcd`, `mod`, `div`, `beq`,
+`ble`, `land`, `lor`, `xor`, `shiftLeft`, `shiftRight` — and is tried in the
+outer `whnf` loop, never inside recursor reduction. `is_def_eq_offset`
+(`:973-1000`) peels one `succ` per call and re-enters the *full*
+`is_def_eq_core`; it is not offset counting.
+
+What Lean has instead is `type_checker::state`
+(`src/kernel/type_checker.h:26-43`): `m_infer_type[2]`, `m_whnf_core`,
+`m_whnf`, `m_unfold`, the `m_eqv_manager` union-find and `m_failure`. All are
+**per declaration** — `environment::add_definition` and friends construct a
+fresh `type_checker` each time — and all are keyed **structurally**
+(`expr_map` is an `unordered_map` over `expr_hash`/`is_equal`,
+`src/kernel/expr_maps.h:13-15`). `m_eqv_manager` is queried *first* on every
+`is_def_eq_core` call, before anything is reduced, and records **successes
+only** (`type_checker.cpp:1164-1169`).
+
+So Lean builds the same tower and survives by not walking it twice.
+
+### Shortening the tower does not shorten the run
+
+`scripts/decl-closure.py` cuts the 238-declaration backward closure of
+`ByteArray.IsValidUTF8`; it declines with the **identical** verdict line and is
+a faithful reproducer. Its tower height is tunable: rewriting the single
+`{"natVal":"2047"}` retargets it.
+
+At **2047 → 20** the run still had not finished at 400 s, indistinguishable
+from the unmodified closure. The tower's height is not the cost.
+
+*(Infra note for the next fixture: `checker/src/parser.rs`'s `assert_ie`
+requires every literal to be **newly** interned, so a rewritten numeral that
+collides with one already in the export panics the parser. The values already
+present are 0–12, 16, 17, 32, 64, 127, 128, 192, 224, 240, 256, 512, 1723,
+2047, 4096, 55296, 57343, 65535, 65536, 262144, 2^32, 2^64.)*
+
+### The cache, and the design that does not work
+
+`def_eq`'s population on this declaration is **120 M calls deciding 1 237
+distinct `(e1, e2)` pairs**, with 119 995 175 of them carrying no endpoints.
+That is one small set of judgements re-decided down an exponentially branching
+recursion.
+
+The obvious key is *(context, e1, e2)* — `mini::Expr` is de Bruijn, so a pair
+does not name a judgement on its own. That was built first: telescope
+identities interned as *(parent identity, type)*, one `u32` per binder,
+maintained at the five sites that move `lenv`. Measured on the closure:
+
+| key | hits | misses | entries | contexts |
+| --- | ---: | ---: | ---: | ---: |
+| `(ctx, e1, e2, lhs)` | 1 178 020 | 13 862 162 | 4 194 304 (capped) | 33 708 376 |
+| `(e1, e2, lhs)`, closed pairs only | 57 455 591 | **857** | **340** | — |
+
+**8 % against 97.5 %**, and ~3 % of the profile spent in the interning table
+that bought the 8 %. The telescope is deep and its *contents* change at every
+instantiation, so keying a judgement by a context the judgement does not mention
+invents a fresh key per visit. Restricting to pairs with no loose `bvar` — which
+denote the same judgement under every telescope — removed the apparatus and the
+five maintenance sites with it.
+
+Two further corrections found by measurement: requiring `Lhs::Unknown` (on the
+strength of that variant's doc comment, *"every decision-only caller is here"*)
+dropped **45 M of 60 M** decision-only calls, so `lhs` rides in the key instead;
+and the standard `RandomState` hasher was ~11 % of the profile, so the map is
+`FxHashMap`.
+
+### What it is worth: 28.21 T → 6.10 T
+
+`init-prelude`, `--verbose --mutual --nested`, modelgen on, debug profile
+(`opt-level = 3`), `perf stat -e instructions:u,task-clock`, both runs on the
+same box:
+
+| | instructions:u | task-clock |
+| --- | ---: | ---: |
+| master `36106d2` | 28 211 388 754 767 | 2 126 588 ms |
+| with the decision cache | **6 103 545 034 876** | **469 896 ms** |
+| | **4.62×** | **4.53×** |
+
+**The verdict is byte-identical**: the same decline on the same term, `prefix
+declarations=44 pairs=0 certified=0`, the same `facts` and `clauses` rows. A
+decision cache is supposed to change the cost and nothing else, and here it is
+measured doing exactly that.
+
+No regression elsewhere. The eight fixture gap counts are unchanged —
+`nat_char_equations` 61, `mutual_aux_encoding` 96, `ctor_abbrev_major` 46,
+`proj_reduced_carrier` 13, `quot_lift_reduction` 12, `proj_stuck_subject` 6,
+`proj_reduced_subject` 2, `field_in_u0_by_carrier` 0 — and the 91-export
+tutorial corpus is still **16 files with gaps, 185 gaps total**.
+
+### The wall has not moved, and where it now is
+
+The declaration still declines, and the certified prefix is still 44/0/0. The
+remaining cost is **`infer_type`: 285 M calls at a 16 % hit rate**, against
+**9 561 distinct expressions** (the same 285 922 406 figure `PROFILE.md` §3
+recorded). `frame_put` refuses to store a `Gap`-carrying `Typing` whenever
+`th.is_some()`, because the `Interp` grows inside a frame's lifetime and a gap
+that would now succeed must not be frozen — so on the threaded pass the memo is
+disabled for exactly the population the grind consists of. That is the next
+defect, and it is a different one from this.

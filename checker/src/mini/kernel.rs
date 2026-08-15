@@ -40,6 +40,7 @@ use crate::mini::ev::{BinderClause, BinderRule, Ev, Gap};
 use crate::mini::conv::Conv;
 use crate::mini::interp::{Interp, LamSite, PiShape};
 use crate::mini::scope::{Closed, ScopeToken, Scopes};
+use rustc_hash::FxHashMap;
 use kernel::{FreeVar, Term, Thm};
 use crate::mini::expr::{
     app, app_n, arrow, bvar, bvars, forall, get_app, has_bvar, has_bvar_in_proj, has_const, konst,
@@ -459,6 +460,53 @@ pub struct Checker<'e, 'i> {
     /// **`infer_type`'s frame-local memo**, one frame per telescope slot.
     /// `frames.len() == lenv.len() + 1` at all times. See [`Frame`].
     frames: Vec<Frame>,
+    /// **`def_eq`'s decision cache**, and the counterpart of the
+    /// `m_eqv_manager` union-find Lean's kernel queries *first* on every
+    /// `is_def_eq_core` call, before anything is reduced.
+    ///
+    /// # Why one is worth having, measured
+    ///
+    /// On `ByteArray.IsValidUTF8` the `def_eq` population is **120 000 000
+    /// calls deciding 1 237 distinct `(e1, e2)` pairs** — a ratio of 97 000 —
+    /// and 119 995 175 of those calls carry no endpoints at all. So the work
+    /// is not new work: it is one small set of pairs re-decided down an
+    /// exponentially branching recursion, which is the exact shape a memo
+    /// removes.
+    ///
+    /// # The four conditions an entry must meet
+    ///
+    /// 1. **Both endpoints absent.** A call carrying `⟦e1⟧` and `⟦e2⟧` is
+    ///    asked to *state* something, and its `Ev` is a theorem about those
+    ///    two terms; only the decision-only population is cached.
+    /// 2. **The `Lhs` classifier hint** rides in the key. It is believed not
+    ///    to change the *decision*, only the route taken to it, but a hint in
+    ///    the key costs one `bool` and needs no such argument.
+    /// 3. **The context, but only when the pair mentions it.** `mini::Expr`
+    ///    is de Bruijn, so a pair with loose `bvar`s does not name a
+    /// 3. **Both sides closed** — no loose `bvar` on either. See the site,
+    ///    which carries what the contextual alternative measured.
+    /// 4. **The `Ev` states nothing** (checked, not assumed — see the insert).
+    ///
+    /// # What is deliberately *not* cached: the negative
+    ///
+    /// Only `Ok` results are stored, and this is not a detail. An `Err` here
+    /// is overloaded: it is either "these are not equal" or "mini ran out of
+    /// depth", and [`DEFEQ_MAX_DEPTH`] makes the second depend on where in the
+    /// recursion the call happened. Caching a refusal would turn a budget
+    /// accident into a permanent verdict. Lean's kernel draws the same line —
+    /// `m_eqv_manager` records successes only (`type_checker.cpp:1164-1169`),
+    /// and its one negative cache, `m_failure`, is confined to a single
+    /// congruence shortcut.
+    ///
+    /// A cached *positive* has no such hazard: success does not become failure
+    /// because the second asker had less budget left.
+    ///
+    /// # Lifetime
+    ///
+    /// This `Checker`, so one `(declaration, σ)` — which is also Lean's, whose
+    /// `type_checker::state` holds every cache and is constructed fresh per
+    /// declaration.
+    defeq_cache: FxHashMap<(E, E, bool), Ev>,
     /// How deep [`Checker::assert_def_eq_as`] currently is. See
     /// [`DEFEQ_MAX_DEPTH`].
     defeq_depth: u32,
@@ -548,6 +596,19 @@ pub fn whnf_trace_on() -> bool {
 /// `derived/src/nat/` and not a larger constant here. Set `NANODA_MAX_DEPTH` to
 /// reach the refusal sooner while measuring; see [`max_depth`].
 pub const DEFEQ_MAX_DEPTH: u32 = 2_000;
+
+/// How many entries [`Checker::defeq_cache`] may hold before it stops growing.
+///
+/// **A ceiling, not a policy.** The measured distinct population on the
+/// declaration this cache exists for is 1 237 pairs, four orders of magnitude
+/// under this; the cap is here so that a *different* file, whose distinct set
+/// is genuinely large, degrades to the uncached behaviour instead of consuming
+/// the session. Aggregate memory over ~50 G kills the whole user session on
+/// this box, so an unbounded per-declaration map is not a safe default even
+/// when every file measured so far would never reach the bound. Nothing is
+/// evicted — an entry once stored stays valid — so hitting the cap costs hits,
+/// never correctness.
+const DEFEQ_CACHE_CAP: usize = 1 << 22;
 
 /// [`DEFEQ_MAX_DEPTH`], overridable by `NANODA_MAX_DEPTH` for **diagnosis**.
 ///
@@ -686,6 +747,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             th: None,
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
+            defeq_cache: FxHashMap::default(),
             defeq_depth: 0,
             whnf_depth: 0,
             whnf_trace: Vec::new(),
@@ -706,6 +768,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             }),
             wt_memo: HashMap::new(),
             frames: vec![Frame::default()],
+            defeq_cache: FxHashMap::default(),
             defeq_depth: 0,
             whnf_depth: 0,
             whnf_trace: Vec::new(),
@@ -3968,17 +4031,58 @@ impl<'e, 'i> Checker<'e, 'i> {
             });
             if n % 20_000_000 == 0 {
                 let fc = crate::mini::census::frame_cache();
+                let dc = crate::mini::census::defeq_cache();
                 eprintln!(
                     "defeq-census  calls={n}  distinct={d}  ratio={ratio:.1}  \
                      depth={depth}  asked={a}  no-endpoints={b}  \
-                     frame-hit={fh} frame-miss={fm}  telescope={tel}",
+                     frame-hit={fh} frame-miss={fm}  telescope={tel}  \
+                     defeq-hit={dh} defeq-miss={dm} defeq-size={ds}",
                     ratio = n as f64 / d.max(1) as f64,
                     depth = self.defeq_depth,
                     fh = fc.hits,
                     fm = fc.misses,
                     tel = self.frames.len(),
+                    dh = dc.hits,
+                    dm = dc.misses,
+                    ds = self.defeq_cache.len(),
                 );
             }
+        }
+        // **The decision cache.** See [`Checker::defeq_cache`]'s conditions;
+        // `cacheable` is the conjunction of those readable off the call, and
+        // the last is checked on the way out.
+        //
+        // **Both sides closed, and that is what makes the key the pair
+        // alone.** `mini::Expr` is de Bruijn, so an expression with a loose
+        // `bvar` names a judgement only together with the telescope — but a
+        // *closed* one names the same judgement under every telescope, so
+        // nothing about the context has to enter the key or be maintained.
+        //
+        // The alternative was built first and measured, and it is worth
+        // recording because it looks like the more general design and is
+        // strictly worse. Interning the telescope's identity (parent identity
+        // plus one type, one `u32` per binder) and keying every pair by it
+        // gave **19 176 263 distinct contexts against 1 230 distinct pairs**,
+        // an **8 %** hit rate, the cap reached at 40 M calls, and ~3 % of the
+        // profile spent in its own interning table. The telescope is deep and
+        // its contents change at every instantiation, so keying a judgement by
+        // a context the judgement does not mention invents a fresh key per
+        // visit. Restricting to closed pairs took the same run to **97.5 %**
+        // and deleted the apparatus.
+        let cacheable =
+            tm1.is_none() && tm2.is_none() && e1.num_loose_bvars() == 0 && e2.num_loose_bvars() == 0;
+        // `lhs` rides in the key rather than restricting the population.
+        // Requiring `Lhs::Unknown` was measured to drop 45 M of the 60 M
+        // decision-only calls on this declaration — the doc claim that every
+        // decision-only caller passes `Unknown` is false, and most of them
+        // pass `Type`.
+        let key = (*e1, *e2, matches!(lhs, Lhs::Type));
+        if cacheable {
+            if let Some(ev) = self.defeq_cache.get(&key) {
+                crate::mini::census::note_defeq_cache(true);
+                return Ok(Conv { to: *e2, ev: ev.clone() })
+            }
+            crate::mini::census::note_defeq_cache(false);
         }
         self.defeq_depth += 1;
         if self.defeq_depth > max_depth() {
@@ -3991,6 +4095,17 @@ impl<'e, 'i> Checker<'e, 'i> {
         let attempt = self.def_eq_ev(e1, tm1, e2, tm2, lhs);
         self.defeq_depth -= 1;
         let ev = attempt?;
+        // **The fourth condition, and the one that makes the cache unable to
+        // lie about evidence: only an `Ev` that states nothing is stored.** A
+        // `Gap` is not a theorem, so replaying one under a different
+        // instantiation cannot publish anything that was not re-derived. The
+        // `!cert` path of [`Checker::def_eq_ev`] mints `no-endpoint`
+        // throughout and so always lands here, but this is a *check* rather
+        // than an appeal to that, and a future route that threaded a theorem
+        // through a decision-only call would simply stop being cached.
+        if cacheable && ev.thm().is_none() && self.defeq_cache.len() < DEFEQ_CACHE_CAP {
+            self.defeq_cache.insert(key, ev.clone());
+        }
         if asked {
             if let Some(ip) = self.ip() {
                 ip.note_conv(&ev);
@@ -5663,6 +5778,66 @@ mod tests {
         );
         // A rejection is still a rejection, and it needs no evidence.
         assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err());
+    }
+
+    /// **`num_loose_bvars` is what [`Checker::defeq_cache`]'s key rests on**,
+    /// so it is pinned here rather than trusted from the arena's header.
+    ///
+    /// Three rungs, not two: a `bvar` that is *bound* inside the expression
+    /// must read `0` exactly as a constant does, and a pair of rungs cannot
+    /// tell "counts binders" from "counts occurrences". `λ. #0` is closed;
+    /// `λ. #1` reaches out one; `λ. λ. #2` reaches out one *from under two
+    /// binders*, which is the case that fails if the count is taken at the
+    /// leaf instead of at the node.
+    #[test]
+    fn num_loose_bvars_separates_closed_from_open() {
+        let prop = sort(Level::zero());
+        assert_eq!(k("X").num_loose_bvars(), 0, "a constant is closed");
+        assert_eq!(lam(prop, bvar(0)).num_loose_bvars(), 0, "λ. #0 binds its own variable");
+        assert_eq!(lam(prop, bvar(1)).num_loose_bvars(), 1, "λ. #1 reaches out one");
+        assert_eq!(
+            lam(prop, lam(prop, bvar(2))).num_loose_bvars(),
+            1,
+            "λ. λ. #2 reaches out one from under two binders"
+        );
+        // An application is the max of its parts, not either one alone.
+        assert_eq!(app(k("X"), lam(prop, bvar(1))).num_loose_bvars(), 1);
+    }
+
+    /// **The decision cache answers the second call, and answers it the same
+    /// way** — in both directions, because a cache that only ever said "equal"
+    /// would pass a test that asked only about a pair that is equal.
+    ///
+    /// `sel X Y Z =?= Y` holds through δ and three βs; `sel X Y Z =?= X` does
+    /// not. Both are asked twice with **no endpoints**, which is the population
+    /// the cache serves, and the second ask of each must agree with the first.
+    /// The counter is read across the pair of asks so that the hit is observed
+    /// and not merely assumed from the verdict.
+    #[test]
+    fn the_decision_cache_answers_the_second_ask_the_same_way() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::mini::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        let before = crate::mini::census::defeq_cache().hits;
+        assert!(c.assert_def_eq(&e, None, &k("Y"), None).is_ok(), "δ then three βs");
+        let after_first = crate::mini::census::defeq_cache().hits;
+        assert!(c.assert_def_eq(&e, None, &k("Y"), None).is_ok(), "and again");
+        let after_second = crate::mini::census::defeq_cache().hits;
+        assert_eq!(
+            after_second - after_first,
+            1,
+            "the second ask of an equal pair is served by the cache"
+        );
+        assert!(after_first >= before);
+
+        // **The negative is not cached, and must not become positive.** An
+        // `Err` here is overloaded with budget refusals, so it is never
+        // stored; asking twice must reject twice.
+        assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err(), "the wrong argument");
+        assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err(), "still the wrong argument");
     }
 
     /// **A δ-redex inside an argument, under a binder, certified** — the

@@ -388,6 +388,22 @@ pub enum Expr {
 }
 
 impl E {
+    /// **How many enclosing binders this expression reaches out to**, read off
+    /// the arena node in O(1) rather than walked.
+    ///
+    /// `checker`'s arena stores it on every node that can have one (`App`,
+    /// `Pi`, `Lambda`, `Let`, `Proj`), exactly as Lean's `expr` header does.
+    /// Zero means *closed*: the expression denotes the same judgement under
+    /// every telescope, which is what
+    /// [`Checker::defeq_cache`](crate::mini::kernel::Checker) keys on.
+    ///
+    /// Not [`has_bvar`], which is a recursive walk answering a different
+    /// question (does index `i` occur) and which deliberately does not look
+    /// inside a `Proj`.
+    pub fn num_loose_bvars(&self) -> u16 {
+        crate::mini::arena::read_expr(self.0).num_loose_bvars()
+    }
+
     /// One level of structure.
     pub fn view(&self) -> Expr {
         match crate::mini::arena::read_expr(self.0) {
