@@ -57,14 +57,24 @@
 //!
 //! The `∀` half — the checker's `prop_infos`/`prop_by_chi` and `mini`'s
 //! `conds`/`cond_by_sym`, ~545 more duplicate mints — is a second table on this
-//! same pattern and is deliberately not in this one. It has a hazard `Π` does
+//! same pattern and is still not in this one. It used to have a hazard `Π` does
 //! not: the checker's `build_cond` takes the domain parameter at the
-//! *canonical* slot `hole_var(k)`, while `mini`'s `cond_site` takes a
-//! `fresh_var()`. The keys still agree (the key is the fibre skeleton, which
-//! mentions neither), but `phi` and `params` do not, so merging the two needs
+//! *canonical* slot `hole_var(k)`, while `mini`'s `cond_site` took a
+//! `fresh_var()`. The keys agreed either way (the key is the fibre skeleton,
+//! which mentions neither), but `phi` and `params` did not, so the merge needed
 //! `mini` moved onto the canonical slot first — a behavioural change to a
-//! derivation, not a table move. Doing it inside this tranche would have made
-//! one commit that both merges a table and alters a proof.
+//! derivation, not a table move, and doing it inside this tranche would have
+//! made one commit that both merges a table and alters a proof.
+//!
+//! **That move has landed on its own**, so what is left is a pure table move.
+//! `Interp::cond_site` now takes its domain at `hole_var(k)` — free by the same
+//! argument `build_cond` makes, since the skeleton only ever uses
+//! `hole_var(0..k)` — and the two constructions are now parameter for
+//! parameter the same. It was measured to be neutral in isolation, which is
+//! what a prerequisite should be: `cargo test -p nanoda_lib` 480/0 unchanged,
+//! and 142.418 G → 142.416 G instructions:u over the 91-file tutorial corpus
+//! (−0.001 %, one fewer variable minted per `∀` skeleton and nothing else).
+//! The ~545 mints are the merge's to collect, not this move's.
 //!
 //! And `Shared::undet_syms` stays a third, checker-only table, for the reason
 //! its own doc gives: one skeleton can sit under both a decided and an

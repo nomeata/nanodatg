@@ -2660,7 +2660,16 @@ impl Interp {
 
         // `φ(h⃗, A) := ∀x. (x ∈ A → • ∈ b(h⃗, x))`, with the binder slot the
         // canonical one, so that one body shape gives one formula.
-        let a_var = self.fresh_var();
+        //
+        // **The domain slot is canonical too**, and that is what lets this
+        // table be merged with the checker's `prop_infos`. `TgBackend::build_cond`
+        // has always taken its domain at `hole_var(k)`; this took a
+        // `fresh_var()`, so the two agreed on the key (the fibre skeleton
+        // mentions neither) and disagreed on `phi` and `params` — see
+        // `crate::pi_store`'s header, where the `∀` merge is booked. `hole_var(k)`
+        // is free by the same argument `build_cond` makes: `skeleton` only ever
+        // uses `hole_var(0..k)`, so the slot above them is untouched.
+        let a_var = self.hole_var(k);
         let mut bargs: Vec<Term> = xs[..k].iter().map(|v| Term::var(*v)).collect();
         bargs.push(Term::var(self.x_canon));
         let bx = self.mk(b, bargs);
