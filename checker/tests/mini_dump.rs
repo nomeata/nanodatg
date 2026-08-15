@@ -596,9 +596,32 @@ fn a_store_that_gained_a_theorem_is_no_longer_printed_as_absent() {
             "IndexedDepRecursor::iota[{i}] is built and must be printed as a theorem:\n{out}"
         );
     }
+    // **This assertion used to name two reason strings and could not fail.**
+    // It read `!out.contains("has no `iota` field") && !out.contains("neither
+    // built nor tested")`, and neither literal existed anywhere in `checker/`
+    // any more — `dump.rs` had been reworded to "the rule was built with no
+    // constructors" / "build attempted and failed" / "not built — never asked
+    // for". No run could emit either string, so no mutation could trip it: it
+    // was the exact defect the header above warns against, one line below the
+    // warning.
+    //
+    // Replaced by the *shape*, which a rewording cannot satisfy: an absence
+    // renders as `(why)` in the body column (`dump.rs::render_group`), so a row
+    // is denied iff its body opens with a parenthesis.
+    //
+    // Pointed at `value-motive rec`, which is the row **nothing else in this
+    // test reaches**. The `value-motive ι` rows are already covered live by the
+    // `thm(…)` loop above — any mutation that prints one as an absence trips
+    // that loop first, so asserting their non-absence here would be shadowed
+    // in turn.
+    let denied = |label: &str| {
+        out.lines().map(str::trim_start).filter_map(|l| l.strip_prefix(label)).any(|rest| {
+            rest.trim_start().starts_with('(')
+        })
+    };
     assert!(
-        !out.contains("has no `iota` field") && !out.contains("neither built nor tested"),
-        "the dump is still denying a store that exists:\n{out}"
+        !denied("value-motive rec"),
+        "the value-motive eliminator's own typing is printed as an absence, and it is stored:\n{out}"
     );
     assert!(
         thm("rec abbrev RBTree.rec"),
