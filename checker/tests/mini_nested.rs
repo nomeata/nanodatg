@@ -1168,6 +1168,178 @@ fn recognise(fixture_name: &str) -> Vec<(String, Result<usize, String>)> {
     out
 }
 
+/// Load a fixture, install it, and hand back the whole [`Recognised`] — the
+/// same three lines [`recognise`] opens with, for the tests below that assert
+/// on the tables rather than on the row summary.
+fn recognised(
+    fixture_name: &str,
+) -> (Environment, nanoda_lib::mini::nested_splice::Recognised) {
+    let opts = LoadOptions { nested: true, mutual: true, ..Default::default() };
+    let loaded = load_with(&fixture(fixture_name), opts).expect("load");
+    let mut env = Environment::empty();
+    for d in &loaded.decls {
+        nanoda_lib::mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+    }
+    let r = nanoda_lib::mini::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
+    (env, r)
+}
+
+/// `a.b.c`.
+fn dot3(a: &str, b: &str, c: &str) -> Name { Name::str(&dot(a, b), c) }
+
+/// **The recognition reads the external producer's names, and this is the
+/// input that says so.**
+///
+/// `tool_nested_keying.ndjson` is `lean-inductive-models` (HEAD `5a9a70f`)
+/// filtering the *same* Lean source as `nested_keying.ndjson` beside it. It is
+/// checked in as the producer's output and has **no `.lean` beside it on
+/// purpose**: `scripts/export-fixture.sh` finds every `.lean` under the fixture
+/// directory recursively and would rewrite the export with `modelgen`'s, which
+/// is the one thing this fixture must not become. Its source is
+/// `vendor/lean-inductive-models/test/fixtures/inductive-models/nested_keying.lean`
+/// and regenerating it means running that repository, not this script.
+///
+/// # What it asserts that a total cannot
+///
+/// A rename that stopped recognising and started declining moves no total: the
+/// declarations are still counted, just in the `untranslated` column instead.
+/// So the assertions here are **adoption**, split by which producer's names
+/// were read — `modelled_tool = 2` and `modelled_legacy = 0` — plus the keyed
+/// name itself, which is the only thing that distinguishes "recognised the
+/// tool's tower" from "recognised something".
+///
+/// Before this suite's rename the same file gave `Tree: no nested model in the
+/// export` and `UTree: nested model over a later declaration`, with
+/// `untranslated declarations=2`; it is now 0.
+///
+/// # `UTree` is still the fixture's point, from the other side
+///
+/// The file declares its own `UTree._model.self`. Under the legacy scheme that
+/// is the name the carrier wants and `modelgen` declines `UTree` outright;
+/// under the tool's it is an unrelated definition and `UTree` models normally,
+/// which is what the producer's own fixture prose now says. So the assertion
+/// that matters is not that `UTree` is keyed but **what it is keyed to**: had
+/// the scheme decision preferred the legacy tower, or fallen back to it after
+/// the tool's tower resolved, `⟦UTree⟧` would be `⟦N⟧` and every counter in
+/// this file would read as if the model worked. That is the `_auxCarrier`
+/// failure and the last assertion is the one that catches it.
+#[test]
+fn the_recognition_reads_the_external_tools_names() {
+    let (_, r) = recognised("tool_nested_keying");
+    assert_eq!(
+        recognise("tool_nested_keying"),
+        vec![
+            ("Tree".to_string(), Ok(5)),
+            ("UTree".to_string(), Ok(5)),
+        ],
+    );
+    assert_eq!((r.seen, r.modelled), (2, 2));
+    assert_eq!(
+        (r.modelled_tool, r.modelled_legacy),
+        (2, 0),
+        "both towers must be read as the external producer's, not as modelgen's",
+    );
+    // The carrier, by the name the producer actually emits.
+    assert_eq!(
+        r.model_of.get(&(Name::simple("UTree"), Vec::new())),
+        Some(&dot("UTree", "_model")),
+        "⟦UTree⟧ must be the tool's carrier and never the file's own UTree._model.self",
+    );
+    assert_eq!(
+        r.model_of.get(&(Name::simple("Tree"), Vec::new())),
+        Some(&dot("Tree", "_model")),
+    );
+    // A constructor is keyed off **its own** name and not off an index into
+    // `Tree`'s constructor array — the difference the rename is about.
+    assert_eq!(
+        r.model_of.get(&(dot("Tree", "node"), Vec::new())),
+        Some(&dot3("Tree", "node", "_model")),
+    );
+    // And a rule off its recursor's, with the index it does still spend.
+    let iota: Vec<&Name> = r
+        .model_iota
+        .iter()
+        .filter(|((key, ctor), _)| key.0 == dot("Tree", "rec") && *ctor == dot("Tree", "leaf"))
+        .map(|(_, thm)| thm)
+        .collect();
+    assert!(
+        !iota.is_empty() && iota.iter().all(|t| **t == Name::str(&dot3("Tree", "rec", "_model"), "iota_0")),
+        "Tree.rec's rule on Tree.leaf is Tree.rec._model.iota_0, got {iota:?}",
+    );
+}
+
+/// **The legacy tower is still read, and this says which fixtures read it.**
+///
+/// The companion to [`the_recognition_reads_the_external_tools_names`], and it
+/// exists for the failure that test cannot see: a scheme decision that always
+/// answered [`Scheme::Tool`] would leave every `modelgen`-filtered export —
+/// which is every other fixture here, and `init-prelude` — declining, and the
+/// split above would still read `(2, 0)` because it is measured on a different
+/// file. Asserting `modelled_legacy` is non-zero on this side is what pins the
+/// two arms apart.
+#[test]
+fn the_legacy_tower_is_still_read_where_modelgen_wrote_one() {
+    let (_, r) = recognised("nested_keying");
+    assert_eq!(
+        (r.modelled_tool, r.modelled_legacy),
+        (0, 1),
+        "modelgen's tower must be read as modelgen's",
+    );
+    assert_eq!(
+        r.model_of.get(&(Name::simple("Tree"), Vec::new())),
+        Some(&dot3("Tree", "_model", "self")),
+    );
+}
+
+/// **The tool's carrier is adopted for its statement and not for its
+/// spelling**, which is the module header's "why this is a table and not a
+/// name rule" under the new names.
+///
+/// The mutation is the smallest one that separates the two: `Tree._model` keeps
+/// its name and its position and is given a type that is not `Tree`'s. A name
+/// rule keys `⟦Tree⟧` to it regardless and reports a working model; the check
+/// declines, by name, at the carrier.
+///
+/// **Where it dies matters**, and it is not where the sibling mutations die.
+/// Removing the carrier gives `no nested model in the export`
+/// ([`a_nested_declaration_with_no_model_declines_saying_so`]) and retyping a
+/// rule gives the ι reason; only this one reaches
+/// `nested model carrier does not state the declaration's type`. It also pins
+/// the *scheme decision*, which is made on this exact check: with the tool's
+/// carrier no longer well-formed the decision falls to the legacy scheme, and
+/// `Tree._model.self` is not in this file — so the reason that surfaces is the
+/// legacy scheme's `no nested model in the export`, not the tool scheme's
+/// carrier reason. Asserting the *carrier* reason instead would pass for the
+/// wrong reason and is the assertion this test does not make.
+#[test]
+fn a_tool_carrier_that_states_something_else_is_not_adopted() {
+    let opts = LoadOptions { nested: true, mutual: true, ..Default::default() };
+    let loaded = load_with(&fixture("tool_nested_keying"), opts).expect("load");
+    let mut env = Environment::empty();
+    for d in &loaded.decls {
+        nanoda_lib::mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+    }
+    // `Tree._model : Type`, retyped to `Type → Type`. Still a well-formed type,
+    // still declared under exactly the name the producer emits, so a keying
+    // spelled as a name rule cannot tell the difference.
+    let carrier = dot("Tree", "_model");
+    let sort1 = nanoda_lib::mini::expr::sort(Level::zero().succ());
+    retype(&mut env, &carrier, forall(sort1, sort1));
+    let r = nanoda_lib::mini::nested_splice::recognise(&env, &loaded.decls, &loaded.schedule);
+    assert_eq!(
+        r.nested.get(&Name::simple("Tree")).and_then(|n| n.why),
+        Some("no nested model in the export"),
+        "a carrier that states something else must not be keyed",
+    );
+    assert!(
+        !r.model_of.contains_key(&(Name::simple("Tree"), Vec::new())),
+        "⟦Tree⟧ must have no keying at all",
+    );
+    // The *other* declaration is untouched, so this is a decline about `Tree`
+    // and not a run that stopped recognising everything.
+    assert_eq!((r.modelled, r.modelled_tool), (1, 1));
+}
+
 /// **A `_model` tower that states something else is a decline and not a
 /// keying**, and this is the input that says so.
 ///

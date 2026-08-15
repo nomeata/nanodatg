@@ -252,6 +252,22 @@ fn main() {
         for m in &f.recursor_shape_mismatches {
             println!("recursor-shape\t{m}");
         }
+        // **Adoption, split by which producer's names were read.** Printed only
+        // where there is something to say, so it does not disturb the output of
+        // every file that has no nested declaration.
+        //
+        // It exists because a recogniser that stops recognising declines
+        // instead, and a decline moves no total on this line or any other — the
+        // declarations are simply counted in the `untranslated` column. `models`
+        // is what says the recognition did work; `tool`/`legacy` is what says
+        // *whose* names it read, which is the only thing that separates
+        // `lean-inductive-models`' output from `modelgen`'s.
+        if f.nested_seen > 0 {
+            println!(
+                "nested\tseen={}\tmodels={}\ttool={}\tlegacy={}",
+                f.nested_seen, f.nested_models, f.nested_models_tool, f.nested_models_legacy
+            );
+        }
         // The §6.2 clause census: what the remaining threading work is made of.
         let (done, todo) = out.census.split();
         print!("clauses\tinterpreted={done}\tremaining={todo}");
