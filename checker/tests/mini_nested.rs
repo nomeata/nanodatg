@@ -1268,6 +1268,66 @@ fn the_recognition_reads_the_external_tools_names() {
     );
 }
 
+/// **A polymorphic declaration's type former and constructors are keyed at
+/// every instantiation, not at the empty one.**
+///
+/// `tool_poly_nested.ndjson` is `lean-inductive-models` over the producer's
+/// `poly_nested_used.lean`, filtered with `--nested --no-simple --no-mutual
+/// --no-basic` so it carries **one** model family and 22 declarations rather
+/// than the whole spliced `_wcore` prelude. Like `tool_nested_keying` it has no
+/// `.lean` beside it, for the same reason.
+///
+/// # Why this fixture and not one of ours
+///
+/// Every nested fixture this repository had was universe-**mono**morphic —
+/// `PT (α : Type)` is parameterised, which is a different thing — so the old
+/// `σ = []` keying was indistinguishable from a correct one in the whole suite.
+/// The producer's fixture exists precisely to break that tie and its own
+/// header says why it uses **three** universes: "two copies cannot distinguish
+/// a per-instantiation model from a model emitted once per *something else that
+/// happens to come in pairs*". So the assertion is on the exact set
+/// `{[0], [1], [2]}` — a mutation that keyed only the declaration's own σ, or
+/// only the pre-pass's default `[0]`/`[1]`, has to move it.
+///
+/// # What it caught, end to end
+///
+/// Before the fix, on this fixture's unreduced sibling: `nested seen=1
+/// models=1 tool=1` — the tower recognised and counted — with
+/// `ind-spec(PTree: nested model not keyed here)=3`, one per instantiation.
+/// **A recognition that succeeds and keys nothing usable is the failure this
+/// asserts against**, and no total moved when it happened.
+#[test]
+fn a_polymorphic_declarations_model_is_keyed_at_every_instantiation() {
+    let (_, r) = recognised("tool_poly_nested");
+    assert_eq!((r.seen, r.modelled_tool, r.modelled_legacy), (1, 1, 0));
+    let sigmas = |n: Name| {
+        let mut v: Vec<Vec<u32>> = r
+            .model_of
+            .keys()
+            .filter(|(k, _)| *k == n)
+            .map(|(_, s)| s.clone())
+            .collect();
+        v.sort();
+        v
+    };
+    let want = vec![vec![0u32], vec![1u32], vec![2u32]];
+    assert_eq!(
+        sigmas(Name::simple("PTree")),
+        want,
+        "the type former must be keyed at each of the three universes it is used at",
+    );
+    assert_eq!(
+        sigmas(dot("PTree", "node")),
+        want,
+        "a constructor shares the declaration's universe parameters and its σ set",
+    );
+    // And to the producer's names, so this is not passing on a legacy tower.
+    assert_eq!(
+        r.model_of.get(&(Name::simple("PTree"), vec![2u32])),
+        Some(&dot("PTree", "_model")),
+    );
+}
+
 /// **The legacy tower is still read, and this says which fixtures read it.**
 ///
 /// The companion to [`the_recognition_reads_the_external_tools_names`], and it
