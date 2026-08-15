@@ -186,26 +186,27 @@ too), so the file demands its own re-baseline. Gaps fell 31 → 9.
 is why it resisted a targeted read. Measured on the same sweep as §3.5, on
 `nanoda_bin`:
 
-| checkpoint | 076 gaps |
-| --- | ---: |
-| `3c4323b` … `9b691cb` | **31** |
-| **`cc5dfd5`** | **24** |
-| `4fc2f25` … `e23e9ac` | 24 |
-| `b747f80` … master | **9** |
+**Attributed and re-based.** It fell in **two** tranches, which is why a single
+attributing commit could not be found and why the previous seat was right to
+refuse to move it:
 
-So it fell in **two** tranches, and the first is pinned to a single commit:
-31 → 24 at **`cc5dfd5` "checker: replay exact lazy delta evidence"**, and
-24 → 9 somewhere after `e23e9ac`. The other three budgets are exact at master
-(075 = 3, 116 = 10, 081 = 1), so 076 is the only stale one.
+| commit | 076 gaps | what moved |
+| --- | ---: | --- |
+| `3c4323b` … `9b691cb` | 31 | — |
+| **`cc5dfd5`** *(replay exact lazy delta evidence)* | **24** | derived 501 → **510**, conditional derivations 126 → 134 with all the extra accounted for by a rule, escapes flat at 17 |
+| `4fc2f25` … `1fe03a0` | 24 | — |
+| **`a29aad9`** *(equality-query scope provenance at the judgement boundary)* | **9** | **entirely escapes, 17 → 2**; conditional derivations byte-identical at 134 made / 0 copies / 117 by a rule |
+
+Nine more theorems and seven fewer gaps at the first; at the second the
+certificates were always being built and their `Γ` is now right, so fifteen
+assumptions that used to reach the boundary are discharged instead. On
+`init-prelude` `a29aad9` is the cleanest commit in the whole range — **no row
+rose**, and the entire −1 221 on the total is that one escape row.
 
 A previous seat's hypothesis that `5bf8342` ("the dependent arm takes the whole
 origin") closed it is **refuted**: 076 is still 31 at `73dcc53` and `6483199`,
-both of which are after `5bf8342`.
-
-Re-basing this one is a **two-sided** ratchet on a fixture, so lowering it to 9
-while only half of it is attributed would record a number and not a reason.
-Left, with the second tranche bracketed to `e23e9ac`..`b747f80` so the remaining
-work is a bisect of ten commits rather than of 134.
+both of which are after `5bf8342`. The other three budgets are exact at master
+(075 = 3, 116 = 10, 081 = 1). **`tg_tutorial` is now 35/35.**
 
 **`mini_envshare_tg`** (2) and **`mini_route_tg`** (1) — all three are the same
 finding on the same fixtures, and all three are convergence rather than a
@@ -470,13 +471,17 @@ step, and that is worth more than 15.8 s. Recorded and left.
 2. ~~The two adverse ratchets~~ — **resolved 2026-08-15** (§3.5). Both are
    population changes, both re-based with the trade written, both totals
    tightened, and a per-row ledger guard added.
-3. **The three stale crossing assertions** (§3.2) — still open. The §3.5 ledger
-   diff could not attribute them: they are counters on the **unified** checker
-   (`checker.rs`, mini publication) and every number in §3.5 is `nanoda_bin`'s,
-   which never runs mini. They need their own measurement, and the candidates
-   are named in §3.2.
-4. **The `076_listRecReduction` budget** (§3.2) — bracketed to two tranches,
-   not re-based. See §3.2 for the bracket.
+3. **The three stale crossing assertions** (§3.2) — still open, and **two named
+   candidates are now refuted by measurement**. `mini_envshare_tg` was run at
+   `a29aad9^`, `a29aad9`, `887fa10^` and `887fa10`: it fails the same 2 at all
+   four, so neither commit is where those counters converged. The change is
+   earlier than `1fe03a0`. It could not be attributed from §3.5's ledger diff
+   because these are counters on the **unified** checker (`checker.rs`, mini
+   publication) and every number in §3.5 is `nanoda_bin`'s, which never runs
+   mini — so they need a measurement on their own binary. The remaining
+   suspects are the mini-unification commits `4e86d46`…`02ab90f`.
+4. ~~The `076_listRecReduction` budget~~ — **resolved 2026-08-15** (§3.2), two
+   tranches, both attributed, re-based 31 → 9 with the derivation written.
 5. **The gate list is the real finding, and it is not fixed.** §3.5's two
    ratchets each fired correctly the first time they were run; nobody ran them
    for four days. `ci/check.sh`'s step `tests (tg backend)` does cover

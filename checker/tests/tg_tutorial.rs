@@ -317,7 +317,27 @@ const HAS_GAPS: &[&str] = &["075_nRecReduction", "076_listRecReduction"];
 /// pinned here.
 const GAP_BUDGET: &[(&str, u64)] = &[
     ("075_nRecReduction", 3),
-    ("076_listRecReduction", 31),
+    // **31 → 9 on 2026-08-15, and it is two tranches, not one** — which is why
+    // the previous seat could not attribute it and correctly refused to move it.
+    // Measured per-commit on `nanoda_bin`, the binary this table reads:
+    //
+    // * **31 → 24 at `cc5dfd5`** ("replay exact lazy delta evidence"). Real
+    //   kernel theorems on this file 501 → **510**, conditional derivations
+    //   126 → 134 with *all* of the extra ones accounted for by a rule, and
+    //   escapes flat at 17. Nine more theorems, seven fewer gaps: the replayed
+    //   delta evidence discharges steps that used to have no certificate.
+    // * **24 → 9 at `a29aad9`** ("equality-query scope provenance at the
+    //   judgement boundary"). Here the fall is **entirely escapes**: 17 → 2,
+    //   with conditional derivations byte-identical at 134 made / 0 copies /
+    //   117 accounted for by a rule. The certificates were always being built;
+    //   their `Γ` is now right, so fifteen assumptions that used to reach the
+    //   boundary are discharged instead. On `init-prelude` the same commit is
+    //   the cleanest in the range — **no row rose**, and the whole −1 221 on
+    //   the total is that one escape row.
+    //
+    // A hypothesis that `5bf8342` closed this file is **refuted**: 076 is still
+    // 31 at `73dcc53` and `6483199`, both after it.
+    ("076_listRecReduction", 9),
     ("116_rtreeRecReduction", 10),
     // `101_proofIrrelevanceWhnf` was here at 5 and is now at zero — see
     // [`PROOF_IRRELEVANCE_DERIVED`], which pins the stronger claim.
