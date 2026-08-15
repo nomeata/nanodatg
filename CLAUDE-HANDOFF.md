@@ -110,26 +110,28 @@ not mistake that historical stage for the current architecture.
 
 Measured on `master` `d73c94f`, verified independently rather than inherited.
 
-### The two populations
+### The three populations
 
-| fixture | gaps | | Lean's own exports |
-| --- | ---: | --- | --- |
-| `nat_char_equations` | 61 | | 91 exports, **16** carry gaps, **168** total |
-| `mutual_aux_encoding` | 49 | | `076_listRecReduction` 45 |
-| `ctor_abbrev_major` | 23 | | `077_RBTree.id_spec` 28 |
-| `proj_reduced_carrier` | 13 | | 74 exports are **fully certified** |
-| `quot_lift_reduction` | 12 | | |
-| `proj_stuck_subject` | 6 | | |
-| `proj_reduced_subject` | 2 | | |
-| `field_in_u0_by_carrier` | 0 | | |
+| fixtures (14 of them carry gaps, **215** total) | | Lean's 91 exports (**16** carry gaps, **168** total) |
+| --- | --- | --- |
+| `nat_char_equations` 61 · `mutual_aux_encoding` 49 · `ctor_abbrev_major` 23 · `proj_reduced_carrier` 13 · `quot_lift_reduction` 12 · `delta_inside_a_proof` 11 · `nested_roundtrip` 11 · `transport_through_eq_rec` 11 · `proj_stuck_subject` 6 · `whnf_of_a_proof` 6 · `ground_unit_subsingleton` 4 · `mono_prefix` 4 · `proj_reduced_subject` 2 · `reducible_ctor_binders` 2 | | `076_listRecReduction` 45 · `077_RBTree.id_spec` 28 · **74 exports fully certified** |
 
-**The exports are the completeness claim; the fixtures are the development
-signal.** Completeness is measured against Lean, never against fixtures we wrote.
-Where they disagree, believe the exports: `proj_reduce` was worth −74 on a
-fixture and **zero** on the exports.
+`budget_decline` is excluded deliberately: it is 2100 nested `succ`s built to
+exhaust a budget, a pathology fixture rather than a certification target.
 
-Movement over the 94 commits: exports **217 → 168**, `nat_char_equations`
-152 → 61, `mutual_aux_encoding` 96 → 49, `ctor_abbrev_major` 46 → 23,
+**And the third population is the one that matters: `init-prelude`, at 10 262
+gaps, which nobody ranked until 2026-08-15.** It is **not** a scaled-up version
+of the other two — its rank 1 is worth more than the entire small-population
+frontier. See `ORIGIN-RANKING.md`.
+
+**The exports and `init-prelude` are the completeness claim; the fixtures are
+the development signal.** Completeness is measured against Lean, never against
+fixtures we wrote. Where they disagree, believe the larger population:
+`proj_reduce` was worth −74 on a fixture and **zero** on the exports, while the
+`Nat` bridge was worth −11 on a fixture and **−3 780** on `init-prelude`.
+
+Movement over the arc: exports **217 → 168**, `nat_char_equations` 152 → 61,
+`mutual_aux_encoding` 96 → 49, `ctor_abbrev_major` 46 → 23,
 `proj_reduced_carrier` 16 → 13.
 
 ### The init-prelude frontier
@@ -280,30 +282,53 @@ The section below this one is **history** — it described the carrier fixture a
 16 gaps and the tranche that took it to 13. Read it for the reasoning, not the
 numbers. What remains now, in the order the measurements put it:
 
-1. **The escape population is the terminal wall.** A floor analysis found that
-   with every *hooked* origin closed, 89 % of what survived were escapes —
-   reachable by no origin tranche. Since then the **ambient-local** category was
-   exhausted corpus-wide (scope provenance) and the **raw-beta** category was
-   priced at **44 gaps tree-wide in the perfect limit**, across ten shape-groups
-   needing different constructions, and deliberately abandoned. Closure there is
-   brutally nonlinear: the largest single shape-group is 54 atoms present in 12
-   of 16 certificates and closes **one**.
-2. **`076_listRecReduction`'s −35 is behind a *layer*, not a wall.** `fire_dep`'s
-   parameterised path is a run of constructions each written for `np == 0`, and
-   the 37-gap sub-tree **migrates intact** across each rather than shrinking.
-   Three are named in `SEAM-DESIGN.md` §10, the third unexamined. The `np > 0`
-   type-former adoption was built, confirmed working end to end on `Prod` and
-   `List`, measured at **0**, and reverted. **Census the layer before building
-   anything there.**
+0. **BUILD THIS NEXT: the `Nat` bridge, measured at −3 780 on `init-prelude`.**
+   `iota: the major premise is not a constructor` is **37 % of `init-prelude`
+   from one origin**, with full acquisition and a 3 % ceiling overshoot.
+   Instrumentation (added, measured, reverted) spelled the major premise:
+   **466 of 563 firings are `Nat.ble <lit> <lit>` — ground literals** — and all
+   563 are `Nat` arithmetic or decidability. That is exactly what
+   `derived::nat::BleClauses`/`ble_transfer` conclude, and they are still called
+   only from `derived/tests/nat.rs`. **Refute first, in order:** does the
+   existing native `NatClause` already decide these and merely fail to hand TG a
+   certificate at the ι site — i.e. is this a *gate*, the shape that has caught
+   three tranches this week — and only if not, pay the `mini::Checker` seam.
+
+   This **inverts** the standing "do not build the `Nat` bridge" decision. That
+   decision was correct *about the fixture* — on `nat_char_equations` the bridge
+   is −18 and changes no theorem's status. The fixture was never the reason to
+   care.
+
+1. **The escape population is the terminal wall, and it does not decompose.**
+   Floor: 10 645 → 2 270 (79 %), of which **2 061 (91 %) are escapes** — up from
+   89 % on a tree 18× smaller. The largest shape-group carries **3 182 atoms
+   across 245 certificates and closes 6**, because a certificate closes only
+   when *every* atom goes; single-shape constructions reach 309 of 1 074 (29 %),
+   and the "thread it, don't derive it" prize is **1 gap**. Two earlier figures
+   circulated in conversation — "ten shape-groups" and "raw-beta priced at 44
+   tree-wide" — **were never written into the repo and do not reproduce**; the
+   measured counts are 23/48 groups and 61 (small) / 625 (`init-prelude`).
+   Likewise "scope provenance exhausted the ambient-local category" is not in
+   the tree: *a context local's own typing* is still the largest or
+   second-largest escape group.
+2. **`076_listRecReduction`'s −35 is behind a *layer* of twelve walls, and
+   should not be started.** `fire_dep`'s parameterised path is a run of
+   constructions each written for `np == 0` — twelve of them, ten hard and two
+   latent, **seven previously unknown** — and the 37-gap sub-tree **migrates
+   intact** across each rather than shrinking, so there is **no partial credit**:
+   0 until all ten land, then −35 on one file. The `np > 0` type-former adoption
+   was built, confirmed working end to end on `Prod` and `List`, measured at
+   **0**, and reverted.
 3. **`077_RBTree.id_spec`'s −19 is blocked on task #38** and is *not* a
    consumption: `IndexedCtor::mem_lean`'s witness protocol demands closed,
    prenex witnesses at `derived`'s own working variables, while every consumer
    holds open-scope already-instantiated theorems whose scope assumptions are
    live hypotheses and therefore cannot be generalised back.
-4. **The `Nat` bridge remains not worth building** — priced at −11 gaps and
-   **zero additional certified theorems**, because all 17 theorems in
-   `nat_char_equations` are `Eq.refl`, there are no numerals, and the `ble`/`beq`
-   theorems fail for the identical reason as the arithmetic ones.
+4. **(superseded — see item 0.)** The `Nat` bridge was priced at −11 on
+   `nat_char_equations` with zero additional certified theorems, and that
+   remains true of *the fixture*: re-measured it is −18 of 61, and 16 of the 17
+   theorems carry escapes under `*` identically to baseline. It is worth −3 780
+   on `init-prelude`, which is the population that matters.
 5. **`init-prelude`'s interpretation debt** — the `type former spine` and
    `field type uninterpretable` families listed above. This is a different kind
    of work from everything in this arc: *"what interprets a machine word and a
@@ -484,6 +509,13 @@ Keep aggregate resident memory below 50 GB and monitor it with:
 ```bash
 systemd-cgtop -m user.slice/user-1001.slice
 ```
+
+**A measurement hazard that has bitten a seat:** running the verification
+gates rebuilds `target/debug/checker` **without** `stepcount` and overwrites the
+census binary, so a sweep run afterwards silently reports baselines. Build the
+instrumented binary to a distinct path, or re-build with the feature before
+every sweep. Release and debug were cross-checked and agree to the digit, so
+either profile is fine as long as the feature is actually on.
 
 This is a shared machine. Use `perf stat -e instructions:u` rather than wall
 time for performance comparisons. Put large temporary artifacts under the
