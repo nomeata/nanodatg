@@ -23803,7 +23803,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             self.consume(&cert).map(|cert| (subject, cert))
         });
         let computed = self.derive_projection_computation(ctx, redex, reduct, reduced_subject);
-        #[cfg(feature = "stepcount")]
         if let Err(e) = computed {
             let shape = match ctx.read_expr(redex) {
                 Expr::Proj { .. } => "redex=Proj",
@@ -23819,7 +23818,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             *PROJ_DECLINE
                 .lock()
                 .expect("proj_decline poisoned")
-                .entry(format!("{shape}  {e}"))
+                .entry((shape, e))
                 .or_insert(0u64) += 1;
         }
         if let Ok(out) = computed {
@@ -24334,8 +24333,21 @@ static PROJ_STRUCTS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
 /// all 14 `PProd` sites on `nat_char_equations` exited at the *first* line of
 /// the computation, 12 of them because the redex is an application rather than
 /// a projection at all and 2 because the subject had not been reduced.
-#[cfg(feature = "stepcount")]
-static PROJ_DECLINE: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+///
+/// **Printed unconditionally, and keyed on two `&'static str`s so it can be.**
+/// This was `stepcount`-only because the key was `format!("{shape}  {e}")` — a
+/// `String` built at every decline. Both halves are static (four redex shapes,
+/// the fixed `"projection: …"` reason set), so the allocation was the only cost
+/// and it is gone: what remains is one lock and one lookup per decline, ~700 on
+/// `init-prelude`.
+///
+/// The gating mattered. `certify.rs`'s [`crate::certify::Admit::ProjRed`] says
+/// `proj_reduce` is a label "a rule mints about itself rather than about what
+/// stopped it" and that "a reader of the report can act on those and cannot act
+/// on these" — but the actionable split **already existed** behind this flag and
+/// nobody read it. The complaint was about the *report*, not about the
+/// information, and this is the two-line fix it was waiting for.
+static PROJ_DECLINE: std::sync::Mutex<std::collections::BTreeMap<(&'static str, &'static str), u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 /// For the multi-constructor declarations: is any constructor nullary?
 /// Index 0 = yes (`t_policy` has its point), 1 = none (policy 3, declines).
@@ -24810,14 +24822,21 @@ pub fn origin_report() -> String {
             s.push_str(&format!("    {r:<96}  {n:>8}\n"));
         }
     }
-    #[cfg(feature = "stepcount")]
+    // **Unconditional.** `gap: proj_reduce` is one of the largest rows in the
+    // ledger — 678 on `init-prelude`, 125 across `undecidability/` — and on its
+    // own it tells a reader nothing they can act on. These lines are what turn
+    // it into work: on both of those populations the dominant entry is
+    // `redex=App(Proj,..)  projection: the redex is not a projection`, because
+    // `derive_projection_computation` requires a bare `Expr::Proj` and declines
+    // an *applied* projection at its first line.
     {
         let g = PROJ_DECLINE.lock().expect("proj_decline poisoned");
         if !g.is_empty() {
             s.push_str("  …why the projection computation declined\n");
-            let mut v: Vec<(&String, &u64)> = g.iter().collect();
+            let mut v: Vec<(&(&'static str, &'static str), &u64)> = g.iter().collect();
             v.sort_by(|a, b| b.1.cmp(a.1));
-            for (r, n) in v.iter().take(30) {
+            for ((shape, why), n) in v.iter().take(30) {
+                let r = format!("{shape}  {why}");
                 s.push_str(&format!("    {r:<110}  {n:>8}\n"));
             }
         }
