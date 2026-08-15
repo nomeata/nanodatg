@@ -37,8 +37,10 @@ changed: there is now ONE build configuration.** The two columns below used to
 be **plain** (`NullCertifier`) and **`--features tg`** (the real
 Tarski–Grothendieck backend); retiring the `Certifier` trait left one backend,
 so the feature had nothing to select and was deleted at `d746251`. Every target
-is unconditional, `cargo test -p nanoda_lib` runs all fourteen, and **all 476
-tests pass**. The two suffixed suites were renamed with the feature —
+is unconditional, `cargo test -p nanoda_lib` runs all fourteen, and **all 479
+tests pass** (re-measured 2026-08-15 on master `4a2910d`; the table below sums to
+that figure, which the previous total did not — it read 476 against rows summing
+to 475). The two suffixed suites were renamed with the feature —
 `mini_envshare_tg` → `mini_envshare_cross`, `mini_route_tg` → `mini_route` —
 because a name that says "needs a special build" is how a suite is read as
 optional; `tg_tutorial` keeps its name, where "tg" is the subject.
@@ -49,12 +51,12 @@ optional; `tg_tutorial` keeps its name, where "tg" is the subject.
 | `tests/corpus.rs` | good/bad export acceptance, arena corpus | **6/6** | 40.3 s | yes |
 | `tests/tg_tutorial.rs` | **every defeq step discharged, no gaps** | **36/36** | 31.7 s | yes |
 | `tests/mini_mutual.rs` | mutual/nested encodings | **12/12** | 28.2 s | yes |
-| `tests/mini_nested.rs` | nested declaration interpretation | **20/20**, 2 ignored | 17.2 s | yes |
+| `tests/mini_nested.rs` | nested declaration interpretation | **23/23**, 2 ignored | 17.3 s | yes |
 | `tests/mini_tutorial.rs` | tutorial corpus under mini | **16/16** | 16.4 s | yes |
 | `tests/mini_dump.rs` | model dump shapes | **12/12** | 16.3 s | yes |
 | `tests/unified_cli.rs` | the unified CLI's ratchets | **6/6** | 5.4 s | yes |
 | `tests/mini_nat_equations.rs` | the characteristic Nat equations | **2/2** | 4.2 s | yes |
-| `tests/mini_designed.rs` | designed-fixture behaviour, indexed seam | **34/34** | 2.2 s | yes |
+| `tests/mini_designed.rs` | designed-fixture behaviour, indexed seam | **35/35** | 2.3 s | yes |
 | `tests/mini_envshare_cross.rs` | crossing ledger, statement guards (was `mini_envshare_tg`) | **14/14**, 1 ignored | 0.3 s | yes |
 | `tests/mini_budget.rs` | declared budget declines | **1/1** | 0.3 s | yes |
 | `tests/mini_envshare.rs` | the mini-side half of the `EnvCore` seam | **6/6** | 0.3 s | yes |
@@ -62,7 +64,7 @@ optional; `tg_tutorial` keeps its name, where "tg" is the subject.
 | `tests/mini_infinitary.rs` | infinitary constructors | **1/1** | 0.2 s | yes |
 | doc-tests | prose examples in `inductive.rs`, `pretty_printer.rs`, `lib.rs` | 0, **8 ignored** | 0.0 s | yes |
 | `src/bin/*.rs` (unit) | — | 0 tests | 0.0 s | — |
-| **`cargo test -p nanoda_lib`** | **all of the above, in one command** | **476 passing** | **171.8 s** | **the gate** |
+| **`cargo test -p nanoda_lib`** | **all of the above, in one command** | **479 passing**, 13 ignored | **171.8 s** | **the gate** |
 | `kernel/tests/*` (8 files) | the trusted base: rules, Tarski, Henkin, choice | **all green** | seconds | yes |
 | `derived/tests/*` (97 files) | derived rules and constructions | **all green** | seconds | yes |
 
@@ -87,7 +89,7 @@ per-commit gate.**
 Measured twice, with the same two tests `#[ignore]`d as when the 175 s was
 taken: **`mini_nested` is 17.2 s** — 17.17 s inside a full package run and
 17.26 s standing alone. It is the *fifth* slowest target, not the first.
-**The whole package — 299 unit tests and all 14 integration suites, 476
+**The whole package — 299 unit tests and all 14 integration suites, 479
 passing — is 171.8 s.** The slowest single target is `corpus.rs` at 40.3 s,
 then `tg_tutorial` at 31.7 s and `mini_mutual` at 28.2 s. Nothing is over the
 minute; `src/lib.rs`, recorded here at 86 s, is **8.7 s**.
@@ -122,14 +124,24 @@ now unconditional, and there is one build configuration where there were two.
 
 What was to hold the *general* shape is `ci/check-test-inputs.sh`, which refuses
 a `cfg(feature)` suite in a package no `--features` step selects. **Measured
-2026-08-15: that leg — leg C — is now vacuous.** Its scan
+2026-08-15: that leg — leg C — has no subject on this tree.** Its scan
 (`grep -rlE '^#!\[cfg\(feature = ...\)\]' checker/tests`) matches **zero**
 files, so it iterates zero times; legs A and B still have subjects
 (`stepcount`/`nanoda_lib`, and kernel/derived carrying no `cfg(feature)` of
-their own), so `matrix == 3` and the script's own non-vacuity floor does not
-trip. Its `--self-test` still proves leg C *can* fire against a synthetic tree,
-so it is prospective rather than broken — but it is a leg with no subject,
-which is §2.1 item 5 arriving from the other direction. Open.
+their own).
+
+**Fixed at `cbb949f`, and the vacuity was never the defect.** A guard against a
+thing being *reintroduced* is not broken for having nothing to guard yet. What
+was broken is that all three legs incremented one `matrix`, floored once at
+`matrix == 0`, so the run printed `3 feature-matrix premises checked` over
+1 + 2 + 0 and **leg C's silence was indistinguishable from leg C having run** —
+on the leg whose entire job is catching a suite that compiles to an empty binary
+and reports `running 0 tests … ok`. Each leg now reports its own count and leg C
+prints `INAPPLICABLE` in so many words. Its `--self-test` is what proves leg C
+can still fire, against a synthetic tree the real one cannot supply; four new
+cells read the script's *output* rather than its exit code, because an exit code
+cannot distinguish "examined nothing" from "examined something and was happy".
+That is §2.1 item 5, and it is closed.
 
 ---
 
@@ -141,12 +153,12 @@ no floor on its own step list.
 
 | script | checks | status | in `ci/check.sh`? |
 | --- | --- | --- | --- |
-| `check.sh` | the aggregator: 29 steps | driver | — |
+| `check.sh` | the aggregator: 26 steps | driver | — |
 | `check-boundary.sh` | kernel trusted-boundary rules 0–7, R6′, member coverage | **OK** | yes |
 | `test-boundary.sh` | that `check-boundary.sh` can fail (~50 cells) | **was RED (2)** → OK, §3.3 | yes |
 | `check-mini-scope.sh` | R6′ for `checker/src/mini` (60 files scanned) | **OK** | yes (+ self-test) |
 | `check-mutual-blackbox.sh` | the two encoders name nothing on the evidence side | **OK** | yes |
-| `check-test-guards.sh` | no test hand-rolls a silent skip (58 call sites) | **OK** | yes (+ self-test) |
+| `check-test-guards.sh` | no test hand-rolls a silent skip (60 call sites, per directory) | **OK** | yes (+ self-test) |
 | `check-test-inputs.sh` | the feature matrix covers every declared feature | **OK** | yes (+ self-test) |
 | `check-uplift.sh` | `[profile.dev]` and `[profile.test]` uplift one inode | not run here (cargo) | yes (+ self-test) |
 | `check-arena.sh` | the arena corpus ratchet | needs the release build | yes (+ self-test) |
@@ -173,9 +185,13 @@ decided by the harness rather than inferred from output);
 
 Legs that had no floor of their own, in risk order:
 
-1. **`ci/check.sh`'s own step list** — 29 steps, each judged individually, and
-   nothing counting them. Deleting a `step` line left "all checks passed".
-   *Fixed on this branch (§3.1).*
+1. **`ci/check.sh`'s own step list** — 29 steps at the time, each judged
+   individually, and nothing counting them. Deleting a `step` line left "all
+   checks passed". *Fixed on this branch (§3.1).* The list is **26** today:
+   `d746251` dropped four `step` lines — `tests (tg backend)`,
+   `tests (cross-engine core)`, `tests (rest, feature-inert)` and the
+   `feature-inert guard` — and added one, `tests (rest)` over
+   `--workspace --exclude nanoda_lib`. Net 29 → 26 (§4).
 2. **`corpus.rs::arena_corpus`** — `good` and `bad` share one `checked`
    counter. Only `bad` carries weight; `good`'s 102 files satisfy the aggregate
    alone. *Fixed on this branch (§3.1).*
@@ -187,12 +203,24 @@ Legs that had no floor of their own, in risk order:
    makes it a check on what executed rather than on what is on disk. The live
    corpus reads `154 files = 99 good + 55 bad`.
 4. **`ci/check-test-guards.sh`** — `for d in $SCAN_DIRS; do [[ -d "$d" ]] ||
-   continue`. Three scan directories, one aggregate `MIN_SITES=1`. All 58 sites
-   are in `checker/tests`; `derived/tests` and `kernel/tests` contribute zero
-   and their disappearance would be invisible. **Open.**
+   continue`. Three scan directories, one aggregate `MIN_SITES=1`. All **60**
+   sites are in `checker/tests`; `derived/tests` and `kernel/tests` contribute
+   zero and their disappearance was invisible. **Fixed** (task #169 sweep): a
+   configured scan directory that is **absent** is now a failure, and the
+   per-directory counts are printed, so a tree that stopped being scanned reads
+   differently from one that correctly has nothing to guard. Deliberately *not*
+   a per-directory floor — `derived/tests` and `kernel/tests` have no optional
+   inputs, so zero is their permanent and correct answer and flooring them would
+   demand a guard that should not exist. Measured against master's copy: with
+   `kernel/tests` renamed away it exited 0, printing `skip guards OK (60 call
+   sites)`; it now exits 1 naming the directory.
 5. **`ci/check-test-inputs.sh`** — three matrix legs incrementing one shared
    `matrix` counter, floored once at the end. A leg iterating zero times is
-   hidden by the other two. **Open.**
+   hidden by the other two. **Fixed** at `cbb949f` (task #169): `mA`/`mB`/`mC`
+   report separately, the floor moved to *members examined* (equivalent to the
+   old `matrix == 0`, since every member lands in leg A or leg B), and leg C —
+   whose input set is empty — prints `INAPPLICABLE` rather than counting zero
+   into a total the other two legs also feed. See §1.2.
 6. **`ci/test-boundary.sh`** — ~50 cells, no cell counter. Deleting cells is
    invisible. **Open.** (This is not theoretical: §3.3 is a cell that had
    stopped being able to fail.)
@@ -250,7 +278,8 @@ rose**, and the entire −1 221 on the total is that one escape row.
 A previous seat's hypothesis that `5bf8342` ("the dependent arm takes the whole
 origin") closed it is **refuted**: 076 is still 31 at `73dcc53` and `6483199`,
 both of which are after `5bf8342`. The other three budgets are exact at master
-(075 = 3, 116 = 10, 081 = 1). **`tg_tutorial` is now 35/35.**
+(075 = 3, 116 = 10, 081 = 1). **`tg_tutorial` was 35/35 when this was written and
+is 36/36 today** (§1) — the suite gained a test, not a ratchet movement.
 
 **`mini_envshare_tg`** (2) and **`mini_route_tg`** (1) — all three are the same
 finding on the same fixtures, and all three are convergence rather than a
@@ -360,7 +389,18 @@ were not measuring a weaker property in the plain build; they were failing on
 the build configuration. Fixed by gating `run_unified` and its two callers on
 `feature = "tg"`, with the hazard (a `cfg`-ed-out test is *absent*, not skipped)
 named at the gate and the guard that holds it — `ci/check-test-inputs.sh` —
-named with it. Now 32/32 plain, 34/34 `tg`.
+named with it.
+
+**Superseded 2026-08-15, and the fix above is gone with the problem.** That
+repair was a `cfg(feature = "tg")` on `run_unified` and its two callers — i.e. it
+made two tests *absent* in the plain build on purpose, which is the third shape
+of "skip is not pass" from §1.2 traded for the second. Retiring the `Certifier`
+trait left one backend, the feature had nothing to select and was deleted
+(`d746251`), and with one build configuration there is no plain/`tg` split for a
+test to be red in. `mini_designed.rs` is **35/35, unconditional**. A count of the
+form "32/32 plain, 34/34 `tg`" now names two configurations that do not exist,
+and a ratchet phrased against a dead feature is itself an instance of §6 — which
+is why it is corrected here rather than carried as history.
 
 ### 3.5 Resolved: two ratchets moved adversely, and both are population changes
 
@@ -562,35 +602,49 @@ workspace three times: the three feature runs are `-p nanoda_lib`, and
 `nanoda_lib` under all three feature sets, `cargo build --workspace --exclude
 nanoda_lib --all-targets` finishes in 0.02 s.
 
-What is still true is that `nanoda_lib` itself — lib, 2 binaries, 14 integration
-test binaries — is compiled three times, once per feature configuration.
-Measured on this tree, rebuilding after `touch checker/src/lib.rs`, at
-`CARGO_BUILD_JOBS=6`:
+**And the rest of this section is now history, not status.** It was written when
+there were three feature configurations; there are **two**, and the one it
+argues hardest to keep is the one that was deleted. `tg` is gone with the
+`Certifier` trait (`d746251`) — see §1 and §1.2 — so `nanoda_lib` is compiled
+twice, plain and `--features stepcount`. The measurements are kept because the
+*shape* of the argument is still the live one for `stepcount`, and because the
+row that no longer exists is what makes the cost of a configuration concrete.
+
+Measured 2026-08-15 (before the deletion) on this tree, rebuilding after
+`touch checker/src/lib.rs`, at `CARGO_BUILD_JOBS=6`:
 
 | configuration | `instructions:u` | `task-clock` |
 | --- | ---: | ---: |
 | plain | 1.384 T | 187.9 s |
 | `--features stepcount` | 1.414 T | 195.0 s |
-| `--features tg` | 1.605 T | 220.0 s |
-| **total** | **4.403 T** | **602.9 s** |
+| ~~`--features tg`~~ *(deleted at `d746251`)* | 1.605 T | 220.0 s |
+| **total, as it then was** | **4.403 T** | **602.9 s** |
 
 Both counters are reported because `instructions:u` was measured this week to
 understate allocation-shaped effects by 9–17 points; here they agree on the
 ordering and on `tg` being the expensive one (+16 % instructions, +17 %
 task-clock over plain).
 
-**Not fixed, and it should not be.** `stepcount` and `tg` change `cfg`, so the
-three are genuinely different compilations and cannot share artifacts. Removing
-one removes a configuration from the matrix, which is coverage rather than
-waste — and §3.4 is a live demonstration that the plain configuration catches
-things the `tg` one does not.
+**"Not fixed, and it should not be" — and then it was fixed, by deletion.** The
+argument here was that a configuration is coverage rather than waste, and that
+§3.4 demonstrated the plain build catching what `tg` did not. That was a good
+argument for keeping a *split*, and it was answered by removing the reason there
+was one: the feature selected `certify::Backend` between `NullCertifier` and the
+real backend, and once the trait was retired it selected nothing. A
+configuration that cannot vary any code is not coverage. `stepcount` still is —
+it genuinely changes `cfg` — so the remaining two are two.
 
-The one genuine duplication is small and is *execution*, not compilation: the
-step `tests (cross-engine core)` re-runs `mini_envshare_tg`, `mini_route_tg` and
-`unified_cli`, all three of which `cargo test -p nanoda_lib --features tg`
-already ran — about **15.8 s**. Its purpose is to name those files so
-`ci/check-test-inputs.sh` can verify a `cfg(feature)` suite is selected by a
-step, and that is worth more than 15.8 s. Recorded and left.
+The duplication recorded here as "the one genuine duplication" is also gone: the
+step `tests (cross-engine core)` re-ran `mini_envshare_tg`, `mini_route_tg` and
+`unified_cli` for about **15.8 s**, and its stated purpose was to name those
+files so `ci/check-test-inputs.sh` could verify a `cfg(feature)` suite is
+selected by a step. With no `cfg(feature)` suites left there is nothing to
+verify; `d746251` removed the step (29 → 26 in `ci/check.sh`), which is why
+leg C now has no subject (§1.2).
+
+**The general lesson, and it is §6's:** every claim in this section was true when
+written and none of it was re-checked, because nothing reads it. A section that
+argues for keeping a configuration outlives the configuration.
 
 ---
 
@@ -861,16 +915,18 @@ rather than to an input.
 (2026-08-15), branched from master `4c6426a`. Kept here with what each one
 actually cost, because two of the three turned out to be worse than reported.
 
-> **Sequencing.** The `tg.rs` half of this (commit `57bfb8c`, instances 2 and
-> the `asked > 0` gates) landed on `joachim/shadowed-residue` **before** the
-> owner parked it behind the `joachim/retire-certifier` refactor, which rewrites
-> `impl Certifier for TgBackend` wholesale. It is one isolated commit touching
-> **only** `checker/src/tg.rs`, and only the two free reporting functions at the
-> file's tail — `ix_readiness_report` and `origin_report`, around lines
-> 24000–24180. It touches **no** `Certifier` method, so it should rebase or
-> cherry-pick over that refactor cleanly; if it does not, the measurements above
-> are what need reproducing, not the diff. The `tg_tutorial` and `derived/`
-> commits are independent of it.
+> **Sequencing — resolved, and every entry below is closed on master.** The
+> `tg.rs` half of this (commit `57bfb8c`, instance 2 and the `asked > 0` gates)
+> was parked behind the `joachim/retire-certifier` refactor, which rewrites
+> `impl Certifier for TgBackend` wholesale, and the open question was whether it
+> would survive the rebase. **It did.** Verified 2026-08-15: `git merge-base
+> --is-ancestor 57bfb8c master` succeeds, and the code says so directly —
+> `origin_report` (`tg.rs:24604`) has no early return, gating only the table it
+> computes from `ORIGINS` with `if !v.is_empty()`; `ix_readiness_report`
+> (`tg.rs:24511`) hangs `ICOD`/`IDEP`/`PRE` off `IX_PUBLISHED`, with the reason
+> written at the line and citing this section. Nothing here needs re-doing, and
+> **no seat should be briefed from these entries as open work** — that mistake
+> was made once, on 2026-08-15, from a task list rather than from the tree.
 
 * **Instance 2's residue — fixed.** `origin_report()`'s early return is gone.
   The gate is drawn at the one block that is genuinely about origins: the table
@@ -886,8 +942,10 @@ actually cost, because two of the three turned out to be worse than reported.
   precisely the two inputs that produce them, with no environment variable
   involved. They print again: census `asked 9, typed 9` and `asked 2, typed 2`.
   Still a measurement hazard and not a test one — every rescued row is
-  `stepcount`-gated, so a plain `--features tg` build emits byte-identical text
-  and **no gate in §2 can observe this half**. It was verified by direct
+  `stepcount`-gated, so a build without that feature emits byte-identical text
+  and **no gate in §2 can observe this half**. (Written as "a plain
+  `--features tg` build"; that feature is gone, and the sentence was always
+  about `stepcount` being off, which is the default.) It was verified by direct
   measurement instead, and that is the honest status: adding a `stepcount`-only
   test would have been a check outside the gate list, which is the disease at
   the top of this document.
@@ -1008,3 +1066,85 @@ distinguish a left from a right nesting, but they distinguish `⟨p,q⟩` from
 this mechanism: they answer "a test that did not run", the *input* dimension.
 This section is "an assertion that ran and could not fail". A suite can be fully
 guarded by both and still contain every instance above.
+
+---
+
+### 6.8 Re-audit against master `4a2910d` — 2026-08-15
+
+**Why this section exists.** Twice on 2026-08-15 a seat was briefed from a task
+entry describing work that had already landed: once on §6.4's `escaped_count`
+item (fixed hours earlier at `25d9229`), once on instance 2 and the `asked > 0`
+gates (fixed at `57bfb8c`, and on master). A task entry is a claim about the
+past. **The base rate matters more than any one entry**, so it is recorded here.
+
+### Closed since the original audit — four of four, verified in the tree
+
+| entry | verified how | status |
+| --- | --- | --- |
+| §6.4 instance 2, `origin_report()`'s early return | `tg.rs:24604` gates only the `ORIGINS` table with `if !v.is_empty()` | **closed** |
+| §6.4 the `asked > 0` guards | `tg.rs:24511` hangs `ICOD`/`IDEP`/`PRE` off `IX_PUBLISHED`; the reason is written at the line | **closed** |
+| §6.4 `escaped_assumptions_are_reported_as_gaps` | pinned per fixture at `tg_tutorial.rs:742`; both pins perturbed and watched red | **closed** |
+| §2.1 items 4 and 5, the two aggregate CI floors | both fixed; see those entries | **closed** |
+
+The `57bfb8c` rebase question §6.4 left open — whether the fix would survive
+`joachim/retire-certifier` rewriting `impl Certifier for TgBackend` wholesale —
+is answered: `git merge-base --is-ancestor 57bfb8c master` succeeds.
+
+**Strengthened past what the fixing commit claimed.** Reading the report off
+`nanoda_bin` directly rather than through `escaped_count` — a second path, which
+is the whole point — shows `028_peano2` at *20 made, 20 accounted for* and
+`029_peano3` at *48 made, 48 accounted for*, so those two zeros are
+**structurally forced** rather than an accident of the tree; and on
+`075_nRecReduction`, `TOTAL gaps == escaped == 3`, so the escapes are that
+file's **entire** gap population rather than a term in a sum where another
+category could mask movement.
+
+### The error rate is in the tracking, not in the findings
+
+**Stated precisely, because this section is about not overclaiming.** This pass
+did *not* re-derive instances 1–11 from scratch; each was fixed with a watched
+mutation when it landed, and re-running eleven mutations was not the ask. What
+was checked is narrower and is what the briefs got wrong: **the four entries
+being tracked as open work, all four of which are closed** (table above), each
+verified against the tree rather than against a task list. No finding was
+refuted; §6.5 already records the one inference the audit itself refuted (the
+"protected by exactly two integers" claim, not the shadowing under it).
+
+So the measured error rate for 2026-08-15 is **2 of 2 task entries briefed as
+open were already closed**, and **0 of the audit's findings were wrong**. Those
+are different populations and conflating them is how the second brief got
+written. The remediation is not more auditing — it is that a brief cites a
+commit or a line, never a task entry.
+
+### New: deleted configuration is where this class breeds
+
+`d746251` retired the `tg` feature and one backend; `ad381f3` retired the
+`Certifier` trait. Both landed after the original audit, and **an assertion or
+a documented count that used to discriminate two configurations discriminates
+nothing once there is one.** Swept for that shape; the live instances are below.
+Ownership is noted because most of them are in files held by other seats.
+
+| # | where | what is now false | owner |
+| --- | --- | --- | --- |
+| 12 | `checker/tests/mini_designed.rs:3237-3252`, `run_unified`'s header | Four independent false claims. It says the suite is *"32/34 under `--no-default-features` and 34/34 under `--features tg`"*, that the spawned binary *"refuses the unified route without it"*, that `ci/check.sh` runs `--features tg`, and that the two tests are *"removed only from the configuration in which they cannot mean anything"*. **Measured: no `cfg(feature)` remains in the file, the refusal string is absent from `checker/src/bin/checker.rs`, and the suite is 35/35 unconditional.** This is the canonical form — a test-count ratchet naming a dead feature. | free |
+| 13 | `checker/tests/mini_route.rs:445` | The documented reproduction command for an `#[ignore]`d measurement is `cargo test -p nanoda_lib --features tg skeleton_key_divergence -- --ignored`. **Measured: `error: the package 'nanoda_lib' does not contain this feature: tg`.** Because the test is ignored, that line is the *only* path to the measurement, so the measurement is unreachable as documented. | free |
+| 14 | `checker/src/tg.rs`, 11 doc blocks (`:22217`, `:22618`, `:22963`, `:23203`, `:23376`, `:23459`, `:23523`, `:23601`, `:23630`, `:23950`, `:27398`) | Counted directly, and `grep -rn 'trait Certifier' checker/src kernel/src` returns nothing, so every one of them describes a default of a trait that does not exist. `ad381f3` moved each rule's contract onto `TgBackend` and rewrote the intra-doc links, but not the sentences around them. They describe *default implementations* on a type that has none — e.g. `:23206` *"The default implementation delegates to [`TgBackend::admit`], so a backend that has nothing to say about iota keeps reporting a gap"*, contradicted by `certify.rs:298-302` (*"the `Certifier` trait's default implementation of `iota` … both are gone"*). Consequence beyond tidiness: these paragraphs promise a safe do-nothing floor that was deleted. Also `:27398`, a comment describing a `feature = "tg"` gate on the line that introduces `#[cfg(test)]` — the whole of that commit's diff to the file was removing that gate. | **unification seat** |
+| 15 | `checker/src/tc.rs:1039` | *"Under the null backend every call here is a no-op, so it still pays nothing."* The null backend is gone; the call reaches `TgBackend::app_arg_checked`, which inserts into `arg_gapped`. The cost argument justifying an unconditional call rests on a deleted premise. | **unification seat** |
+| 16 | `kernel/Cargo.toml:17-23` and `kernel/README.md:425-430` | The TCB's own soundness argument cites a live enforcement mechanism that no longer exists: *"`NullCertifier` sits in `checker/src/certify.rs` behind `cfg(not(feature = "tg"))`, so a `--features tg` build does not compile it at all."* The obligation is in fact discharged far more strongly, by deletion — but a reader checking the stated enforcement finds nothing. `kernel/README.md:407-418` and `:559-565` continue in the present tense about the trait. | **`kernel/` — stop-and-report** |
+| 17 | `checker/Cargo.toml:14`, `kernel/src/lib.rs:31-37` | Both describe the trusted boundary as *"the `Certifier` proof-backend trait and its null implementation"*. `certify.rs:14-17` already states the replacement correctly; these two are what should point at it. | manifest free; `kernel/` stop-and-report |
+| 18 | `README.md:178` | *"With `--features tg`, **69 of 91** tutorial exports check…"* — the only surviving `tg`-feature instruction to a user. | free |
+| 19 | `DOC-AUDIT.md:712` | *"Verified **true today**, and worth keeping as do-not-re-verify: `Certifier::iota` is still exactly `checker/src/certify.rs:174`"*. The worst form in the set: it instructs a future auditor to skip the check that would have caught it. | free |
+
+Corrected in this pass, in place: §1's per-target counts and total, §2's step and
+call-site counts, §2.1 items 4 and 5, §1.2's leg C paragraph, §3.4's
+`32/32 plain, 34/34 tg`, §4 in full, and §6.4's sequencing note.
+
+### One asymmetry the sweep found and did not close
+
+`ci/check-test-inputs.sh` leg A walks *declared feature → step that runs it*.
+There is **no inverse leg** — a step naming a feature no member declares — so a
+resurrected `--features tg` line would not be caught statically. In practice
+cargo hard-errors on an undeclared feature (measured above) and `ci/check.sh`'s
+`step` wrapper turns that into a failure, so the hole is covered at runtime by
+something louder than the grep. Recorded rather than fixed: adding a leg whose
+only failure mode cargo already reports more clearly would be ceremony.
