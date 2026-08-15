@@ -1342,6 +1342,59 @@ origin *acquire* `PRE` as an antecedent, so it prices a world in which the
 premise holds and says nothing about whether either route can establish it.
 That is the whole distinction this section exists to record.
 
+### 8.3 Measured against the code, 2026-08-15 — route (A) taken as far as the rule
+
+Route (A) is taken. `RecBottom::IxDep` and `mini_ix_dep_rec_bottom` adopt mini's
+published `IxDepRec` and `IndexedTranslation` whole, `rec_nest` builds the nest,
+and `fire_ix_dep` instantiates `IndexedDepRecursor::iota[i]` at the use site.
+Four things were measured that this section had marked open or got wrong.
+
+1. **The nest's difference from `RecBottom::Dep` is arity, and only arity** —
+   `depth == np + n + ni + 2`, with the `ni` index binders *inert at the bottom*
+   because the ι rule eliminates the index vector. All three declarations build
+   a nest and reach the rule. §8.2's ~40 mechanical lines for an `ind_spine_at`
+   equivalent over `ExprPtr` is right; it is 10.
+
+2. **The premise's difference is not arity, and the brief that scoped this said
+   it was.** `minor_atoms_general`'s plain atoms are the non-indexed ones
+   exactly, but a recursive atom is `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` — a different set
+   *per slot*, at the child's own index vector — where `DEP`'s is `tⱼ ∈ W` at
+   one carrier moved along one bridge, and the induction hypothesis is
+   `vⱼ ∈ app(m, d⃗ᵢⱼ, tⱼ)`. The index **terms** come from
+   `IndexedDeclSpec::rec_index_vec` and need no Lean syntax; only the
+   **memberships** the β step consumes are inference's.
+
+3. **`has_type_a` types index expressions at 35 of 35** (`RBTree.rec` 24,
+   `Aux.rec` 9, `Ix.rec` 2), 17 unconditionally and 18 on assumptions that are
+   the walk's own binder typings — 0 foreign. `SEAM-DESIGN.md` §6's residual
+   risk is resolved in the favourable direction. `TgBackend::ix_index_census`
+   is the measurement and stays in the tree.
+
+4. **But that rate does not generalise to `ICOD`, and this is the new
+   obstruction.** `ICOD(m,T)`'s discharge needs `⊢ ⟦T p⃗ → … → Sort u₁⟧ ∈ Uℓ` —
+   the motive's own *type* in the rung, which is what
+   `crate::mini::rec_ix_dep::icod_at_rung` starts from. Asking `has_type_a` for
+   it **fails at every rung**, measured: the motive's type mentions the indexed
+   family, and TG has no interpretation of an indexed type former (`gen_scope`
+   returns `Decline::Indices`). The rung itself is found correctly, so this is
+   not a target-availability failure of the kind §6 analysed — it is the
+   original "no interpretation — an indexed family" obstruction resurfacing one
+   level up, at the *motive's type* rather than at the recursor.
+
+   So `ICOD` is **not** the cheap conjunct, and a seat should not size it as
+   `mini_cod_at_rung` at a longer arity. Two routes, neither costed here:
+   derive `doms[np] ∈ Uℓ` from mini's published carrier typing
+   (`IndexedTranslation::ii.carrier`) through the rung's closure lemmas, the
+   motive's type being a `dprod` over `⟦ind(p⃗,d⃗)⟧`; or publish the typing.
+   The first keeps the seam rule (`ICOD` is an inference, not a symbol) and is
+   the one to try. **Do not** route it through `has_type_a` — that is measured
+   and it does not work.
+
+The site declines naming the premise, and the row now prices exactly the
+tranche: `ctor_abbrev_major` 2 firings −23, `mutual_aux_encoding` 3 firings −47,
+`077_RBTree.id_spec` 3 firings −19 — 8 firings, **−89**, against
+`ORIGIN-RANKING.md`'s hand split of the same number out of a −117 label.
+
 What remains after that is TG-native and is the honest ~800–1000 lines the
 ranking predicted: `RecBottom::IxDep`, a `mini_ix_dep_rec_bottom` that reads the
 published package and checks identity, and a `fire_ix_dep` following
