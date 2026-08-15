@@ -10641,3 +10641,91 @@ that is raised and hit again is compatible with both.
 What this does settle is the shape of the fix. It is neither a larger constant
 nor `derived/src/nat/`'s binary numerals: at four times the budget the same
 declaration fails the same way.
+
+## `infer_type`'s persistent memo — 5.47 T → 0.42 T, and the wall is still there — 2026-08-15
+
+The section above leaves `infer_type` as the remaining cost: **285 M calls at a
+16 % hit rate against ~9 561 distinct expressions**. This is that memo, and it
+is the same lesson as the `def_eq` cache one layer up — *the key is the whole
+design.*
+
+### The refusal was not the obstacle; the frame was
+
+`frame_put` refuses to store a `Gap`-carrying `Typing` whenever `th.is_some()`,
+and that looked like the cause. It is not. Stamping the frame with a new
+`Interp::generation` makes a cached `Gap` safe — any publication that could
+improve it empties the frame — so the refusal *can* be lifted. Lifted, and
+measured on `ByteArray.IsValidUTF8`:
+
+| | frame hits | frame misses |
+| --- | ---: | ---: |
+| refusal in place | 36 774 953 | 189 766 167 |
+| refusal lifted, frame stamped | 36 774 593 | 189 763 969 |
+
+**Unchanged to five figures.** The 16 % is the *access pattern*, not the
+filter: `frames` is pushed and popped at every binder, so each frame starts
+empty and the same 9 561 expressions are re-inferred in every new one. That
+change was reverted; only the finding is kept.
+
+### What pays is persistence, under three conditions
+
+A second memo on the `Checker`, `gap_types`, holding what the frame turns away.
+The two are complementary: **theorems in the frame, gaps here.**
+
+1. **`e` is closed** (`num_loose_bvars() == 0`). `BVar` is the only arm of
+   `infer_type_inner` that reads a kernel scope variable (`tm:
+   self.scope_term(*i)`), so closedness excludes it by construction and neither
+   `ty` nor `tm` can mention an open scope. This is what lets an entry survive
+   the binder pushes the frame cannot.
+2. **The `Ev` states nothing.** Not merely the complement of what the frame
+   keeps: a `Thm` carries a **hypothesis set** naming the kernel variables open
+   when it was derived, and a `Gap` carries none. *This must not be relaxed on
+   the strength of condition 1* — a closed `e` is not a closed hypothesis set.
+   (A gapped typing may still carry `tm: Some(..)`: `const_evidence` returns the
+   carrier with `Ev::missing(g)` when the store holds `⟦c⟧` and its `typing` is
+   an `Err`. Condition 1 is what makes that term safe to keep.)
+3. **The `Interp` has not moved**, by a stamp. The counter is `puts` — every
+   `put_const` — and not `consts.len()`, because that method **replaces** a key
+   as readily as it adds one, and an entry whose `typing` moved from `Err` to
+   `Ok` is exactly an improvement a length cannot see. With `site_count()` and
+   whether the inductive apparatus has been built, it covers `zoneb::ensure`,
+   `adopt_shared` and the lazy apparatus alike.
+
+All three are checked at the insert rather than argued, and each is falsified
+by its own mutation: dropping any one reds exactly one assertion and leaves the
+other test passing.
+
+### What it is worth
+
+Both files, `--verbose --mutual --nested`, modelgen on, `perf stat`, same box:
+
+| | instructions:u | wall |
+| --- | ---: | ---: |
+| `init-prelude`, `a49cd79` | 5 467 212 113 559 | 438.7 s |
+| `init-prelude`, + `gap_types` | **418 139 170 886** | **26.9 s** |
+| | **13.1×** | **16.3×** |
+| the 238-declaration closure, `a49cd79` | 5 442 003 929 766 | 438.3 s |
+| the closure, + `gap_types` | **403 340 287 064** | **25.8 s** |
+| | **13.5×** | **17.0×** |
+
+Cumulative against `36106d2`, where this arc started: **28.211 T → 0.418 T
+instructions, 67.5×**, and **2126.7 s → 26.9 s, 79×**.
+
+**Verdict byte-identical** — the same decline on the same term, `prefix
+declarations=44 pairs=0 certified=0`, the same `facts` and `clauses` rows.
+
+### The rows, not the total
+
+A cached `Gap` that silently became a *different* `Gap` would leave every
+total intact while moving the reason rows underneath, so the check is
+row-level: every `gap: <reason>` row and every provenance row, over **all**
+`checker/tests/fixtures/*.ndjson` **and** all 91 tutorial exports. Identical,
+line for line, against `a49cd79`. Fixtures 61 / 96 / 46 / 13 / 12 / 6 / 2 / 0
+and the corpus at 16 files / **172** gaps are unmoved.
+
+### The wall has not moved
+
+Still `ByteArray.IsValidUTF8`, still the 2 000-level weak-head bound, still
+`declarations=44 pairs=0 certified=0`. Only the time to reach it changed. What
+that buys is that the *depth* question — reopened by the 8192 result above — is
+now a one-minute experiment instead of a half-hour one.

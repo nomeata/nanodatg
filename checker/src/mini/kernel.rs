@@ -332,8 +332,17 @@ pub enum Clause {
 /// asking was provably pointless.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Lhs {
-    /// Nothing known — infer `e1` and ask the gate. Every decision-only
-    /// caller, and every congruence over *terms*, is here.
+    /// Nothing known — infer `e1` and ask the gate. Every congruence over
+    /// *terms* is here.
+    ///
+    /// **This used to say "every decision-only caller, and every congruence
+    /// over terms, is here", and the first half is false.** Counted on
+    /// `ByteArray.IsValidUTF8`: of 60 000 000 calls carrying no endpoints,
+    /// **45 M pass `Type` and 15 M pass `Unknown`**. The claim was load-bearing
+    /// — [`Checker::defeq_cache`] was first written to cache only `Unknown`
+    /// *on the strength of this comment*, and so declined three quarters of
+    /// the population it exists for. Corrected here rather than worked around
+    /// there; the cache now carries `lhs` in its key.
     Unknown,
     /// `e1`'s own type is a `Sort`: `e1` is a type, not an element of one.
     /// The gate cannot fire, so it is not asked.
@@ -460,6 +469,49 @@ pub struct Checker<'e, 'i> {
     /// **`infer_type`'s frame-local memo**, one frame per telescope slot.
     /// `frames.len() == lenv.len() + 1` at all times. See [`Frame`].
     frames: Vec<Frame>,
+    /// **`infer_type`'s persistent memo, for the typings the frame refuses.**
+    ///
+    /// [`Checker::frame_put`] keeps a `Typing` only when it carries a theorem
+    /// (on the threaded pass), and [`Checker::frames`] is emptied at every
+    /// binder push. Between them, the population that dominates a decision-only
+    /// descent — gapped typings of expressions met again and again in fresh
+    /// frames — is memoised nowhere: 285 M `infer_type` calls at a **16 %**
+    /// hit rate against ~9 561 distinct expressions. This is the other half,
+    /// and the two are complementary rather than overlapping: theorems in the
+    /// frame, gaps here.
+    ///
+    /// # The three conditions, and why each is the one that makes it sound
+    ///
+    /// 1. **`e` is closed** (`num_loose_bvars() == 0`). `mini::Expr` is de
+    ///    Bruijn, so an expression with a loose `bvar` names a judgement only
+    ///    with its telescope — and `BVar` is the *only* arm of
+    ///    [`Checker::infer_type_inner`] that reads a kernel scope variable
+    ///    (`tm: self.scope_term(*i)`). Closedness excludes that arm by
+    ///    construction, so neither `ty` nor `tm` can mention an open scope,
+    ///    and the entry survives the binder pushes the frame cannot.
+    /// 2. **The `Ev` states nothing** (`ev.thm().is_none()`). This is not
+    ///    merely the complement of what the frame keeps. A `Thm` carries a
+    ///    **hypothesis set** naming the kernel variables open when it was
+    ///    derived; a `Gap` carries none, so nothing about the ambient `Γ`
+    ///    rides in a cached value. *Do not relax this on the strength of
+    ///    condition 1* — closedness of `e` is not closedness of a theorem's
+    ///    hypotheses.
+    /// 3. **The `Interp` has not moved** — [`Checker::gap_gen`].
+    ///
+    /// Note that a gapped typing may still carry `tm: Some(..)`:
+    /// `const_evidence` returns the carrier with `Ev::missing(g)` when the
+    /// store holds `⟦c⟧` but its `typing` is an `Err`. Condition 1 is what
+    /// makes that term safe to keep.
+    gap_types: FxHashMap<E, Typing>,
+    /// [`Interp::generation`] when [`Checker::gap_types`] was last written.
+    ///
+    /// A `Gap` is a claim that something could **not** be derived *yet*, and
+    /// the `Interp` grows: `zoneb::ensure` builds carriers on demand,
+    /// `adopt_shared` takes them across the seam, and the inductive apparatus
+    /// is built on first use. Any of those can turn a gap into a proof, so the
+    /// memo is emptied whenever the stamp moves — the same device as
+    /// `Frame::scopes_len`, and it needs no audit of who may publish what.
+    gap_gen: (u64, usize, bool),
     /// **`def_eq`'s decision cache**, and the counterpart of the
     /// `m_eqv_manager` union-find Lean's kernel queries *first* on every
     /// `is_def_eq_core` call, before anything is reduced.
@@ -752,6 +804,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             th: None,
             wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
+            gap_types: FxHashMap::default(),
+            gap_gen: <(u64, usize, bool)>::default(),
             defeq_cache: FxHashMap::default(),
             defeq_depth: 0,
             whnf_depth: 0,
@@ -773,6 +827,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             }),
             wt_memo: FxHashMap::default(),
             frames: vec![Frame::default()],
+            gap_types: FxHashMap::default(),
+            gap_gen: <(u64, usize, bool)>::default(),
             defeq_cache: FxHashMap::default(),
             defeq_depth: 0,
             whnf_depth: 0,
@@ -2494,12 +2550,56 @@ impl<'e, 'i> Checker<'e, 'i> {
     // ────────────────────────────────────────────────── inferType ──
 
     pub fn infer_type(&mut self, e: &E) -> R<Typing> {
+        // **The frame is consulted first, always.** It is the only one of the
+        // two that may hold a *theorem*, so asking it first means a cached gap
+        // can never shadow a certified entry for the same expression.
         if let Some(t) = self.frame_get(e) {
+            return Ok(t)
+        }
+        if let Some(t) = self.gap_get(e) {
             return Ok(t)
         }
         let t = self.infer_type_inner(e)?;
         self.frame_put(e, &t);
+        self.gap_put(e, &t);
         Ok(t)
+    }
+
+    /// A hit in [`Checker::gap_types`], or `None`. Empties it first if the
+    /// `Interp` has moved since it was filled.
+    fn gap_get(&mut self, e: &E) -> Option<Typing> {
+        if e.num_loose_bvars() != 0 {
+            return None
+        }
+        let g = self.th.as_ref().map_or_else(Default::default, |th| th.ip.generation());
+        if self.gap_gen != g {
+            self.gap_types.clear();
+            self.gap_gen = g;
+            crate::mini::census::note_gap_types(false);
+            return None
+        }
+        let hit = self.gap_types.get(e).cloned();
+        crate::mini::census::note_gap_types(hit.is_some());
+        hit
+    }
+
+    /// Store a gapped typing of a closed expression. The three conditions are
+    /// [`Checker::gap_types`]'s; **all three are checked here rather than
+    /// argued**, so a future route that threaded a theorem through, or handed
+    /// this an open expression, simply stops being cached.
+    fn gap_put(&mut self, e: &E, t: &Typing) {
+        if e.num_loose_bvars() != 0 || t.ev.thm().is_some() {
+            return
+        }
+        let g = self.th.as_ref().map_or_else(Default::default, |th| th.ip.generation());
+        if self.gap_gen != g {
+            self.gap_types.clear();
+            self.gap_gen = g;
+        }
+        // The same ceiling, for the same reason, as [`DEFEQ_CACHE_CAP`].
+        if self.gap_types.len() < DEFEQ_CACHE_CAP {
+            self.gap_types.entry(*e).or_insert_with(|| t.clone());
+        }
     }
 
     /// A hit in the innermost frame, or `None`. Empties the frame first if a
@@ -2555,6 +2655,19 @@ impl<'e, 'i> Checker<'e, 'i> {
         // certified path **byte-identical by construction rather than by
         // test**: the added conjunct is false exactly when `th` is `None`, so
         // no run with an `Interp` can take a different branch than before.
+        //
+        // **Removing this refusal was tried, and bought nothing.** Stamping
+        // the frame with [`Interp::generation`] makes a cached `Gap` safe —
+        // any publication that could improve it empties the frame — so the
+        // refusal *can* be lifted. Measured on `ByteArray.IsValidUTF8` it
+        // moved the frame memo from 36 774 953 hits / 189 766 167 misses to
+        // 36 774 593 / 189 763 969: unchanged to five figures. The 16 % is not
+        // this filter, it is the **access pattern** — `frames` is pushed and
+        // popped at every binder, so each frame starts empty and the 9 561
+        // distinct expressions are re-inferred in each new one. Reverted, and
+        // the persistence that does pay lives in
+        // [`Checker::gap_types`] instead, where the entries this refusal turns
+        // away are the entries that are kept.
         if self.th.is_some() && t.ev.thm().is_none() {
             return
         }
@@ -4037,11 +4150,13 @@ impl<'e, 'i> Checker<'e, 'i> {
             if n % 20_000_000 == 0 {
                 let fc = crate::mini::census::frame_cache();
                 let dc = crate::mini::census::defeq_cache();
+                let gt = crate::mini::census::gap_types();
                 eprintln!(
                     "defeq-census  calls={n}  distinct={d}  ratio={ratio:.1}  \
                      depth={depth}  asked={a}  no-endpoints={b}  \
                      frame-hit={fh} frame-miss={fm}  telescope={tel}  \
-                     defeq-hit={dh} defeq-miss={dm} defeq-size={ds}",
+                     defeq-hit={dh} defeq-miss={dm} defeq-size={ds}  \
+                     gap-hit={gh} gap-miss={gm} gap-size={gs}",
                     ratio = n as f64 / d.max(1) as f64,
                     depth = self.defeq_depth,
                     fh = fc.hits,
@@ -4050,6 +4165,9 @@ impl<'e, 'i> Checker<'e, 'i> {
                     dh = dc.hits,
                     dm = dc.misses,
                     ds = self.defeq_cache.len(),
+                    gh = gt.hits,
+                    gm = gt.misses,
+                    gs = self.gap_types.len(),
                 );
             }
         }
@@ -5783,6 +5901,63 @@ mod tests {
         );
         // A rejection is still a rejection, and it needs no evidence.
         assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err());
+    }
+
+    /// **[`Checker::gap_types`] keeps exactly what its three conditions
+    /// allow**, and each is checked separately because any one of them alone
+    /// would let an unsound entry through.
+    ///
+    /// The acceptance checker (`Checker::new`, `th: None`) is used for the
+    /// first two rungs because *every* `Typing` it produces carries a `Gap` —
+    /// so condition 2 is satisfied throughout and conditions 1 and 3 are the
+    /// only things that can be doing the work.
+    #[test]
+    fn the_gap_memo_keeps_closed_gapped_typings_and_nothing_else() {
+        let (env, _) = env3();
+        let prop = sort(Level::zero());
+        let mut c = Checker::new(&env);
+        let gapped = Typing { ty: prop, tm: None, ev: Ev::missing(Gap::NoEndpoint) };
+
+        // **Condition 1, the open side.** A loose `bvar` means the telescope
+        // is part of the judgement, and the memo has no telescope in its key.
+        c.gap_put(&lam(prop, bvar(1)), &gapped);
+        assert!(c.gap_types.is_empty(), "an open expression is not keyed by the pair alone");
+
+        // **Condition 1, the closed side** — otherwise the test above would
+        // pass against a memo that stores nothing at all.
+        c.gap_put(&k("X"), &gapped);
+        assert_eq!(c.gap_types.len(), 1, "a closed expression is kept");
+        assert!(c.gap_get(&k("X")).is_some(), "and is served back");
+
+        // **Condition 3.** A moved `Interp` empties it: a `Gap` is a claim
+        // that something could not be derived *yet*.
+        c.gap_gen = (c.gap_gen.0 + 1, c.gap_gen.1, c.gap_gen.2);
+        assert!(c.gap_get(&k("X")).is_none(), "a moved Interp invalidates");
+        assert!(c.gap_types.is_empty(), "and empties the memo rather than shadowing it");
+    }
+
+    /// **Condition 2: nothing carrying a theorem is stored.**
+    ///
+    /// Separate from the test above because it needs the *threaded* checker —
+    /// on the acceptance path no `Typing` can carry a `Thm` at all, so that
+    /// checker cannot tell a memo that honours this condition from one that
+    /// ignores it.
+    #[test]
+    fn the_gap_memo_refuses_a_typing_that_carries_a_theorem() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::mini::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        let t = c.infer_type(&k("X")).expect("infer X");
+        assert!(t.ev.thm().is_some(), "X certifies — otherwise this proves nothing");
+        c.gap_types.clear();
+        c.gap_put(&k("X"), &t);
+        assert!(
+            c.gap_types.is_empty(),
+            "a theorem's hypotheses name the kernel variables open when it was derived, \
+             so it must not travel"
+        );
     }
 
     /// **`num_loose_bvars` is what [`Checker::defeq_cache`]'s key rests on**,
