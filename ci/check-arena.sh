@@ -87,7 +87,47 @@ run_corpus() {
     fails=$((fails+1))
     return 1
   fi
+  LAST_N="$n"
   echo "  $name: $n files"
+}
+
+# ── A floor per leg, because the two legs are not interchangeable ────────────
+# Task #137: "one counter lets a healthy leg hide a dead one." `scripts/arena.sh`
+# fuses `good/` and `bad/` into a single `find` and reports one total, and the
+# guard above floors only that total — so an empty `bad/` behind a healthy
+# `good/` passes, on a script whose own header says "The `bad` half is the part
+# that matters." A checker that accepts everything passes `good/` trivially;
+# `bad/` is the entire negative coverage of this step.
+#
+# So each leg is counted here and required to be non-empty, and their sum is
+# required to equal what the run reported. The equality is the part that makes
+# this a check on what *executed* rather than on what is on disk: a leg present
+# but skipped by the runner changes the total without changing the file counts.
+#
+# `perf/` is excluded to match `scripts/arena.sh`, which skips it unless
+# `--include-perf` — see this file's header for why (3.6 GB RSS on one file).
+ARENA_LEGS="${ARENA_LEGS:-good bad}"
+check_legs() { # check_legs <corpus> <reported-total>
+  local c="$1" reported="$2" sum=0 n leg rc=0
+  for leg in $ARENA_LEGS; do
+    n=$(find "$c/$leg" -name '*.ndjson' 2>/dev/null | grep -cv '/perf/')
+    if (( n == 0 )); then
+      echo "  BROKEN: the \`$leg\` leg holds 0 export files at $c/$leg." >&2
+      echo "          The total above is the other leg's alone. \`bad/\` is the" >&2
+      echo "          negative coverage of this step; a checker that accepts" >&2
+      echo "          everything passes \`good/\` without it." >&2
+      rc=1
+    else
+      echo "  leg $leg: $n files"
+    fi
+    sum=$((sum+n))
+  done
+  if (( rc == 0 && sum != reported )); then
+    echo "  BROKEN: the run counted $reported file(s) but the legs hold $sum." >&2
+    echo "          A leg is present on disk and was not run, or was run twice." >&2
+    rc=1
+  fi
+  return $rc
 }
 
 # ── the self-test ───────────────────────────────────────────────────────────
@@ -200,6 +240,33 @@ EOF
     echo "SELF-TEST FAILED: a real count was rejected" >&2; bad=1
   fi
 
+  # ── the per-leg floor ─────────────────────────────────────────────────────
+  # The cell that matters is the second: a healthy `good/` and an empty `bad/`
+  # is precisely what the single total cannot see. Falsifier: delete the
+  # `(( n == 0 ))` branch of `check_legs` and it goes green, because the sum
+  # still equals the reported total when the runner also saw no `bad/` files.
+  LEGOK="$(corpus legok good/a.ndjson good/b.ndjson bad/c.ndjson)"
+  if check_legs "$LEGOK" 3 >/dev/null 2>&1; then
+    echo "  ok: two non-empty legs summing to the reported total pass"
+  else
+    echo "SELF-TEST FAILED: a healthy two-leg corpus was rejected" >&2; bad=1
+  fi
+
+  LEGBAD="$(corpus legbad good/a.ndjson good/b.ndjson)"
+  if check_legs "$LEGBAD" 2 >/dev/null 2>&1; then
+    echo "SELF-TEST FAILED: an empty \`bad\` leg passed behind a healthy \`good\`" >&2; bad=1
+  else
+    echo "  ok: an empty \`bad\` leg is BROKEN even when the total is nonzero"
+  fi
+
+  # …and a leg that is on disk but was not run. The file counts are healthy;
+  # only the equality catches it.
+  if check_legs "$LEGOK" 2 >/dev/null 2>&1; then
+    echo "SELF-TEST FAILED: a leg present but unrun was accepted" >&2; bad=1
+  else
+    echo "  ok: a total that does not match the legs on disk is BROKEN"
+  fi
+
   echo
   if (( bad )); then echo "arena self-test FAILED" >&2; exit 1; fi
   echo "arena self-test OK"
@@ -238,7 +305,10 @@ fi
 # `$ROOT/vendor/arena-tests`, so without this it would look somewhere else than
 # the directory checked above the moment the two differ — which is exactly what
 # a worktree makes happen.
-run_corpus "arena corpus" env ARENA_CORPUS="$CORPUS" "$ROOT/scripts/arena.sh"
+LAST_N=0
+if run_corpus "arena corpus" env ARENA_CORPUS="$CORPUS" "$ROOT/scripts/arena.sh"; then
+  check_legs "$CORPUS" "$LAST_N" || fails=$((fails+1))
+fi
 
 echo
 if (( fails )); then

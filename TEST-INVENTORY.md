@@ -139,9 +139,12 @@ Legs that had no floor of their own, in risk order:
    counter. Only `bad` carries weight; `good`'s 102 files satisfy the aggregate
    alone. *Fixed on this branch (§3.1).*
 3. **`ci/check-arena.sh`** — `scripts/arena.sh` fuses `good` and `bad` into one
-   `find` and reports one total, so an empty `bad/` passes behind a healthy
+   `find` and reports one total, so an empty `bad/` passed behind a healthy
    `good/`, even though that script's own header says "the `bad` half is the
-   part that matters". **Open** — see §5.
+   part that matters". *Fixed on this branch:* each leg is counted and floored,
+   and their sum must equal the total the run reported — the equality is what
+   makes it a check on what executed rather than on what is on disk. The live
+   corpus reads `154 files = 99 good + 55 bad`.
 4. **`ci/check-test-guards.sh`** — `for d in $SCAN_DIRS; do [[ -d "$d" ]] ||
    continue`. Three scan directories, one aggregate `MIN_SITES=1`. All 58 sites
    are in `checker/tests`; `derived/tests` and `kernel/tests` contribute zero
@@ -339,13 +342,9 @@ step, and that is worth more than 15.8 s. Recorded and left.
 
 ## 5. What is still open
 
-1. **`ci/check-arena.sh` per-leg floors** (§2.1 item 3). The clean fix is a
-   `good`/`bad` split like `check-mini-vs-nanoda.sh`'s `REQUIRE_LEGS`. It can be
-   done entirely inside `ci/` by having `check-arena.sh` count each leg's files
-   itself and require the reported total to equal their sum.
-2. **Per-leg counters in `check-test-guards.sh` and `check-test-inputs.sh`**
+1. **Per-leg counters in `check-test-guards.sh` and `check-test-inputs.sh`**
    (§2.1 items 4, 5), and a **cell counter** in `test-boundary.sh` (item 6).
-3. **The two adverse ratchets** (§3.5) — needs the ledger diff and the owning
+2. **The two adverse ratchets** (§3.5) — needs the ledger diff and the owning
    seat.
-4. **The three stale crossing assertions and one gap budget** (§3.2) — needs the
+3. **The three stale crossing assertions and one gap budget** (§3.2) — needs the
    attributing commit so the re-baseline can say why.
