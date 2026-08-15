@@ -50,7 +50,7 @@ fn build(env: &mut Env) -> Dev {
 /// The tag set is right-nested and **terminates in `0`**, exactly as
 /// `thesis.txt:1789–1791` writes it — that is what makes `inj_i = inr^i ∘ inl`
 /// uniform in `i`, and it is where this differs from the hand-written
-/// `enums`/`wnat`/`wlist`, which collapse the trailing `+ 0`.
+/// `enums`/`wlist` (and the deleted `wnat`), which collapse the trailing `+ 0`.
 #[test]
 fn the_tag_set_is_right_nested_and_ends_in_zero() {
     let mut env = Env::new();

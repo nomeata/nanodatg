@@ -121,8 +121,14 @@ pub use wmem::WMem;
 // ─────────────────────────────────────────────────────────────────────────────
 // Closing note — 2026-07-31, in two sessions: the one that built the tower and
 // refuted the target it was asked for, and the one that finished the chain to
-// `⟦N⟧ ∈ U₁`. The first session's record is kept verbatim, because its
-// corrections are what made the second short.
+// `⟦N⟧ ∈ U₁`. The first session's record is kept as written, because its
+// corrections are what made the second short — with one exception: it named
+// `crate::wnat` and `cumul::witness` in the present tense, and both were
+// deleted when the `Nat` carrier moved to von Neumann `ω` ([`crate::nat`],
+// `DECISIONS.md` 2026-08-11). Those citations are corrected where they stand
+// rather than annotated at the end, so nothing below reads as a live module
+// path. The mathematics is untouched; the W-type argument is about W-types and
+// never depended on which module carried `Nat`.
 //
 // WHAT IS DONE, all unconditional and each pinned by a test in
 // `derived/tests/cumul.rs` at fresh constants or (for the last three) at
@@ -154,14 +160,16 @@ pub use wmem::WMem;
 //   ⊢ 1 = succ 0        ⊢ 1 ∈ ω        ⊢ (1+1) ∈ U₁           [NatUniverse]
 //   ⊢ W(1+1, B, U(1+1)) ∈ U(ω)   — i.e. ⊢ ⟦N⟧ ∈ U₁            [NatUniverse::nat_in_u1]
 //
-// The last of those is the deliverable, it is at closed terms, and
-// `crate::wnat::Nat`'s `zero`/`succ`/`zero_ne_succ` at the same terms are what
-// stop it being a statement about a one-element set.
+// The last of those is the deliverable, it is at closed terms, and the deleted
+// `wnat::Nat`'s `zero`/`succ`/`zero_ne_succ` at the same terms were what
+// stopped it being a statement about a one-element set.
 //
 // ── THE STATEMENT IN THE BRIEF IS FALSE, AND THIS IS THE FIRST THING TO KNOW ──
 //
 // `W(A,B,u) ∈ u` is **refutable** at the `u` the development actually uses.
-// `⟦N⟧` is `W(A, B, U(A))` with `A = 1+1` (`crate::wnat`), and:
+// `⟦N⟧` **was** `W(A, B, U(A))` with `A = 1+1`, in the deleted `wnat` — today
+// `⟦Nat⟧` is von Neumann `ω` ([`crate::nat`]) and none of this is on its path.
+// The refutation below is about W-types and stands whatever carries `Nat`:
 //
 //   * `V_ω`, the hereditarily finite sets, satisfies every clause of
 //     `crate::universe::is_universe` — this is already recorded in
@@ -169,8 +177,8 @@ pub use wmem::WMem;
 //     rather than `U(U₀)`;
 //   * `A ∈ V_ω`, so `U(A) ⊆ V_ω`, so **every member of `U(A)` is finite**;
 //   * `crate::bound::least_universe_closed` gives `closed(A,B,U(A))`, so
-//     `W(A,B,U(A))` really is the least closed subset, and `crate::wnat`'s
-//     `zero`, `succ`, `zero_ne_succ` and `succ_inj` make it infinite.
+//     `W(A,B,U(A))` really is the least closed subset, and `wnat`'s `zero`,
+//     `succ`, `zero_ne_succ` and `succ_inj` made it infinite.
 //
 // So `W(A,B,U(A)) ∉ U(A)`. `W ∈ u` is a *size* statement and the size has to
 // come from somewhere: the correct target is
@@ -228,8 +236,8 @@ pub use wmem::WMem;
 //   * **Finite branching as `k ∈ ω`.** `bounded` proves that a function out of
 //     a von Neumann natural lands in a single stage, by induction on `k` with
 //     `directed` doing the merge. The fibres of every inductive in scope *are*
-//     naturals — `crate::wnat` sends its two tags to `0` and `1`, `crate::wlist`
-//     likewise, a two-recursive-argument constructor would send its tag to `2`
+//     naturals — `wnat` sent its two tags to `0` and `1`, [`crate::wlist`]
+//     still does, a two-recursive-argument constructor would send its tag to `2`
 //     — so `∀a ∈ A. B(a) ∈ ω` is the finite-branching hypothesis to carry. A
 //     fibre merely *equinumerous* to a natural needs more, and the sentence
 //     that used to end here guessed wrong about what: see the 2026-08-01
@@ -250,9 +258,9 @@ pub use wmem::WMem;
 //
 //          Fin(A,B) := A ⊆ S ∧ ∀a ∈ A. (B(a) ⊆ S ∧ B(a) ∈ ω)
 //
-//      At `crate::wnat` the seed is then `S := (1+1) ∪ 1` — the fibres are `0`
-//      and `1` — which is a great deal smaller and needs no facts about `B` as
-//      a set at all. See `witness`.
+//      At `wnat` the seed was then `S := (1+1) ∪ 1` — the fibres are `0` and
+//      `1` — which is a great deal smaller and needs no facts about `B` as a
+//      set at all. See `witness`.
 //
 //  (b) `⊢ ∀A ∀B. (Fin(A,B) → closed(A,B,T))`  [closed::tower_closed]
 //      The route in the old note is exactly right and every step of it already
@@ -392,8 +400,8 @@ pub use wmem::WMem;
 // — to get one stage covering `f : B(a) → T` — so `bnd(B(a))` is the weakest
 // hypothesis that carries the proof and nothing weaker could. `bounded`, the
 // old hypothesis's whole content, becomes the four-line specialisation
-// `tower_closed`, so `wnat`, `enums` and the checker keep the statement they
-// already discharge and pay nothing for the generality.
+// `tower_closed`, so `wnat` (as it then was), `enums` and the checker keep the
+// statement they already discharge and pay nothing for the generality.
 //
 // Two things about this that are worth having in writing.
 //
@@ -425,9 +433,9 @@ pub use wmem::WMem;
 //   S ∈ U(c), S ∈ U₁, ω ∈ U₁           unchanged from `witness`/`enums`
 //
 // `derived/tests/cumul.rs` walks the whole path at terms that already exist:
-// `the_general_membership_statement_reproves_the_naturals_in_u1` weakens
-// `wnat`'s `Fin` to `Fin⁺` and gets `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`,
-// the same theorem `NatUniverse` produces.
+// `the_general_membership_statement_reproves_the_naturals_in_u1` weakened
+// `wnat`'s `Fin` to `Fin⁺` and got `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`,
+// the same theorem `NatUniverse` produced. That test went with the carrier.
 //
 // ── THE COMPOSITION — 2026-08-01, later the same day ────────────────────────
 //

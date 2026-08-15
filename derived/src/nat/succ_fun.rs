@@ -21,7 +21,7 @@
 //! can apply with `app` and pass around as a value.
 //!
 //! The W-type presentation this replaces carried the same three fields
-//! (`succ_fun`, `succ_in_funspace`, `succ_beta` on `crate::wnat::Nat`), so the
+//! (`succ_fun`, `succ_in_funspace`, `succ_beta` on the deleted `wnat::Nat`), so the
 //! consumer's shape is unchanged; only the object is.
 //!
 //! # It is assembly, not a new derivation

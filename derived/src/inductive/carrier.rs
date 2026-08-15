@@ -55,8 +55,9 @@
 //! A ∈ U(c)      and      ∀a ∈ A. app(B,a) ∈ U(c)
 //! ```
 //!
-//! for some seed `c`. `wnat.rs` and `wlist.rs` both take `c := A` and then
-//! discharge the second obligation by **case analysis on the tag sum**, showing
+//! for some seed `c`. `wlist.rs` takes `c := A` — so did the deleted `wnat.rs` —
+//! and then discharges the second obligation by **case analysis on the tag
+//! sum**, showing
 //! each constructor's fibre — `0` or `1` there — separately lands in `U(A)`.
 //! That does not generalise: the fibres here are `finord(mᵢ)`, and
 //! `finord(m) ∈ U(A)` for arbitrary `m` would need `U` closed under binary

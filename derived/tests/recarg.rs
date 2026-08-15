@@ -81,7 +81,8 @@ fn no_recursive_arguments_is_the_empty_function() {
 }
 
 /// One recursive argument: the fibre is `finord(1) = 1 + 0`, which is **not**
-/// the term `1`, so the function is not the one-point graph `wnat.rs` uses.
+/// the term `1`, so the function is not the one-point graph the deleted
+/// `wnat.rs` used.
 #[test]
 fn one_recursive_argument_is_not_a_one_point_graph() {
     let mut env = Env::new();
@@ -117,8 +118,8 @@ fn one_recursive_argument_is_not_a_one_point_graph() {
 }
 
 /// Two recursive arguments, at two provably different points. This is the shape
-/// nothing in `derived/` could express before: `wnat.rs` and `wlist.rs` both
-/// stop at one.
+/// nothing in `derived/` could express before: `wlist.rs` stops at one, and so
+/// did the deleted `wnat.rs`.
 #[test]
 fn two_recursive_arguments_come_back_out() {
     let mut env = Env::new();

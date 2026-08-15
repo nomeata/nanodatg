@@ -3,10 +3,14 @@
 //! (the cumulative hierarchy), run end to end at the shapes the checker's three
 //! hand-written recognisers currently carry.
 //!
-//! `derived/tests/cumul.rs`'s `the_general_membership_statement_reproves_the_naturals_in_u1`
-//! walks the same route at `derived/src/wnat.rs`'s hand-built `N`. These tests
-//! are its analogue **from declaration data**: nothing below mentions a fibre,
-//! a tag or a seed by hand.
+//! `derived/tests/cumul.rs` used to walk the same route at
+//! `derived/src/wnat.rs`'s hand-built `N`, in
+//! `the_general_membership_statement_reproves_the_naturals_in_u1`; both went
+//! when the W-type presentation of `Nat` was deleted (see
+//! [`the_naturals_from_a_declspec_land_in_u1`] below, which is the only place
+//! `w_in_universe_bnd` is now exercised at a concrete W-type). These tests are that one's
+//! analogue **from declaration data**: nothing below mentions a fibre, a tag or
+//! a seed by hand.
 //!
 //! **Non-vacuity is checked at every shape.** A membership theorem about `∅`
 //! would satisfy every `∈ U₁` assertion here, so each declaration is also made

@@ -104,8 +104,8 @@
 //! every caller to build and then take apart an `n`-fold conjunction, and it
 //! has no sensible form at `n = 0`. Taking the theorems as arguments keeps all
 //! `n + 1` exports **unconditional**, and it is what the callers actually have:
-//! `wnat.rs` and `wlist.rs` each hold their two branch typings as separate
-//! theorems already. The typings are *checked* against the branches and the
+//! `wlist.rs` holds its two branch typings as separate theorems already, as the
+//! deleted `wnat.rs` did. The typings are *checked* against the branches and the
 //! codomain rather than assumed, so a mismatched pair is refused.
 //!
 //! # Why `beta[i]` needs every typing and not just `fᵢ`'s

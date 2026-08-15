@@ -436,11 +436,12 @@ fn colliding_telescopes_are_separated_by_the_injections_alone() {
     );
 }
 
-/// The `N` shape, as a cross-check against the hand-written `wnat_rec`: the
-/// general machine's ι at the successor fires closed with the zero
-/// constructor as the recursive witness. (The terms are *not* `wnat_rec`'s —
-/// the fibres differ, `finord(1) ≠ 1` — so the check is that both fire, not
-/// term equality.)
+/// The `N` shape, written as a cross-check against the hand-written `wnat_rec`
+/// while that still existed: the general machine's ι at the successor fires
+/// closed with the zero constructor as the recursive witness. (The terms were
+/// *not* `wnat_rec`'s — the fibres differ, `finord(1) ≠ 1` — so the check was
+/// that both fire, not term equality. `wnat_rec` is gone; what this pins now is
+/// the general machine on its own.)
 #[test]
 fn the_nat_shape_fires_at_the_successor() {
     let mut env = Env::new();

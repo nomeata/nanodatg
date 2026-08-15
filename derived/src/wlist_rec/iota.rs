@@ -32,7 +32,7 @@ use super::shared::{congr_ctx, gen_under, hyp_inst, rewrite_under};
 
 /// `⊢ HYP → app(lrec(α,z,s,T), ⟨inl •,∅⟩) = z` — **ι at `List.nil`**.
 ///
-/// Line for line [`crate::wnat_rec`]'s zero rule: the fibre `fam(α)(inl •)` is
+/// Line for line the deleted `wnat_rec`'s zero rule: the fibre `fam(α)(inl •)` is
 /// `0`, so the composite is over an empty domain and
 /// [`crate::wrec_unit::comp_empty_domain`] collapses it, leaving the step applied
 /// to `k₀`.
@@ -118,7 +118,7 @@ pub(super) fn iota_nil_at(
 /// the field and the recursive call live**.
 ///
 /// The fibre `fam(α)(inr h)` is `1`, so nothing collapses. Everything
-/// [`crate::wnat_rec`]'s successor rule needed is needed again — the one-point
+/// the deleted `wnat_rec`'s successor rule needed is needed again — the one-point
 /// subterm family, the composite's typing, and
 /// [`crate::wrec_typing::composite_app`] to read the recursive value back out —
 /// with one difference: the fibre equation is itself *conditional* on `h ∈ α`,

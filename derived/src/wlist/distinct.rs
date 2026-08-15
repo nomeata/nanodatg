@@ -75,7 +75,7 @@ pub(super) fn nil_ne_cons(wt: &Wtype, hv: FreeVar, tv: FreeVar) -> Option<Thm> {
 /// [`crate::sums::Sums::inr_inj`], and the fibre half is
 /// [`crate::singleton_inj`] followed by the pair's injectivity again.
 ///
-/// The *head* component is what [`crate::wnat`]'s `succ_inj` had no counterpart
+/// The *head* component is what the deleted `wnat`'s `succ_inj` had no counterpart
 /// for: it is what makes distinct elements of `α` give distinct one-element
 /// lists, so `lt(α)` sees `α` rather than only its cardinality being non-zero.
 pub(super) fn cons_inj(env: &mut Env, wt: &Wtype) -> Option<Thm> {

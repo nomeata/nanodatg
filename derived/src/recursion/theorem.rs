@@ -185,7 +185,7 @@ pub fn recursion(
 //
 // `W(A,B,u) ∈ u` is not open — it is **refutable** at the `u` this development
 // uses. `crate::cumul` proves the point (`V_ω` is a universe, `A ∈ V_ω` makes
-// every member of `U(A)` finite, and `crate::wnat` makes `W(A,B,U(A))`
+// every member of `U(A)` finite, and the deleted `wnat` made `W(A,B,U(A))`
 // infinite); `crate::cumul::wmem` repeats it. The correct target is
 // `W(A,B,U(A)) ∈ U(c)` for a universe `c` with `ω ∈ U(c)` — a size statement
 // whose size content is `ω`.

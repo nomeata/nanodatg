@@ -35,7 +35,7 @@ use crate::{
 /// `⊢ A ∈ U(A) ∧ ∀a. (a ∈ A → app(B,a) ∈ U(A))` at `A := 1 + α` — the antecedent
 /// every unconditional W-type rule carries, with **`α` free and no hypothesis**.
 ///
-/// The case analysis is [`crate::wnat`]'s with one branch generalised: an
+/// The case analysis is the deleted `wnat`'s with one branch generalised: an
 /// `a ∈ 1 + α` is `inl x` with `x ∈ 1`, hence `inl •` by
 /// [`crate::sums::Sums::unit_eta`], or `inr y` with `y ∈ α` — and *that* `y` is
 /// exactly what [`WList::fibre_cons`] wants, so the right branch discharges its

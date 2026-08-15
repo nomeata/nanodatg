@@ -22,8 +22,8 @@
 //! ```
 //!
 //! **uniform in `i`**, for every `i < n` and every `n`. A translation that
-//! collapsed the last `+ 0` — as `derived/src/enums.rs`, `wnat.rs` and
-//! `wlist.rs` all do by hand, writing `Bool`'s tag set as `1 + 1` rather than
+//! collapsed the last `+ 0` — as `derived/src/enums.rs` and `wlist.rs` do by
+//! hand, and the deleted `wnat.rs` did, writing `Bool`'s tag set as `1 + 1` rather than
 //! `1 + (1 + 0)` — has to special-case the last constructor, whose injection
 //! becomes `inr^{n-1}` with no `inl`. Every lemma below would then need two
 //! forms. Keeping the `0` costs one extra `+` in the term and buys a single
