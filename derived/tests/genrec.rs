@@ -1561,8 +1561,27 @@ fn carrier_at_restates_the_codomain_and_not_only_the_summands() {
     // the telescopes rather than read back, so a `carrier_at` that reused
     // `Fibre::target` fails at the emptiness check above and one that rebuilt
     // it at the wrong parameters fails here.
+    //
+    // **The rebuild is now real, and the sentence above used to be false.** This
+    // read `assert_eq!(target, target_of(&s, &values))` against
+    // `let (values, target) = ind.fibre_at(…)` — and `fibre_at`
+    // (`inductive/carrier.rs:747`) *computes* `target` as `target_of(s, &values)`
+    // and returns the pair, so both sides came out of one call and the assertion
+    // was `f(x) == f(x)`. No `fibre_at` could fail it. The summands are taken
+    // from `fibre_summands_at` at `q⃗` instead — the telescope-side entry point,
+    // one layer below the thing under test — so a `fibre_at` that summed the
+    // wrong telescopes, or read back `Fibre::values` at the declaration's own
+    // parameters, is separated by the first assertion and the codomain by the
+    // second.
     let (values, target) = ind.fibre_at(&mach, &qs).expect("the fibre at q⃗");
-    assert_eq!(target, derived::fibre::target_of(&s, &values));
+    let rebuilt: Vec<Term> = ind
+        .fibre_summands_at(&s, &qs)
+        .expect("the fibre summands at q⃗")
+        .iter()
+        .map(|f| mach.syms.sum(f).expect("the sum symbol"))
+        .collect();
+    assert_eq!(values, rebuilt, "`fibre_at`'s summands are not the telescopes' at q⃗");
+    assert_eq!(target, derived::fibre::target_of(&s, &rebuilt));
     assert_ne!(target, ind.fibre.target, "the two codomains cannot be the same term");
     let seed = Term::apply(s.ap.sets.up, vec![tags.clone(), target.clone()]);
     assert_eq!(u, mach.bnd.universe_of(seed), "the bound is seeded at the re-stated codomain");

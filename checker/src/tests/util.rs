@@ -79,9 +79,33 @@ impl<'t, 'p: 't> TcCtx<'t, 'p> {
     }
 }
 
+/// **An export with no declarations loads and checks.** The subject is the
+/// loader reaching the end of a header-only file, which is what returning `Ok`
+/// says; the loop is not the subject and cannot be.
+///
+/// `test_export_file(None, …)` defaults to `test_resources/Empty/export`, which
+/// is **176 bytes and one line** — the `meta` object and nothing else. So
+/// `declars` is empty, the loop body never runs, and no mutation to
+/// `check_declar` can fail this test. That was true and unstated, which is the
+/// half worth fixing: it is `ci/skip-guard.rs`'s rule ("a check that examined
+/// nothing reports success") applied to an assertion rather than to an input,
+/// exactly as `hash_test0` in this same file was fixed for running 20 000
+/// iterations of `None == None`.
+///
+/// The emptiness is therefore **asserted rather than assumed**. If the fixture
+/// ever gains a declaration this fails and someone decides what the test should
+/// be, instead of it quietly becoming a weak `check_declar` test that looks
+/// like a strong one. Falsified by pointing `test_export_file` at any
+/// non-empty export, e.g. `ProjFromProp/config.json`, whereupon it reds here.
 #[test]
 fn check_empty() -> Result<(), Box<dyn Error>> {
     test_export_file(None, |export| {
+        assert!(
+            export.declars.is_empty(),
+            "the Empty fixture now has {} declaration(s); this test's subject is the \
+             header-only file, and the loop below has never been its content",
+            export.declars.len()
+        );
         for declar in export.declars.values() {
             export.check_declar(declar);
         }
