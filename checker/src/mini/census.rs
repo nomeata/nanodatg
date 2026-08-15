@@ -273,6 +273,25 @@ pub fn gap_types() -> FrameCache {
     })
 }
 
+thread_local! {
+    static WHNF_MEMO: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Hits and misses of `Checker::whnf_memo`, the acceptance-only reduction memo.
+pub fn note_whnf_memo(hit: bool) {
+    WHNF_MEMO.with(|c| {
+        let (h, m) = c.get();
+        c.set(if hit { (h + 1, m) } else { (h, m + 1) });
+    })
+}
+
+pub fn whnf_memo() -> FrameCache {
+    WHNF_MEMO.with(|c| {
+        let (hits, misses) = c.get();
+        FrameCache { hits, misses }
+    })
+}
+
 pub fn defeq_cache() -> FrameCache {
     DEFEQ_CACHE.with(|c| {
         let (hits, misses) = c.get();
