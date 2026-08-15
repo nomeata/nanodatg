@@ -316,7 +316,7 @@ const HAS_GAPS: &[&str] = &["075_nRecReduction", "076_listRecReduction"];
 /// `074_prodRecEqns` (16 → 14 gaps, 2 → 4 escapes) moved with them and are not
 /// pinned here.
 const GAP_BUDGET: &[(&str, u64)] = &[
-    ("075_nRecReduction", 3),
+    ("tutorial/075_nRecReduction", 3),
     // **31 → 9 on 2026-08-15, and it is two tranches, not one** — which is why
     // the previous seat could not attribute it and correctly refused to move it.
     // Measured per-commit on `nanoda_bin`, the binary this table reads:
@@ -337,8 +337,8 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     //
     // A hypothesis that `5bf8342` closed this file is **refuted**: 076 is still
     // 31 at `73dcc53` and `6483199`, both after it.
-    ("076_listRecReduction", 9),
-    ("116_rtreeRecReduction", 10),
+    ("tutorial/076_listRecReduction", 9),
+    ("tutorial/116_rtreeRecReduction", 10),
     // `101_proofIrrelevanceWhnf` was here at 5 and is now at zero — see
     // [`PROOF_IRRELEVANCE_DERIVED`], which pins the stronger claim.
     // **Two, not one, and the two are the same gap counted twice.** These
@@ -347,8 +347,8 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     // single arbitrary level — see the constant's own documentation. Each pass
     // reports the file's one gap, so the file reports two. Nothing about the
     // interpretation moved here; the *amount of checking* did.
-    ("113_reduceCtorParamRefl.mk", 2),
-    ("114_reduceCtorParamRefl2.mk", 2),
+    ("tutorial/113_reduceCtorParamRefl.mk", 2),
+    ("tutorial/114_reduceCtorParamRefl2.mk", 2),
     // **The projection typing rule's residue, and the reason it is a residue.**
     // `081` was at 8 gaps at `DEFAULT_LEVELS = [0]` and 0 at `[1]`, and that
     // disagreement was the whole of the interpretation's `[0]`/`[1]` gap. At
@@ -366,7 +366,7 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     // *interpretation of `PSigma`*, one level down, and no typing rule over an
     // uninterpreted structure can close it. Pinned here so the trade stays
     // visible: 8 gaps / 0 escapes became 1 / 1.
-    ("081_PSigma.snd", 1),
+    ("tutorial/081_PSigma.snd", 1),
     // **Two files whose numbers went up when `admit` stopped guessing, and both
     // were always this high.** `TgBackend::admit`'s implementation used to try
     // `proof_eq` first and pass the step off as derived whenever both sides
@@ -376,8 +376,41 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     // `124_quotLiftReduction` was 9 and is 10. Pinned so that the correction
     // stays made — an entry here is the only thing that would notice a rescue
     // being reintroduced.
-    ("124_quotLiftReduction", 10),
-    ("125_quotIndReduction", 2),
+    ("tutorial/124_quotLiftReduction", 10),
+    ("tutorial/125_quotIndReduction", 2),
+    // ── The population that had no budget at all, added 2026-08-15 ──────────
+    //
+    // Measured over the whole `good/` corpus at master `203b3ff`, these are
+    // every remaining gap-bearing export except `init-prelude`, which is pinned
+    // row by row by `GAP_LEDGER` instead. Before this, **854 of the corpus's
+    // 11 279 gaps carried no assertion of any kind** — the four
+    // `undecidability/` files (737) and thirteen tutorial files (117), among
+    // them `077_RBTree.id_spec` at 45, the largest single tutorial file. Their
+    // counts could grow without limit and nothing would say so.
+    //
+    // They are pinned at the number they measure and not at a ceiling, like
+    // every entry above: the loop below fails on an increase *and* on a
+    // decrease, so an improvement is reported rather than absorbed. No claim is
+    // made that any of these numbers is good — only that it is known.
+    ("tutorial/052_reduceCtorParam.mk", 2),
+    ("tutorial/074_prodRecEqns", 1),
+    ("tutorial/077_RBTree.id_spec", 45),
+    ("tutorial/093_projRed", 5),
+    ("tutorial/094_ruleK", 9),
+    ("tutorial/098_natLitEq", 5),
+    ("tutorial/102_unitEta1", 4),
+    ("tutorial/103_unitEta2", 8),
+    ("tutorial/104_unitEta3", 4),
+    ("tutorial/105_structEta", 12),
+    ("tutorial/106_funEta", 5),
+    ("tutorial/107_funEtaDep", 5),
+    ("tutorial/118_accRecReduction", 12),
+    // The four `undecidability/` exports. Nothing in the suite named this
+    // directory before; it is the second-largest gap population in the corpus.
+    ("undecidability/alg-conv-trans-acc-left", 205),
+    ("undecidability/alg-conv-trans-acc-right", 248),
+    ("undecidability/alg-conv-trans-quot-right", 9),
+    ("undecidability/subject-reduction-redex", 275),
 ];
 
 /// Exports outside the inductive-free fragment that are nevertheless derived
@@ -607,7 +640,12 @@ fn files_with_known_gaps_are_still_accepted() {
 /// constructors stopped escaping — not because any reduction rule changed.
 #[test]
 fn partially_derived_files_stay_within_their_budget() {
-    let dir = corpus().join("good/tutorial");
+    // **`good/`, not `good/tutorial`.** The entries carry their subdirectory
+    // now, because the tutorial corpus is not where the gaps are: measured over
+    // the whole corpus, the four `undecidability/` exports hold 737 of them and
+    // no test named that directory at all. Keying on the stem alone is what made
+    // the second-largest population in the corpus unreachable from here.
+    let dir = corpus().join("good");
     if skip_guard::absent(&dir) {
         return
     }

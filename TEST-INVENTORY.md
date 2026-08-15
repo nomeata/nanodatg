@@ -1525,13 +1525,27 @@ assertion"**.
 | population | gaps | ratcheted by |
 | --- | ---: | --- |
 | `init-prelude` | 10 386 | `GAP_LEDGER`, row by row, in `tg_tutorial.rs` |
-| `undecidability/` (4 files) | 737 | **nothing** — no test names these files |
+| `undecidability/` (4 files) | 737 | `GAP_BUDGET` — **added 2026-08-15** |
 | `tutorial/`, 8 files | 39 | `GAP_BUDGET` |
-| `tutorial/`, 13 files | 117 | **nothing** |
+| `tutorial/`, 13 files | 117 | `GAP_BUDGET` — **added 2026-08-15** |
 
-**854 gaps (7.6 %) carry no assertion of any kind**, including
-`077_RBTree.id_spec` at 45 — the largest single tutorial file — and
-`118_accRecReduction` and `105_structEta` at 12 each.
+**854 gaps (7.6 %) carried no assertion of any kind** — the four
+`undecidability/` exports, which no test named at all, and thirteen tutorial
+files including `077_RBTree.id_spec` at 45, the largest single tutorial file.
+They are pinned now, at the number each measures rather than at a ceiling: the
+loop fails on an increase *and* on a decrease, so an improvement is reported
+rather than absorbed. **Every gap-bearing export in the corpus is now held by
+something** — `init-prelude` row by row, the other 25 file by file — and the
+arithmetic closes: `GAP_BUDGET` has **25 entries summing to 893**, `init-prelude`
+is **10 386**, and 893 + 10 386 = **11 279**, the corpus total. That identity is
+the check on this claim; if a new gap-bearing export appears, the two stop
+adding up.
+
+Two things this required. `GAP_BUDGET`'s entries had been bare tutorial stems
+and its loop was rooted at `good/tutorial`, so the second-largest gap population
+in the corpus was not addressable from it; entries now carry their subdirectory
+and the loop is rooted at `good/`. And no claim is made that any of these numbers
+is *good* — only that it is known, and that it cannot move in silence.
 
 The zero side is looser still. Measured, **70 of 91 tutorial exports have zero
 gaps**; `FULLY_DERIVED` and `RECURSOR_DERIVED` together assert 28 of them. So
