@@ -6,8 +6,10 @@
 //! agree object-for-object, and two private cores disagree, which is the
 //! `Nat::over` template (two-over-one agree, fresh disagrees) one level up.
 //! The cross-engine half — the checker running over the same core — is
-//! `mini/tests/envshare_tg.rs`, behind `--features tg` because driving the
-//! checker's evidence path needs its backend compiled in.
+//! `mini_envshare_cross.rs` — which used to be `mini/tests/envshare_tg.rs`,
+//! "behind `--features tg` because driving the checker's evidence path needs
+//! its backend compiled in". There is one backend and one build now, so the
+//! feature and the suffix are both gone and that file is unconditional.
 //!
 //! Everything here runs off committed fixtures or no input at all; nothing
 //! reads the gitignored corpus, so there is nothing to skip.

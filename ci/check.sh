@@ -224,8 +224,9 @@ step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
 # "There is one backend, and it is not selected"). That retires a whole build
 # configuration, and with it:
 #
-#   * four suites — `tg_tutorial`, `unified_cli`, `mini_envshare_tg`,
-#     `mini_route_tg` — which opened `#![cfg(feature = "tg")]` and so were
+#   * four suites — `tg_tutorial`, `unified_cli`, `mini_envshare_cross`
+#     (then `mini_envshare_tg`) and `mini_route` (then `mini_route_tg`) —
+#     which opened `#![cfg(feature = "tg")]` and so were
 #     *absent*, not skipped, in the plain run (`TEST-INVENTORY.md` §1.2's third
 #     shape of "skip is not pass"). They run in the only build there is now.
 #   * `mini_designed`'s two `cfg`-ed tests, which made that suite 32/34 in the

@@ -789,7 +789,7 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
     }
 
     // **The sweep runs on a big stack, as every other wholesale sweep in this
-    // suite does** — `envshare_tg.rs` and `route_tg.rs` spawn at 512 MB,
+    // suite does** — `mini_envshare_cross.rs` and `mini_route.rs` spawn at 512 MB,
     // `budget.rs` reaches its fixture through `run::check_file_deep_with`,
     // which spawns at 256 MB. This loop was the one that did not, and it read
     // the *whole* fixture directory on the default 2 MB test stack.

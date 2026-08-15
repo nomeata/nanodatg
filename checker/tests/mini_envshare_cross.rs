@@ -10,9 +10,28 @@
 //! borrows, the counters are one pair of counters, and the W-type machine is
 //! one object on both sides — in either engine order.
 //!
-//! Behind `--features tg` because the checker's evidence path exists only
-//! with its backend compiled in; `ci/check.sh` runs it with
-//! `cargo test -p mini --features tg`.
+//! # The `_tg` in the file name, and what it now means
+//!
+//! This header used to read: *"Behind `--features tg` because the checker's
+//! evidence path exists only with its backend compiled in; `ci/check.sh` runs
+//! it with `cargo test -p mini --features tg`."* **Every clause of that is now
+//! false**, and each was false in a way that would send the next reader
+//! somewhere that does not exist: `--features tg` was retired with the
+//! `Certifier` trait when one backend stopped needing selecting (`d746251`,
+//! `checker/src/certify.rs` — "There is one backend, and it is not selected"),
+//! `-p mini` names a crate merged into `checker` at `4e86d46`, and the
+//! `ci/check.sh` step that ran this line is one of the three deleted with the
+//! feature. The suite is unconditional, runs under a plain `cargo test`, and
+//! `ci/check.sh` reaches it through the bare `cargo test -p nanoda_lib`.
+//!
+//! So the suffix does **not** mean "needs a special build" — there is one
+//! build. What separates this file from its sibling `mini_envshare.rs` is that
+//! the sibling exercises mini's root alone (two `Interp`s over one core, no
+//! corpus, no checker), while this one drives **both engines** in one process.
+//! That is the distinction the name should carry, and a suffix that instead
+//! names a deleted feature is how a suite gets read as optional and drops off
+//! a gate list — which is exactly what happened to it. Renamed accordingly;
+//! `TEST-INVENTORY.md` §3.2 records the trade.
 
 
 use std::path::{Path, PathBuf};
@@ -147,8 +166,16 @@ fn a_defining_equation_crosses_from_mini_to_checker() {
 /// mini's defining equation is *offered* and the statement guard in
 /// `const_abbrev` refuses it: one counted decline, a second carrier beside
 /// mini's (`divergent = 1`), and no adoption. This is the fixture that goes
-/// red if that guard is loosened — `034` below cannot catch it, because an
-/// inductive-only file never calls `const_abbrev` at all.
+/// red if that guard is loosened — `034` below cannot catch it.
+///
+/// *(The reason given here used to be "because an inductive-only file never
+/// calls `const_abbrev` at all", and **`034` is not an inductive-only file**:
+/// it is one `inductive` and one `def`. The true reason is narrower and is now
+/// visible in `034`'s own numbers — its one defining equation is **adopted**,
+/// `adoptedByCheckerDefeq = 1` with no decline beside it, so that file offers
+/// the declining side of this slot no witness at all. Corrected in place
+/// rather than annotated, because the old sentence was a claim about the
+/// fixture and it was simply false.)*
 ///
 /// **Moved off `003_arrowType` on 2026-08-11, with a written trade** (task
 /// #151). `003` used to carry this cell and stopped being divergent when the
@@ -214,38 +241,200 @@ fn the_arrow_type_converged_because_its_pi_symbol_is_now_one() {
     assert_eq!(field(&pi, "askedByCheckerOnly"), 0, "a one-sided Π shape appeared:\n{pi}");
 }
 
-/// **The `has_type_const` guard, specifically.** `034` below exercises only
-/// `ty_const`'s read (whose statement check lives inside `typing`), so a
-/// loosened guard in `has_type_const` — the obligation-discharge read — slips
-/// past it; measured under exactly that mutation, `084_projProp1` is a file
-/// where it shows: one mini typing gets wrongly adopted there (0 → 1) while
-/// this fixture pins 0 adopted and all thirteen offers declined.
+/// **The `has_type_const` guard, specifically** — and the file that still has
+/// a live decline population to guard. `034` below exercises only `ty_const`'s
+/// read (whose statement check lives inside `typing`), so a loosened guard in
+/// `has_type_const` — the obligation-discharge read — slips past it;
+/// `084_projProp1` is the file where it shows.
+///
+/// # Re-based 0/13 → 9/4 at `18212fc`, and the offers are conserved
+///
+/// This cell pinned `adoptedByCheckerTyping = 0` with **all thirteen** offers
+/// declined. It reads **9 adopted, 4 declined** now. Attributed by measurement
+/// over the four commits of the mini-unification block: `4e86d46~1`,
+/// `4e86d46` and `8815abb` all read `0 / 13`, and **`18212fc` "checker:
+/// consume mini Nat certificates in TG"** reads `9 / 4`, which is master's.
+/// One commit, one step, both this fixture and `034`'s.
+///
+/// **It is convergence, not a loosened guard**, and the order of the evidence
+/// is the order of its strength:
+///
+/// 1. **The offer population is conserved**: `13 = 4 + 9`. The guard is still
+///    consulted on every offer; only the verdict moved. A guard that had
+///    stopped being consulted would have dropped the *total*, and that is the
+///    failure this arithmetic separates from this one.
+/// 2. `TgBackend::typing` (`tg.rs`) returns `Derived` **only** under
+///    `u_concl(&thm, …) == want`, where `want = Formula::mem(⟦e⟧, ⟦ty⟧)` is
+///    built from the interpretation on the spot — re-read on this tree, after
+///    the `Certifier` retirement rewrote the impl around it. An adopted typing
+///    is by construction a slot whose conclusion is literally the statement the
+///    reader asked for, so "the guard loosened" is not available as an
+///    explanation for an adoption.
+/// 3. `alias = 0` and `incoherent = 0` throughout: no certificate is about the
+///    wrong carrier.
+/// 4. `18212fc` **declared this effect when it landed**, on its own fixture:
+///    ENV-UNIFY.md B6 records `nat_char_equations.ndjson` going "mini typings
+///    adopted by TG **0 → 15**, declined typings **16 → 3**" as TG stopped
+///    minting a second Nat carrier and started reading mini's entries. This
+///    fixture is the same handoff seen from the tutorial corpus. Nobody re-ran
+///    this suite, which is why the pin outlived the change by 67 commits.
+///
+/// The four that still decline are what keeps this cell a guard rather than a
+/// record: `034` has **no** decline left, so if this fixture's 4 ever go to 0
+/// the tree has no live witness that a mismatched typing is refused, and that
+/// is a finding rather than an improvement.
+///
+/// # Falsified per assertion — and two mutations that stayed green
+///
+/// Every mutation below was applied to `checker/src/tg.rs`, watched, and
+/// restored; `git diff checker/src/` is empty.
+///
+/// | mutation | dies at | reads |
+/// | --- | --- | --- |
+/// | the `ty_const` statement read never matches (`if false && *t.concl() == want`) | the **offer sum**, `:331` | `left: 14  right: 13` |
+/// | the obligation read records every consulted offer as *adopted* | `adoptedByCheckerTyping`, `:336` | `left: 13  right: 9` |
+/// | the obligation read records every consulted offer as *declined* | the **offer sum**, `:331` | `left: 14  right: 13` |
+///
+/// The second is the separation that matters: the offer sum **passes** at 13
+/// under it and the run dies one line later, so the two assertions are not one
+/// assertion twice.
+///
+/// **`declinedByCheckerTyping = 4` is unfalsifiable from here**, and is
+/// recorded as such rather than left to read as coverage: with the sum pinned
+/// at 13 and the adoptions at 9, it follows by arithmetic and no mutation can
+/// reach it. It is kept because it is the number this header is written about.
+///
+/// **The claim this cell used to make about loosening is refuted.** Its old
+/// header said a loosened `has_type_const` "shows" here — *"one mini typing
+/// gets wrongly adopted there (0 → 1)"*. Two loosening mutations were run and
+/// **both leave this suite and `mini_route.rs` entirely green**: accepting any
+/// offer at the `ty_const` read (`if true || *t.concl() == want`), and making
+/// the obligation read's `find` never locate the asked-for statement so it
+/// falls back to `slots[0]`. The reason is §6.1's fourth gate, a **degenerate
+/// instantiation**: wherever these reads find a hit there is only *one* slot
+/// offered for the key, so "pick the one whose conclusion is what was asked"
+/// and "pick the first" select the same certificate and the mutation is the
+/// identity. The old measurement was taken when this fixture had 13 declines;
+/// the 9 that converged at `18212fc` took the discriminating population with
+/// them. **So this cell catches the regression direction and the
+/// stopped-consulting direction, and it does not catch loosening** — a
+/// separating fixture would need a key with two offered slots, and no fixture
+/// in the corpus has one. That is a gap with a stated shape, which is worth
+/// more than the sentence it replaces.
 #[test]
 fn the_obligation_read_declines_mismatched_typings() {
     let Some(r) = cross_report("good/tutorial/084_projProp1.ndjson") else { return };
-    assert_eq!(field(&r, "adoptedByCheckerTyping"), 0, "a typing crossed unguarded:\n{r}");
-    assert_eq!(field(&r, "declinedByCheckerTyping"), 13, "the declined population moved:\n{r}");
+    // The conserved total, asserted *first* and as a sum, because it is the
+    // one statement that separates "the verdict moved" from "the guard stopped
+    // being consulted" — and a pair of pinned constants cannot say that on its
+    // own. 21 mini entries offer 13 typings across this file.
+    assert_eq!(
+        field(&r, "adoptedByCheckerTyping") + field(&r, "declinedByCheckerTyping"),
+        13,
+        "the checker stopped consulting mini's typing offers:\n{r}"
+    );
+    assert_eq!(field(&r, "adoptedByCheckerTyping"), 9, "the crossing moved:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerTyping"), 4, "the declined population moved:\n{r}");
     assert_eq!(field(&r, "alias"), 0, "{r}");
     assert_eq!(field(&r, "incoherent"), 0, "{r}");
 }
 
-/// **The B4 crossing, measured and pinned — the declining file.** On
-/// `034_boolType` (inductive-only) the two engines' carriers genuinely
-/// differ, so nothing may cross: the checker consults mini's three typings
-/// (`Bool`, its recursor spine) and the statement guard refuses each. The
-/// declines being *counted* — rather than the entries being trusted — is the
-/// adopt-and-check discipline itself, so `adopted* = 0` here is as load-
-/// bearing as `adopted = 1` is in the fixture above; it goes red if the
-/// typing guard in `has_type_const`/`ty_const` is loosened.
+/// **`034_boolType` restated: the file whose carriers stopped differing, and
+/// why.** Follows the precedent two cells up — a divergence cell whose
+/// divergence went away is *restated with the mechanism pinned*, not deleted
+/// and not weakened.
+///
+/// This cell used to be called `a_mismatched_typing_is_declined_not_adopted`
+/// and read: *"On `034_boolType` (inductive-only) the two engines' carriers
+/// genuinely differ, so nothing may cross: the checker consults mini's three
+/// typings (`Bool`, its recursor spine) and the statement guard refuses each."*
+/// It asserted `adoptedByCheckerTyping = 0` and `declinedByCheckerTyping = 3`.
+/// **It reads 3 adopted and 0 declined now** — and two sentences of that
+/// description were already wrong on their own terms:
+///
+/// * `034` is **not** inductive-only. The export is one `inductive` *and one
+///   `def`* (counted off the ndjson: `{inductive: 1, def: 1}`), which is why
+///   `mini_route.rs`'s `Split` cell can send declaration 1 to mini and
+///   declaration 2 to the checker. The same wrong claim is repeated in
+///   [`a_mismatched_defining_equation_is_declined_not_adopted`]'s header,
+///   corrected there.
+/// * "the two engines' carriers genuinely differ" is what stopped being true.
+///
+/// # Attribution, and why this is convergence
+///
+/// Measured over the mini-unification block: `4e86d46~1`, `4e86d46` and
+/// `8815abb` all read `adopted 0 / declined 3 / defeq 0 / converged 0`;
+/// **`18212fc` "checker: consume mini Nat certificates in TG"** reads
+/// `3 / 0 / 1 / 1`, which is master's. One commit, and the same commit that
+/// moved `084` above — see that cell for the four-point argument that this is
+/// TG consuming mini's entries rather than a guard that stopped refusing. The
+/// short form: the typing offers are conserved, `3 = 0 + 3`, and
+/// `TgBackend::typing` can only return `Derived` at a conclusion equal to the
+/// statement asked for.
+///
+/// The **defeq** slot is the one number that is not a conserved re-verdict:
+/// `adoptedByCheckerDefeq` 0 → 1 with `declinedByCheckerDefeq` flat at 0, so
+/// the offer is *new* rather than re-decided. That is the same fact as
+/// `converged` 0 → 1: before `18212fc` the checker never consulted mini's
+/// entry for `034`'s definition at all, and it does now. An offer appearing
+/// where there was none cannot be explained by a weakened guard — a weakened
+/// guard moves declines into adoptions, and there was no decline here to move.
+///
+/// # What this cell can still catch
+///
+/// The regression direction, which is the one it was always for: if the
+/// crossing goes back to 0 adopted, or if the statement guard in
+/// `has_type_const`/`ty_const` starts refusing again, every assertion below
+/// moves. What it can **no longer** catch is a *loosened* guard, because there
+/// is no decline left on this file to be wrongly converted — that duty passed
+/// wholly to [`the_obligation_read_declines_mismatched_typings`], whose four
+/// remaining declines are now the tree's only live witness for it, and which
+/// says so at its own header.
+///
+/// # Falsified per assertion
+///
+/// Both mutations applied to `checker/src/tg.rs`, watched, and restored.
+///
+/// | mutation | dies at | reads |
+/// | --- | --- | --- |
+/// | the obligation read records every consulted offer as *declined* | `adoptedByCheckerTyping`, `:428` | `left: 0  right: 3` |
+/// | the `const_abbrev` statement guard never matches | `adoptedByCheckerDefeq`, `:432` | `left: 0  right: 1` |
+///
+/// The first passes the offer sum at 3 and dies one line later; the second
+/// passes **every** typing assertion and dies in the defeq block, so the two
+/// slots are pinned separately rather than by one number twice.
+///
+/// **Two assertions here are unfalsifiable from here and are kept as recorded
+/// outcomes** (`TEST-INVENTORY.md` §6.2): `declinedByCheckerTyping = 0`
+/// follows from the sum and the adoptions by arithmetic; and the **offer sum
+/// itself** had no separating mutation — every mutation that moved the total
+/// on this fixture also moved the adoptions, so it died at the adoption line
+/// first. It is asserted anyway because the property it names, "the checker
+/// stopped asking", is the one a pair of pinned constants cannot express, and
+/// on `084_projProp1` the same assertion *is* separately falsifiable — two
+/// mutations trip it there with the constants intact. Enforced on the sibling
+/// fixture, documentation here; that is its honest status.
 #[test]
-fn a_mismatched_typing_is_declined_not_adopted() {
+fn the_bool_family_crossed_because_the_checker_reads_minis_entries() {
     let Some(r) = cross_report("good/tutorial/034_boolType.ndjson") else { return };
     assert_eq!(field(&r, "miniEntries"), 6, "{r}");
-    assert_eq!(field(&r, "adoptedByCheckerTyping"), 0, "a typing crossed unguarded:\n{r}");
-    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 0, "{r}");
-    assert_eq!(field(&r, "declinedByCheckerTyping"), 3, "the declined population moved:\n{r}");
+    // Conserved, and asserted as a sum for the reason `084` gives: it is what
+    // separates "the verdict moved" from "the checker stopped asking".
+    assert_eq!(
+        field(&r, "adoptedByCheckerTyping") + field(&r, "declinedByCheckerTyping"),
+        3,
+        "the checker stopped consulting mini's typing offers:\n{r}"
+    );
+    assert_eq!(field(&r, "adoptedByCheckerTyping"), 3, "the crossing regressed:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerTyping"), 0, "the declined population moved:\n{r}");
+    // The new offer, and the pair that says it is one: an adoption with no
+    // decline beside it and one converged entry.
+    assert_eq!(field(&r, "adoptedByCheckerDefeq"), 1, "the defining equation stopped crossing:\n{r}");
+    assert_eq!(field(&r, "declinedByCheckerDefeq"), 0, "{r}");
+    assert_eq!(field(&r, "converged"), 1, "{r}");
+    assert_eq!(field(&r, "divergent"), 0, "a second carrier appeared beside mini's:\n{r}");
     assert_eq!(field(&r, "alias"), 0, "{r}");
-    assert_eq!(field(&r, "incoherent"), 0, "{r}");
+    assert_eq!(field(&r, "incoherent"), 0, "a certificate not about its carrier:\n{r}");
 }
 
 /// **The B4 measurement across the whole tutorial corpus** — one process,
