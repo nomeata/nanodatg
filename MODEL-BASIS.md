@@ -1,0 +1,899 @@
+# The model basis — scoping the retirement of certified inductive construction
+
+*A design and measurement tranche, not a build. Nothing in `checker/`, `derived/`
+or `kernel/` was changed; `git diff` over those three trees is empty. Every
+number below was produced with the release binary at master `4c6426a` — line
+counts re-verified unchanged at `5bab7c0` — or read off the external tool's own
+source. Where a claim is unmeasured it says so.*
+
+The proposal: **every non-basis inductive arrives in the export as a *model*
+built over a fixed basis, and the checker recognises the model and cases on its
+theorems, instead of constructing a carrier, recursor and ι rule itself.** The
+owner's dispatch rule is three-way and total:
+
+1. **basis** — `Eq`, `Nat`, `PUnit`, `PSigma'`, `Quot`: our own clauses;
+2. **non-basis with a `_model`** — recognise it, case on its theorems, use it;
+3. **non-basis without a `_model`** — **decline, loudly and by name.** There is
+   no construction to fall back to, because the construction is gone.
+
+The external producer is `github.com/nomeata/lean-inductive-models`, read here at
+`vendor/lean-inductive-models` (HEAD `5a9a70f`, 2026-08-14). It is a separate
+product and a `vendor/` read-only dependency; this document cites its own
+contract rather than speculating about it.
+
+## 0. Verdict in one paragraph
+
+The pivot is sound and the retirement is real: **up to 23 656 of
+`checker/src/mini`'s 55 255 lines retire** (§5 says why that is an upper bound
+and not yet a measurement), and they retire *by policy* — unreachable because no
+dispatch reaches them — not merely by circumstance. The load-bearing claim holds:
+a model is a pile of `def`s and `theorem`s, those route to **nanoda**, and
+nanoda's `def_eq` has had the identity fast path since the beginning. But the
+tranche's stated motivation is void: **the `def_eq` defect that prompted it was
+fixed sixteen commits before this branch point**, so the pivot must be justified
+on the retirement and on §6 instead.
+
+**§6 is the strongest result here and it is new.** Running the external tool over
+`init-prelude` gives **144 model families, 0 declines, 3 exempt** — and every one
+of the 91 declarations and 10 eliminators we currently refuse as `type former
+spine` or `field type uninterpretable` is among the modelled: the machine words,
+`Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Lean.Syntax`, the heterogeneous
+operator classes, `Trans`, `False`, `PEmpty`, `HEq`. **That entire category of
+refusal disappears.** Nobody had considered it and it is now measured.
+
+Two costs the brief did not price stand against it, one measured red here for the
+first time: **`PSigma'` is untranslatable by our current machinery** — it declines
+`ind-spec(PSigma': class (P) above Prop)`, and closing it needs a genuinely new
+`derived/` construction, because `U₀` has no closure clauses at all — and **`Acc`
+has left the basis**, so the 3 519-line `Acc` family retires and every
+well-founded definition arrives instead as a `Classical.choice`-bearing model.
+
+## 1. The decisive question, answered
+
+> Would a model's declarations be checked by **nanoda's** `def_eq`, which has the
+> identity check and the certification machinery, or still by **mini's**?
+
+**By nanoda's.** Established three independent ways, none of them an assumption.
+
+### 1.1 The external contract requires the two kinds
+
+`vendor/lean-inductive-models/README.md`:
+
+> The generated type formers, constructors, and recursors are safe definitions;
+> reduction rules are theorems.
+
+This is *enforced*, not merely documented. `src/InductiveModels/Check.lean`'s
+structural checker rejects any implementation slot that is not a safe definition
+and any proof slot that is not a theorem:
+
+```lean
+-- Check.lean:642-651
+if declaration.kind != .defn then
+  #[.declarationKind owner declaration.name .defn declaration.kind]
+else if declaration.safety? != some "safe" then
+  #[.declarationSafety owner declaration.name (declaration.safety?.getD "<missing>")]
+...
+if declaration.kind == .thm then #[] else #[.declarationKind owner declaration.name .thm declaration.kind]
+```
+
+with the same test repeated at `:731-741`, `:910-914` and `:952` for the private
+mutual and one-layer bookkeeping. `DeclarationKind` (`Check.lean:423-431`) can
+express `.induct`, `.ctor`, `.recursor`, `.axiom`, `.opaq` and `.quotient`; the
+checker admits **none of them** at a model slot. The kind restriction is part of
+the advertised contract, not an artefact of the current routes.
+
+### 1.2 Our dispatch sends exactly those two kinds to nanoda
+
+Every hop, in order:
+
+| step | site | what happens |
+| --- | --- | --- |
+| 1 | `checker/src/mini/route.rs:103-105` | `Declaration::Def{kind: DefKind::Def}` → `DeclKind::Definition`; `DefKind::Theorem` → `DeclKind::Theorem` |
+| 2 | `route.rs:116-122` | `Mode::Split::pick` sends `Definition`, `Theorem`, `Opaque`, `Axiom` to `Pick::Checker`; only `Inductive` and `Quotient` go to `Pick::Mini` |
+| 3 | `route.rs:390-411` | `Routed::accept`'s `Pick::Checker` arm calls `via(c, d)` — the `GroupEngine` seam |
+| 4 | `route.rs:167-189` | `CheckerEngine::check_group` calls `RoutedChecker::check_anchor` per group name |
+| 5 | `checker/src/routed.rs:196-205` | `check_anchor` walks the group's export entries into `check_declar_scheduled` |
+| 6 | `routed.rs:70-90` | `check_declar_scheduled`'s `matches!(d, Declar::Inductive(..) \| Declar::Quot{..})` early return **does not fire** for a `def` or a `theorem`; it goes down the schedule path to `check_declar_at` |
+| 7 | `checker/src/tc.rs:2914` | nanoda's `def_eq_quick_check` opens `if x == y { … refl … }` |
+
+And the negative half, which matters as much: `Driver::evidence`
+(`route.rs:337-350`) returns `false` on `Pick::Checker`. **Mini's evidence walk
+never touches a model declaration.** `install_checked_noninductive`
+(`kernel.rs:5471-5493`) puts the accepted syntax into mini's environment
+*without* inferring a type, comparing a value, or applying mini's acceptance
+rules — its own doc comment says so — solely so a later mini-routed inductive can
+name it.
+
+**Routing is the default, not a flag.** `checker/src/bin/checker.rs:166-176`:
+`--route` was *removed*; `Mode::Split` is what a plain invocation gets, and
+`--naive` is the opt-out. (A `--naive` run is mini-only and would put models on
+mini's `def_eq` — that is the one configuration in which the pivot does not
+dissolve the question, and it is not the production path.)
+
+### 1.3 Measured on a real export
+
+`checker/tests/fixtures/nested_keying.ndjson` carries 27 `_model` declarations.
+Classified out of the export by kind: **16 `def`, 11 `thm`, zero inductives,
+zero axioms.** The run reports
+
+```
+nested_keying.ndjson	accept	39 declarations	untranslated: 2 declarations	tg gaps:526
+route	mode=Split	toMini=8	toChecker=31	unclaimed=0
+```
+
+31 of 39 declaration groups to nanoda, 8 to mini — the 8 being the inductives and
+the quotient bundle.
+
+**So the pivot dissolves the question rather than relocating it.** The residue is
+named in §7.
+
+## 2. The premise is stale: the defect was already fixed
+
+The tranche was prompted by mini's evidence-producing `def_eq` lacking an
+identity fast path, normalising 262 144 unary `Nat.sub` steps twice to discover
+that a term equals itself.
+
+**That fast path is in the tree and has been since before this branch existed.**
+`checker/src/mini/kernel.rs:4298`, inside `assert_def_eq_as`:
+
+```rust
+if e1 == e2 {
+    match (&tm1, &tm2) {
+        (None, None) => { … return Ok(Conv { to: *e2, ev: Ev::missing(Gap::NoEndpoint) }) }
+        (Some(a), Some(b)) if a == b => { … return Ok(Conv::refl(*e2, a)) }
+        _ => {}
+    }
+}
+```
+
+`def_eq_ev` has exactly **one** caller — `assert_def_eq_as` at `:4357` — so the
+guard covers every conversion. It landed in `d263be2`, *"checker: syntactic
+equality before reduction — init-prelude ACCEPTS, prefix 44 → 152"*, dated
+2026-08-15, **sixteen commits before** the branch point `4c6426a`, and
+`MEASUREMENTS.md:11000-11090` records its effect: `init-prelude` went from
+declining at declaration 44 to accepting 1 822 declarations, 28.211 T → 0.507 T
+instructions, certified prefix 44 → 152.
+
+Two consequences.
+
+* **The pivot cannot be justified by the `def_eq` issue.** It must stand or fall
+  on the retirement in §5 and the frontier in §6.
+* **The alternative the owner rejected is also cheaper than it looked.** "Make
+  the checker for inductives use the nanoda `def_eq` routine" was priced against
+  a mini `def_eq` that lacked the check Lean opens with. It no longer lacks it.
+  That does not make the alternative *good* — mini's `def_eq` still has no
+  `is_def_eq` cache where Lean's kernel keeps one (`kernel.rs:4300-4306`) — but
+  the gap between the two engines is one fix narrower than the brief assumed.
+
+The identity guard is also *partial*, and the residue is the interesting part:
+it fires when both endpoints are absent, or when the two endpoints are the same
+`Term`. A caller that hands in two different spellings of one interpretation
+falls through to the full walk. `MEASUREMENTS.md:11036-11046` records six such
+pairs on `nat_char_equations`. That residue is not addressed by this pivot
+either way.
+
+## 3. The basis — what exists, and what `PUnit` and `PSigma'` need
+
+### 3.1 The basis is five, and `Acc` is not one of them
+
+`vendor/lean-inductive-models/src/InductiveModels/Simple.lean:204`:
+
+```lean
+def basis : List Name := [`Eq, `PSigma', `Nat, `PUnit, `Quot]
+def inductiveBasis : List Name := [`Eq, `PSigma', `Nat, `PUnit]   -- :221
+```
+
+with `Quot` the kernel quotient bundle rather than an ordinary inductive. The
+same file, `:210-215`, states the change that costs us the most:
+
+> **`Acc` was the fifth and is not here any more.** Its one grant — the
+> subsingleton-recursive large eliminator — is derived by `graphArm`, so `Acc` is
+> an ordinary declaration and models like one.
+
+`README.md` states the consumer's obligation in one sentence: *"A consumer using
+models as an inductive front end must implement the five-member basis and admit
+the standard axioms used by the selected generated route."* Those axioms are
+`Quot.sound` on the funext routes, plus `Classical.choice` and `propext` where a
+route requires them.
+
+**This supersedes `MODELGEN.md`'s basis.** That document records
+`Modelgen.primBasis = [Eq, PSigma, Nat, PULiftP]` (`MODELGEN.md:2411, 2822,
+3461`) — Lean's `PSigma` with its `max 1`, and `PULiftP` in place of `PUnit`. The
+successor tool changed both. `MODELGEN.md` describes a tool this repository is
+retiring and should be read as history from here on.
+
+### 3.2 What we have today
+
+| basis member | our clause | where | state |
+| --- | --- | --- | --- |
+| `Eq` | `direct.rs` row `Clause::Eq`, plus `eq_rec`/`eq_bottom` | `direct.rs:257`, `recursor.rs:399-549` | **exists** |
+| `Nat` | `direct.rs` row `Clause::Nat`, `nat_clause.rs`, `rec_nat.rs`, `iota_nat.rs` | 1 046 lines + the row | **exists** |
+| `Quot` | `quot.rs`, `quot_classes.rs`, `quot_iota.rs` | 1 595 lines | **exists** |
+| `PUnit` | none — served by the *general* class-(S) rule | `class_s.rs`, `unit_like.rs` | **not a clause** |
+| `PSigma'` | none, and the general machinery **declines it** | — | **red, measured** |
+
+The brief said clauses exist for `Eq`, `Nat` and `Quot`. **Verified — they do.**
+It implied `PUnit` might be one. It is not, and the tree contains a test
+asserting the opposite, `direct.rs:720`:
+
+```rust
+assert_eq!(clause_for(&nm("PUnit")), None, "PUnit is not a direct clause");
+```
+
+`direct.rs:716` and `class_s.rs:45` record why: `And` and `PUnit` **used to be**
+rows of the closed-form table and were deliberately retired into the general
+class-(S) rule. Reinstating a `PUnit` clause is therefore a re-derivation of
+something this repository once had and chose to delete — which is exactly the
+case where a provenance marker is worth only a re-derivation, not a revert.
+
+### 3.3 `PSigma'`, and the measurement that decides part 1
+
+`PSigma'` is defined canonically at
+`vendor/lean-inductive-models/src/InductiveModels/Simple.lean:261`, and the
+fixture `test/fixtures/inductive-models/tight_psigma_prime.lean:13` spells it:
+
+```lean
+inductive PSigma' {α : Sort u} (β : α → Sort v) : Sort (max u v) where
+  | mk (fst : α) (snd : β fst) : PSigma' β
+```
+
+It differs from Lean's `PSigma` in exactly one place — the resulting universe is
+`max u v`, with **no built-in `1`** — and it therefore crosses Lean's bootstrap
+resulting-universe boundary: the elaborator refuses it, the kernel takes it. That
+is the whole point of it: `Subtype`, every structure with a `Prop` field, and
+every `Prop`-fibred pair need a Σ that does not raise the level.
+
+**The external repository ships an export of that fixture, so this is measurable
+rather than arguable.** Running our checker on it:
+
+```
+tight_psigma_prime.ndjson	accept	3 declarations	untranslated: 3 declarations
+elim	PSigma'	computed=false	oracle=false
+untranslated	declarations=3	constructors=0	eliminators=0
+  notrans:ind-spec(PSigma': class (P) above Prop)=1
+  notrans:ind-spec(PI2:     class (P) above Prop)=1
+  notrans:ind-spec(PIDep:   class (P) above Prop)=1
+```
+
+**A mandatory basis member is untranslatable by our current machinery, at every
+σ, today.** So are `PI2` and `PIDep`, the two companion shapes the same fixture
+carries for the same reason.
+
+The refusal site says precisely what is missing —
+`checker/src/mini/zoneb.rs:1402`, `if shape.result_level != 0` — and the comment
+above it, `zoneb.rs:1394-1400`, is a written commitment rather than an open
+problem:
+
+> The replacement is scheduled rather than open: `TruncCarrier::in_un`,
+> `⊢ ∀p⃗∀x⃗. ‖a‖ ∈ Uₙ` for `n ≥ 1`, from `in_u0` + `Rung::u0_mem` +
+> `Rung::transitive` — all present, **a signature change rather than a
+> derivation** … A `good/` `Squash.{u} (α : Sort u) : Sort u | mk : α → Squash α`
+> is what would open it.
+
+It was deferred for one stated reason: *"no accepted file can exercise it and no
+fixture can test it"* — every class-(P) declaration in `good/` has resultant sort
+literally `Sort 0`, and the only witness lived in `bad/`. **`PSigma'` is that
+witness, and the pivot supplies it.** The blocker was never the mathematics; it
+was the absence of an input that could test the wiring, and the external repo
+ships one.
+
+### 3.4 What `PSigma'` actually demands of us — less than a recursor
+
+The natural fear is that a basis `PSigma'` means building a large-eliminating
+recursor for it. It does not, and the external repo says so at
+`Simple.lean:252-259`:
+
+> Only the inductive and its constructor are primitive. The named projections
+> and the universe-polymorphic eliminator below are ordinary definitions over
+> primitive `.proj` expressions. In particular, `PSigma'.rec'` does not add a
+> second kernel exception: **structure eta** makes `mk t.1 t.2` convertible to
+> `t`, so `fun h t => h t.1 t.2` has an arbitrary `Sort w` motive and its
+> constructor rule is reflexivity.
+
+Confirmed against the shipped export: `PSigma'.rec` carries level params
+`[u, v]` — **two, with no motive level** — where Lean's own `PSigma.rec` carries
+`[u_1, u, v]`. `PSigma'.rec` is small-eliminating; the large eliminator `rec'` is
+an ordinary `def`, which under §1 routes to nanoda like any other.
+
+So the obligation on our side is:
+
+1. `⟦PSigma' α β⟧` at every `(u, v)`, landing in `⟦Sort (max u v)⟧` — including
+   `u = v = 0`, where the carrier must be a **subsingleton**, and mixed
+   `(0, 1)` / `(1, 0)`;
+2. `⟦PSigma'.mk⟧` and its membership;
+3. **primitive projections** `⟦t.1⟧`, `⟦t.2⟧` with their computation rules;
+4. **structure eta** as a certified definitional equality;
+5. the small recursor `⟦PSigma'.rec⟧` and its one ι rule.
+
+Items 3 and 4 are where our current state is weakest and it is recorded in the
+tree: `proj_prop.rs:422-426` states that `PProd.{1,1}` and `PSigma.{1,1}` *reach
+that route and decline*, because at `u = v = 1` the field is data and the
+projection owes a term rather than `•`; those pairs belong on `proj_data.rs`'s
+route instead. Lean's `PSigma` does translate today — `081_PSigma.snd.ndjson`
+accepts at **1 tg gap**, `untranslated declarations=0` — so the data-side
+projection route works. What is unmeasured is that route at `PSigma'`'s tighter
+universe, and in particular at `u = v = 0`.
+
+`PUnit`'s obligation is smaller and better understood: a carrier in `⟦Sort u⟧`
+for every `u` (Prop at `u = 0`, a singleton above), the constructor, the small
+recursor and its ι rule, and unit-like η — for which `unit_like.rs` already
+exists and whose header (`unit_like.rs:39-46`) records `PUnit`'s two σ as the
+worked case.
+
+### 3.5 The design choice this forces — and why the obvious answer is wrong
+
+The obvious move is **closed-form clauses**: new `direct.rs` rows for `PUnit` and
+`PSigma'`, in the style the `Eq`, `Acc` and `Nat` rows use, sharing
+`direct::build`'s λ-nest walk, after which `class_s.rs`, `proj_prop.rs` and the
+rest of the general machinery genuinely delete. **This tranche drafted that
+recommendation and then had to withdraw it.** Two findings kill it.
+
+**First, `direct.rs` carries a standing rule against exactly this**, and it is
+about `PUnit` by name — `direct.rs:44-58`:
+
+> `And` and `PUnit` were the other two, with closed forms `and_set(a,b)` and `1`
+> and a delete-by attached … Both rows are gone and both declarations now go
+> through `crate::mini::class_s`. **The table takes no fourth row**, and this is
+> the standing rule rather than a note about the past: a declaration that seems to
+> want one is evidence that the general clause is missing a case, and belongs in
+> the ledger as a gap naming that construction.
+
+**Second, the general route already serves both types, measured.**
+`MINI-HANDOFF.md:855,857,894,896` records `PProd.{0,0}` / `PSigma.{0,0}` — 4 pairs,
+closed via `DeclFields` — and `Prod` / `PProd.{1,1}` / `PSigma.{1,1}` — 16 pairs,
+closed via `DeclProj`. `proj_prop.rs:582` records `⊢ ⟦PUnit.{1}⟧ ∈ ⟦Sort 0⟧`
+sitting in the store. A closed-form clause would be replacing working coverage,
+which is the `direct.rs` header's exact objection.
+
+**So the answer is (b): a slice of the general machinery stays, deliberately, to
+serve the basis.** That is `class_s.rs` (616), `proj_data.rs` (962),
+`proj_prop.rs` (1 006), `unit_like.rs` (133), and the part of `zoneb.rs` that
+builds a non-recursive, non-indexed class-(T)/class-(S) carrier. The last is not
+a clean file boundary and the retirement in §5 counts `zoneb.rs` as retiring
+*in full*, which is therefore an over-count by an unmeasured amount. Bounding it
+is the first piece of implementation work, not a design question.
+
+This costs the pivot some of its purity — a general construction path survives,
+reachable for exactly four declarations — but the alternative is deleting working,
+certified coverage and rebuilding it as a special case, against a rule the file
+already states.
+
+### 3.6 What `derived/` already has, and the one thing it does not
+
+Against §3.4's five obligations, the set-theoretic side is nearly complete.
+*(Statements are quoted as the constructions conclude them; how the evidence
+reaches TG is `tc.rs`'s business and is being reworked separately.)*
+
+| obligation | construction | concludes | state |
+| --- | --- | --- | --- |
+| dependent sum | `derived/src/sigma/dsum.rs:103` | `⊢ ∀p⃗∀q. (q ∈ Σ(p⃗) ↔ (q ∈ dom(p⃗) × ⋃img(p⃗) ∧ π₂q ∈ fib(p⃗,π₁q)))` | **exists** |
+| pair + projections + β | `derived/src/proj.rs:86-91` | `⊢ ∀a∀b. π₁⟨a,b⟩ = a`, `π₂⟨a,b⟩ = b` | **exists**, used by `proj_data.rs:275` |
+| singleton at a rung | `derived/src/isum/in_universe.rs:138`, `derived/src/tower.rs:33` | `⊢ ∀c. 1 ∈ U(c)`; `⊢ 1 ∈ U₀` | **exists**, two lemmas not one |
+| unit-like η | `derived/src/sums/unit_type.rs` | `⊢ x ∈ 1 → x = •` | **exists** |
+| structure η | `derived/src/sigma/dsum.rs:111`, `derived/src/inductive/decl_proj.rs:322` | `⊢ ∀p⃗∀q. (q ∈ Σ(p⃗) → ⟨π₁q,π₂q⟩ = q)`; `⊢ ∀p⃗∀z. (z ∈ ind(p⃗) → ctor₀(π₀z,…) = z)` | **exists**, used by `proj_data.rs:649` |
+| **Σ in a rung** | `derived/src/cumul/sigma.rs:51`, `sigma_n.rs:602` | `Σ(p⃗) ∈ Uₙ ⇐ β₀ ∈ Uₙ ∧ img ∈ Uₙ` | **exists but private and telescope-bound**; and see below |
+| **Σ is a subsingleton when its components are** | — | `⊢ ∀x∀y. ((x ∈ Σ(p⃗) ∧ y ∈ Σ(p⃗)) → x = y)` | **not found** |
+
+**The one real gap is `PSigma'` at `u = v = 0`, and it is structural rather than
+missing work.** `derived/src/tower.rs:69-80` states it:
+
+> `U₀` is `Prop`, not a universe … it is not closed under power set … So `U₀`
+> gets the membership condition, the subsingleton property and `[φ] ∈ U₀`, and
+> **none of the closure clauses**; `Tower::at(0)` is `None` rather than a `Rung`
+> whose fields would be unprovable.
+
+So `⊢ Σ ∈ U₀` cannot be reached through `Rung::product`/`union`/`sub` — there is
+no `Rung` at 0 at all. The only door into `U₀` is `Tower::cond_in_u0`,
+`⊢ [φ] ∈ U₀` for any formula `φ`: the carrier must be *presented as* a conditional
+singleton, or proved equal to one. **There is no lemma `z ⊆ 1 → z ∈ U₀`
+anywhere.** `derived/src/tower.rs:31`'s `u0_members`,
+`⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))`, is the raw material and nothing derives the
+subset direction from it.
+
+Note also that the governing rung rule as `derived/` writes it is
+`n₀ := max(1, max over fields …)` (`derived/src/cumul/sigma.rs:32-34`) — **the
+`max 1` that `PSigma'` exists to remove.** That is not a coincidence: our set side
+and Lean's `PSigma` made the same choice, and `PSigma'` is the tool's decision to
+unmake it.
+
+**Therefore the honest cost of basis member `PSigma'` is one new `derived/`
+construction plus a subsingleton lemma**, both stated above, plus the
+`TruncCarrier::in_un` signature change `zoneb.rs:1394` already promises. That is
+the smallest well-defined build this pivot depends on, and §8.2 is where it should
+be refuted first.
+
+## 4. The recognition path — what it takes to generalise
+
+The brief said `modelgen.rs` and `nested_splice.rs` recognise a spliced `_model`.
+**One correction: `modelgen.rs` (227 lines) recognises nothing.** It discovers the
+filter binary and streams the export through it as a subprocess; the recogniser is
+`nested_splice.rs` (926 lines) alone.
+
+### 4.1 The recogniser is already generic; the *gate* is not
+
+`nested_splice.rs` produces (`:1-15`, `:311`):
+
+* `model_of : HashMap<ModelKey, Name>` — which model constant carries `⟦T⟧`,
+  `⟦T.ctorᵢ⟧`, `⟦T.rec_k⟧`, keyed with σ included;
+* `model_iota : HashMap<(ModelKey, Name), Name>` — which theorem is `T.rec_k`'s
+  rule on a given constructor;
+* the σ propagation from the export constant onto the model constant.
+
+It keys on a **table filled from statement-shape checks**, deliberately not on a
+name rule — `nested_splice.rs:47-67` argues the point at length, and the argument
+is the `_auxCarrier` incident: a name rule answers for a constant that exists for
+some other reason. The shape check is explicitly a *diagnostic* and not the trust
+root (`:69-92`); what makes a conclusion trustworthy is the certificate, and a
+`_model` tower with wrong statements produces none.
+
+The consumer, `zoneb::model_alias` (`zoneb.rs:299-332`), is **already free of any
+mention of nesting** except in its reason strings. It is four lines of real work:
+look up the model constant at this σ, look up its interpretation, republish it
+under the export constant's key, and deliberately *not* carry the defining
+equation across (`zoneb.rs:295-298` — `T` is a primitive inductive and has no δ
+step, so handing the model's δ equation on would be offering a reduction Lean does
+not have).
+
+**The nesting specificity is two gates and nothing else:**
+
+| gate | site | what it does |
+| --- | --- | --- |
+| the recogniser's | `nested_splice.rs:458-465` | `crate::mini::nested::plan(env, …)`; `Ok(None)` means "an ordinary declaration" and the loop body **ignores it**. Nothing else decides. |
+| the consumer's | `zoneb.rs:248` | `if let Some(why) = nested_seen(c, &ind_name)`, where `nested_seen` (`:279-282`) is membership in `app.nested` — the table the recogniser fills only for nested declarations. |
+
+Generalising is: drop the `nested::plan` gate so the recogniser attempts every
+inductive, and change `nested_seen` from "is in `app.nested`" to "is a non-basis
+inductive". Under the owner's rule the second gate becomes **total**: a non-basis
+inductive with no `model_of` entry at this σ declines — which is already
+`model_alias`'s behaviour (`zoneb.rs:314-316`, `nested model not keyed here`), and
+already what `zoneb.rs:243-247` argues is the *right* behaviour, in terms:
+
+> A declaration in `nested` and not in `model_of` **declines here.** It does not
+> fall through … any later route that *did* succeed would be interpreting `T` as
+> something the splice never checked.
+
+That is the owner's rule, already written down, for a smaller population.
+
+### 4.2 What the recogniser must be taught
+
+Three things, none of them structural:
+
+1. **The new naming scheme, which shares no name with the old one.** Measured,
+   not read off the README: the names in the tool's own output fixture
+   `test/fixtures/inductive-models/filtered/nested_keying.ndjson` are
+
+   ```text
+   Tree._model                 the carrier          (we look for Tree._model.self)
+   Tree.leaf._model            a constructor        (we look for Tree._model.ctor_0)
+   Tree.node._model            a constructor        (we look for Tree._model.ctor_1)
+   Tree.rec._model             the recursor         (we look for Tree._model.rec_0)
+   Tree.rec._model.iota_0      a rule               (we look for Tree._model.iota_0_0)
+   Tree._model._impl.pack_0    private bookkeeping  (README: not API)
+   ```
+
+   against `nested_splice.rs:289-304`, which builds `T._model.self`,
+   `T._model.ctor_j`, `T._model.rec_k`, `T._model.iota_k_j`. **The two schemes
+   overlap in nothing.** The mismatch fails closed — a name that is not found
+   reads as "no model", which under the owner's rule is a loud decline — but it
+   fails *uniformly*, so the first end-to-end run reports "no model" for
+   everything (§8.4).
+
+   Two structural differences ride along and are improvements rather than
+   translations. **A constructor is keyed by its own name** (`Tree.leaf._model`),
+   not by an index into the block, so the recogniser stops depending on
+   constructor order; and **a rule is keyed off the recursor**
+   (`R._model.iota_j`), not off the triple `(T, k, j)`. `model_of`'s `ModelKey`
+   and `model_iota`'s `(ModelKey, Name)` both survive that; what changes is the
+   name-building functions and nothing downstream of them.
+2. **Projections.** `T._model.proj_j` and `T._model.proj_j.iota` are new slots
+   with no counterpart in our table. Today a projection out of a structure is
+   *constructed* by `proj_data.rs` / `proj_prop.rs`; under the pivot it should be
+   *recognised*, which is a fifth family beside carrier / ctor / rec / ι.
+3. **The optional metadata theorems.** The tool "may additionally emit exact
+   structure-eta, unit-like, and recursor-rule-K theorems when the exported kernel
+   metadata calls for them" (README). Those correspond to `fun_eta.rs`,
+   `unit_like.rs` and the K-rule handling. **Whether they subsume the clauses we
+   carry is not established** — see §8.
+
+`eq_cash.rs` (889 lines) and `iota_model.rs` (346) are the machinery that turns a
+model's ι *theorem* into a firing reduction rule inside mini's `whnf`. Both are
+already keyed off `model_iota` rather than off nesting, and both grow rather than
+change.
+
+## 5. The retirement, in lines
+
+`checker/src/mini/*.rs` is **55 255 lines** across 60 files. Of the 32 358 lines
+in the 38 files this pivot touches:
+
+| bucket | lines | files |
+| --- | ---: | --- |
+| **retires** — construction of non-basis inductives | **20 137** | `zoneb.rs` 5875, `rec_dep.rs` 2757, `ctor_ix.rs` 1443, `mutual_aux.rs` 1258, `class_p_ix.rs` 1028, `minor_ix.rs` 895, `rec_prop.rs` 876, `iota_dep.rs` 839, `recursor.rs` 737, `iota_ix_dep.rs` 670, `rec_ix_dep.rs` 645, `class_s.rs` 616, `rec_trunc.rs` 614, `class_s_ix.rs` 536, `rec_ix_prop.rs` 490, `rec_s_ix.rs` 489, `rec_trunc_ix.rs` 369 |
+| **retires** — the `Acc` family, because `Acc` left the basis | **3 519** | `rec_acc_iota.rs` 970, `rec_acc_value.rs` 732, `rec_acc.rs` 692, `rec_acc_ih.rs` 471, `acc.rs` 432, `rec_acc_ap.rs` 222 |
+| **stays** — basis clauses | **3 582** | `quot_classes.rs` 833, `direct.rs` 941, `nat_clause.rs` 399, `rec_nat.rs` 405, `iota_nat.rs` 242, `quot.rs` 569, `quot_iota.rs` 193 |
+| **stays** — recognition, and grows | **2 388** | `nested_splice.rs` 926, `eq_cash.rs` 889, `iota_model.rs` 346, `modelgen.rs` 227 |
+| **stays** — the basis slice of the general machinery (§3.5) | **2 101** | `proj_prop.rs` 1006, `proj_data.rs` 962, `unit_like.rs` 133 |
+| **stays** — zone-A nested acceptance | **631** | `nested.rs` |
+| | **32 358** | |
+
+**23 656 lines retire**, and the brief's ~25 500 was close and slightly high. Two
+honest qualifications on that number, both in the same direction:
+
+* `nested.rs` (631) does not retire — §5.2.
+* **`zoneb.rs` is counted as retiring in full and it does not.** §3.5 keeps the
+  non-recursive class-(T)/class-(S) build alive to serve `PUnit` and `PSigma'`,
+  and that lives inside `zoneb.rs`'s 5 875 lines at a boundary nobody has drawn.
+  Until it is drawn, **23 656 is an upper bound**, not a measurement.
+
+Roughly 4 700 of the retiring lines are `#[cfg(test)]` blocks — 1 997 in
+`zoneb.rs` alone — so the executable surface removed is nearer 19 000.
+
+### 5.1 Two files do not delete wholesale, and `direct.rs` is not one bucket
+
+`direct.rs` (941) is **mostly basis and stays**, but not entirely:
+
+* `clause_for` (`:252-263`) matches exactly `"Eq" | "Acc" | "Nat"`. The `Acc` row
+  goes with the `Acc` family; `Eq` and `Nat` stay; `PUnit` and `PSigma'` are added
+  under §3.5(a).
+* `direct::build` (`:265+`) is a **shared walk** — "the shape of the walk is
+  `zoneb::build`'s … what differs is only the bottom of each nest" — so it is
+  basis infrastructure, not a per-type clause, and it survives all four rows.
+* The `Acc`-specific arms are five sites (`:229`, `:404`, `:537`, `:606-611`),
+  perhaps 40 lines.
+
+`recursor.rs` (737) is counted as retiring, but **`eq_rec` and `eq_bottom` at
+`:399-549` are `Eq`'s entire interpretation clause** and must be extracted into
+the basis before the file goes. Likewise `zoneb.rs` (5 875) retires, but its first
+statements are dispatch that must be lifted out first: `:193-194` routes `Quot` to
+`quot::build`, `:843-845` routes `Eq`/`Nat` to `direct::build`, and `:248-252`
+routes a recognised model to `model_alias`. Call it ~200 lines to extract before
+~23 650 delete.
+
+### 5.2 What remains inductive-shaped after the pivot
+
+The pivot removes the *certified construction* of inductives. It does not remove
+inductives.
+
+* **The export still declares `T`.** The tool "adds an ordinary-declaration model
+  of each supported inductive **while retaining the original declaration**"
+  (README). Under `Mode::Split` a `Declaration::Inductive` still routes to
+  `Pick::Mini`, and `kernel::add` (`kernel.rs:5453`) still calls
+  `add_maybe_nested` — mini's *syntactic* acceptance: positivity, constructor
+  typing, recursor generation, ι rules. **None of that retires.** What retires is
+  the *interpretation* half, zone B. The original declaration becomes the key
+  under which the model's interpretation is published, exactly as
+  `model_alias` already does it.
+* **`nested.rs` (631) therefore stays.** It is the zone-A specialise / check /
+  restore that makes `kernel::add` accept a nested inductive at all, called from
+  `kernel.rs:5550`, and it is independent of whether zone B builds a carrier.
+* **The basis five must still be declared.** `Eq`, `Nat`, `PUnit`, `PSigma'` are
+  ordinary inductives that route to mini and are accepted there; `Quot` is not an
+  inductive at all and takes `add_quot` (`kernel.rs:5450`) and the four-entry
+  route anchor `routed.rs:97`. The external tool splices any basis member the
+  input lacks, so their *presence* is guaranteed; their *interpretation* is ours.
+* **`nanoda`'s own `checker/src/inductive.rs` is untouched** by this. Under
+  `Mode::Split` it does not see inductives at all; it is exercised by
+  `--naive`-adjacent paths and by `check_declar_scheduled`'s `Inductive` arm when
+  a run is not routed.
+
+### 5.3 The fourth bucket: `mini::kernel::Checker`, demoted
+
+The owner's endgame statement:
+
+> After the pivot, we don't have much inductive handling left, only fixed clauses
+> and the recognizers. Then all that is materially left from mini is a certifying
+> type checker that is working but **naive and not usable in practice**. So we'll
+> drag it along for inspiration and maybe comparison on simple input, but **it
+> will not play a role in practice.**
+
+That is a fourth bucket beside retires / basis / recognition: **stays but
+demoted.** It is `checker/src/mini/kernel.rs` (6 876 lines) and the conversion
+machinery around it — `conv.rs`, `ev.rs`, and the `Checker` half of `interp.rs`.
+Not deleted, not production.
+
+**§1 is what makes this coherent, and bucket 4 makes §1 more important rather than
+less.** If any model declaration were still checked by mini's `Checker` after the
+pivot, production would depend on a component the owner has just designated
+non-production. §1 shows it is not: under `Mode::Split` every `def` and `theorem`
+— which is every model declaration — goes to nanoda, and `Driver::evidence`
+returns `false` on that arm so mini's evidence walk does not run on them either.
+Mini's `Checker` remains reachable in production for exactly two things: accepting
+inductive declarations (`kernel::add` → `add_maybe_nested`, §5.2) and firing a
+model's ι rule inside `whnf_conv` (§7). Neither is "checking a model".
+
+**Where the label belongs.** A checker that is "working but not usable in
+practice" and still compiled into the binary is precisely what a future reader
+mistakes for a live path, and this project has a long record of that failure —
+`SEAM-DESIGN.md:579-598`'s three heads for one constant, and `fire_list` being
+structurally dead code that nobody had deleted, are the same mistake twice. The
+label should go in three places, in decreasing order of importance:
+
+1. **`checker/src/mini/kernel.rs`'s module header**, as the first thing in it:
+   what the `Checker` is, that it is not the production type checker, what still
+   *does* reach it (inductive acceptance and ι firing), and what does not (any
+   `def`, `theorem`, `opaque` or `axiom`). A header that says only "certifying
+   type checker" will be read as a live path.
+2. **`route.rs`'s `Mode` doc**, which today explains the split as a performance
+   argument ("the measured escape from the matcher wall"). After the pivot the
+   split is also a *policy* statement about which engine is production, and the
+   doc should say so, because a future reader tempted to route a `def` to mini
+   for some local reason needs to meet that sentence.
+3. **`MINI-DESIGN.md` §0**, which frames mini as one of two axes.
+
+**Should anything stop it being reachable?** No new mechanism is needed, and
+adding one would be the wrong shape: `Mode::pick` is already the single policy
+function — `route.rs:110-113` says in terms that "there is no second place a
+routing decision is made" — so the reachability question is already answered by
+one `match`. What is worth adding is a *test* that pins it: a run over a fixture
+carrying a model, asserting that no `_model` declaration was dispatched to
+`Pick::Mini`. That converts the guarantee from a reading of `Mode::pick` into
+something that fails when someone changes it.
+
+### 5.4 `--naive` cannot survive the pivot in its current meaning
+
+`--naive` today selects `Driver::Plain` (`route.rs:270-273`,
+`checker/src/bin/checker.rs:176`), the historical whole-file mini run: mini
+accepts *and* certifies every declaration, inductives included, via
+`kernel::add`. `CLAUDE-HANDOFF.md` records it as the only way to run that policy.
+
+**After the pivot that policy no longer exists**, and the reason is bucket 1, not
+bucket 4: `Driver::Plain`'s inductive half is `zoneb` and the `rec_*`/`iota_*`
+families — the 23 656 lines that are being deleted. A `--naive` run over any file
+with a non-basis inductive would decline on every one of them. So `--naive` does
+not survive as "mini does everything"; it survives, if at all, as something
+narrower.
+
+**What the owner actually asked for — "comparison on simple input" — is narrower
+than `--naive` and is better served by a different flag.** The comparison that
+still means something after the pivot is: *for a declaration both engines can
+take, do they agree?* That population is the `def`s, `theorem`s, `opaque`s and
+axioms — precisely `Mode::Split`'s `Pick::Checker` set — plus the basis
+inductives. So the useful mode is **the split policy with the ordinary-declaration
+side flipped to mini**, not the whole-file walk. That is a second `Mode` variant,
+which `route.rs:87-95` already anticipates: its `DeclKind` enum tells the
+`DefKind`s apart explicitly "because a future policy may want to split them, not
+because today's does."
+
+**Recommendation: retire `--naive` with the construction code and introduce
+`Mode::MiniDefs` (or similar) in its place**, so that the demoted checker keeps
+exactly one entry point, that entry point is a routing mode rather than a separate
+driver, and the differential oracle keeps working on the population where both
+engines are still defined. Keeping `Driver::Plain` as a second driver beside the
+routed one, after its inductive half is gone, would leave a mode that silently
+declines most real files — the "names where a value stopped rather than why"
+failure this project pays for most.
+
+## 6. The 91 untranslated declarations
+
+`init-prelude` currently reports, with `--verbose --mutual --nested`
+(`CLAUDE-HANDOFF.md:142-151`):
+
+```
+accept  1822 declarations
+untranslated: 91 declarations, 10 eliminators
+uncertified:  32 const typings, 29 type typings
+tg gaps: 11909      prefix declarations=152 pairs=32      exit 4
+```
+
+in two families: **`type former spine`** — the heterogeneous-operator classes
+(`HAdd`, `HSub`, `HMul`, `HPow`, `HAnd`, `HOr`, `HXor`, `HShiftLeft/Right`,
+`HAppend`, `HAndThen`, `HOrElse`, `HDiv`, `HMod`, `HSMul`), the `Monad*` classes,
+`Membership`, `EStateM.Backtrackable`, `Trans` — and **`field type
+uninterpretable`** — the machine words `UInt8/16/32/64`, `USize`, plus `Char`,
+`String`, `Fin`, `BitVec`, `ByteArray`, `Substring.Raw`, `Hashable` and the
+`Lean.*` syntax types. The 10 eliminators are `False` and `PEmpty` (class-(S)
+eliminator, no constructors) and `HEq` (a result index is not a bare field).
+
+**Every one of those refusals is minted inside code that retires.** The four sites:
+
+| site | reason |
+| --- | --- |
+| `zoneb.rs:3625` | `type former spine` — `ip.beta_spine` could not decompose the stored type |
+| `class_s.rs:440` | `type former spine`, class-(S) arm |
+| `direct.rs:553`, `recursor.rs:498` | `type former spine` on the `Eq` clause |
+| `zoneb.rs:2268` | `field type uninterpretable` — the field's inferred typing carries no interpretation term |
+
+All four are reached from `zoneb::build`, and `zoneb::ensure` returns at the model
+route (`:248-252`) **before** `build` is ever called. So under the owner's rule
+these declarations no longer produce *our* refusals at all: they either arrive
+with a model and work, or they arrive without one and we complain that the model
+is missing. **The category `type former spine` / `field type uninterpretable`
+disappears as a category.** That is the largest single consequence of the pivot
+and the brief was right to flag that nobody had considered it.
+
+What replaces it is *the producer's* decline ledger rather than ours, so whether
+that is a net win depends entirely on the producer's coverage. **This tranche
+measured it, and the answer is that the coverage is total.**
+
+`lean-inductive-models` was built from `vendor/` in a scratch copy and run over
+the same export:
+
+```console
+$ lean-inductive-models --no-output --no-type-check-output \
+      vendor/arena-tests/good/init-prelude.ndjson
+…
+Nat:   exempt — prim model: a basis primitive
+Eq:    exempt — prim model: a basis primitive
+PUnit: exempt — prim model: a basis primitive
+statements: 658 compared, 0 differ
+levels: 3 planner comparisons, 0 escapes
+output check: 144 model families checked
+EXIT=0
+```
+
+**144 model families, 0 declines, 3 exempt.** Exit 0; exit 2 is the tool's code
+for "a requested generation route declined an unsupported owner" and it did not
+fire. And the models are exactly the declarations we refuse:
+
+| our refusal | the tool's verdict |
+| --- | --- |
+| `field type uninterpretable` — `UInt8/16/32/64`, `USize` | `model of 7 declarations` each |
+| — `Char`, `String`, `Fin` | `model of 9 declarations` each |
+| — `BitVec`, `ByteArray`, `Hashable` | `model of 7` each |
+| — `Lean.Name`, `Lean.Syntax` | `model of 8`, `model of 26` |
+| `type former spine` — `HAdd`, `HSub`, `HMul`, `HDiv`, `HMod`, `HPow`, `HAppend`, `Membership`, `Trans`, the `Monad*` classes | `model of 7 declarations` each |
+| the 10 **eliminator** declines — `False`, `PEmpty` (no constructors), `HEq` (result index not a bare field) | `model of 2`, `model of 2`, `model of 5` |
+
+**So the 91 untranslated declarations and the 10 untranslated eliminators go, all
+of them.** That is the largest single consequence of the pivot, it was
+unconsidered before this tranche, and it is now measured rather than inferred.
+
+Two details from the same run worth carrying:
+
+* **`PSigma'` is spliced, not assumed.** `init-prelude` declares no `PSigma'`, and
+  the tool emits it — `LT: prelude spliced — PSigma', PSigma'.rec, PSigma'.mk,
+  PSigma'.fst, PSigma'.snd, PSigma'.rec', PSigma'.fst_mk, PSigma'.snd_mk,
+  PSigma'.rec'_mk`. That is the whole family §3.4 describes: the primitive
+  inductive and its constructor, then projections, the large eliminator `rec'` and
+  the three computation rules, all as ordinary declarations.
+* **`Acc` models, confirming §3.1.** `_wcore.Acc: prelude spliced —
+  _wcore.Acc._model._impl.funext`. `Lean.Syntax` reaches it through a `_wcore.*`
+  prelude of some 250 declarations including `WellFounded`, `Classical.choice`
+  and `Quot.sound` — which is the concrete shape of the cost §8.3 raises.
+
+The predecessor's numbers point the same way and are now corroboration rather
+than the argument: `MODELGEN.md:2569-2591` records `--prim-models` modelling
+**122 of `init-prelude`'s 125 simple inductives**, and `MODELGEN.md:6930` records
+**6 882 closed, 0 declined, 3 exempt** on full Mathlib with 18 511 statements
+compared at 0 differing and 6 796 recursors at 0 differing.
+
+## 7. What is *not* dissolved
+
+* **`--naive`.** A mini-only run puts model `def`s and `theorem`s on mini's
+  `def_eq`. The pivot's guarantee is a property of the default split, not of the
+  binary.
+* **Reduction still happens in mini.** A model's ι rule fires inside mini's
+  `whnf_conv` (`kernel.rs:1474-1693` dispatches `iota_model::selects`), and
+  `eq_cash` cashes the model's `Eq` theorem into a TG equation there. That is a
+  single rewrite per redex rather than a normalisation, so it is not the failure
+  mode §2 describes — but mini's `def_eq` is not eliminated from the picture, only
+  removed from the *checking of model bodies*.
+* **The identity guard's residue** (§2, last paragraph) is untouched.
+* **The basis five are still constructed by us**, with mini's `def_eq` doing the
+  work. They are five fixed declarations rather than an open population, which is
+  the point, but "the checker constructs no inductives" would be false.
+
+## 8. Risks and what is not established
+
+### 8.1 The producer's coverage is measured on `init-prelude` and nowhere else
+
+**Retired as a risk for `init-prelude`** — §6: 144 families, 0 declines. The risk
+that remains is scale. `lean-inductive-models` exits **2** when "a requested
+generation route declined an unsupported owner", and under the owner's rule every
+such decline becomes a hard failure on our side rather than a fallback, so the
+tool's decline rate *is* our decline rate. **It has not been run over Mathlib**,
+and the predecessor's 6 882/0/3 is not transferable — the basis changed
+(`PULiftP` → `PUnit`, `PSigma` → `PSigma'`, `Acc` out), and a changed basis is a
+changed coverage argument. The next measurement is `scripts/ci-mathlib.sh` in the
+external repo; it is cheap relative to any build this document proposes and should
+be taken before, not after.
+
+### 8.2 `PSigma'` is red today and the fix is only half-written
+
+§3.3 and §3.6. `zoneb.rs:1394` says the replacement is "a signature change rather
+than a derivation" and names the pieces — `TruncCarrier::in_un` from `in_u0` +
+`Rung::u0_mem` + `Rung::transitive`. **That comment is about class-(P)
+truncation above `Prop`, and it is not the whole of what `PSigma'` needs.** §3.6
+finds two statements with no construction concluding them: `Σ ∈ U₀` (blocked
+structurally — `Tower::at(0)` is `None` and `U₀` has no closure clauses), and
+"a Σ whose components are subsingletons is a subsingleton".
+
+This is the load-bearing claim to refute first, and it is cheap to refute:
+build `TruncCarrier::in_un` against the shipped `tight_psigma_prime.ndjson` and
+see whether one signature change turns three `class (P) above Prop` declines
+green. **If it does not** — and §3.6 predicts it will not at `u = v = 0` — then
+part 1 includes one genuinely new `derived/` construction and part 1 is larger
+than the brief assumed. Either way the experiment is a day, and it gates
+everything else.
+
+### 8.3 The `Acc` retirement is a real cost, not a saving
+
+3 519 lines of `Acc` machinery retire, and everything that used `Acc` — every
+well-founded recursion in Mathlib — must then arrive with a model produced by the
+graph arm, whose ι rule is **not** `Eq.refl` and whose axiom bill includes
+`Classical.choice`, plus `funext`/`Quot.sound` when a recursive field has binders
+(`MODELGEN.md:3509-3527`). Our `Acc` clause is `thesis.txt:2126`'s own clause and
+is cheap and exact. Trading it for a `Classical.choice`-bearing model on every
+well-founded definition is a decision with a cost, and this document is where the
+cost should be argued rather than absorbed. **It has not been argued anywhere.**
+
+### 8.4 The naming scheme does not match, and the mismatch fails quiet
+
+§4.2(1). Our recogniser looks for `T._model.self`; the tool emits `T._model`. A
+name that is not found reads as "no model", which under the owner's rule is a
+loud decline — so it fails closed, not open. But it fails *uniformly*, which
+means the first end-to-end run will report "no model" for everything and say
+nothing about why. The shape-check diagnostics `nested_splice.rs:214-262` exist
+precisely to prevent that class of report and will need the same treatment for the
+new slots.
+
+### 8.5 The structural checker is a second contract we would depend on
+
+The tool's structural checker deliberately "does not unfold definitions, use proof
+irrelevance, ask Lean for definitional equality, or inspect arbitrary declaration
+values" (README) — it is a syntactic correspondence check, independent of the
+kernel verdict. Our `nested_splice::shape` is our own version of the same check,
+and `nested_splice.rs:69-92` is emphatic that it is a *diagnostic* and not the
+trust root. That remains right and must stay right: **we must not come to rely on
+the producer's checker having run.** The certificate is the trust root; the shape
+check buys the reason string.
+
+### 8.6 Not established
+
+* Whether the tool's optional structure-eta / unit-like / recursor-rule-K
+  theorems subsume `fun_eta.rs`, `unit_like.rs` and our K handling. The README
+  says they are emitted "when the exported kernel metadata calls for them", which
+  is a weaker guarantee than "always".
+* Whether `PSigma'` translates at mixed universes `(0,1)` and `(1,0)`, which
+  `tight_psigma_prime` does not isolate.
+* Whether the recognition path scales. §6 measures the **modelling** side at
+  `init-prelude` scale and `MODELGEN.md` measures the predecessor's at Mathlib
+  scale. The **recognition** side has never been run at more than fixture scale,
+  because today it recognises only what was written for nested declarations —
+  and it cannot be run at all until the naming scheme is fixed (§4.2). That is
+  the asymmetry the brief identified and it survives this tranche intact.
+* The performance consequence. A model is `2 + 2c` declarations for `c`
+  constructors on most arms, all of which now go through nanoda and its schedule.
+  Mathlib's 6 882 inductives become on the order of 30 000 extra declarations to
+  check. Nothing here prices that.
+* Where inside `zoneb.rs` the basis slice ends and the retiring construction
+  begins (§5.3's qualification on the 23 656).
+
+### 8.7 A note on scope
+
+This document deliberately says nothing about *how* TG evidence is produced —
+only about which engine type-checks which declaration, and which statements a
+construction concludes. That is so it survives the `Certifier`-trait retirement
+now in flight on `joachim/retire-certifier`, which threads evidence directly
+through `tc.rs`. Nothing here depends on the trait, on `NullCertifier`, or on the
+compile-time backend selection; §1's trace is about `Mode::pick` and
+`check_declar_scheduled`, and §3.6's table quotes constructions by the statement
+they conclude.
+
+## 9. Measurement log
+
+*Release binary at `4c6426a`, `--features tg`. `ci/corpus-dir.sh --link` run
+first.*
+
+| what | result |
+| --- | --- |
+| `nested_keying.ndjson` `_model` declarations by kind | 16 `def`, 11 `thm`, 0 inductive, 0 axiom |
+| `nested_keying.ndjson` routing | `toMini=8 toChecker=31 unclaimed=0` |
+| `tight_psigma_prime.ndjson` (external fixture) | `accept 3 declarations`, **`untranslated: 3`**, all `class (P) above Prop` |
+| `081_PSigma.snd.ndjson` (Lean's `PSigma`) | `accept`, `untranslated declarations=0`, **1 tg gap** |
+| `PSigma'.rec` level params | `[u, v]` — small-eliminating |
+| `PSigma.rec` level params (control) | `[u_1, u, v]` — large-eliminating |
+| `init-prelude.ndjson` with `--no-modelgen` | declines at `Lean.Syntax`, as `CLAUDE-HANDOFF.md` records |
+| `checker/src/mini/*.rs` | 55 255 lines, 60 files (unchanged `4c6426a` → `5bab7c0`) |
+| retiring / staying split | 23 656 / 8 702 of the 32 358 in scope |
+| model names in the tool's own output fixture | `T._model`, `C._model`, `R._model`, `R._model.iota_j` — **no overlap** with our `T._model.self` / `ctor_j` / `rec_k` / `iota_k_j` |
+| **`lean-inductive-models` over `init-prelude`** | **144 model families, 0 declines, 3 exempt (`Nat`, `Eq`, `PUnit`), 658 statements compared / 0 differ, exit 0** |
+| — the `field type uninterpretable` family | all modelled (`UInt8/16/32/64`, `USize`, `Char`, `String`, `Fin`, `BitVec`, `ByteArray`, `Hashable`, `Lean.Name`, `Lean.Syntax`) |
+| — the `type former spine` family | all modelled (`HAdd`…`HAppend`, `Membership`, `Trans`, `Monad*`) |
+| — the 10 untranslated eliminators | all modelled (`False`, `PEmpty`, `HEq`) |
+
+The tool was built from a scratch copy at `_tmp/lim`, never from `vendor/`, which
+is unmodified. `_tmp/` is project-local and gitignored.
+
+**Gates, at `5bab7c0` with this document as the only change:** `unified_cli`
+6/6, `mini_designed` 34/34, `tg_tutorial` 36/36, `--no-default-features --lib`
+251/251, `cargo check` 10 warnings, `ci/check-boundary.sh` OK.

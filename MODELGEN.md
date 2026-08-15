@@ -2402,6 +2402,15 @@ they are pinned in `mini/tests/nested.rs` today.
 
 # 8. The third construction: models from four primitives (`--prim-models`)
 
+> **This section describes `modelgen`'s basis, and `modelgen` is being retired.**
+> Its successor `lean-inductive-models` uses a different one —
+> `{Eq, Nat, PUnit, PSigma', Quot}`, with `PUnit` in place of `PULiftP` and the
+> *tight* `PSigma' : Sort (max u v)` in place of Lean's `PSigma : Sort (max 1 u v)`
+> — and that is the basis a consumer must implement. `MODEL-BASIS.md` §3 is the
+> current statement and cites the successor's own source. Everything below remains
+> accurate about `modelgen` and should be read as the derivation history that
+> produced the successor's basis, not as the contract.
+
 **Off by default, behind `--prim-models`.** Where §1's constructions remove
 *nesting* and *mutuality*, this one removes the inductive declaration itself:
 a plain — non-mutual, non-nested — inductive's carrier, constructors,
@@ -2424,7 +2433,7 @@ four. They are internal in the contract's sense (`modelgen/README.md`, "what
 the contract does not say"): no consumer reads them.
 
 The commission named the basis `{Eq, False, Sigma, Acc, Nat}` and asked for
-it to be verified rather than inherited. **The basis it ended at is
+it to be verified rather than inherited. **The basis `modelgen` ended at is
 `{Eq, PSigma, Nat, PULiftP}`** — `INDUCTIVE-BASIS.md` is the derivation,
 and the three changes are that `False` is derived rather than primitive
 (Church `∀ p : Prop, p`, with the `Sort w` eliminator from `0 = 1` plus a
