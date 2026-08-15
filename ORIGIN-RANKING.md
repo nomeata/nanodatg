@@ -995,3 +995,65 @@ Gates at the time of writing: `unified_cli` 6/6, `mini_designed` 34/34,
 `tg_tutorial` 36/36, `--no-default-features --lib` 251/251,
 `cargo check --no-default-features --all-targets` existing warnings only,
 `ci/check-boundary.sh` OK. No ratchet moved.
+
+---
+
+## Synthesis after six refutations — the `np == 0` layer is the shared root
+
+Written 2026-08-15 by the coordinator, from the six tranches below. It asserts
+no new measurement; it is a reading of the ones already recorded above, and it
+should be corrected in place if any of them is re-measured differently.
+
+| tranche | headline | reachable | why it died |
+| --- | ---: | ---: | --- |
+| B1 `major premise is not a constructor` | −3 780 | **0** | no backend rule for the numeral step; simulating it costs **+942** |
+| B2 `major premise's domain is not this inductive` | −1 609 | **0** | all 249 firings are wall #1 of the `np == 0` layer; next gate reads the same field |
+| B3 `proj_reduce` | −890 | **12** | 231 declines, **zero** at or past the composition |
+| A1 `076`'s `…at this parameter` | −35 | **−1** | three independent mints of `⟦List⟧` in one binary |
+| `077`'s `has_type_lam` | −19 | **0** | needs task #38's bridge, which does not exist |
+| the untranslated frontier | 6 531 | **1 333** | 63 % is co-location, proved by a matched control; 1 307 of the rest is `Lean.Syntax` |
+
+**Two roads survive contact with measurement, and they are the same road.**
+
+* The **`np == 0` layer in `fire_dep`** is worth **−1 609** on its own (−1 892 with
+  its `fire_list` sibling, 18 % of `init-prelude`). Twelve constructions, ten
+  hard, seven previously unknown, **no partial credit** — the sub-tree migrates
+  intact across each wall rather than shrinking.
+* **`Lean.Syntax`'s translation** is worth **−1 162**, and it is the only tranche
+  measured this week where **nothing migrates**: every other origin row is
+  unchanged under the deletion (598→598, 249→249, 213→213), the exact opposite
+  of B1's +942. The escape ledger does not take a cut, because a landed
+  translation publishes an *unconditional* ι where `NANODA_ASSUME` mints the
+  antecedent the ledger charges for.
+
+**But the second road runs through the first.** The frontier seat's own residual
+risk: *`List` is fully translated and still carries 103 gaps on its `brecOn`
+tower, so a translated `Lean.Syntax` inherits the `np > 0` layer.* And
+`Lean.Syntax` is a nine-link chain rooted at `Nat.le` whose **first eight links
+are measured at 0** — `Fin` included, which gates 24 of the 59 untranslated
+declarations and is worth **7 gaps**.
+
+**So the layer is not one option among several. It is the shared root**, worth
+−1 609 directly and a precondition for most of the −1 162. That is the case for
+paying its commitment, and it is the first time the case has rested on anything
+but the size of a single prize.
+
+**What would refute this synthesis**, and should be checked before anyone
+commits ten constructions to it: that a translated `Lean.Syntax` really does
+inherit the layer — it is one seat's inference from `List`'s 103 residual gaps,
+not a measurement of `Lean.Syntax` itself, and `List` may differ. **One probe
+settles it: translate nothing, and ask whether `Lean.Syntax`'s 1 307 are raised
+at sites the layer's walls would gate.** That probe is cheap and it is the
+correct next act, ahead of any construction.
+
+### The two pre-build checks this week produced, both cheap and both decisive
+
+1. **Read the gate immediately downstream of the one you would open, and check
+   it does not test the same predicate.** B2's prize was 0 because it did; B3's
+   one buildable arm sat behind a `match` closing `_ => false`. Twice the
+   deciding gate was one line, checkable before any work.
+2. **Distinguish co-location from causation with a matched control.** The
+   frontier seat paired a 2-constructor *translated* `ctorElim` with a
+   2-constructor *untranslated* one and got 28 gaps / 4 own from both. That one
+   comparison retired a 63 % headline and retroactively corrected B3's
+   146-of-231.
