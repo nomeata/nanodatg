@@ -87,6 +87,7 @@ The integration sequence from the pre-merge baseline `a10bf90` is:
 | `cc5dfd5`, `4a1f567` | Replays exact lazy-delta traces, but retains recipes only when replay is sound and useful. |
 | `4fc2f25` | Replays certificate-free, endpoint-checked structural equality recipes; eliminates the final `eq_cache` origin. |
 | `b654c98` | Refuses to park conditional reduct certificates in memo traces; removes eight false escape/copy artifacts. |
+| `c014763` | One carrier per declaration: a parameterised declaration adopts mini's `Inductive` instead of getting a second one built beside it. Exports 172 → 168, and — attributed 2026-08-15, see the frontier — `init-prelude` **11 909 → 11 556**, all of it escaping certificates closed at the judgement boundary. |
 
 The relevant production and regression code is concentrated in:
 
@@ -152,17 +153,58 @@ declaration 1 on `Lean.Syntax`, and with modelgen but no gates it declines on th
 Of the 11 556 gaps, roughly 6 700 are `trans over an admitted premise` — relays,
 not origins. Exit 4 is correct: it is certification debt, not rejection.
 
-**The total was 11 909 when first measured at `d73c94f` and is 11 556 now, and
-the 353 is UNATTRIBUTED.** It is in the improvement direction, and the only
-executable changes in between were the `Certifier`-trait retirement — whose
-own invariant captured `init-prelude` byte-identical at 11 556 on *both* sides
-of its branch point — and a reporting-only change to `origin_report` /
-`ix_readiness_report`, which should not move a gap count at all. So either one
-of those did more than it claimed, or the 11 909 was taken under a
-configuration nobody wrote down. **Attribute it before quoting either number as
-a ratchet.** An unexplained fall is the same defect as an unexplained rise; this
-project has already spent a day on two rows that drifted for 134 commits behind
-a passing total.
+**The 353 is attributed, 2026-08-15: it is `c014763` (`checker: one carrier per
+declaration`) alone, and it is a real closure of escaping certificates — not a
+population change and not a lost measurement.** Measured rather than inferred:
+release, `--features tg`, the same command and the same input at two revisions
+one commit apart — `d263be2` **11 909**, `5422a61` (that commit, merged)
+**11 556**. Every mainline revision from `5422a61` to master reproduces 11 556
+unchanged, so the `Certifier`-trait retirement, `57bfb8c`'s origin-table gating,
+`50605c4` and `623d4fd` each moved it by **zero**, exactly as they claimed.
+
+The paragraph that stood here was wrong twice, and in the same way both times:
+the 11 909 was taken at **`d263be2`** (`_tmp/ip-final.log`, 05:03), *before*
+`c014763` landed at 05:10 — not at `d73c94f`, where it was only quoted forward —
+so `c014763` **was** the executable change "in between" that this text said did
+not exist. A figure inherited across a rewrite is not a measurement taken at the
+revision the rewrite names.
+
+**What moved, row by row.** The `gap:` rows sum to the total on both sides
+(11 909 and 11 556), so nothing left the accounting:
+
+* the entire −353 is one escape row, `undischarged assumption ⟦arg⟧ ∈ ⟦binder
+  domain⟧ survived to the boundary`, **1 570 → 1 217**;
+* the mechanism is the judgement boundary: **864 → 1 212** certificates closed
+  as the ambient context's own typings (963 → 1 595 atoms), 1 421 → 1 068 still
+  conditional. `close_at_boundary` mints each with `Thm::mp` against
+  `scope::assume_ambient` and re-checks the conclusion is an equation, so these
+  are real kernel theorems whose hypotheses are `⟦Γ⟧` — not a relabelling;
+* two ι origins **migrated and neither closed**: `iota: the constructor's bridge
+  is not about this spine` 200 → **4**, `iota: the major premise's domain is not
+  this inductive` 53 → **249**. Equal and opposite: those questions are still
+  asked and still charged;
+* `derived (real kernel Thm)` is **162 846 on both sides**, and the certified
+  prefix is `declarations=152 pairs=32` on both. **No additional declaration is
+  certified and no origin closed.** Quote the −353 as an escape-ledger result,
+  never as certification progress.
+
+**Nothing stopped asking — checked three ways rather than assumed.** The rows
+sum to the total on both sides; the ask population is flat or *larger* (typing
+obligations 61 966 → 61 928 asked, conditional derivations 32 418 → 32 413 made,
+"accounted for by a rule" 29 984 → 29 984 identical, and the cross ledger grew:
+`checkerEntries` 1 041 → 1 042, `checkerSlots` 1 348 → 1 350); and the one
+reporting gate `c014763` touched — `gen_report`'s early return — was **widened**,
+adding the degenerate and dependent counters so the section prints where it
+previously printed nothing at all. Its test changes are purely additive: no
+assertion was removed and none lowered.
+
+**Both numbers belong to *this* population** — `checker --verbose --mutual
+--nested --modelgen=<repo-root build>`, 1 822 declarations — which is neither
+the exports' 16 files / 168 nor `--no-modelgen`'s 10 262 on this same file.
+**Bisect it on first-parent mainline only**: `c014763` sits on a branch that
+forked before `d263be2`, so a build of `c014763` or its parent declines
+(`budget: … 260146`) for want of the syntactic-equality shortcut and measures
+nothing.
 
 What stops it now is **interpretation debt**, in two named families:
 
