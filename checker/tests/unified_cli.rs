@@ -265,6 +265,25 @@ fn authoritative_projection_handoff_computes_direct_redexes_and_congruence() {
         stdout.contains("conditional derivations: 71 made (0 of them copies), 69 accounted for by a rule, 2 escaped"),
         "a direct-subject reduction parked conditional evidence:\n{stdout}",
     );
+    // **This row is printed although the general path was never consulted, and
+    // that is the point.** All the degenerate and dependent rows live in
+    // `gen_report`, which used to return early on `GEN_BUILT == 0 && no
+    // declines` — a gate about the *general* path standing in front of rows
+    // about two other arms. On this fixture TG now adopts mini's carriers and
+    // builds none of its own, so `declarations translated` is 0 and the early
+    // return swallowed the whole section: the dependent arm fired and reported
+    // nothing, and the assertion below read `no report row` rather than a
+    // wrong number. `TEST-INVENTORY.md` §4.5 in reporting code.
+    //
+    // The two are asserted together so the shadow cannot come back unseen: if
+    // the gate is ever narrowed to the general path again, `translated == 0`
+    // is exactly the condition that hides the row beneath it.
+    let translated = report_count(&stdout, "declarations translated");
+    assert_eq!(
+        translated, 0,
+        "TG built {translated} carrier(s) of its own here; the row below is then printed for \
+         the general path's reasons and stops witnessing the dependent arm:\n{stdout}"
+    );
     assert_eq!(report_count(&stdout, "ι sites the DEPENDENT rule computed"), 1, "Two.rec did not consume mini's dependent recursor evidence:\n{stdout}");
     assert!(!stdout.contains("gap: iota:"), "the ready Two.rec subject trace was not certified:\n{stdout}");
     assert!(!stdout.contains("gap: proj_reduce"), "the certified iota subject did not compose with projection computation:\n{stdout}");

@@ -1181,6 +1181,73 @@ fn the_degenerate_iota_rule_computes_on_a_tutorial_export() {
     assert_eq!(general, 0, "the general ι rule fired on `Prod.rec`, which has no nullary constructor");
 }
 
+/// The unified checker's own report on one corpus export, `--no-modelgen`.
+///
+/// [`report`] spawns `nanoda_bin` with modelgen and the `Nat`/`String`
+/// extensions; that configuration **cannot see** the carrier-adoption change
+/// this file's next test is about — measured, `074_prodRecEqns` reads 1 gap
+/// there either way. The `--no-modelgen` split dispatch is where the two
+/// engines meet over one declaration, so it needs its own runner.
+fn split_report(export: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_checker"))
+        .args(["--no-modelgen", "--verbose"])
+        .arg(export)
+        .output()
+        .expect("spawn unified checker");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// **One declaration, one carrier.** `Prod` is parameterised (`α`, `β`) with two
+/// plain fields, so before [`TgBackend::mini_adoptable_translation_at`] existed
+/// the adoption clause in `gen_ind_build` — which demanded `params == 0` and
+/// fieldless constructors — refused it, and TG built its own
+/// `derived::inductive::Inductive` beside the one mini had already published
+/// and interpreted `⟦Prod⟧` with. Two carriers for one declaration is the
+/// recorded `Dt::IndDrift` failure, and here it cost four gaps.
+///
+/// `declarations translated` is the assertion that names the mechanism: it
+/// counts carriers **TG built**, so `0` says the adoption happened and every
+/// mention of `Prod` in the file is over mini's set. The gap count is the
+/// consequence, and `the constructor's bridge is not about this spine` is the
+/// origin that was being reported — a bridge stated over TG's carrier about a
+/// constructor spine interpreted over mini's.
+///
+/// # Falsification
+///
+/// Restoring the `params == 0` conjunct in `mini_adoptable_translation_at`'s
+/// second disjunct takes this file **10 → 14**, `declarations translated`
+/// 0 → 1, and brings the `constructor's bridge` origin back. All three
+/// assertions below fail together, because they are three readings of the one
+/// adoption; the first is the one that distinguishes *adopted mini's carrier*
+/// from *the gaps happened to fall*.
+#[test]
+fn a_parameterised_declaration_adopts_minis_carrier_rather_than_building_a_second() {
+    let dir = corpus().join("good/tutorial");
+    if skip_guard::absent(&dir) {
+        return
+    }
+    let f = dir.join("074_prodRecEqns.ndjson");
+    assert!(f.exists(), "missing corpus file {}", f.display());
+    let text = split_report(&f);
+    // Rule 3: the reads below are `== n`, and a dead subprocess satisfies them
+    // for free. The anchor is what stops that.
+    assert_is_a_report(&text, "074_prodRecEqns");
+    let translated = row(&text, GEN_TRANSLATED);
+    assert_eq!(
+        translated, 0,
+        "TG built {translated} carrier(s) of its own for `Prod`, which mini had already \
+         published — two carriers for one declaration, and `⟦Prod⟧` is then not a function \
+         of the constant"
+    );
+    let gaps = row(&text, "TOTAL gaps");
+    assert_eq!(gaps, 10, "`074_prodRecEqns` reports {gaps} gaps under the split dispatch, expected 10");
+    assert!(
+        !text.contains("iota: the constructor's bridge is not about this spine"),
+        "the constructor bridge is being stated over a carrier the spine is not interpreted \
+         over:\n{text}"
+    );
+}
+
 /// **The threat-model anchor is tied to a term the backend actually produces.**
 ///
 /// `README.md` makes the whole guarantee conditional on `⟦False⟧` being
