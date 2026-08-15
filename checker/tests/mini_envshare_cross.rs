@@ -53,9 +53,28 @@ fn corpus() -> PathBuf {
 /// its `Shared` from whatever core was installed. Panics if checking fails,
 /// which is the checker's own contract.
 fn run_checker(export: &Path) {
+    // **The counter is what keeps two tests over the same export apart.**
+    //
+    // This was `process::id()` plus the export's *stem*, which is unique only
+    // while no two tests in this binary drive the checker over the same file.
+    // `one_pi_mint_for_both_engines` and
+    // `a_checker_minted_pi_is_upgraded_not_reminted` both use
+    // `good/tutorial/034_boolType.ndjson`, so they computed the *same* path;
+    // cargo runs them as parallel threads, this function ends by
+    // `remove_file`ing it, and the loser read an empty file — surfacing as
+    // `EOF while parsing a value, line: 1, column: 0` out of
+    // `Config::try_from`'s `unwrap`.
+    //
+    // Those two tests are the two halves of the collision, and each has been
+    // the victim once: `a_checker_minted_pi_is_upgraded_not_reminted` in one
+    // gate run and `one_pi_mint_for_both_engines` in another. *A race shows a
+    // different victim each time* — see `THREADING-CENSUS.md` §7.8, and
+    // `corpus.rs::outcome`, which had the same defect for the same reason.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let cfg_path = std::env::temp_dir().join(format!(
-        "nanodatg-envshare-{}-{}.json",
+        "nanodatg-envshare-{}-{}-{}.json",
         std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         export.file_stem().unwrap_or_default().to_string_lossy(),
     ));
     let cfg = format!(

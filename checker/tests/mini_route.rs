@@ -620,9 +620,20 @@ fn skeleton_key_divergence_sweep() {
 /// above (the *routed* driver shares mini's parse; this deliberately runs
 /// the checker's own full pass).
 fn run_checker(export: &Path) {
+    // **Counter, not just the pid** — the third site of the same defect. Keyed
+    // on `process::id()` plus the export's stem, two tests in this binary over
+    // the *same* export compute the same path, and this helper removes it when
+    // it is done: the loser reads an empty file. Two tests here use
+    // `good/tutorial/034_boolType.ndjson`, so the collision is live, not
+    // latent. Same fix as `corpus.rs::outcome`,
+    // `mini_envshare_cross::run_checker` and `tg_tutorial::tmp_cfg`; see
+    // `THREADING-CENSUS.md` §7.8 for the signature and why it went unattributed
+    // for a day.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let cfg_path = std::env::temp_dir().join(format!(
-        "nanodatg-route-skel-{}-{}.json",
+        "nanodatg-route-skel-{}-{}-{}.json",
         std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         export.file_stem().unwrap_or_default().to_string_lossy(),
     ));
     let cfg = format!(
