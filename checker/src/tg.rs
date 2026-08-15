@@ -22442,6 +22442,49 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// term. So an antecedent is only ever acquired at Lean's own judgement for
     /// this projection, and an obligation stated at something merely
     /// definitionally equal to it is a counted gap.
+    /// **Had the general path translated this projection's structure yet?** —
+    /// the second axis of the [`ProjCause`] census, and a pure read.
+    ///
+    /// The name comes from `syn_type`'s memoised walk, which is the same one
+    /// [`Self::syn_type_proj`] starts with, so on the path that reaches the
+    /// telescope this costs a map hit. Where `syn_type` cannot name the
+    /// structure's type there is no inductive to ask about and the answer is
+    /// [`ProjInterp::Unknown`] — which is *not* the same as untranslated, and is
+    /// kept apart for that reason.
+    fn proj_structure_interp(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        structure: ExprPtr<'t>,
+    ) -> ProjInterp {
+        let Some(sty) = self.syn_type(ctx, structure) else { return ProjInterp::Unknown };
+        let Some((_, sname, _, _)) = ctx.unfold_const_apps(sty) else {
+            return ProjInterp::Unknown
+        };
+        // **Keyed on the name alone, deliberately.** `gen_inds` is keyed
+        // `(name, interpreted levels)`, and building that key needs
+        // [`Self::interp_levels`] — whose `Param` arm *mints* a level-parameter
+        // symbol when one is not already shared (`Shared::param_syms`).
+        //
+        // **A probe that mints is not a probe.** Measured: keying this lookup
+        // that way took `cargo test -p nanoda_lib` from 489 passed to 487
+        // passed / 2 failed, and scanning by name instead restored it with the
+        // census numbers **byte-identical** — so the minting changed the run
+        // without changing the answer, which is the worst shape an instrument
+        // can have. The cost of the name-only scan is that it does not
+        // distinguish σ, which this census does not report on anyway.
+        let mut seen_declined = false;
+        for ((n, _), v) in self.gen_inds.iter() {
+            if *n != sname {
+                continue
+            }
+            match v {
+                Some(_) => return ProjInterp::Translated,
+                None => seen_declined = true,
+            }
+        }
+        if seen_declined { ProjInterp::Declined } else { ProjInterp::NotAttempted }
+    }
+
     pub(crate) fn ty_proj(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -22451,22 +22494,31 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ) -> TgTyping {
         // `e` really is a projection, and out of the subject the caller named.
         let Expr::Proj { idx, structure: s, .. } = ctx.read_expr(e) else {
+            note_proj(ProjCause::NotProj, ProjInterp::Unknown);
             return self.ty_miss(crate::certify::TyGap::Proj)
         };
         if s != structure {
+            note_proj(ProjCause::SubjectMismatch, ProjInterp::Unknown);
             return self.ty_miss(crate::certify::TyGap::Proj)
         }
+        // **The census axis**, resolved once and used at every exit below. It
+        // costs one memoised `syn_type` (already computed by `syn_type_proj` on
+        // the path that reaches it) and one map lookup.
+        let interp_of = self.proj_structure_interp(ctx, structure);
         let (te, tt) = (self.interp(ctx, e), self.interp(ctx, ty));
         // The field type, recomputed here. Declining when the delta-only walk
         // cannot reach the telescope is deliberate: nothing is assumed about a
         // projection whose field type this module cannot see for itself.
         let Some(field) = self.syn_type_proj(ctx, idx, structure) else {
+            note_proj(ProjCause::TelescopeUnreached, interp_of);
             return self.ty_miss(crate::certify::TyGap::Proj)
         };
         let tf = self.interp(ctx, field);
         if tf != tt {
+            note_proj(ProjCause::FieldTypeDiffers, interp_of);
             return self.ty_miss(crate::certify::TyGap::Proj)
         }
+        note_proj(ProjCause::Carried, interp_of);
         let f = Formula::mem(te.clone(), tt.clone());
         let thm = derived::imp_refl(f.clone());
         self.typing(crate::certify::TyGap::Proj, &te, &tt, thm, vec![f])
@@ -25623,6 +25675,68 @@ static ARG_MEM: [std::sync::atomic::AtomicU64; N_ARG_MEM] =
     [const { std::sync::atomic::AtomicU64::new(0) }; N_ARG_MEM];
 fn note_arg_mem(k: ArgMem) { ARG_MEM[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+/// **Why [`TgBackend::ty_proj`] turned a projection away, or what it carried.**
+///
+/// `TyGap::Proj` is minted at four different exits and the ledger shows one row,
+/// so "126 no-evidence rows" says nothing about how many are *addressable*.
+/// Only two of the four are: a subject that is not a projection, or is out of
+/// another subject, is the caller's problem and no interpretation work reaches
+/// it. `THREADING-CENSUS.md` §6.4 records the count as an upper bound for
+/// exactly this reason; this splits it.
+///
+/// Paired with [`ProjInterp`], because the decision this feeds is not "how many"
+/// but *when*: a projection over a structure the general path has already
+/// translated is one an interpreted-structure classification could serve
+/// **today**, and one over an untranslated structure waits on
+/// `MODEL-BASIS.md` §6's step 2 instead. See §8.8.
+#[derive(Clone, Copy)]
+enum ProjCause {
+    /// The subject handed in is not a `Proj` expression at all. Not addressable.
+    NotProj,
+    /// It is a projection, but out of a different subject than the caller
+    /// named. Not addressable.
+    SubjectMismatch,
+    /// `syn_type_proj` could not reach the constructor telescope — `expose_pi`
+    /// is delta-only and delta was not enough. **Addressable.**
+    TelescopeUnreached,
+    /// The field type was reached and is not the claimed one: the obligation is
+    /// stated at something merely definitionally equal to Lean's judgement.
+    /// **Addressable**, and the one a whnf certificate would speak to.
+    FieldTypeDiffers,
+    /// Carried: the antecedent was acquired at the projection's own field type.
+    Carried,
+}
+
+/// Whether the structure's own inductive had been **translated** by the time
+/// this projection was typed.
+///
+/// Read off [`TgBackend::gen_inds`], which is the general path's memo, so this
+/// is "translated *at this moment*" and not "translatable" — a structure the
+/// walk simply has not reached yet reads [`Self::NotAttempted`]. That makes
+/// `Translated` a **lower bound** on what a classification could serve, which is
+/// the safe direction for the decision it informs.
+#[derive(Clone, Copy)]
+enum ProjInterp {
+    /// `gen_inds` holds a translation for this inductive at these levels.
+    Translated,
+    /// `gen_inds` was asked and the spec declined.
+    Declined,
+    /// No entry: not reached yet, or never attempted.
+    NotAttempted,
+    /// The structure's own type could not be named — `syn_type` did not reach a
+    /// constant head, so there is no inductive to ask about.
+    Unknown,
+}
+
+const N_PROJ_CAUSE: usize = 5;
+const N_PROJ_INTERP: usize = 4;
+static PROJ_CENSUS: [std::sync::atomic::AtomicU64; N_PROJ_CAUSE * N_PROJ_INTERP] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_PROJ_CAUSE * N_PROJ_INTERP];
+fn note_proj(c: ProjCause, i: ProjInterp) {
+    PROJ_CENSUS[(c as usize) * N_PROJ_INTERP + (i as usize)]
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// **Where [`TgBackend::has_type_lam`] declines** — the cause attribution for
 /// `HtMiss::Lam`, the largest single shape in the raw-hoist residue (10 538 of
 /// 20 328 on `init-prelude`).
@@ -26831,6 +26945,51 @@ fn ht_report() -> String {
         s.push_str(&format!(
             "    HAS-TYPE MEMO RECALLS NOT MATCHING THEIR CLAIM (bug report, expected 0): {ht_mm}\n",
         ));
+    }
+    // **`ty_proj` by cause and by whether the structure was translated.** One
+    // `TyGap::Proj` row cannot say how much of it is addressable: two of the
+    // four exits are the caller's shape and no interpretation work reaches
+    // them. See [`ProjCause`], and `MODEL-BASIS.md` §8.8 for the decision this
+    // feeds — whether an interpreted-structure classification pays before
+    // step 2 or only after it.
+    let pc = |c: ProjCause, i: ProjInterp| {
+        PROJ_CENSUS[(c as usize) * N_PROJ_INTERP + (i as usize)].load(Relaxed)
+    };
+    let row = |c: ProjCause| {
+        [ProjInterp::Translated, ProjInterp::Declined, ProjInterp::NotAttempted, ProjInterp::Unknown]
+            .map(|i| pc(c, i))
+    };
+    let total = |c: ProjCause| row(c).iter().sum::<u64>();
+    let proj_seen = [
+        ProjCause::NotProj,
+        ProjCause::SubjectMismatch,
+        ProjCause::TelescopeUnreached,
+        ProjCause::FieldTypeDiffers,
+        ProjCause::Carried,
+    ]
+    .map(total)
+    .iter()
+    .sum::<u64>();
+    if proj_seen > 0 {
+        s.push_str(&format!(
+            "    ty_proj by cause: {} not a projection, {} subject mismatch, {} telescope unreached, {} field type differs, {} carried\n",
+            total(ProjCause::NotProj),
+            total(ProjCause::SubjectMismatch),
+            total(ProjCause::TelescopeUnreached),
+            total(ProjCause::FieldTypeDiffers),
+            total(ProjCause::Carried),
+        ));
+        for (name, c) in [
+            ("telescope unreached", ProjCause::TelescopeUnreached),
+            ("field type differs", ProjCause::FieldTypeDiffers),
+            ("carried", ProjCause::Carried),
+        ] {
+            let r = row(c);
+            s.push_str(&format!(
+                "      …{name}, by the structure's own translation: {} translated, {} declined, {} not attempted, {} untypeable\n",
+                r[0], r[1], r[2], r[3],
+            ));
+        }
     }
     let raw_causes =
         am(ArgMem::RawStoredElsewhere) + am(ArgMem::RawGapAtCheck) + am(ArgMem::RawNeverChecked);

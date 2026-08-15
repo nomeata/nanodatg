@@ -988,7 +988,15 @@ consumer being **able to receive**. The right test is*
 **So all four are blocked on interpretation, not on threading** — and **three of
 the four on the same milestone**, interpreted structures (`infer_proj`,
 `try_eta_struct_aux`, `def_eq_unit`), with `to_ctor_when_k` alone waiting on an
-ι-K rule. The acceptance-only debt that remains in this
+ι-K rule.
+
+*That milestone was then priced, and it is smaller than "a large construction":
+`MODEL-BASIS.md` §8.8. The `derived/` side **already exists** —
+`inductive::decl_proj` publishes the field typings, the structure η rule and the
+β equations over an arbitrary class-(T) structure, and the splicer seat's
+`proj_data.rs` already consumes it — so what these three groups wait on is a
+classification in `checker/`, and it is the pivot's own structure half rather
+than a milestone beside it.* The acceptance-only debt that remains in this
 population is **interpretation debt wearing threading's clothes** — which is worth
 more as a finding than any of the four would have been as a fix, and is why the
 `ty_proj` and `to_ctor_when_k` attempts were stopped before either was built.

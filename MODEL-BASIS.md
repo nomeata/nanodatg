@@ -1208,7 +1208,7 @@ Attributed by *blocker*:
 | blocker | pairs | share |
 | --- | ---: | ---: |
 | **§4.1 step 2** — drop the `nested::plan` gate, and change `nested_seen` from "is in `app.nested`" to "is a non-basis inductive" | **106** | **87 %** |
-| **`PSigma'`** — the `class (P) above Prop` guard at `zoneb.rs:1471`, whose replacement is `TruncCarrier::in_un` | **14** | **11 %** |
+| **`PSigma'`** — the `class (P) above Prop` guard at `zoneb.rs:1560`, whose replacement is `TruncCarrier::in_un` | **14** | **11 %** |
 | **neither** — `_wcore.Acc`'s `recursive argument telescope depth` (§8.3's cost, and step 2 does not touch it) and one `nested model not interpreted`, which is a declaration that *did* take the model route and whose model then failed to interpret | 2 | 2 % |
 
 ##### The evidence that makes this attribution a fact rather than a reading
@@ -1786,6 +1786,209 @@ through `tc.rs`. Nothing here depends on the trait, on `NullCertifier`, or on th
 compile-time backend selection; §1's trace is about `Mode::pick` and
 `check_declar_scheduled`, and §3.6's table quotes constructions by the statement
 they conclude.
+
+---
+
+### 8.8 Pricing "interpreted structures" — it is already built, and the payoff is 669 antecedents, not 126 declines
+
+*Asked 2026-08-15 at `02c8cbe`, as a design-and-pricing round after
+`THREADING-CENSUS.md` §6.4 found that **three of its four acceptance-only debt
+groups are blocked on interpreted structures** — `infer_proj`,
+`try_eta_struct_aux` and `def_eq_unit`. The question put was what the
+construction costs, on the assumption it is large. **It is not large. It exists,
+at the generality needed, and is already consumed.** Nothing was built for this
+section.*
+
+### What the construction is — Carneiro settles it, and we follow him
+
+`thesis.txt` does not leave structures to be invented:
+
+* **Σ is one of the eight basis inductives** (⊥, Σ, +, ulift, ‖·‖, W, =, acc)
+  that §5.4 says are "indeed sufficient".
+* **Recursors are omitted in favour of projections.** `thesis.txt:1745` — *"these
+  rules are also required for this axiomatization since we've **omitted the
+  recursors in favor of projections for Σ and ulift**."*
+* **The projection formula is given outright.** `thesis.txt:1870` — *"the
+  notation `B[p/(x)]` means to replace each `xᵢ` with the appropriate projection
+  `π₁(π₂ⁱ p)`."* A structure is a right-nested Σ; field `i` is `π₁∘π₂ⁱ`.
+* **The η rule is named and its status stated.** `thesis.txt:1747-1748` — `↑↓x ≡ x`
+  and **`(π₁x, π₂x) ≡ x`** — with the honest note that these are *"provable but
+  not definitional equalities in Lean"* and are helped to *"for soundness only"*.
+
+So `⟦S⟧` is the iterated Σ and `⟦s.i⟧` is `π₁(π₂ⁱ ⟦s⟧)`. There is nothing to
+design.
+
+### It is built, and `derived/` needs no new construction
+
+`derived/src/inductive/decl_proj.rs` is the module, and its own header states the
+scope: *"**a projection out of a class-(T) structure, typed at an arbitrary
+carrier element** — and the structure η rule that falls out of the same
+induction."* Its spine is the thesis's, with three extra layers for the carrier's
+tag and telescope:
+
+```text
+πⱼ(z) := compⱼ(π₂(π₁ z)) = π₁(π₂ʲ(π₂(π₁ z)))          [decl_proj::proj_of]
+```
+
+`DeclProj` (`:306`) publishes exactly the three things the three blocked groups
+need, and `DeclProj::build` (`:338`) is a one-call entry:
+
+| blocked group | what it needs | what `DeclProj` already publishes |
+| --- | --- | --- |
+| `infer_proj` / `ty_proj` | `proj(i,⟦s⟧) ∈ ⟦F⟧` | `pub typed: Vec<Thm>` (`:321`) |
+| `try_eta_struct_aux` ×2 | the structure η rule | `pub eta: Thm` (`:324`) |
+| ι/β on fields | `πⱼ(ctor₀(y⃗)) = yⱼ` | `pub computes: Vec<Thm>` (`:318`) |
+
+`def_eq_unit`'s unit-like η is separately present (`derived/src/sums/unit_type.rs`,
+§3.6). **§3.6 already priced this and reached the same answer** against five
+obligations, every one "exists": dependent sum, pair+projections+β, singleton at
+a rung, unit-like η, structure η, Σ in a rung — the last *"exists and is
+public"*. So:
+
+* **new `derived/` primitives: none;**
+* **`kernel/`: untouched, and nothing here proposes touching it;**
+* the machinery takes it the way `PSigma'` did — `decl_proj` is stated over a
+  general `ind(p⃗)`, not over a basis member, so arbitrary class-(T) structures
+  are in scope by construction rather than by extension.
+
+**The remaining cost is a classification in `checker/`, not a construction in
+`derived/`** — which is what §8.2 already says of `PSigma'`, in those words.
+
+**And on the `checker/` side it is wiring, not plumbing to be laid.**
+`DeclProj::build` takes `(env, mach, ind)`, and `tg.rs` holds all three already:
+the shared `derived::inductive::Machine` (`tg.rs:2545,2551` — `Machine::over`
+over the one `Wtype`/`Bound`), and an `Rc<derived::inductive::Inductive>`
+(`tg.rs:3958`), which it builds itself (`tg.rs:4287` records `Inductive::build`
+declining a spec). The splicer seat's `proj_data.rs:326` is already the same
+three-argument wrapper. So the change at `ty_proj` is: where the structure's
+inductive is one the interpretation has built, take `DeclProj`'s `typed[i]` as a
+**derivation** instead of `imp_refl` as an **antecedent**. No new input has to be
+threaded to reach it.
+
+### It is the same work as the pivot, not adjacent to it
+
+`DeclProj` is **already consumed by the splicer seat's own file**:
+`checker/src/mini/proj_data.rs:113` imports `{proj_of, DeclProj}`, `:311`
+delegates `computes` to it, and `:139`/`:293` record that this module's own
+spellings were deleted in favour of it. So the model-projection family and
+"interpreted structures" are one construction reached from two directions: the
+producer emits `T._model.proj_i` whose values go through the basis Σ, and the
+consumer needs the same `π₁(π₂ⁱ ·)` typings that `ty_proj` wants. The shared
+blocker is the `class (P) above Prop` guard at `zoneb.rs:1560`, whose replacement
+§8.2 names as `TruncCarrier::in_un`.
+
+**Consequence for sequencing.** "Interpreted structures" is not a milestone to
+fund beside the pivot; it is the pivot's structure half, already scoped in §8.2
+and in flight. Funding it separately would be funding work that exists.
+
+### What it closes — measured, and the framing was wrong
+
+*The spike this section originally proposed was run. It reports `ty_proj` by
+cause and by whether the structure's own inductive had been translated; the
+counter agrees with the existing ledger exactly (`by ty_proj` = the carried
+count, and nothing falls to `TyGap::Claim`). Measured at `02c8cbe` on
+`init-prelude`:*
+
+```
+ty_proj by cause: 0 not a projection, 0 subject mismatch,
+                  126 telescope unreached, 0 field type differs, 671 carried
+  …telescope unreached, by translation:   0 translated,   0 declined, 101 not attempted, 25 untypeable
+  …field type differs, by translation:    0 translated,   0 declined,   0 not attempted,  0 untypeable
+  …carried,            by translation: 669 translated,   2 declined,   0 not attempted,  0 untypeable
+```
+
+**Three things fall out, and the third inverts the question.**
+
+**One: the four exits are not four.** Only `telescope unreached` fires — 126 of
+126. `not a projection` and `subject mismatch` are zero, so the "126 is an upper
+bound" caveat resolves in the *generous* direction: every decline is at the
+addressable exit. `field type differs` is also zero, which means no obligation on
+this corpus is stated at something merely definitionally equal to the field
+type — the honesty property §8.2 worries about losing is, today, costing nothing.
+
+**Two: the classification cannot serve one single decline today.** Of the 126,
+**zero** are over a translated structure — 101 the walk never attempted, 25 whose
+own type `syn_type` cannot name. So for the *declines*, the answer to "before or
+after step 2" is **only after**.
+
+**Three, and this is the result: the declines were the wrong target.** The prize
+is the **671 carried**, of which **669 are over structures the general path has
+already translated**. Those are antecedents today — `imp_refl(f)`, assumed — and
+`DeclProj::typed` could make them **derivations**, now, with no step 2 and no new
+construction. That is five times the decline population, it is available before
+step 2 rather than after, and it moves in the good direction on the escape ledger:
+an antecedent that becomes a derivation is one fewer assumption travelling to the
+boundary.
+
+*A correction this measurement forced.* This section first quoted **417**
+successes, taken from the report row `by Proj: the field's own typing, acquired
+as an antecedent`. That row is `HtClause::Proj` — **`has_type_proj`, a different
+function**. `ty_proj`'s own figure is `by ty_proj` = **671**. The instrumentation
+was built to split a population and its first result was to catch the wrong
+population being quoted for it.
+
+### So: does the classification pay before step 2, or after?
+
+**Both, for different populations, and the larger half pays first.**
+
+| population | size | when it pays |
+| --- | ---: | --- |
+| carried antecedents over translated structures → derivations | **669** | **now** — no step 2, no new construction |
+| declines at `telescope unreached` | 126 | **after step 2**, which is what translates their structures |
+| declines at the other three exits | **0** | never — they do not occur |
+
+The 669 and step 2's 87 % are therefore *not* competing for the same seat: one is
+a `checker/` classification over structures already translated, the other is the
+routing gate that translates the rest. The splicer seat's `iota_model` work gates
+the second; the first is independent of it and can be measured the day it lands
+by re-running this census.
+
+**And the subject side already lines up — checked, not assumed.**
+`TgBackend::interp_projection` (`tg.rs:10431`) **already calls
+`derived::inductive::decl_proj::proj_of`** for exactly the structures mini
+translated by the class-(T) route; the opaque `syms.proj` is documented there as
+"the fail-closed fallback" for the rest (`tg.rs:10428-10430`). So on the 669,
+`⟦s.i⟧` *is* `π₁(π₂ʲ(π₂(π₁ ⟦s⟧)))` — the same spine `DeclProj::typed` states its
+membership about. **`ty_proj` is handing back `imp_refl` — an assumption — for a
+membership `derived/` already proves about the very term the interpretation
+already builds.**
+
+That also sharpens `has_type_proj`'s standing argument. Its doc says `proj` is
+axiom-free and "nothing at all is provable about it", which is true **of the
+fallback symbol** and not of `proj_of`'s spine; the sentence pre-dates
+`interp_projection` and now describes only the untranslated case.
+
+**What is still not known**, and it is now one side rather than two:
+
+* `ProjInterp::Translated` is read off `gen_inds`, so it means *translated by the
+  time this projection was typed* — a structure the walk has not reached yet
+  reads `not attempted`. **669 is therefore a lower bound**, which is the safe
+  direction.
+* The **target** side is now settled too, and **it is not one `assert_eq`.**
+  `proj_data.rs:344` states the theorem as `∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈
+  βⱼ(p⃗, π⃗<ⱼ z))`, and `:348-358` answers the question directly: *"`βⱼ(p⃗, π₀ z,
+  …)` is `derived`'s spelling and `⟦βⱼ⟧` the interpretation's; the two meet
+  because `field_ty` is the Lean field type with each **earlier projection
+  substituted**, and each of those interprets — by this very clause one index
+  down — to `π_q(⟦s⟧)`"*. They meet **via an unfold, not syntactically**:
+  `:631` instantiates `dp.typed[j]` at `p⃗ ++ [subject]`, discharges the premise
+  `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)` by `mp`, then carries `βⱼ` onto `⟦βⱼ⟧` through
+  `field_abbrev`. `PSigma.snd`, whose field type is `β fst`, is named there as
+  the corpus member that can tell a wrong argument list apart.
+
+  **So the chain exists and is exercised — in the other engine.**
+  `proj_data::typing` is `pub(crate)`, but its signature is
+  `(c: &mut mini::kernel::Checker, ind: &mini::expr::Name, …, s: &E, field_ty: &E)`
+  and `tg.rs` never holds a mini `Checker`. Reaching it from `ty_proj` needs the
+  name/expression bridge `tg.rs` already declines to build elsewhere ("a name
+  bridge that would be a tranche of its own", `iota_decline_label`'s doc);
+  re-implementing it in `tg.rs` would be a second spelling of the chain
+  `proj_data.rs:139,293` records having *deleted* for being a second spelling.
+
+  **This does not refute the 669** — the theorem applies to them and the terms
+  do meet. It prices the step: the change at `ty_proj` is not "return
+  `typed[i]` instead of `imp_refl`", it is **a bridge or a duplication**, and
+  which one is a call for the owner rather than for this section.
 
 ## 9. Measurement log
 
