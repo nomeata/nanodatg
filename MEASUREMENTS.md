@@ -10764,3 +10764,30 @@ frames is beyond any stack the process can be given — but a `whnf` whose
 recursion is on the heap. The bound's own message stays correct either way:
 mini must **report**, because the alternative is a stack overflow that reports
 nothing.
+
+#### Reaching the bottom is not the same as getting through it
+
+The prediction was tested directly: a scratch build with `mini::run`'s
+`STACK_SIZE` raised from 256 MB to 12 GB, at `NANODA_MAX_DEPTH=400000` — well
+past the 262 146 the law predicts.
+
+It **does not hit the bound**, and its resident set climbs to **2.25 GB and then
+holds flat**, which is the descent bottoming out: ~262 000 frames at ~8.5 KB of
+native stack each. So the chain really is finite and really is that long, and
+both halves of the law are confirmed rather than extrapolated.
+
+But the declaration still does not finish: fifteen minutes at full depth with
+the stack plateaued and no verdict. So legitimate depth is *necessary* to
+explain the wall and is **not sufficient** — there is work at the bottom that
+this measurement does not size. The scratch build was reverted; nothing in the
+tree carries a 12 GB stack.
+
+The next construction is therefore an **iterative `whnf`**, and the shape is
+already visible in the histogram: the refusal's 1 998 frames are an unbroken
+`Proj PProd.0` tower, and the `Proj` arm's `self.whnf_conv(s, …)` on the
+subject is what makes each level a native frame. Collecting a projection spine
+into a `Vec`, reducing the base once, and re-applying the projections outward
+in a loop turns that recursion into iteration — with the certificate composed
+along the loop exactly as it is composed along the recursion now. That is a
+bounded, well-scoped change to one arm, and it is the one the depth measurement
+points at.
