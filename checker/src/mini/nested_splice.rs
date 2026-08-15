@@ -191,12 +191,32 @@
 //! **That trap is not reachable in this design, and it is worth writing down
 //! why rather than repeating the guard that used to avoid it.** The model's
 //! declarations are the file's own, so the pre-pass has already scheduled every
-//! one of them on its own account; a σ added here can only be one the export
-//! constant was already going to be interpreted at. The old
+//! one of them on its own account. The old
 //! `applied_at` sweep — "read the σ off the file's own declarations rather than
 //! off the padded schedule" — existed because seeding a model *the file did not
 //! contain* at a σ nothing applies is pure cost. Seeding one it does contain at
 //! a σ it is already checked at is free.
+//!
+//! **One sentence of that was wrong and is corrected here rather than
+//! appended, because the correction is the open item.** It read: "a σ added
+//! here can only be one the export constant was already going to be interpreted
+//! at." That holds only while `DEFAULT_LEVELS` covers the σ in play. It is
+//! `&[0, 1]` (`checker::instantiations:148`), and **nothing mentions a model
+//! constant**, so the model tower is scheduled at `[0]` and `[1]` and at
+//! nothing else — while the export constant is scheduled at every σ the file
+//! genuinely uses. Measured on `tool_poly_nested`, where `PTree.{u}` is used at
+//! three universes: `⟦PTree._model.{0}⟧` and `⟦PTree._model.{1}⟧` are
+//! interpreted and `⟦PTree._model.{2}⟧` is not, and neither is the
+//! `_impl.0` / `_auxCarrier` / `_auxTag` chain under it.
+//!
+//! So [`Recogniser::decl_sigmas`]'s propagation is **necessary and not
+//! sufficient**: it puts `{2}` on `PTree._model`'s schedule entry, but the
+//! demand closure that would carry `{2}` down to what `PTree._model` *mentions*
+//! was taken by the pre-pass before this module ran and is not re-taken.
+//! `ind-spec(PTree: nested model not keyed here)` — the keying defect — is
+//! gone; `ind-spec(PTree: nested model not interpreted)` at the one σ past
+//! `DEFAULT_LEVELS` is what is left, and closing it is
+//! `checker::instantiations`' business rather than this module's.
 //!
 //! What is **not** free is that the model's recursors and ι theorems are
 //! interpreted at **two** σ rather than one. That is real. The obvious reading
@@ -662,10 +682,14 @@ impl Recogniser {
 /// carries its interpretation, and the rules.
 struct Model {
     /// `(export constant, model constant)` for the type former and each
-    /// constructor, keyed at `σ = []`.
+    /// constructor. **Keyed at every σ the declaration is instantiated at**,
+    /// which [`Recogniser::decl_sigmas`] computes — see the note there for what
+    /// it used to be and what that cost.
     ///
-    /// **The declaration's own level parameters are compared but not keyed
-    /// over**, and that is a limitation rather than a claim: `modelgen` grew
+    /// *Superseded doc, kept because a seat was briefed off it: "the
+    /// declaration's own level parameters are compared but not keyed over, and
+    /// that is a limitation rather than a claim":*
+    /// `modelgen` grew
     /// universe-polymorphic support after this was written, so the statements
     /// are checked at the export's own `ℓ⃗` (see [`at_export_levels`]) while
     /// the store key here is the empty σ. Every nested fixture mini has is
@@ -679,6 +703,66 @@ struct Model {
 }
 
 impl Recogniser {
+    /// **Every ground instantiation the declaration's own constants are asked
+    /// for**, which is what the type former and the constructors are keyed at.
+    ///
+    /// The same union a recursor takes in [`Recogniser::key`] — the pre-pass's
+    /// schedule, plus what the file's own declarations actually apply — taken
+    /// over the type former *and* each constructor and then shared by all of
+    /// them. Sharing is not a convenience: `T` and `T.cⱼ` bind the very same
+    /// universe parameters, so a σ at which any one of them is named is a σ at
+    /// which the declaration is instantiated, and `⟦T.cⱼ.{σ}⟧` cannot be
+    /// resolved without `⟦T.{σ}⟧` anyway — the constructor's own type mentions
+    /// `T`.
+    ///
+    /// # What this replaces, and what it cost
+    ///
+    /// This used to be the single key `σ = []`, on the reasoning that "every
+    /// nested fixture mini has is monomorphic, so the two coincide". They
+    /// coincide only there. [`crate::mini::zoneb::model_alias`] looks a
+    /// constant up at *its own* σ, so for a polymorphic declaration every
+    /// instantiation missed a table that had exactly one entry under the empty
+    /// σ — and missed it **after** the model had been recognised and counted.
+    /// Measured on the producer's `poly_nested_used`, where `PTree.{u}` is used
+    /// at three universes: `nested seen=1 models=1 tool=1`, and
+    /// `ind-spec(PTree: nested model not keyed here)=3`. A recognition that
+    /// succeeds and then keys nothing usable is the exact shape this project
+    /// keeps paying for, so the count of the σ set is asserted and not just its
+    /// non-emptiness.
+    ///
+    /// **The empty union is not "no σ".** A declaration nothing names is still
+    /// interpreted — `checker::instantiations` defaults it — so an empty union
+    /// falls back to all-zeroes at the declaration's arity, which is `[]` for a
+    /// monomorphic declaration and therefore exactly the old behaviour. That
+    /// fallback is what keeps every existing nested fixture keyed.
+    fn decl_sigmas(
+        &self,
+        env: &Environment,
+        name: &Name,
+        mono: &[(Name, Name)],
+        schedule: &HashMap<Name, Vec<Vec<u32>>>,
+    ) -> Vec<Vec<u32>> {
+        let mut out: Vec<Vec<u32>> = Vec::new();
+        for (export, _) in mono {
+            for src in [schedule.get(export), self.applied.get(export)] {
+                for s in src.into_iter().flatten() {
+                    if !out.contains(s) {
+                        out.push(s.clone());
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            // The arity is the *declaration's*, read off the environment for
+            // the same reason [`export_recs`] reads its recursors there: what
+            // the declaration binds is the environment's answer.
+            let nl = env.get(name).map(|ci| ci.lparams().len()).unwrap_or(0);
+            out.push(vec![0u32; nl]);
+        }
+        out.sort();
+        out
+    }
+
     /// Fill the tables for one recognised model, and propagate its σ.
     fn key(
         &mut self,
@@ -688,11 +772,17 @@ impl Recogniser {
         schedule: &mut HashMap<Name, Vec<Vec<u32>>>,
     ) {
         let mut constants: Vec<Name> = Vec::new();
-        // The type former and the constructors have no universe parameters of
-        // their own, so `σ = []` is the whole population.
+        // **The type former and its constructors are keyed at the
+        // declaration's σ, not at the empty one.** They share the
+        // declaration's universe parameters exactly — a constructor adds none
+        // and a recursor's extra motive level is handled below — so one σ set
+        // serves all of them.
+        let mono_sigmas = self.decl_sigmas(env, name, &m.mono, schedule);
         for (export, model) in &m.mono {
-            self.model_of.insert((*export, Vec::new()), *model);
-            demand(schedule, model, &[Vec::new()]);
+            for s in &mono_sigmas {
+                self.model_of.insert((*export, s.clone()), *model);
+            }
+            demand(schedule, model, &mono_sigmas);
             constants.push(*export);
         }
         // **A recursor is keyed at every σ the run will ask for it at**, and
