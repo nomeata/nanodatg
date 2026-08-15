@@ -50,8 +50,8 @@
 # here", and it would report the second as the first. That is `ci/
 # check-test-guards.sh`'s rule C one level over, and this was the only
 # `ci/*.sh` that did not have it: every neighbour (`check-arena.sh`'s `(of N)`,
-# `check-feature-inert.sh`'s and `check-uplift.sh`'s `cells`, `check-modelgen.sh`'s
-# check counts) says how much it measured, and this said nothing.
+# `check-uplift.sh`'s `cells`, `check-modelgen.sh`'s check counts) says how
+# much it measured, and this said nothing.
 #
 # So three things are pinned, and the two greps that anchor them use the *same*
 # `--include='*.rs'` recursion the bans use, so anything that blinds the bans

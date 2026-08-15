@@ -133,7 +133,6 @@ impl<'p> ExportFile<'p> {
     }
 }
 
-#[cfg(feature = "tg")]
 impl<'p> ExportFile<'p> {
     /// Interpret `d`'s declared type — and, for a definition-like
     /// declaration, its value — at `sigma`, through the checker's dispatch,

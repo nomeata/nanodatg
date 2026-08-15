@@ -26,18 +26,35 @@
 //! [`DefEq`], which is `Option`-shaped: `Some(cert)` carries the reason, `None`
 //! means "not shown equal".
 //!
-//! # Backend selection
+//! # There is one backend, and it is not selected
 //!
-//! Exactly one backend is active per build. [`Backend`] is the alias every
-//! other module refers to; without `--features tg` it is `NullCertifier`, whose
-//! `Cert` is `()` and therefore free. The `tg` feature swaps this alias for the
-//! Tarski–Grothendieck backend and nothing else in the checker changes shape.
+//! [`Backend`] is [`crate::tg::TgBackend`], in every build. There is no second
+//! implementation and no `cfg` choosing between them, which is why [`Cert`] and
+//! [`Typing`] can name [`crate::tg::TgCert`] and [`crate::tg::TgTyping`]
+//! outright rather than through a trait's associated types.
 //!
-//! Note that the null backend is still handed the checker's *real* context at
-//! every call. It ignores it, but the code is already in the shape the real
-//! backend needs. That is deliberate: the failure mode this design is guarding
-//! against is discovering at milestone 3 that certificates were never
-//! obtainable at the places that claimed them.
+//! It was not always so. A `NullCertifier` whose `Cert` was `()` used to be the
+//! default, with the real backend behind `--features tg`, and a `Certifier`
+//! trait existed to hold the two in conformance. The arrangement paid for
+//! itself once — it is what kept the checker in the shape the real backend
+//! needed, so that milestone 3 did not discover that certificates were never
+//! obtainable at the places that claimed them — and then stopped. The trait was
+//! never used polymorphically; `TgBackend` overrode **every one** of its 36
+//! methods, so its defaults described only the null backend; and the feature
+//! selecting between them had grown into a second build configuration whose
+//! test coverage was strictly smaller (four whole suites were `cfg`-ed to
+//! nothing in it, which is `TEST-INVENTORY.md` §1.2's third shape of "skip is
+//! not pass").
+//!
+//! What replaces it is `mini`'s arrangement, which is the one that finished:
+//! **one concrete evidence type, threaded directly**. Note the half of mini's
+//! shape that deliberately did *not* transfer — `mini::kernel::Checker` keeps
+//! its evidence in an `Option<Th>` because it has a genuine zone with no
+//! interpretation at all (the declaration-shape zone, at symbolic levels).
+//! `tc.rs` has no such zone: every `TypeChecker` is built at a ground
+//! instantiation with an interpretation available, so an `Option` here would
+//! have no inhabitant for its `None` and would be a build switch wearing a
+//! runtime disguise.
 
 use crate::util::{ExprPtr, TcCtx};
 
@@ -429,9 +446,7 @@ pub trait Certifier<'t, 'p> {
     // whatever it needs at entry and act on it at exit; the depth is the
     // backend's to track, because only the *outermost* entry marks the
     // judgement boundary.
-    //
-    // Both default to doing nothing, so a backend that does not care about
-    // scope — [`NullCertifier`] — needs no change and pays nothing.
+    // `TgBackend` implements both.
 
     /// One definitional-equality query is starting.
     ///
@@ -727,187 +742,38 @@ pub trait Certifier<'t, 'p> {
     fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> Self::Cert;
 }
 
-/// The milestone-1 proof backend: certificates carry no information (`Cert =
-/// ()`), so the checker degenerates to an ordinary trusted type checker.
+/// The proof backend in force. **There is one**, in every build: the
+/// Tarski–Grothendieck backend, whose [`Cert`] is a genuine kernel theorem.
 ///
-/// **Milestone 3 obligation:** once the real backend exists, `NullCertifier`
-/// must be unreachable in a release build. It is compiled only when the `tg`
-/// feature is *off*, so in a `--features tg` build it does not exist at all —
-/// which is that obligation enforced rather than merely intended.
-///
-/// It carries no data: it ignores the context it is handed, but every call site
-/// passes the genuine arena, so the code is already in the shape the real
-/// backend needs.
-#[cfg(not(feature = "tg"))]
-#[derive(Debug, Clone, Default)]
-pub struct NullCertifier;
-
-#[cfg(not(feature = "tg"))]
-impl NullCertifier {
-    /// Create the null backend.
-    pub fn new() -> Self { NullCertifier }
-}
-
-#[cfg(not(feature = "tg"))]
-impl<'t, 'p> Certifier<'t, 'p> for NullCertifier {
-    type Cert = ();
-
-    fn refl(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>) {}
-    fn symm(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _c: ()) {}
-    fn trans(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _ab: (), _bc: ()) {}
-    fn app_cong(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _f: (), _arg: ()) {}
-    fn lam_cong(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _dom: (), _body: ()) {}
-    fn pi_cong(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _dom: (), _body: ()) {}
-    fn beta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
-    fn zeta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
-    fn delta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
-    fn eta(
-        &mut self,
-        _: &mut TcCtx<'t, 'p>,
-        _a: ExprPtr<'t>,
-        _b: ExprPtr<'t>,
-        _expansion: ExprPtr<'t>,
-        _expanded: (),
-    ) {
-    }
-    fn sort(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) {}
-    fn const_eq(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) {}
-    fn admit(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _reason: &'static str) {}
-
-    type Typing = ();
-
-    fn ty_gap(&mut self, _: &mut TcCtx<'t, 'p>, _e: ExprPtr<'t>, _ty: ExprPtr<'t>, _reason: &'static str) {}
-}
-
-/// The proof backend in force for this build.
-#[cfg(not(feature = "tg"))]
-pub type Backend<'x, 't, 'p> = NullCertifier;
-
-/// The real Tarski–Grothendieck backend, whose `Cert` is a genuine kernel
-/// theorem. Enable with `--features tg`.
-///
-/// It is opt-in rather than default for now because it is strictly more
-/// expensive — it interprets every Lean expression into a first-order term and
-/// builds an actual derivation at every step — and because the parts it cannot
-/// yet prove (beta, delta, zeta, eta) are reported rather than assumed, so the
-/// two backends answer different questions. `NullCertifier` answers "does this
-/// development check?"; `TgBackend` answers "and was every step derived?".
-#[cfg(feature = "tg")]
+/// The lifetimes are the checker's own: `'x` is the borrow of the [`crate::env::Env`]
+/// the backend resolves constants through, `'t` the term arena and `'p` the
+/// parsed export.
 pub type Backend<'x, 't, 'p> = crate::tg::TgBackend<'x, 't, 'p>;
 
-/// The variable under which a process declares that it must not execute any
-/// code the `stepcount` or `tg` features can change.
+/// Build the backend.
 ///
-/// # Why a runtime assertion and not a comment
-///
-/// `ci/check.sh` used to run `cargo test --workspace` three times — plain,
-/// `--features stepcount`, `--features tg` — and two thirds of that was spent
-/// on crates the two features cannot reach. `kernel` and `derived` do not link
-/// `nanoda_lib` at all; `mini` links it for the parser and the level pre-pass
-/// and for nothing else. So the matrix is now `-p nanoda_lib` for the two
-/// feature runs, which is only sound while this holds:
-///
-/// > Every item `stepcount` or `tg` gates lives in `certify.rs`,
-/// > `stepcount.rs`, `tg.rs` or the binary's `main.rs`; and every one of them
-/// > that is reachable from library code is reachable only through a
-/// > [`crate::tc::TypeChecker`], which builds its backend right here, in its
-/// > constructor.
-///
-/// That is a claim about the call graph, and a claim about a call graph decays
-/// the moment somebody adds an edge. So it is enforced instead of asserted:
-/// `ci/check.sh` runs the non-`checker` half of the workspace with this
-/// variable set, and building a backend under it **panics**. The first `mini`
-/// test that starts driving the checker turns the *plain* run red and says the
-/// matrix has to widen again — rather than the coverage being lost in silence,
-/// which is the failure mode the whole SKIP-is-not-PASS design exists to stop.
-///
-/// It costs one relaxed atomic load per backend built, which is once per
-/// declaration checked; the environment is read once.
-pub const FEATURE_INERT_VAR: &str = "NANODATG_ASSERT_FEATURE_INERT";
-
-/// Cached reading of [`FEATURE_INERT_VAR`]. Unset, empty and `0` are all off,
-/// matching how `ci/check.sh` treats `NANODATG_REQUIRE_CORPUS`.
-static FEATURE_INERT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-
-#[cold]
-#[inline(never)]
-fn feature_inert_violated() -> ! {
-    panic!(
-        "{FEATURE_INERT_VAR} is set and a checker proof backend was built anyway.\n\
-         \n\
-         This process was run as part of the half of the workspace that \
-         `ci/check.sh` does *not* re-run under `--features stepcount` and \
-         `--features tg`, on the argument that it never executes any code \
-         those features change. Building a backend is exactly that code. \
-         Either undo the edge that reached `TypeChecker`, or widen the two \
-         feature steps in `ci/check.sh` back to the crates that now need them \
-         — but do not silence this, because silencing it is the lost coverage."
-    )
-}
-
-/// Panic if this process promised not to execute feature-varying code.
-#[inline]
-fn assert_feature_inert() {
-    let on = *FEATURE_INERT.get_or_init(|| {
-        match std::env::var_os(FEATURE_INERT_VAR) {
-            None => false,
-            Some(v) => !v.is_empty() && v != "0",
-        }
-    });
-    if on {
-        feature_inert_violated()
-    }
-}
-
-/// Build the active backend.
-///
-/// The `Env` is what lets the TG backend resolve a constant to its *value*, so
+/// The `Env` is what lets the backend resolve a constant to its *value*, so
 /// that `⟦c⟧` can be introduced as an explicit definition `⟦c⟧ := ⟦value⟧`
 /// rather than as an opaque symbol. Without it, delta reduction could never be
 /// justified: there would be nothing relating the constant to what it unfolds
-/// to. The null backend ignores it.
-#[cfg(feature = "tg")]
+/// to.
 pub fn new_backend<'x, 't: 'x, 'p: 't>(env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
-    assert_feature_inert();
     crate::tg::TgBackend::new(env)
 }
 
-/// Build the active backend (null variant; the environment is unused).
-#[cfg(not(feature = "tg"))]
-pub fn new_backend<'x, 't: 'x, 'p: 't>(_env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
-    assert_feature_inert();
-    NullCertifier::new()
-}
-
-/// The certificate type of the active backend.
-#[cfg(feature = "tg")]
+/// The certificate type: a definitional-equality judgement's evidence.
 pub type Cert<'t, 'p> = crate::tg::TgCert;
 
-/// The certificate type of the active backend (null variant: no information).
-#[cfg(not(feature = "tg"))]
-pub type Cert<'t, 'p> = ();
-
-/// The typing-certificate type of the active backend.
-#[cfg(feature = "tg")]
+/// The typing-certificate type: a typing judgement's evidence.
 pub type Typing<'t, 'p> = crate::tg::TgTyping;
-
-/// The typing-certificate type of the active backend (null variant).
-#[cfg(not(feature = "tg"))]
-pub type Typing<'t, 'p> = ();
 
 /// Whether a typing certificate carries **no evidence at all**.
 ///
 /// The inference rules use this as a short-circuit: a rule whose premise is a
 /// hole cannot conclude anything, so the terms it would otherwise have to build
 /// (the partial applications of a spine, the `Π` at each binder of a lambda
-/// chain) are not built. Under the null backend every typing is a hole, so the
-/// whole apparatus costs that build exactly nothing.
-#[cfg(feature = "tg")]
+/// chain) are not built.
 pub fn typing_is_gap(t: &Typing<'_, '_>) -> bool { t.is_gap() }
-
-/// Whether a typing certificate carries no evidence (null variant: never any).
-#[cfg(not(feature = "tg"))]
-pub fn typing_is_gap(_t: &Typing<'_, '_>) -> bool { true }
 
 /// Whether a certificate rests on nothing — a complete derivation of the
 /// equation, not of an implication and not a step taken on trust.
@@ -960,7 +826,6 @@ pub fn typing_is_gap(_t: &Typing<'_, '_>) -> bool { true }
 /// union-find's edges; and `TcCache::infer_cache_*`, which deliberately admits
 /// *conditional* typings and is discussed at its insertion point. Sealing
 /// `TgCert` itself was considered and rejected — see [`crate::sealed`].
-#[cfg(feature = "tg")]
 pub fn is_unconditional(c: &Cert<'_, '_>) -> bool { c.thm().is_some_and(|t| t.hyps().is_empty()) }
 
 /// Whether a certificate's kernel theorem stands under **no hypotheses** —
@@ -975,18 +840,7 @@ pub fn is_unconditional(c: &Cert<'_, '_>) -> bool { c.thm().is_some_and(|t| t.hy
 /// re-asserts them silently. This remains the predicate for stores whose key
 /// also accounts for a conditional formula; the checker's reduction memos do
 /// not, and therefore use [`is_unconditional`] instead.
-#[cfg(feature = "tg")]
 pub fn hypothesis_free(c: &Cert<'_, '_>) -> bool { c.hyps().is_empty() }
-
-/// Whether a certificate stands under no hypotheses (null variant: it carries no
-/// theorem, so there are none).
-#[cfg(not(feature = "tg"))]
-pub fn hypothesis_free(_c: &Cert<'_, '_>) -> bool { true }
-
-/// Whether a certificate rests on nothing (null variant: it carries no
-/// information, so there is nothing it could rest on).
-#[cfg(not(feature = "tg"))]
-pub fn is_unconditional(_c: &Cert<'_, '_>) -> bool { true }
 
 /// The result of a definitional-equality check.
 ///

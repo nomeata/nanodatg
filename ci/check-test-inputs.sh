@@ -38,7 +38,7 @@
 # # The feature matrix (the top half)
 #
 # `ci/check.sh` runs the two feature variants over `-p nanoda_lib` rather than
-# over the whole workspace, because `stepcount` and `tg` are the checker's
+# over the whole workspace, because `stepcount` is the checker's
 # features and nothing else can observe them. The saving is two thirds of the
 # heaviest thing in the run. What is checked here is the *premise*:
 #
@@ -49,12 +49,12 @@
 #   C. every suite hidden behind `#![cfg(feature = "X")]` lives in a package
 #      the `--features X` step actually selects.
 #
-# The fourth leg — that no other member reaches the checker code the features
-# *do* change — is not a grep, because at module granularity every module in
-# `checker/src` mentions `certify`. It is a runtime assertion instead:
-# `ci/check.sh` runs the non-checker half of the workspace under
-# `NANODATG_ASSERT_FEATURE_INERT`, and `ci/check-feature-inert.sh` watches it
-# fire. See `checker/src/certify.rs`.
+# A fourth leg — that no other member reaches the checker code the features
+# *do* change — used to be a runtime assertion, `NANODATG_ASSERT_FEATURE_INERT`,
+# because at module granularity every module in `checker/src` mentions
+# `certify`. It was retired with the `tg` feature on 2026-08-15: it held up a
+# matrix of *two* narrowed feature runs, and there is one left. See
+# `checker/src/certify.rs`.
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -134,9 +134,13 @@ self_test() {
     sfails=$((sfails+1))
   fi
   # …and the ci/check.sh grep.
-  printf '#!/bin/sh\nstep "tests" cargo test --workspace\n' > "$TMP/no-tg.sh"
-  expect 1  "a ci/check.sh with no --features tg step is BROKEN" \
-            CHECK_SH="$TMP/no-tg.sh" CORPUS_DIR="$TMP/nope" MODELGEN_BIN="$TMP/nope"
+  # Against the *real* member crates: `stepcount` is declared and this fake
+  # `check.sh` runs no `--features` step at all, so the declared-but-unrun rule
+  # must fire. (Until 2026-08-15 this cell named `tg`; that feature is gone —
+  # see `checker/src/certify.rs` — and the rule it exercises is unchanged.)
+  printf '#!/bin/sh\nstep "tests" cargo test --workspace\n' > "$TMP/no-feat.sh"
+  expect 1  "a ci/check.sh with no --features step for a declared feature is BROKEN" \
+            CHECK_SH="$TMP/no-feat.sh" CORPUS_DIR="$TMP/nope" MODELGEN_BIN="$TMP/nope"
 
   # ── the feature matrix ────────────────────────────────────────────────────
   # A synthetic two-member workspace: `feat` declares a feature and holds the
@@ -273,8 +277,8 @@ done < <(declared_features)
 #    fails the build instead of the matrix quietly not covering it.
 #
 #    The complementary leg — that those crates do not reach the *checker* code
-#    the features change — cannot be a grep, and is the runtime assertion
-#    `ci/check-feature-inert.sh` watches fire.
+#    the features change — cannot be a grep. It was a runtime assertion until
+#    the `tg` feature was retired; see the header.
 for d in $MEMBER_DIRS; do
   [[ -f "$d/Cargo.toml" ]] || continue
   p="$(pkg_name "$d")"

@@ -26,7 +26,7 @@ declare -a skipped=()
 # SKIPs count as *scheduled and reached* — an unequipped machine legitimately
 # skips, and the summary already names those separately. What must not happen
 # is a step vanishing from the schedule without anyone noticing.
-EXPECTED_STEPS="${EXPECTED_STEPS:-29}"
+EXPECTED_STEPS="${EXPECTED_STEPS:-26}"
 # Exit 77 is SKIP — the autotools convention — and it is **not** PASS. A step
 # that needs something the machine may not have (today: a Lean toolchain, for
 # `check-modelgen.sh`) must be able to say "I did not run" in a way the summary
@@ -189,11 +189,12 @@ if [[ -x modelgen/.lake/build/bin/modelgen ]]; then export NANODATG_REQUIRE_MODE
 step "corpus-dependent tests"    ./ci/check-test-inputs.sh
 # …and its self-test, which needs no inputs and so runs where it SKIPs. It also
 # covers the third shape of this defect, which is neither a skip nor a shell
-# step: `checker/tests/tg_tutorial.rs` opens `#![cfg(feature = "tg")]`, so
-# without the feature its 28 tests are not skipped but *absent* —
-# `running 0 tests … ok`. Dropping `--features tg` from the step below would
-# retire them in silence. Since the feature steps are now `-p nanoda_lib` and
-# not `--workspace`, the step's *existence* is no longer enough to look for:
+# step: a suite opening `#![cfg(feature = "…")]` in a build without the feature
+# is not skipped but *absent* — `running 0 tests … ok`. Four suites were in
+# exactly that state under `tg`; retiring that feature is what fixed them, and
+# this check is what keeps `stepcount` from repeating it. Since the feature
+# steps are `-p nanoda_lib` and not `--workspace`, a step's *existence* is not
+# enough to look for:
 # `check-test-inputs.sh` resolves each package's name from its manifest and
 # requires the step to select the package the gated suite lives in, and to
 # select the package that declares the feature. It also refuses a
@@ -212,48 +213,39 @@ step "skip-guard self-test"      ./ci/check-test-guards.sh --self-test
 # This used to be `cargo test --workspace` three times: plain,
 # `--features stepcount`, `--features tg`. Measured, `mini/tests/nested.rs`
 # alone is 17.76 T instructions, so that one file cost 53.3 T per run of this
-# script — and two thirds of it bought nothing. `stepcount` and `tg` are
-# `nanoda_lib`'s features; `kernel` and `derived` do not link `nanoda_lib` at
-# all, and `mini` links it for the export parser, the level pre-pass and the
-# shared `tg::EnvCore` — never `tc.rs`. So the feature runs are
-# `-p nanoda_lib`; the cross-engine seam suites now live in that package too.
+# script — and two thirds of it bought nothing. So the feature runs were
+# narrowed to `-p nanoda_lib`, because `kernel` and `derived` do not link
+# `nanoda_lib` at all and `mini` links it for the export parser, the level
+# pre-pass and the shared `tg::EnvCore` — never `tc.rs`.
 #
-# Narrowing a matrix is how coverage is lost, so the premise is checked rather
-# than believed, in three places:
+# **`tg` is no longer one of them.** It selected `certify::Backend` between
+# `NullCertifier` and the real backend; there is one backend now, so the
+# feature had nothing left to choose and is gone (`checker/src/certify.rs`,
+# "There is one backend, and it is not selected"). That retires a whole build
+# configuration, and with it:
 #
-#   * `ci/check-test-inputs.sh` refuses a feature that no step builds, a step
-#     that names a feature without selecting the crate that declares it, and a
-#     `cfg(feature)` appearing in any crate the feature steps no longer build;
-#   * the plain run below is split so that everything except the checker runs
-#     under `NANODATG_ASSERT_FEATURE_INERT`, which makes
-#     `certify::new_backend` panic — the moment `mini` starts driving the
-#     checker, the plain run goes red and says the matrix has to widen;
-#   * `ci/check-feature-inert.sh` watches that panic actually happen, because a
-#     guard nobody has seen fail is not known to work.
+#   * four suites — `tg_tutorial`, `unified_cli`, `mini_envshare_tg`,
+#     `mini_route_tg` — which opened `#![cfg(feature = "tg")]` and so were
+#     *absent*, not skipped, in the plain run (`TEST-INVENTORY.md` §1.2's third
+#     shape of "skip is not pass"). They run in the only build there is now.
+#   * `mini_designed`'s two `cfg`-ed tests, which made that suite 32/34 in the
+#     plain build and 34/34 under the feature.
+#   * `NANODATG_ASSERT_FEATURE_INERT` and `ci/check-feature-inert.sh`. The
+#     variable asserted that a process which never builds a backend cannot tell
+#     the feature builds apart — the premise that let the two feature steps be
+#     `-p nanoda_lib`. With one feature left and one backend, there is no such
+#     premise to hold up, and a guard that cannot fire is worse than no guard.
+#     Both were retired here rather than left asserting a tautology.
 #
-# The split costs nothing: the two halves run the same test binaries the single
-# `--workspace` run did, and between them they run all of them.
+# `stepcount` is still a feature and still narrowed, so the premise-checking
+# above it still has a subject: `ci/check-test-inputs.sh` refuses a declared
+# feature that no step builds, a step that names a feature without selecting
+# the crate that declares it, and a `cfg(feature)` in any crate the feature
+# steps no longer build.
 step "tests (checker)"           cargo test -p nanoda_lib
-step "tests (rest, feature-inert)" \
-     env NANODATG_ASSERT_FEATURE_INERT=1 cargo test --workspace --exclude nanoda_lib
-# …and the guard that holds the two steps below to `-p nanoda_lib`, watched
-# firing against a process that certainly does build a backend.
-step "feature-inert guard"       ./ci/check-feature-inert.sh
+step "tests (rest)"              cargo test --workspace --exclude nanoda_lib
 # The step-counting probe must not change behaviour, only observe it.
 step "tests (stepcount)"         cargo test -p nanoda_lib --features stepcount
-# The real Tarski-Grothendieck backend: builds actual kernel derivations, and
-# must not change what the checker accepts.
-step "tests (tg backend)"        cargo test -p nanoda_lib --features tg
-# Both engines over one shared `EnvCore` in one process — the environment-
-# unification seam (ENV-UNIFY.md §3.3) and the routed driver over it
-# (ENV-UNIFY.md §5 track D). `mini/tests/envshare_tg.rs` and
-# `mini/tests/route_tg.rs` need the checker's backend compiled in, hence the
-# feature; the ungated half of the seam (`mini/tests/envshare.rs`) already
-# ran in the plain step above. Both test files are named here because a
-# `cfg(feature)` suite a step does not select is not skipped but *absent* —
-# the defect this script's own comments document.
-step "tests (cross-engine core)" cargo test -p nanoda_lib --features tg \
-     --test mini_envshare_tg --test mini_route_tg --test unified_cli
 
 echo
 echo "$ran step(s) reached a verdict (expected $EXPECTED_STEPS)"

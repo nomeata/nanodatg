@@ -9,7 +9,6 @@
 //! signature), which `check_file_deep_with` provides — so each test below is
 //! one file, one thread, exactly like production.
 
-#![cfg(feature = "tg")]
 
 use std::path::{Path, PathBuf};
 

@@ -78,15 +78,26 @@ A full `--features tg` run of every target is about **8 minutes** of test
 execution. That is the real number behind "one unrelated test running longer
 than 60 seconds, so it was stopped".
 
-### 1.2 Four targets are *absent*, not skipped, in the plain build
+### 1.2 Four targets were *absent*, not skipped, in the plain build — fixed
 
 `mini_envshare_tg.rs`, `mini_route_tg.rs`, `tg_tutorial.rs` and `unified_cli.rs`
-open with `#![cfg(feature = "tg")]`. Without the feature they compile to nothing
-and cargo prints `running 0 tests … test result: ok`. This is a *third* shape of
-"skip is not pass", distinct from both the shell `exit 77` and
-`ci/skip-guard.rs`: there is no skip to guard, because there is no test. What
-holds it today is `ci/check-test-inputs.sh`, which refuses a `cfg(feature)`
-suite in a package no `--features` step selects. That guard is only as good as
+opened with `#![cfg(feature = "tg")]`. Without the feature they compiled to
+nothing and cargo printed `running 0 tests … test result: ok`. This is a *third*
+shape of "skip is not pass", distinct from both the shell `exit 77` and
+`ci/skip-guard.rs`: there is no skip to guard, because there is no test. The
+same shape cost `mini_designed.rs` two of its 34 tests, which is how it was
+32/34 in the plain build and 34/34 under the feature.
+
+**Resolved 2026-08-15 by removing the cause rather than guarding it.** The `tg`
+feature selected `certify::Backend` between `NullCertifier` and the real
+backend; retiring the `Certifier` trait left one backend, so the feature had
+nothing to select and is gone (`checker/src/certify.rs`, "There is one backend,
+and it is not selected"). All four suites and both `mini_designed` tests are
+now unconditional, and there is one build configuration where there were two.
+
+What still holds the *general* shape is `ci/check-test-inputs.sh`, which refuses
+a `cfg(feature)` suite in a package no `--features` step selects. `stepcount` is
+the one feature left for it to be about. That guard is only as good as
 `ci/check.sh` being run.
 
 ---
@@ -107,7 +118,6 @@ no floor on its own step list.
 | `check-test-guards.sh` | no test hand-rolls a silent skip (58 call sites) | **OK** | yes (+ self-test) |
 | `check-test-inputs.sh` | the feature matrix covers every declared feature | **OK** | yes (+ self-test) |
 | `check-uplift.sh` | `[profile.dev]` and `[profile.test]` uplift one inode | not run here (cargo) | yes (+ self-test) |
-| `check-feature-inert.sh` | `NANODATG_ASSERT_FEATURE_INERT` really aborts | needs a built bin | yes |
 | `check-arena.sh` | the arena corpus ratchet | needs the release build | yes (+ self-test) |
 | `check-mini-vs-nanoda.sh` | mini vs nanoda, two tolerated divergence classes | needs the release build | yes (+ self-test) |
 | `check-modelgen.sh` | `lake exe test` / `monotest`, both legs floored | SKIPs without Lean | yes (+ self-test) |

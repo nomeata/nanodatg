@@ -14,7 +14,6 @@
 //! with its backend compiled in; `ci/check.sh` runs it with
 //! `cargo test -p mini --features tg`.
 
-#![cfg(feature = "tg")]
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

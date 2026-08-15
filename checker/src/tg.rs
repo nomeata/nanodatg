@@ -26898,7 +26898,7 @@ pub fn global_report() -> String {
 // ungated the module broke `cargo test` and two `ci/check.sh` steps for the
 // default build while passing under `--features tg`, which is the configuration
 // everyone was running.
-#[cfg(all(test, feature = "tg"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

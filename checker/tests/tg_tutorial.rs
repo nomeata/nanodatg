@@ -46,7 +46,6 @@
 //! floor that turned out never to have been written, which only the mutation
 //! found.
 
-#![cfg(feature = "tg")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

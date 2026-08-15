@@ -22,9 +22,6 @@ publish = false
 # Definitional-equality step counting (src/stepcount.rs). Off by default: it is
 # a measurement probe, and when disabled `stepcount::bump` compiles to nothing.
 stepcount = []
-# Use the real Tarski–Grothendieck proof backend instead of `NullCertifier`, so
-# that definitional-equality certificates are actual kernel theorems.
-tg = []
 
 [dev-dependencies]
 rand = "0.8.5"

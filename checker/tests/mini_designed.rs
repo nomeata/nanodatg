@@ -3039,7 +3039,6 @@ fn propexts_typing_is_about_its_own_declared_type() {
 /// names a feature without selecting the package declaring it. So these two run
 /// on every full check; they are removed only from the configuration in which
 /// they cannot mean anything.
-#[cfg(feature = "tg")]
 fn run_unified(name: &str) -> String {
     let path = fixture(name);
     let out = Command::new(env!("CARGO_BIN_EXE_checker"))
@@ -3120,7 +3119,6 @@ fn icod_counts(row: &str) -> (u64, u64) {
 /// Both fixtures, because they fail differently: `Ix` is tag-indexed with two
 /// firings and `Aux` is the six-constructor mutual encoding with three, so a
 /// consumer that happened to work at one arity is caught at the other.
-#[cfg(feature = "tg")] // see `run_unified`
 #[test]
 fn tg_discharges_the_indexed_iota_rules_premise() {
     for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
@@ -3254,7 +3252,6 @@ fn tg_discharges_the_indexed_iota_rules_premise() {
 /// would pass on one of them alone), `Aux` is the three-member mutual encoding
 /// at six constructors, and `RBTree` is the two-index family with a genuinely
 /// family-valued motive.
-#[cfg(feature = "tg")] // see `run_unified`
 #[test]
 fn mini_publishes_indexed_class_t_evidence_across_the_envcore_seam() {
     for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {

@@ -167,12 +167,10 @@ fn main() {
         eprintln!("--route was removed; use the default split checker or --naive");
         std::process::exit(2);
     }
-    if !naive && !cfg!(feature = "tg") {
-        eprintln!(
-            "the unified checker requires a `--features tg` build; use --naive only for the historical mini checker"
-        );
-        std::process::exit(2);
-    }
+    // The unified route used to require a `--features tg` build, because
+    // without it the checker's backend was `NullCertifier` and the route's
+    // certification half measured nothing. There is one backend now, so every
+    // build can run it and the refusal is gone.
     let route = (!naive).then_some(nanoda_lib::mini::route::Mode::Split);
     let only = val("--dump-only").map(str::to_string);
     let sigma = val("--dump-sigma").map(|s| {

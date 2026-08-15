@@ -1,7 +1,6 @@
 //! The merged checker's command-line policy: split by default, old mini under
 //! `--naive`, and no successful certification verdict while TG gaps remain.
 
-#![cfg(feature = "tg")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
