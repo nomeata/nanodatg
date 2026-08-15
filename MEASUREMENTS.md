@@ -9922,6 +9922,15 @@ So the schematic tranche is the honest answer. **`⟦Nat.ble⟧`'s three clauses
 have to be derived at `x, y ∈ ω`, not at 51 literals**, and the machinery for
 that — δ and ι under a quantifier — is the work.
 
+> **Twice corrected.** The next section corrects "δ and ι under a quantifier":
+> `eq_cash` converts a *proof's typing*, so no symbolic reduction is needed —
+> where a proof exists. And the 2026-08-15 census corrects the survivor: the
+> clauses *are* derived schematically by ordinary typing inference, and in
+> `checker --features tg` they come out **conditional on 16–24 raw-beta atoms**,
+> which `ble_transfer` propagates. The 51-literal population reproduces exactly
+> (51 distinct pairs, operands 0–12, 466 firings); it is not the obstacle and
+> neither is the schematic form.
+
 ### Method note
 
 `perf stat -e instructions` was **not** taken, deliberately: there is nothing to
@@ -10074,8 +10083,12 @@ the wrong name for the tranche, and it made a solved problem look open.
    `mutual_aux`-shaped generator, under the black-box invariant
    `ci/check-mutual-blackbox.sh` enforces. **Not built.**
 2. **Certify them in the program that owns the ledger.** Measured for `mini`
-   (§2.3, 38/38 pairs); **unmeasured for `checker --features tg`**, and that is
-   the next measurement, not the next construction.
+   (§2.3, 38/38 pairs). **Now measured for `checker --features tg` too, on
+   2026-08-15 — and it fails**: all three clause certificates escape, carrying
+   16 / 23 / 24 raw-beta atoms, so the equation `ble_transfer` would return is
+   conditional. This was the right next measurement and it is the one that ends
+   the tranche; see *"The `Nat.ble` tranche, refuted at its own gate"* at the
+   end of this file. Steps 1 and 3 are moot.
 3. **Cash and re-generalise** into three `BleClauses` `Thm`s — pattern exists
    (`rcompat_at`), subject to the ground-σ and open-scope caveats above.
 4. **Call `ble_transfer` from `tg.rs`** — §4.6's link 4.
@@ -11088,3 +11101,145 @@ certification debt:
 So the next question is no longer "why does it stop" but "what interprets a
 machine word and a type-former spine", which is a different kind of work from
 everything in this arc.
+
+## The `Nat.ble` tranche, refuted at its own gate: −3 780 is −2 630, and it is unreachable — 2026-08-15
+
+*`ORIGIN-RANKING.md`'s "The next build" asked for two checks before a line was
+written. Both were taken. Check 1 fails, check 2 fails, and the headline is 30 %
+high besides. Release, `--features tg,stepcount`, `--nested --no-modelgen`, at
+master `530d4ba`, census binary copied aside before any gate ran. Baseline
+reproduces the ranking to the digit: **10 262 gaps, 1 074 escapes, own 577**.
+All instrumentation added here was measured and **reverted**; `git diff` is
+empty of `checker/`, `derived/`, `kernel/` and `modelgen/`.*
+
+### Check 1 — the answer is no, and there is no gate to open
+
+The hypothesis was that the native `NatClause` already decides `Nat.ble` at two
+literals and merely fails to hand TG a certificate at the ι site, making this a
+wiring tranche of the `3eab691` shape.
+
+**There is no rule, so there is no wiring.** `try_reduce_nat`
+(`checker/src/tc.rs:685`) computes the value by bignum — `Ble => bool_to_expr(arg1 <= arg2)`
+(`:682`) — and `whnf_reduce` records the step as
+`Rule::Admitted(Admit::NatRed)` (`:1799`). `Rule::Admitted`'s own definition is
+*"a step the backend has no rule for"* (`checker/src/reduct.rs:96`), and the
+`Certifier` trait has **no numeral method** — the enum's `ProjRed` doc states the
+distinction the enum draws is "there is somewhere to ask" versus "there is not",
+and numerals are on the second side. `reduce_rec`'s `fully_ruled` gate
+(`tc.rs:2812`) is therefore already correct, and `tc.rs:2796–2800` already says
+in terms that it fires on 466 the moment the numeral rule becomes real.
+
+The tree already carries the simulation switch — `NANODA_NAT_RULED`
+(`reduct.rs:233,262`), which promotes the numeral admission to a rule. Fired:
+
+| state | gaps | escapes | `iota: …not a constructor` | `nat_reduce` |
+| --- | --: | --: | --: | --: |
+| baseline | **10 262** | 1 074 | 577 | 32 |
+| `NANODA_NAT_RULED=1` | **11 204** | 1 074 | **106** | **503** |
+
+**The origin migrates; it does not close.** −471 off the ι row is exactly the
+466 `Nat.ble` plus 5, and it reappears on `nat_reduce` to the unit. The extra
+942 gaps are the second leg's relays (`trans` 6 276 → 6 747, `congruence`
+498 → 969): splitting one admitted step into two admitted legs costs a relay per
+site. So the `3eab691` shape does not apply — that tranche opened a gate onto a
+construction that existed, and here there is nothing behind the gate.
+
+### The headline is −3 780; the route's ceiling is −2 630
+
+`−3 780` prices *the ι equation* being true. What a numeral construction could
+ever price is *the numeral equation* being true, which is a different and
+strictly weaker assumption — the ι-at-the-`Bool`-constructor leg still has to be
+derived, and 106 of them still do not.
+
+| state | gaps | Δ | escapes |
+| --- | --: | --: | --: |
+| baseline | 10 262 | — | 1 074 |
+| `NANODA_ASSUME='iota: the major premise is not a constructor'` | 6 482 | **−3 780** | 1 324 |
+| `NANODA_NAT_RULED=1 NANODA_ASSUME='nat_reduce'` | **7 632** | **−2 630** | **1 777** |
+
+**−2 630 is the tranche's true ceiling, 30 % below the number it was scoped on**,
+and it comes with a 703-gap rise in the escape ledger — the largest take-back
+any row in `ORIGIN-RANKING.md` records. Anyone quoting −3 780 for a Nat
+construction is quoting the wrong assumption.
+
+### The census inside the rule
+
+The temporary probe of the previous ranking was re-derived rather than
+inherited, and extended with the redex head and the operand values.
+
+* **20 distinct spelled major premises, 563 firings.** All 466 `Nat.ble` sites
+  are `Bool.rec @ (Nat.ble <lit> <lit>)` — one redex head, no variation.
+* **51 distinct `Nat.ble(a,b)`, 466 firings, every operand in 0–12.** The
+  head-constant table (466 / 46 / 18 / 16 / 14 / 2 / 1) reproduces unchanged,
+  and the 51/0–12 population reproduces the 2026-08-11 census to the digit.
+* The export holds **exactly one `Nat.ble` const node** in 3.7 MB
+  (`grep -c '"const":{"name":606'` = 1). All 466 firings descend from one
+  syntactic occurrence.
+
+### Check 2 — and the step everyone recorded as unmeasured is now measured
+
+The schematic route needs `BleClauses`' three clause theorems about
+`⟦Nat.ble⟧`. Two things were known: they are **not in `init-prelude`** (156
+`thm`s, none about `ble`), and `eq_cash` cannot be called from `tg.rs` for want
+of a live `mini::kernel::Checker`. The scope recorded at
+*"The Lean-`Eq`-to-set-equation bridge already exists"* listed step 2 —
+*"certify them in the program that owns the ledger; measured for `mini`,
+**unmeasured for `checker --features tg`**, and that is the next measurement"* —
+as the open one.
+
+**Taken. It fails, and it fails on the wall that is terminal anyway.** On
+`checker/tests/fixtures/nat_char_equations.ndjson`, the one input that *does*
+contain the three clauses, `checker --features tg` accepts 44 declarations at 61
+gaps and all three clause certificates **escape**:
+
+```
+[15] natBleZ  ×1: 16 atoms — raw 16, local 0, proj 0, unknown 0
+[16] natBleSZ ×1: 23 atoms — raw 23, local 0, proj 0, unknown 0
+[17] natBleSS ×1: 24 atoms — raw 24, local 0, proj 0, unknown 0
+```
+
+Every atom is raw beta — *"a lambda whose typing rule did not apply"* and
+*"an application of a lambda that beta-reduces"* — i.e. the undischarged
+`⟦arg⟧ ∈ ⟦binder domain⟧` obligations of `Nat.ble`'s own `brecOn` nest. A
+hypothesis-carrying `Thm` fed to `ble_transfer` yields a conclusion carrying the
+same hypotheses, so the numeral equation would come out **conditional on 63
+atoms** and land in the escape ledger instead of closing a gap.
+
+So the correction that section made to its predecessor is right about `mini` and
+**wrong about the program that owns the ledger**: *"mini already certifies
+`natBleSS` from `Nat.ble`'s own `brecOn` nest — that certification is the
+schematic work"* is true of `mini` and false of `checker --features tg`. This is
+the same population error, for the third time in a week, one level in: a claim
+established on the program that does not produce the ledger.
+
+### The disposition
+
+**Declined.** Even granting the two things that are out of scope — synthesising
+three clause declarations into the stream, and the `eq_cash` seam — the
+construction reaches a conditional equation, not a theorem. The reachable prize
+is **0**, against a ceiling of −2 630 and a headline of −3 780. The binding wall
+is the escape ledger, exactly where `ORIGIN-RANKING.md` puts the terminal wall,
+and no `Nat` construction reaches it.
+
+### One stale number re-taken on the way past
+
+`fully_ruled` admits only `Beta`/`Zeta`/`Delta`/`Sort`; admitting `ProjRed` and
+`Iota` was measured at **+660 and +512** before `3eab691` readied the ι gate for
+`Nat`. Re-taken here behind two temporary switches:
+
+| state | gaps | escapes |
+| --- | --: | --: |
+| `ProjRed` in the gate | **10 262** | 1 074 |
+| `Iota` in the gate | **14 865** | 1 078 |
+
+**`ProjRed` is now byte-identical to the baseline on every counter** — not
+cheaper, *inert*: no trace it would newly admit is otherwise fully ruled. The
++660 is gone and so is any prize behind it. `Iota` is nine times worse than its
+recorded +512. Neither is a wiring opportunity; both switches were reverted.
+
+### The 18 `OfNat.ofNat` sites, and why they are not the consolation prize
+
+`Nat.rec @ (OfNat.ofNat Nat <lit> (instOfNatNat _))` is 18 firings and needs no
+arithmetic at all — δ, β and a projection reach the literal. They are excluded
+by the same gate, and the `ProjRed` row above is the measurement that says
+opening it for them buys nothing.

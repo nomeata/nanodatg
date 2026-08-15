@@ -335,6 +335,19 @@ gate underneath it.** (Heading kept; the diagnosis below is corrected in place.)
   11 is partly untested. Build it when something is actually gated on it; nothing
   here is.
 
+  > **REVERSED, then RESTORED — and the verdict is now measured rather than
+  > argued.** The reversal below was right that something is gated on it and
+  > right that it had never been measured. It was measured on 2026-08-15
+  > (`MEASUREMENTS.md`, *"The `Nat.ble` tranche, refuted at its own gate"*) and
+  > **the bridge is still not the build**: the numeral step has no backend rule
+  > to certify (`Rule::Admitted(Admit::NatRed)`), simulating one costs +942
+  > gaps, the route's ceiling is −2 630 rather than −3 780, and the three
+  > clauses escape with 16/23/24 raw-beta atoms in `checker --features tg` so
+  > `ble_transfer` returns a conditional equation. **Reachable prize 0.** This
+  > section's original "build it when something is actually gated on it" was the
+  > right rule; the population correction below is still correct and is kept,
+  > because the −3 780 is real even though nothing reaches it.
+  >
   > **REVERSED, 2026-08-15 — and the last sentence is why.** Something is gated
   > on it, and it had never been measured. On `init-prelude` — the real goal
   > population, 10 262 gaps — the origin

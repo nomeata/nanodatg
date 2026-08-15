@@ -128,7 +128,10 @@ frontier. See `ORIGIN-RANKING.md`.
 the development signal.** Completeness is measured against Lean, never against
 fixtures we wrote. Where they disagree, believe the larger population:
 `proj_reduce` was worth −74 on a fixture and **zero** on the exports, while the
-`Nat` bridge was worth −11 on a fixture and **−3 780** on `init-prelude`.
+`Nat` bridge was worth −11 on a fixture and **−3 780** on `init-prelude` — where
+the second half carries its own lesson, because that −3 780 was then measured to
+be **unreachable** (see the frontier, item 0). A large number on the right
+population is a reason to *look*, not a reason to build.
 
 Movement over the arc: exports **217 → 168**, `nat_char_equations` 152 → 61,
 `mutual_aux_encoding` 96 → 49, `ctor_abbrev_major` 46 → 23,
@@ -282,22 +285,32 @@ The section below this one is **history** — it described the carrier fixture a
 16 gaps and the tranche that took it to 13. Read it for the reasoning, not the
 numbers. What remains now, in the order the measurements put it:
 
-0. **BUILD THIS NEXT: the `Nat` bridge, measured at −3 780 on `init-prelude`.**
-   `iota: the major premise is not a constructor` is **37 % of `init-prelude`
-   from one origin**, with full acquisition and a 3 % ceiling overshoot.
-   Instrumentation (added, measured, reverted) spelled the major premise:
-   **466 of 563 firings are `Nat.ble <lit> <lit>` — ground literals** — and all
-   563 are `Nat` arithmetic or decidability. That is exactly what
-   `derived::nat::BleClauses`/`ble_transfer` conclude, and they are still called
-   only from `derived/tests/nat.rs`. **Refute first, in order:** does the
-   existing native `NatClause` already decide these and merely fail to hand TG a
-   certificate at the ι site — i.e. is this a *gate*, the shape that has caught
-   three tranches this week — and only if not, pay the `mini::Checker` seam.
+0. **DO NOT BUILD the `Nat` bridge — measured and declined, 2026-08-15.** This
+   item said "BUILD THIS NEXT" on −3 780 and named the two checks that had to
+   refute it first. Both were taken and both fail
+   (`MEASUREMENTS.md`, *"The `Nat.ble` tranche, refuted at its own gate"*).
+   The census is right — `iota: the major premise is not a constructor` is 37 %
+   of `init-prelude` from one origin, and **466 of 563 firings are
+   `Bool.rec @ (Nat.ble <lit> <lit>)`, 51 distinct pairs, operands 0–12**
+   (re-derived, not inherited). What is wrong is that anything reaches it:
 
-   This **inverts** the standing "do not build the `Nat` bridge" decision. That
-   decision was correct *about the fixture* — on `nat_char_equations` the bridge
-   is −18 and changes no theorem's status. The fixture was never the reason to
-   care.
+   * **It is not a gate.** The numeral step is `Rule::Admitted(Admit::NatRed)`,
+     and `Rule::Admitted` *is* "the backend has no rule for this"; the
+     `Certifier` trait has no numeral method, so there is no disjunct to add.
+     The tree's own `NANODA_NAT_RULED` simulation moves the origin 577 → 106
+     straight onto `nat_reduce` 32 → 503 for **+942 gaps**.
+   * **The headline is 30 % high.** −3 780 assumes the *ι* equation; a numeral
+     construction can only assume the *numeral* equation. Measured ceiling
+     **−2 630**, with escapes 1 074 → 1 777.
+   * **The clauses cannot be had unconditionally.** `ble_transfer` `mp`s its
+     three premises, and on the one input that contains them
+     `checker --features tg` certifies `natBleZ`/`natBleSZ`/`natBleSS` only
+     conditionally — **16 / 23 / 24 raw-beta atoms** from `Nat.ble`'s `brecOn`
+     nest. `mini` certifies them unconditionally; `mini` does not own the ledger.
+
+   **Reachable prize 0.** The standing "do not build the `Nat` bridge" decision
+   was right all along, and now for a measured reason rather than a fixture's.
+   Build item 6 instead.
 
 1. **The escape population is the terminal wall, and it does not decompose.**
    Floor: 10 645 → 2 270 (79 %), of which **2 061 (91 %) are escapes** — up from
@@ -324,11 +337,17 @@ numbers. What remains now, in the order the measurements put it:
    prenex witnesses at `derived`'s own working variables, while every consumer
    holds open-scope already-instantiated theorems whose scope assumptions are
    live hypotheses and therefore cannot be generalised back.
-4. **(superseded — see item 0.)** The `Nat` bridge was priced at −11 on
-   `nat_char_equations` with zero additional certified theorems, and that
-   remains true of *the fixture*: re-measured it is −18 of 61, and 16 of the 17
-   theorems carry escapes under `*` identically to baseline. It is worth −3 780
-   on `init-prelude`, which is the population that matters.
+4. **The `Nat` bridge's fixture price, for the record.** −18 of 61 on
+   `nat_char_equations`, zero additional certified theorems, 16 of 17 theorems
+   carrying escapes under `*` identically to baseline. The fixture was right
+   about the corpus for a reason it could not see: the −3 780 on `init-prelude`
+   is real and **unreachable** (item 0).
+6. **BUILD THIS NEXT: `iota: the major premise's domain is not this inductive`,
+   −1 609 on `init-prelude`** — rank 2, terminal, 8 % ceiling overshoot, full
+   acquisition, and it has a 10-gap development fixture (`074_prodRecEqns`)
+   carrying the same cause. That is the best fixture-to-goal leverage in the
+   tree. Then `proj_reduce` at −890, an extension of a construction that already
+   landed once (`3eab691`) and beat its own price.
 5. **`init-prelude`'s interpretation debt** — the `type former spine` and
    `field type uninterpretable` families listed above. This is a different kind
    of work from everything in this arc: *"what interprets a machine word and a

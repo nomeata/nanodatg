@@ -64,6 +64,19 @@
 //! "schematic ι", and that was wrong too; the revision after *that* said "crate
 //! boundary", which was true when the crates were separate and is now stale.
 //!
+//! **And granting both of those would still not be enough** — measured
+//! 2026-08-15 (`MEASUREMENTS.md`, *"The `Nat.ble` tranche, refuted at its own
+//! gate"*). [`BleClauses`]'s three fields are `&Thm`, and [`ble_transfer`]
+//! reaches its conclusion by `mp` on them, so **whatever hypotheses the clauses
+//! carry, the numeral equation carries**. On the one input that contains them,
+//! `checker --features tg` certifies `natBleZ` / `natBleSZ` / `natBleSS` only
+//! *conditionally* — 16 / 23 / 24 undischarged raw-beta atoms each, the
+//! `⟦arg⟧ ∈ ⟦binder domain⟧` obligations of `Nat.ble`'s own `brecOn` nest — so
+//! the transfer would return a conditional equation and the checker's gap would
+//! move to the escape ledger rather than close. `mini` certifies the same three
+//! unconditionally; `mini` is not the program that owns the ledger, and that
+//! distinction is the whole of link 2.
+//!
 //! # Why `t` and `f` are quantified, and not `succ 0` and `0`
 //!
 //! Because the imported operation is `Bool`-valued and `ble` is not. The three

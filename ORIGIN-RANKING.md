@@ -370,7 +370,23 @@ remaining 43), which no Nat construction reaches.** — **but see the next
 section, because the fixture is no longer the reason to care about the Nat
 bridge, and the conclusion drawn from it corpus-wide is now wrong.**
 
-## The next build: the `Nat` bridge, −3 780, and why the standing decision inverted
+## The largest origin, and why it is **not** the next build
+
+> **Measured and declined, 2026-08-15.** This section recommended the `Nat`
+> bridge on −3 780 and named two checks that had to refute it first. Both were
+> taken (`MEASUREMENTS.md`, *"The `Nat.ble` tranche, refuted at its own gate"*).
+> **Check 1 fails: there is no gate to open** — the numeral step is
+> `Rule::Admitted(Admit::NatRed)`, which is by definition a step the backend has
+> no rule for, and firing the tree's own `NANODA_NAT_RULED` simulation moves the
+> origin 577 → 106 straight onto `nat_reduce` 32 → 503 and costs **+942 gaps**.
+> **Check 2 fails**, and on a step recorded as unmeasured: on the one input that
+> contains `Nat.ble`'s three clauses, `checker --features tg` gives all three
+> **escaping** certificates (16 / 23 / 24 raw-beta atoms), so `ble_transfer`
+> would return a conditional equation rather than a theorem. **And the headline
+> is 30 % high**: what a numeral construction can price is −2 630, not −3 780,
+> with escapes 1 074 → 1 777. **Reachable prize: 0.** The census below is
+> correct and is kept; the recommendation it carried is withdrawn, and the
+> second-ranked build named at the end of this section is now the first.
 
 **`iota: the major premise is not a constructor` is the largest single origin in
 the project: own 577, sub-tree 3 910, measured −3 780 — 37 % of `init-prelude`'s
@@ -414,29 +430,40 @@ conclusion true of the fixtures has been false of the reference population, afte
 declared "worth exactly zero on the reference population" when the reference
 population was the 91 tutorial exports.
 
-**What the next seat must refute first, because this brief is a hypothesis
-too.** −3 780 prices the equations being *true*, not a construction reaching
-them. Two specific checks, in this order:
+**The two checks, taken.** −3 780 prices the equations being *true*, not a
+construction reaching them, and the gap between the two turned out to be the
+whole tranche. Full numbers in `MEASUREMENTS.md`, *"The `Nat.ble` tranche,
+refuted at its own gate"*; the answers:
 
 1. **Does `Nat.ble n m` at two literals need `BleClauses` at all, or does it need
-   the native `NatClause` routed one level further?** `nat_reduce` ("native
-   arithmetic on literals") already exists, fires 32 times, and is worth −119 —
-   yet 466 ground `Nat.ble` applications reach ι unreduced. If the native clause
-   already decides them and merely fails to hand TG a certificate at the ι site,
-   this is a wiring tranche of the `3eab691` shape (one added disjunct in a
-   readiness gate, −87 on its fixture) rather than a derivation tranche. **That
-   is the cheapest possible outcome and it should be checked before a line is
-   written.** `NAT-CHAR-CENSUS.md` §5 is the precedent: the wall was located at
-   the rule whose *name* was on the gap, and it was one gate away.
-2. **`ble_transfer`'s preconditions.** `NAT-CHAR-CENSUS.md` §3 priced them: a
-   `&mut mini::kernel::Checker` over a populated interpretation store, which
-   `TgBackend` holds at no site. If check 1 fails and the construction really is
-   needed on the TG side, that seam cost is the tranche, and §6's refusal to pay
-   it for an 11-gap prize should be re-taken against −3 780. It is exactly the
-   "revisit it if a large origin ever turns out to need cashing" clause, and this
-   is that origin.
+   the native `NatClause` routed one level further?** **Neither — there is no
+   rule to route.** `try_reduce_nat` (`tc.rs:685`) computes the value by bignum
+   and records `Rule::Admitted(Admit::NatRed)`, and `Rule::Admitted` *is* the
+   enum's "the backend has no rule for this" case (`reduct.rs:96`); the
+   `Certifier` trait has no numeral method at all. `reduce_rec`'s `fully_ruled`
+   gate is already correct and `tc.rs:2796–2800` already says it fires on 466
+   the moment a numeral rule exists. Fired via the tree's own
+   `NANODA_NAT_RULED`: the origin goes 577 → **106** and reappears entire on
+   `nat_reduce` 32 → **503**, for **+942 gaps** in relays. The `3eab691` shape
+   needs a construction behind the gate; there is none.
+2. **`ble_transfer`'s preconditions.** Blocked twice over, and the second one is
+   new. The three clauses are not in `init-prelude` (one `Nat.ble` const node in
+   3.7 MB, 156 `thm`s, none about `ble`) — and on
+   `nat_char_equations.ndjson`, which *does* contain them, `checker --features tg`
+   certifies none: `natBleZ` / `natBleSZ` / `natBleSS` escape carrying **16 / 23
+   / 24 raw-beta atoms**, the β-domain obligations of `Nat.ble`'s `brecOn` nest.
+   `ble_transfer` `mp`s its premises, so its conclusion inherits them and the
+   numeral equation comes out conditional. The `eq_cash` seam was never the
+   binding cost; **the escape ledger is**, which is where this document already
+   puts the terminal wall.
 
-**Second-ranked build, if the Nat row turns out to be blocked:**
+**And the price is −2 630, not −3 780.** The ι deletion assumes the *ι* equation;
+a numeral construction can only assume the *numeral* equation, after which the
+ι-at-the-`Bool`-constructor leg still has to derive and 106 still do not.
+Measured, `NANODA_NAT_RULED=1 NANODA_ASSUME='nat_reduce'`: 10 262 → **7 632**,
+escapes 1 074 → **1 777**. Every future quotation of this row should be −2 630.
+
+**The next build, therefore:**
 `iota: the major premise's domain is not this inductive` at **−1 609** on
 `init-prelude` — the same cause as Ranking A's rank 7 (−9 on `074_prodRecEqns`),
 which makes `074` a 10-gap development fixture for a 1 609-gap goal-population
@@ -500,7 +527,7 @@ answer shorter than the whole tranche.
 
 | origin | expect a construction to reach `Δ`? |
 | --- | --- |
-| `major premise is not a constructor` (−3 780) | **Unknown and it is the whole question.** 83 % is ground `Nat.ble`. If the native clause already decides it, a gate reaches most of `Δ`; if `ble_transfer` is needed on the TG side, the `mini::Checker` seam is the tranche. Check 1 above settles it. |
+| `major premise is not a constructor` (−3 780) | **No — measured at 0, 2026-08-15.** The route's own ceiling is **−2 630** (the numeral equation, not the ι equation), and nothing reaches it: the numeral step has no backend rule to certify, and `Nat.ble`'s three clauses escape with 16/23/24 raw-beta atoms in the program that owns the ledger, so `ble_transfer` returns a conditional equation. Declined. |
 | `…domain is not this inductive` (−1 609) | Probably. Terminal, 8 % over, full acquisition, and it has a 10-gap fixture (`074_prodRecEqns`) to develop against. |
 | `proj_reduce` (−890) | Likely — the construction landed once at `3eab691` and beat its own price (−87 against −74). |
 | `eq_cache` (−511) / `nested inductive` (−525) | Partly. 23 % / 11 % over; both mid-chain at scale. |
@@ -517,10 +544,18 @@ this document is net of it.
 
 * **Start the `fire_dep` `np > 0` layer.** Ten walls, no partial credit, −35 on
   one file. Censused and declined; see question (b).
+* **Build the `Nat` bridge.** Measured and declined, 2026-08-15 — see the box at
+  the head of "The largest origin". Reachable prize 0 against a route ceiling of
+  −2 630. The one thing left worth doing with it is *not* a construction:
+  `derived::nat::BleClauses` / `ble_transfer` should stay in
+  `derived/tests/nat.rs` until something can hand them **unconditional**
+  clause theorems, and nothing in the checker can.
 * **Treat `nat_char_equations` as the reason to decide anything about `Nat`.**
   It has no numerals. It said the bridge was worth 11 gaps; it was right about
-  itself (now 18) and the same family of origins on the goal population measures
-  **−3 961** (rank 1 −3 780, `nat_reduce` −119, `nat_eq` −62).
+  itself (now 18), and it was right about the corpus for a reason it could not
+  see — the goal population's Nat family looks like **−3 961** (rank 1 −3 780,
+  `nat_reduce` −119, `nat_eq` −62) and *reaches* none of it. The fixture's
+  verdict was right twice and well-founded once.
 * **Bundle tranches.** Excess over the sum is 2.5–4 %.
 * **Plan anything off the `SUBTREE` column alone**, or off the old 10 %/30 %
   bands — they are 2× pessimistic on the rows that now matter.
