@@ -696,6 +696,7 @@ literals in `zoneb.rs` would still be wrong for a non-nested declaration:
 (`:319`), and `Missing::label`'s seven strings on our side say "nested" too.**
 
 **Item 1 — the type former and constructors are keyed at `σ = []` only.**
+**Landed 2026-08-15 at `8dba64c`, and doing it uncovered item 1b.**
 `Model::mono`'s own doc calls this a limitation and says why it has never
 mattered: "every nested fixture mini has is monomorphic". Step 2 ends that
 immediately. Of `init-prelude`'s **126 inductive type formers, 88 are
@@ -704,6 +705,38 @@ universe-polymorphic**, and `zoneb::model_alias` looks up
 reports `nested model not keyed here`. The fix is to key them the way recursors
 already are, from `schedule ∪ applied`; it is perhaps fifteen lines and it is
 entirely inside `nested_splice.rs`.
+
+*Done — `Recogniser::decl_sigmas`. Measured on the producer's
+`poly_nested_used`, where `PTree.{u}` is used at three universes:
+`ind-spec(PTree: nested model not keyed here)` **3 → 0**, `untranslated`
+17 → 15. Nothing moved on `init-prelude`, and that was measured rather than
+assumed — its only nested declaration, `Lean.Syntax`, binds no level
+parameters, so with the first gate closed the 88 are unreachable. Every nested
+fixture this repository had was universe-monomorphic (`PT (α : Type)` is
+parameterised, which is a different thing), so no existing test could have
+caught the defect; `checker/tests/fixtures/tool_poly_nested.ndjson` is the
+producer's fixture reduced to one model family and is now the pin.*
+
+**Item 1b — propagating σ is necessary and not sufficient.** Found by doing
+item 1, and it **refutes a written claim** in `nested_splice.rs`'s header,
+which said the seeding trap was unreachable because "a σ added here can only be
+one the export constant was already going to be interpreted at". That holds
+only up to `DEFAULT_LEVELS`, which is `&[0, 1]`
+(`checker/src/instantiations.rs:148`). **Nothing mentions a model constant** —
+the same fact the header's mention-graph section turns on — so the model tower
+is scheduled at `[0]` and `[1]` and nowhere else, while the export constant is
+scheduled at every σ the file genuinely uses. Dumped on `tool_poly_nested`:
+`⟦PTree._model.{0}⟧` and `⟦PTree._model.{1}⟧` are interpreted,
+`⟦PTree._model.{2}⟧` is not, and neither is the `_impl.0` / `_auxCarrier` /
+`_auxTag` chain beneath it.
+
+So the keying defect is closed and `ind-spec(PTree: nested model not
+interpreted)` at the one σ past `DEFAULT_LEVELS` is what remains. The demand
+**closure** is taken by the pre-pass before the recogniser runs and is not
+re-taken over the σ the recogniser adds. Closing it is
+`checker::instantiations`' business rather than `nested_splice.rs`'s, so it is
+reported rather than edited. **It bites every polymorphic declaration used
+above `Sort 1`**, which at step 2 is a population and not a curiosity.
 
 **Item 2 — the projection family is not optional, and it is the bulk of the
 work.** This is the finding that decides step 2's size. Counted over the tool's
@@ -1586,6 +1619,8 @@ first.*
 | — the same **with output**, and our checker over it (2026-08-15, `236ba86`) | `accept 3123`, **`untranslated: 109 declarations, 17 eliminators`** (was 91/10 — §6 corrected), `prefix 171`, `nested seen=1 models=1 tool=1 legacy=0`, `route toMini=149 toChecker=2974`, `output kernel check: accepted` |
 | — the public model surface, by family | 1 044 declarations: 453 `X._model`, 174 `iota_j`, **153 `proj_i` + 153 `proj_i.iota` + 104 `eta` + 4 `ruleK` + 3 `unitlike` with no slot on our side (40%)**, 100 `_impl` |
 | — `init-prelude`'s inductives | 126 type formers; **88 universe-polymorphic**, **107 single-constructor**, 4 indexed, 0 mutual |
+| **σ keying of the type former and constructors** (2026-08-15, `8dba64c`) | on `poly_nested_used`, `PTree.{u}` at three universes: `nested model not keyed here` **3 → 0**, `untranslated` 17 → 15. `init-prelude` **byte-identical** — its only nested declaration binds no level parameters |
+| — what it exposed | `DEFAULT_LEVELS = [0,1]` and nothing mentions a model constant, so `⟦PTree._model.{2}⟧` is never interpreted: propagating σ does not re-take the demand **closure** (§4.3 item 1b) |
 | **`lean-inductive-models` over full Mathlib** (2026-08-15, §6.1) | **6 882 model families, 0 declines, 3 exempt, 48 677 statements compared / 0 differ, 203 level comparisons / 0 escapes, `output kernel check: accepted`, exit 0** |
 | — declines at every rung of the ladder (3.7 MB → 5.6 GB) | **0**, at all six sizes; `grep -c ': declined'` is the check, not the exit code |
 | — families against inductives, full Mathlib | 6 882 families over 6 644 input inductives; 85 splice events supply the difference |
