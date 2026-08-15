@@ -147,10 +147,22 @@ declaration 1 on `Lean.Syntax`, and with modelgen but no gates it declines on th
     accept  1822 declarations
     untranslated: 91 declarations, 10 eliminators
     uncertified:  32 const typings, 29 type typings
-    tg gaps: 11909      prefix declarations=152 pairs=32      exit 4
+    tg gaps: 11556      prefix declarations=152 pairs=32      exit 4
 
-Of the 11 909 gaps, **6 683 are `trans over an admitted premise`** — relays, not
-origins. Exit 4 is correct: it is certification debt, not rejection.
+Of the 11 556 gaps, roughly 6 700 are `trans over an admitted premise` — relays,
+not origins. Exit 4 is correct: it is certification debt, not rejection.
+
+**The total was 11 909 when first measured at `d73c94f` and is 11 556 now, and
+the 353 is UNATTRIBUTED.** It is in the improvement direction, and the only
+executable changes in between were the `Certifier`-trait retirement — whose
+own invariant captured `init-prelude` byte-identical at 11 556 on *both* sides
+of its branch point — and a reporting-only change to `origin_report` /
+`ix_readiness_report`, which should not move a gap count at all. So either one
+of those did more than it claimed, or the 11 909 was taken under a
+configuration nobody wrote down. **Attribute it before quoting either number as
+a ratchet.** An unexplained fall is the same defect as an unexplained rise; this
+project has already spent a day on two rows that drifted for 134 commits behind
+a passing total.
 
 What stops it now is **interpretation debt**, in two named families:
 
