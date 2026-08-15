@@ -488,3 +488,216 @@ step, and that is worth more than 15.8 s. Recorded and left.
    `tg_tutorial` — so this is not a missing step, it is that **`ci/check.sh`
    itself is not on the short gate list seats actually run**. Every guard this
    document adds is downstream of that.
+6. **Shadowed assertions (§6), the unfixed remainder.** Four were fixed; three
+   groups were not, and two of the three need a file this branch does not own:
+   * `origin_report()`'s surviving early return and the `if asked > 0` report
+     gates, both in `checker/src/tg.rs` — §6.4. Neither is read by a test today;
+     the second makes a live `mini_designed.rs` assertion unfalsifiable.
+   * `tg_tutorial.rs:1917` and `:1931` are the **same predicate**
+     (`assert!(fired >= 92)`) on an unchanged local, carrying two different
+     failure stories. The second cannot fail. Confirmed by inspection, not
+     mutation — a literally identical predicate needs none.
+   * `tg_tutorial.rs:721`'s `assert_eq!(counted, n)` compares two printings of
+     one local (`escapes`, `global_report`), so it is `escapes == escapes`. The
+     independent observation that *would* separate it exists and is unused:
+     `escapes::report_from` recomputes the total from the `made`/`taken`/`closed`
+     census rather than from the counter.
+7. **729 of `derived/`'s 952 tests are unaudited for §6's pattern**, with named
+   candidates carrying named surviving mutations — the fibre-lift rung pair
+   (every call site in the repo passes `(1, 2)`, so `n` is never observed), and
+   the `np <= 1` parameter spines in `le_index.rs`, `decl_proj.rs` and
+   `telescope.rs`. None is verified; each is a hypothesis with a stated
+   mutation, which is the form §6.6 asks for.
+
+---
+
+## 6. Shadowed assertions — an assertion that cannot fail on its own
+
+**Audited 2026-08-15 on `joachim/shadowed-assertions`, branched from master
+`f9b98ee`.** Every claim below that is marked *measured* was produced by
+mutating production code, watching the red (or the green), and restoring; the
+tree's production code is unchanged by this audit apart from the two test-side
+fixes in §6.4.
+
+### 6.1 The pattern
+
+An assertion can be **structurally untestable** — present, plausible, and
+incapable of failing — because something upstream fails first on every mutation
+that would have tripped it.
+
+> **Any assertion downstream of a gate that the same mutation trips is untested
+> — and "gate" includes early returns in reporting code, `.expect(…)` on the
+> value under test, a constructor's own guard, and a fixture instantiated where
+> two readings agree, not just an earlier `assert!`.**
+
+The five gates seen in this tree, in the order they cost time:
+
+1. **An earlier assertion in the same test.** A label check and a counter check,
+   where every mutation that moves the count also moves the label. The label
+   fails first and the counter assertion has never once been exercised.
+2. **An early return in reporting code.** The row the assertion reads is emitted
+   only on the failure path, so it vanishes in exactly the success state the
+   work is driving toward. *A readiness counter whose only witness is a failure
+   is not a readiness counter.*
+3. **The constructor's own guard.** `X::build(…)` ends in
+   `(concl == want).then_some(out)`, and the test spells `want` with the same
+   production calls. Every mutation makes the constructor return `None`, so the
+   `.expect(…)` fires and the assertions about the result never discriminate.
+4. **A degenerate instantiation.** The mutation yields a *true theorem about the
+   wrong thing*, the constructor succeeds, nothing `expect`s — and the test
+   still passes, because the fixture is instantiated at the one value where the
+   correct and incorrect readings agree. `φ := y = y`, `⟨a,a⟩`, `subset(u,u)`,
+   a one-element list, an adjacent rung pair, index 0.
+5. **A predicate too symmetric for its subject.** `occurs_free(a) &&
+   occurs_free(b)` cannot pin an *ordered* pair; `leq(l,r) && leq(r,l)`
+   asserted only at pairs that are equal cannot pin antisymmetry.
+
+### 6.2 The standing rule is insufficient, and this is why
+
+`DECISIONS.md` (2026-08-10, "And the rule that found the bug in the fix") says:
+
+> **A guard nobody has watched fail is a guard nobody has tested.**
+
+That is right and it is not enough. **Confirming that a test goes red does not
+establish that each of its assertions can go red.** Every instance in §6.3 sits
+in a test that was falsified when it was written — the author mutated something,
+saw the red, restored, and landed it. The red came from the *first* assertion
+every time, and the assertion the test was named for was never reached.
+
+The stronger form:
+
+> **Falsify every assertion, not every test.** For each assertion, name the
+> mutation that trips *that assertion and no earlier one*, and watch it fail at
+> that line. An assertion for which no such mutation exists is not a weak
+> assertion — it is not an assertion. Delete it, or replace it with one that
+> pins something the earlier gate cannot reach.
+
+Two corollaries that are cheaper than the full discipline and catch most of it:
+
+* **Read the assertion's message as a claim and try to violate it directly.** If
+  the message says "a count alone would not say *which*", ask what the count is
+  pinned to three lines up. At a pinned zero the names say nothing.
+* **When you cannot separate two assertions, say so at the assertion.** The
+  precedent is `tg.rs`'s
+  `a_redex_subject_is_typed_at_its_contractum_and_owes_betas_premise`, which
+  records of its fourth assertion: *"It was attempted against three mutations …
+  It stayed green through all three, because `Thm::mp` refuses … The assertion is
+  kept as a recorded outcome, and its honest status is: enforced one layer
+  below, unfalsifiable from here."* That is the correct disposition. An
+  unfalsifiable assertion carrying a confident message is the defect; one
+  carrying its own status is documentation.
+
+### 6.3 The instances
+
+The first five were found by one seat in one day, before this audit; the rest
+are this audit's, and each was measured.
+
+| # | gate | where | what was untested |
+| --- | --- | --- | --- |
+| 1 | earlier assertion | a decline label beside a firing count | the **counter** assertion had never been exercised; falsified only by a mutation that keeps the label and zeroes the count |
+| 2 | reporting early return | `tg.rs::origin_report()` | `ICOD`/`IDEP`/`PRE`/publication rows were emitted inside a function that returns early when there are no gap origins. The rows vanished the moment the rule started certifying and two tests **went red on success**. Fixed by hoisting them to `ix_readiness_report` |
+| 3 | wrong event | `assert_eq!(FIRED, PRE)` | `IX_FIRED` counts a function *returning* an equation, not the site *certifying*. Renamed to `composite BUILT` |
+| 4 | earlier label | a conclusion spine's constructor position | the mutation produced a *true equation about the wrong pair* and died at a **label** assertion one step before the join check it was meant to exercise |
+| 5 | degenerate instantiation | a Prop-rung `x = •` | the mutation gave a **true theorem**, so the constructor succeeded and nothing `expect`ed; the ground test passed because it instantiated at the value where the two readings agree |
+| **6** | **degenerate instantiation** | **`kernel/tests/henkin.rs`** | **`closed_witness` fixes `φ := y = y`, so `φ[c/y]` *is* `c = c` and "the axiom is φ at the constant" is the reflexivity assertion above it. *Measured: a `henkin` that ignores φ outright and returns `⊢ c = c` leaves all 8 tests in the file green.* The rule's entire content was untested from inside the TCB. Fixed with a witness at `φ := y = d`** |
+| **7** | **symmetric predicate** | **`kernel/tests/rules.rs`** | **`opair_description_mentions_both_components` asserts `occurs_free(a) && occurs_free(b)`, symmetric in `a` and `b`. *Measured: building `⟨b,a⟩` under the name `⟨a,b⟩` (`thm.rs:818`, singleton half naming `b`) leaves every test in the file green.* Fixed by rebuilding the Kuratowski formula from `is_singleton`/`is_upair`** |
+| **8** | **degenerate instantiation** | **`checker/src/tests/level.rs`** | **all five assertions about `eq_antisymm` named a pair that *is* equal, so both conjuncts hold. *Measured: rewriting it as `leq(l,r) && leq(l,r)` — dropping antisymmetry — leaves `--no-default-features --lib` at 246/246.* It gates sort defeq (`tc.rs`) and constructor level agreement (`inductive.rs`), so the degenerate form accepts `Sort u ≡ Sort v` whenever `u ≤ v` — the unsound direction. Fixed with a strict pair in **both** argument orders** |
+| **9** | **no reachable occupant** | **`checker/tests/mini_dump.rs`** | **the assertion named two reason strings (`"has no \`iota\` field"`, `"neither built nor tested"`) that had been **deleted from `dump.rs`**. No run could emit either, so no mutation could trip it — one line below a header warning against exactly that. Fixed by asserting the absence *shape*, at the one row nothing else in the test reaches** |
+
+Instance 7 carries a trap worth keeping: `assert_ne!(is_opair(p,a,b),
+is_opair(p,b,a))` is **not** a fix. `is_upair` is symmetric in meaning but not
+in syntax, so the two descriptions differ structurally under the swapped rule
+too and that assertion stays green. Only rebuilding from the constructors
+separates them.
+
+### 6.4 What was fixed, and what was reported instead
+
+Fixed on this branch, each with its separating mutation watched red and
+restored: instances **6, 7, 8, 9** (`kernel/tests/henkin.rs`,
+`kernel/tests/rules.rs`, `checker/src/tests/level.rs`,
+`checker/tests/mini_dump.rs`). `kernel/` production code is unchanged;
+`git diff kernel/src/` is empty and both kernel mutations ran under a restore
+trap.
+
+**Reported rather than fixed, because `checker/src/tg.rs` is owned by another
+seat:**
+
+* **Instance 2's residue.** `origin_report()`'s early return survives, and now
+  returns `ix_readiness_report()` — so the indexed readiness rows are safe in
+  both branches. Everything *after* that point in `origin_report`'s body still
+  vanishes when `ORIGINS` is empty: the `equations ACQUIRED` line, `indexed iota
+  rule REACHED`, the indexed census, and `the top origin, by recursor` rows.
+  **Verified: no test in the tree reads any of them**, so this is a measurement
+  hazard and not a test hazard — `ORIGIN-RANKING.md` §2 already records it
+  biting a measurement. The fix, if wanted, is the same one instance 2 got:
+  emit unconditionally.
+* **The `asked > 0` guards under a `> 0` report gate.** `mini_designed.rs`'s
+  `tg_discharges_the_indexed_iota_rules_premise` asserts `asked > 0` off the
+  `ICOD` and `IDEP` readiness rows, and `ix_readiness_report` emits each row
+  only `if asked > 0`. The row exists iff the assertion holds, so the
+  `contains(…)`/`unwrap_or_else(panic!)` above it catches the only state that
+  would trip it. Separating it needs the *gate* changed, in `tg.rs`.
+
+### 6.5 One claim this audit refuted
+
+The largest family found — roughly sixty assertions across `mini_designed.rs`
+and `mini_tutorial.rs` of the form "and the reason set is empty", each following
+`assert_eq!(constEv, pairs)` — **is** shadowed: `Ledger::note_missing`
+(`ledger.rs:612`) is the sole writer of `missing`, and it is the `Err` arm of the
+same `match` whose `Ok` arm increments `const_ev_ok`, so `constEv == pairs`
+implies the `waiting:` set is empty by construction.
+
+The conclusion drawn from that — that the tranche's named-row ratchets are
+"protected by exactly two integers" — **is wrong**, and it is the kind of claim
+this document exists to check. The invariant those assertions restate is itself
+tested, by `ledger.rs::every_reason_lands_in_a_counter_in_the_set`, on a fixture
+built deliberately so that the equality is *"not `0 = 0` nor `n = n` over a
+uniformly broken file"*. The sixty are redundant, not unguarded. **Redundancy
+whose message overclaims is a documentation defect; it is not the same finding
+as an unguarded invariant, and conflating them would have sent a seat to rewrite
+sixty live assertions.**
+
+### 6.6 The check to apply when writing a test
+
+Before landing a test with more than one assertion, for each assertion after the
+first:
+
+1. **Name the mutation that trips this assertion and not the one above it.** If
+   you cannot, the assertion is redundant — either delete it or write its status
+   at the line, as §6.2 describes.
+2. **Ask what gates it.** An `.expect(…)`/`.unwrap()` on the value under test; a
+   `then_some(concl == want)` inside the constructor; a report row emitted under
+   `if n > 0` or after an early return; an exit-status assertion that already
+   subsumes every counter beneath it.
+3. **Ask whether the fixture can tell the readings apart.** Two atoms cannot
+   distinguish a **nesting**; two identical atoms cannot distinguish an
+   **order**; an adjacent pair cannot distinguish `n` from `m+1`; `x = x` cannot
+   distinguish an equation from its converse; a symmetric predicate cannot pin
+   an ordered subject. Three elements, all distinct, is the default.
+4. **If the assertion reads a counter, find its increment site.** Two counters
+   bumped on the same line make `assert_eq!(a, b)` a tautology; a counter that
+   is a `saturating_sub` of two others is not an independent observation.
+5. **Grep every string literal you assert the absence of.** Instance 9 is the
+   whole argument: a literal with no occupant in the tree is an assertion that
+   can never fail, and it reads to the next person as coverage.
+
+### 6.7 Denominator
+
+**1 464 `#[test]` functions** in the tree (`checker/tests` 14 files,
+`checker/src` `#[cfg(test)]` modules including `tg.rs`'s 48, `kernel/tests` 62,
+`derived/tests` 952). **687 were examined closely**; 729 of `derived/`'s remain
+unaudited, and the highest-yield names there are the `family_*`, `cumul_*`,
+`verify_*` and `w*rec` groups.
+
+Of those 687, **four were confirmed by mutation and fixed**, and one candidate —
+`derived/tests/hyp.rs::binary_operations_union_merge` — was **refuted**: a
+`close` that ignores its requested order goes red there, because the fixture's
+`[p, q]` is not the canonical rank order. That refutation is the reason §6.6
+step 3 distinguishes *nesting* from *order*: two atoms genuinely cannot
+distinguish a left from a right nesting, but they distinguish `⟨p,q⟩` from
+`⟨q,p⟩` perfectly well.
+
+`ci/check-test-guards.sh` and `ci/skip-guard.rs` were read first and are **not**
+this mechanism: they answer "a test that did not run", the *input* dimension.
+This section is "an assertion that ran and could not fail". A suite can be fully
+guarded by both and still contain every instance above.
