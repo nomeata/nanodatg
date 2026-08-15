@@ -12052,15 +12052,63 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         IDEP_ASKED.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
         let mut parts: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(n);
         for i in 0..n {
-            match self.ix_dep_minor_typed(ctx, d, _doms, _obligations, &ps, &c, &minors, &sub, i) {
+            match self.ix_dep_minor_typed(
+                ctx, d, _dom_exprs, _doms, _obligations, &ps, &c, &minors, &sub, i,
+            ) {
                 Ok(p) => parts.push(p),
                 Err(e) => return Err(e),
             }
         }
         IDEP_DONE.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-        let _ = parts;
-        let _ = ctx;
-        Err("iota: IDEP's conjuncts are discharged; the rule is not yet fired")
+
+        // `IDEP(m,S⃗)` is the **right-nested** conjunction, in constructor
+        // order, and `PRE` is `ICOD ∧ IDEP` in that order — both checked
+        // against `derived`'s own formulas rather than assembled and trusted.
+        let mut dep_hyps: Vec<Formula> = Vec::new();
+        for (_, hy) in &parts {
+            dep_hyps = merge_hyps(&dep_hyps, hy);
+        }
+        let dh = conj_of(&dep_hyps);
+        let mut acc: Option<Thm> = None;
+        for (t, hy) in parts.iter().rev() {
+            let Some(t) = reassume(t, hy, &dep_hyps) else {
+                return Err("iota: restating an IDEP conjunct on the joint assumptions failed")
+            };
+            acc = Some(match acc {
+                None => t,
+                Some(a) => match u_and_intro(&t, &a, dh.as_ref()) {
+                    Some(j) => j,
+                    None => return Err("iota: conjoining the IDEP conjuncts failed"),
+                },
+            });
+        }
+        let Some(dep_all) = acc else {
+            return Err("iota: an indexed declaration with no constructors")
+        };
+        if u_concl(&dep_all, dh.as_ref())
+            != Some(crate::mini::rec_dep::subst_f(&d.dr.guards.dep, &sub))
+        {
+            return Err("iota: the derived IDEP is not IndexedDepRecursor's")
+        }
+        let pre_hyps = merge_hyps(&icod_hyps, &dep_hyps);
+        let ph = conj_of(&pre_hyps);
+        let (Some(icod_j), Some(dep_j)) = (
+            reassume(&icod, &icod_hyps, &pre_hyps),
+            reassume(&dep_all, &dep_hyps, &pre_hyps),
+        ) else {
+            return Err("iota: restating the two halves of PRE on the joint assumptions failed")
+        };
+        let Some(pre_thm) = u_and_intro(&icod_j, &dep_j, ph.as_ref()) else {
+            return Err("iota: conjoining ICOD and IDEP failed")
+        };
+        if u_concl(&pre_thm, ph.as_ref())
+            != Some(crate::mini::rec_dep::subst_f(&d.dr.premise, &sub))
+        {
+            return Err("iota: the derived premise is not IndexedDepRecursor's PRE")
+        }
+        PRE_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _ = (pre_thm, rule, ctx);
+        Err("iota: PRE is discharged; the rule's own composite is not yet built")
     }
 
     /// **`⊢ H → ICOD(⟦C⟧, T)`** — `crate::mini::rec_ix_dep`'s `icod_at_rung`
@@ -12191,6 +12239,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         d: &IxDepBottom,
+        dom_exprs: &[ExprPtr<'t>],
         doms: &[Term],
         obligations: &[(Thm, Vec<Formula>)],
         ps: &[Term],
@@ -12202,7 +12251,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let spec = &d.tr.ii.spec;
         let ctor = spec.base.ctors.get(i).ok_or("iota: IDEP at no constructor")?.clone();
         let (k, m) = (ctor.args.len(), ctor.recs);
-        let (np, ni) = (ps.len(), spec.num_indices());
+        let np = ps.len();
         let su = minors.get(i).ok_or("iota: IDEP at no minor")?.clone();
 
         // `derived`'s own statement, at this site's terms. Everything below is
@@ -12213,18 +12262,43 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         );
 
         if k + m != 0 {
-            IDEP_FIELDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Err("iota: IDEP undischargeable — a constructor with fields")
+            let out =
+                self.ix_dep_minor_fielded(ctx, d, dom_exprs, doms, obligations, ps, c, minors, i);
+            if out.is_ok() {
+                IDEP_FIELDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            let (thm, hyps) = out?;
+            if u_concl(&thm, conj_of(&hyps).as_ref()) != Some(want) {
+                return Err("iota: the derived IDEP is not IndexedDepRecursor's")
+            }
+            return Ok((thm, hyps))
         }
 
         // ── A constructor with no fields ────────────────────────────────────
         //
         // No binders and no antecedent, so `IDEPᵢ` is one membership and the
         // whole of the work is the conclusion move.
-        let (minor_ty, hs) = obligations
+        let (minor_ty, mut hs) = obligations
             .get(np + 1 + i)
             .ok_or("iota: the nest paid for no typing at this minor")?
             .clone();
+        // The parameters' typings join, for the same reason they do on the
+        // fielded path: `⟦cᵢ p⃗⟧` is a nest over the parameters even when the
+        // constructor has no fields, so a `np > 0` declaration's nullary
+        // constructor still needs them to reach mini's own term. `RBTree.leaf`
+        // is the witness — fieldless and parameterised at once.
+        for (_, phs) in &obligations[..np] {
+            hs = merge_hyps(&hs, phs);
+        }
+        let mut ctor_mems: Vec<Thm> = Vec::with_capacity(np);
+        for (pt, phs) in &obligations[..np] {
+            ctor_mems.push(
+                reassume(pt, phs, &hs)
+                    .ok_or("iota: restating a parameter's typing at a nullary minor failed")?,
+            );
+        }
+        let minor_ty = reassume(&minor_ty, &obligations[np + 1 + i].1, &hs)
+            .ok_or("iota: restating a nullary minor's typing failed")?;
         let h = conj_of(&hs);
         let mdom = doms.get(np + 1 + i).ok_or("iota: the nest has no domain at this minor")?;
         if u_concl(&minor_ty, h.as_ref()) != Some(Formula::mem(su.clone(), mdom.clone())) {
@@ -12236,89 +12310,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("iota: IDEP's nullary conjunct is about another minor")
         }
 
-        // `⟦m e⃗ᵢ cᵢ⟧` and `app(m, e⃗ᵢ, ctorᵢ)` are one spine `ni + 1` deep, and
-        // every position may be spelled through an abbreviation — which is what
-        // `ctor_abbrev_major` exists to say. Bridge them position by position.
-        let (mhead, margs) = self
-            .app_spine(mdom, ni + 1)
-            .ok_or("iota: the nullary minor's codomain is not the motive's spine")?;
-        let (whead, wargs) = self
-            .app_spine(&target, ni + 1)
-            .ok_or("iota: IDEP's conclusion is not the motive's spine")?;
-        if mhead != *c || whead != *c {
-            return Err("iota: the nullary minor's codomain is not headed by this motive")
-        }
-        let mut cs: Vec<CondEq> = Vec::with_capacity(2);
-        let mut acc = CondEq::refl(mhead);
-        for (pos, (from, to)) in margs.iter().zip(wargs.iter()).enumerate() {
-            // The `ni` index positions are `derived`'s own symbols and the
-            // axiom relating each to the interpretation is published:
-            // `⊢ ∀p⃗∀y⃗. (eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧)`. The last position is the
-            // constructor, whose bridge is `IndexedTranslation::ctor_abbrev`.
-            // In both cases the *published* end is `to` and the walk's end is
-            // `from`, so the axiom is used right-to-left.
-            let pub_eq = if pos < ni {
-                let ax = d
-                    .tr
-                    .ax
-                    .ctors
-                    .get(i)
-                    .and_then(|cx| cx.result.get(pos))
-                    .ok_or("iota: mini published no result-index axiom for this constructor")?;
-                derived::inst_all(ax, ps)
-                    .ok_or("iota: instantiating a result-index axiom at these parameters failed")?
-            } else {
-                let (_, ax) = d
-                    .tr
-                    .ctor_abbrev
-                    .get(i)
-                    .ok_or("iota: mini published no constructor abbreviation")?;
-                derived::inst_all(ax, ps)
-                    .ok_or("iota: instantiating the constructor abbreviation failed")?
-            };
-            let (lhs, rhs) = pub_eq
-                .concl()
-                .as_eq()
-                .ok_or("iota: a published conclusion axiom is not an equation")?;
-            // **The two axioms point opposite ways, and neither direction is a
-            // free choice.** A result index is published as
-            // `⊢ eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧` — `derived`'s symbol on the left — while a
-            // constructor is published as `⊢ cᵢ(f⃗) = ctorᵢ(y⃗,r⃗)`, mini's
-            // abbreviation on the left. So the end that `derived` states the
-            // conclusion at is the left one in the first case and the right one
-            // in the second; both are accepted here and the *other* end is what
-            // the walk has to reach.
-            let (near, back) = if rhs == *to {
-                (lhs, u_a1i(&pub_eq, None))
-            } else if lhs == *to {
-                let s = u_eq_symm(&mut self.env_mut(), &pub_eq, None)
-                    .ok_or("iota: reversing a published conclusion axiom failed")?;
-                (rhs, s)
-            } else {
-                return Err("iota: a published conclusion axiom is about another symbol")
-            };
-            // `⊢ from = near`, then `⊢ near = to`, then compose.
-            let head = self.ix_arg_bridge(ctx, from, &near, &hs).ok_or(if pos < ni {
-                "iota: an index position of the conclusion has no bridge"
-            } else {
-                "iota: the constructor position of the conclusion has no bridge"
-            })?;
-            let hh = conj_of(&head.hyps);
-            let joined = self
-                .u_eq_trans(&head.thm, &u_a1i(&back, hh.as_ref()), hh.as_ref())
-                .ok_or("iota: composing a conclusion position's two equations failed")?;
-            let step = CondEq::new(joined, head.hyps)
-                .ok_or("iota: a conclusion position's bridge is not an equation")?;
-            cs.clear();
-            cs.push(acc);
-            cs.push(step);
-            acc = self
-                .ceq_congr(self.pre.ap.app, &cs)
-                .ok_or("iota: congruence along the motive's spine refused")?;
-        }
-        if !acc.proves(mdom, &target) {
-            return Err("iota: the conclusion bridge does not join the two spines")
-        }
+        let acc = self.ix_concl_bridge(ctx, d, i, c, ps, ps, &ctor_mems, mdom, &target, &hs)?;
         let out_hyps = merge_hyps(&hs, &acc.hyps);
         let minor_ty = reassume(&minor_ty, &hs, &out_hyps)
             .ok_or("iota: restating the nullary minor's typing failed")?;
@@ -12333,6 +12325,611 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         IDEP_NULLARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok((moved, out_hyps))
+    }
+
+    /// **`IDEPᵢ` at a constructor with fields** — the telescope walk.
+    ///
+    /// [`Self::dep_minor_typed`] at an indexed family, with the three
+    /// differences §8.3 flagged and one it did not:
+    ///
+    /// * the pointwise antecedent is `minor_atoms_general`'s, not a list built
+    ///   here — so the field atoms are in **declared** order (`lean_order_of`'s
+    ///   permutation) and the `m` induction hypotheses follow, where
+    ///   `dep_minor`'s are plains-then-recs-then-ihs;
+    /// * a recursive slot's atom is `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` at the child's
+    ///   **own** index vector, so the bridge to the binder's interpreted domain
+    ///   is one congruence per index over `IndexedCarrier::ty` and not one
+    ///   carrier moved along one equation;
+    /// * its induction hypothesis is `vⱼ ∈ app(m, d⃗ᵢⱼ, tⱼ)`, the motive at
+    ///   those same indices;
+    /// * and the conclusion moves in `ni + 1` positions — [`Self::ix_concl_bridge`].
+    ///
+    /// The one it did not flag: a *function-typed or mixed* recursive slot is
+    /// declined by name here exactly as on the non-indexed row, because the
+    /// walk reads one binder per slot and `Inductive::minor_subs` hands the
+    /// constructor a different grain.
+    #[allow(clippy::too_many_arguments)]
+    fn ix_dep_minor_fielded(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        dom_exprs: &[ExprPtr<'t>],
+        doms: &[Term],
+        obligations: &[(Thm, Vec<Formula>)],
+        ps: &[Term],
+        c: &Term,
+        minors: &[Term],
+        i: usize,
+    ) -> Result<(Thm, Vec<Formula>), &'static str> {
+        let ap = self.pre.ap.clone();
+        let ind = d.tr.base.clone();
+        let spec = d.tr.ii.spec.clone();
+        let ctor = spec.base.ctors[i].clone();
+        let (k, m) = (ctor.args.len(), ctor.recs);
+        let order = ctor.order.clone();
+        let np = ps.len();
+        let su = minors[i].clone();
+        let Some(mach) = self.machine() else {
+            return Err("iota: the general apparatus is unavailable")
+        };
+        let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+        if cd.len() != m || rd.len() != m {
+            return Err("iota: an indexed minor's recursive slots are not the spec's")
+        }
+        if cd.iter().chain(rd.iter()).any(|x| x.is_some()) {
+            return Err("iota: IDEP undischargeable — a function-typed or mixed recursive slot")
+        }
+
+        // ── The minor's own typing, and the parameters' ──────────────────────
+        let (hs, mut out_hyps) = obligations[np + 1 + i].clone();
+        for (_, phs) in &obligations[..np] {
+            out_hyps = merge_hyps(&out_hyps, phs);
+        }
+        let mdom = doms[np + 1 + i].clone();
+        if u_concl(&hs, conj_of(&out_hyps).as_ref()) != Some(Formula::mem(su.clone(), mdom.clone()))
+        {
+            return Err("iota: IDEP undischargeable — a minor premise has no typing to rest on")
+        }
+
+        // ── The pointwise variables and `derived`'s own antecedent ───────────
+        let (yv, tv, vv) = {
+            let mut env = self.env_mut();
+            let yv: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+            let tv: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+            let vv: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+            (yv, tv, vv)
+        };
+        let ys: Vec<Term> = yv.iter().map(|v| Term::var(*v)).collect();
+        let ts: Vec<Term> = tv.iter().map(|v| Term::var(*v)).collect();
+        let vs: Vec<Term> = vv.iter().map(|v| Term::var(*v)).collect();
+        // **Not rebuilt here.** `minor_atoms_general` is the builder `IDEPᵢ`
+        // itself is stated with, so the list below and the formula this is held
+        // against cannot drift apart by construction.
+        let atoms = {
+            let mm = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::family::minor_atoms_general(
+                &mut env,
+                &mm,
+                &ind,
+                &spec,
+                &d.tr.ii.carrier,
+                i,
+                c,
+                ps,
+                &ys,
+                &ts,
+                &vs,
+            )
+        }
+        .ok_or("iota: derived declined this constructor's indexed minor atoms")?;
+        if atoms.len() != k + 2 * m {
+            return Err("iota: the indexed minor's antecedent is not k + 2m atoms")
+        }
+        // **`derived::conj_of`, not this file's** — the two nest opposite ways
+        // and `idep_minor` states the antecedent right-nested.
+        let Some(h_pw) = derived::conj_of(&atoms) else {
+            return Err("iota: an indexed minor has an empty pointwise antecedent")
+        };
+        let h_out = conj_of(&out_hyps);
+        let h_all = match &h_out {
+            Some(o) => Formula::and(o.clone(), h_pw.clone()),
+            None => h_pw.clone(),
+        };
+        let ha = Some(&h_all);
+        let left = |o: &Formula| derived::and_left(o.clone(), h_pw.clone());
+        let Some(mut acc_thm) = (match &h_out {
+            Some(o) => derived::syl(&left(o), &hs),
+            None => Some(u_a1i(&hs, ha)),
+        }) else {
+            return Err("iota: restating the indexed minor premise's typing failed")
+        };
+        let mut atom_thms: Vec<Thm> = Vec::with_capacity(atoms.len());
+        for j in 0..atoms.len() {
+            let Some(p) = derived::conj_proj(&atoms, j) else {
+                return Err("iota: projecting the indexed pointwise antecedent failed")
+            };
+            let carried = match &h_out {
+                Some(o) => derived::syl(&derived::and_right(o.clone(), h_pw.clone()), &p),
+                None => Some(p),
+            };
+            match carried {
+                Some(cp) => atom_thms.push(cp),
+                None => return Err("iota: carrying an indexed pointwise assumption failed"),
+            }
+        }
+
+        // ── The telescope, in declared order then the induction hypotheses ───
+        //
+        // `minor_atoms_general` puts the `k + m` field atoms in declared order
+        // and the `m` ihs after, so the rung's atom index *is* its position —
+        // the indirection `dep_minor_typed` needs (its atoms are grouped) is
+        // gone, and that is the one place the indexed walk is simpler.
+        let mut rung: Vec<(Term, FreeVar, usize)> = Vec::with_capacity(k + 2 * m);
+        {
+            let (mut pj, mut rj) = (0usize, 0usize);
+            for (pos, sl) in order.iter().enumerate() {
+                match sl {
+                    Slot::Plain => {
+                        rung.push((ys[pj].clone(), yv[pj], pos));
+                        pj += 1;
+                    }
+                    Slot::Rec => {
+                        rung.push((ts[rj].clone(), tv[rj], pos));
+                        rj += 1;
+                    }
+                }
+            }
+            for j in 0..m {
+                rung.push((vs[j].clone(), vv[j], k + m + j));
+            }
+        }
+
+        // The parameters' typings, which the constructor's own nest wants
+        // ahead of the fields — `dep_minor_typed`'s reason, at this arity.
+        let mut ctor_mems: Vec<Thm> = Vec::with_capacity(np + k + m);
+        for (pt, phs) in &obligations[..np] {
+            let lifted = reassume(pt, phs, &out_hyps)
+                .and_then(|p| match &h_out {
+                    Some(o) => derived::syl(&left(o), &p),
+                    None => Some(u_a1i(&p, ha)),
+                })
+                .ok_or("iota: restating a parameter's typing under the walk failed")?;
+            ctor_mems.push(lifted);
+        }
+        let mut cur_e = dom_exprs[np + 1 + i];
+        let mut cur_t = mdom.clone();
+        let mut acc_term = su.clone();
+        let mut rec_seen = 0usize;
+        for (step, (arg, bind, atom_ix)) in rung.iter().enumerate() {
+            let Expr::Pi { binder_name, binder_style, binder_type, body, .. } =
+                ctx.read_expr(cur_e)
+            else {
+                return Err("iota: an indexed minor's declared type is not deep enough")
+            };
+            let dom_t = self.interp(ctx, binder_type);
+            let atom = &atoms[*atom_ix];
+            let (subj, dset) =
+                atom.as_mem().ok_or("iota: an indexed minor's atom is not a membership")?;
+            if subj != *arg {
+                return Err("iota: an indexed minor's atom is about another field")
+            }
+            // Which slot this rung is, and hence which bridge it needs.
+            let slot = if step < k + m { order.get(step).copied() } else { None };
+            let arg_thm = if dset == dom_t {
+                atom_thms[*atom_ix].clone()
+            } else {
+                let j = match slot {
+                    Some(Slot::Rec) => rec_seen,
+                    Some(Slot::Plain) => usize::MAX,
+                    None => step - (k + m),
+                };
+                let eq = self.ix_slot_bridge(ctx, d, i, j, &dset, &dom_t, ps, &ys, &out_hyps)?;
+                // The bridge is stated under the site's own assumptions; the
+                // walk runs under `h_all = h_out ∧ h_pw`. Lift it the way the
+                // carrier bridge is lifted on the non-indexed row — through
+                // `and_left`, never `reassume`, because `h_all` is one
+                // conjunction and not a list.
+                let Some(eq) = reassume(&eq.thm, &eq.hyps, &out_hyps) else {
+                    return Err("iota: restating a slot bridge on the site's assumptions failed")
+                };
+                let lifted = match &h_out {
+                    Some(o) => derived::syl(&left(o), &eq),
+                    None => Some(u_a1i(&eq, ha)),
+                };
+                let Some(lifted) = lifted else {
+                    return Err("iota: lifting a slot bridge under the walk's antecedent failed")
+                };
+                self.uu_mem_along(&atom_thms[*atom_ix], &lifted, ha)
+                    .ok_or("iota: retargeting an indexed minor's atom onto its binder failed")?
+            };
+            if matches!(slot, Some(Slot::Rec)) {
+                rec_seen += 1;
+            }
+            if u_concl(&arg_thm, ha) != Some(Formula::mem(arg.clone(), dom_t.clone())) {
+                return Err("iota: an indexed minor's argument is not typed at its binder")
+            }
+            if step < k + m {
+                ctor_mems.push(arg_thm.clone());
+            }
+            let Ok((next, _)) =
+                self.app_at_pi(cur_e, &cur_t, &dom_t, &acc_term, arg, &acc_thm, &arg_thm, ha)
+            else {
+                return Err("iota: applying an indexed minor premise to one argument failed")
+            };
+            acc_term = ap.apply(acc_term.clone(), arg.clone());
+            acc_thm = next;
+            let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+            let Some(lkey) = unique_key(ctx, local) else {
+                return Err("iota: an indexed minor's binder has no key")
+            };
+            self.locals.insert(lkey, *bind);
+            cur_e = ctx.inst(body, &[local]);
+            cur_t = self.interp(ctx, cur_e);
+        }
+        let applied = derived::inductive::applied_minor(&ap, &order, &su, &ys, &ts, &vs);
+        if acc_term != applied {
+            return Err("iota: the applied indexed minor is not the one the rule spells")
+        }
+
+        // ── The conclusion, `ni + 1` positions at once ───────────────────────
+        let (ctor_term, target) = {
+            let mm = mach.borrow();
+            let ct = ind
+                .ctor_term(&mm, i, &ys, &ts)
+                .ok_or("iota: the indexed constructor term could not be built")?;
+            let rv = spec
+                .result_vec(i, ps, &ys)
+                .ok_or("iota: the constructor's result index vector could not be built")?;
+            let tg = derived::inductive::family::motive_app(&mm.wt.sums, c, &rv, &ct);
+            (ct, tg)
+        };
+        let _ = ctor_term;
+        let mut res_args = ps.to_vec();
+        res_args.extend(ys.iter().cloned());
+        let mut ctor_args = ps.to_vec();
+        {
+            let (mut pj, mut rj) = (0usize, 0usize);
+            for sl in order.iter() {
+                match sl {
+                    Slot::Plain => {
+                        ctor_args.push(ys[pj].clone());
+                        pj += 1;
+                    }
+                    Slot::Rec => {
+                        ctor_args.push(ts[rj].clone());
+                        rj += 1;
+                    }
+                }
+            }
+        }
+        let one = vec![h_all.clone()];
+        let bridge = self.ix_concl_bridge(
+            ctx, d, i, c, &res_args, &ctor_args, &ctor_mems, &cur_t, &target, &one,
+        )?;
+        let landed = self
+            .uu_mem_along(&acc_thm, &bridge.thm, ha)
+            .ok_or("iota: retargeting the indexed minor onto IDEP's conclusion failed")?;
+        if u_concl(&landed, ha) != Some(Formula::mem(applied.clone(), target.clone())) {
+            return Err("iota: the indexed minor does not land where IDEP asks")
+        }
+
+        // ── Close: `derived`'s own quantifier order ──────────────────────────
+        //
+        // `lean_order_of(order, y⃗, t⃗)` then `v⃗` — `idep_minor`'s prefix, which
+        // is declared field order and **not** `dep_minor`'s plains-then-recs.
+        let mut quant = derived::inductive::family::lean_order_of(&order, &yv, &tv)
+            .ok_or("iota: the indexed minor's quantifier order is not the declaration's")?;
+        quant.extend(vv.iter().copied());
+        let closed = match &h_out {
+            None => derived::gen_all(&quant, &landed),
+            Some(o) => {
+                let Some(u) = derived::uncurry(&landed) else {
+                    return Err("iota: separating the indexed minor's assumptions failed")
+                };
+                match gen_under(&u, o, &quant) {
+                    Some(cl) => cl,
+                    None => return Err("iota: quantifying the indexed minor failed"),
+                }
+            }
+        };
+        Ok((closed, out_hyps))
+    }
+
+    /// `⊢ H → dset = dom_t` for one rung of [`Self::ix_dep_minor_fielded`] —
+    /// the bridge between the set `derived` states an atom at and the set the
+    /// Lean binder is interpreted at.
+    ///
+    /// `j` is the recursive slot's index, or `usize::MAX` at a plain field.
+    /// A plain field's two sets are `βⱼ(p⃗,y⃗<ⱼ)` and `⟦βⱼ⟧`, related by the
+    /// published `IndexedTranslation::field_abbrev`. A recursive slot's are
+    /// `ind(p⃗, d⃗ᵢⱼ)` and the binder's own type; an induction hypothesis's are
+    /// `app(m, d⃗ᵢⱼ, tⱼ)` and the motive at the binder's indices. The last two
+    /// share one construction — `ni` published index equations, congruenced
+    /// over `IndexedCarrier::ty` or over the motive's spine — and that sharing
+    /// is the whole reason they are one function.
+    #[allow(clippy::too_many_arguments)]
+    fn ix_slot_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        i: usize,
+        j: usize,
+        dset: &Term,
+        dom_t: &Term,
+        ps: &[Term],
+        ys: &[Term],
+        out_hyps: &[Formula],
+    ) -> Result<CondEq, &'static str> {
+        let ni = d.tr.ii.spec.num_indices();
+        if j == usize::MAX {
+            // A plain field: one published abbreviation, used right-to-left.
+            return self
+                .ix_arg_bridge(ctx, dset, dom_t, out_hyps)
+                .ok_or("iota: a plain field's declared domain has no bridge")
+        }
+        // `⊢ dᵢⱼₖ(p⃗,y⃗) = ⟦dₖ⟧`, one per index of this child.
+        let pb = d
+            .tr
+            .ii
+            .spec
+            .plains_before(i, j)
+            .ok_or("iota: this constructor has no such recursive slot")?;
+        let mut at = ps.to_vec();
+        at.extend(ys.iter().take(pb).cloned());
+        let mut eqs: Vec<Thm> = Vec::with_capacity(ni);
+        let mut interp: Vec<Term> = Vec::with_capacity(ni);
+        for kk in 0..ni {
+            let ax = d
+                .tr
+                .ax
+                .ctors
+                .get(i)
+                .and_then(|cx| cx.rec_args.get(j))
+                .and_then(|r| r.get(kk))
+                .ok_or("iota: mini published no child-index axiom for this slot")?;
+            let e = derived::inst_all(ax, &at)
+                .ok_or("iota: instantiating a child-index axiom at this site failed")?;
+            let (_, rhs) =
+                e.concl().as_eq().ok_or("iota: a child-index axiom is not an equation")?;
+            interp.push(rhs);
+            eqs.push(e);
+        }
+        // `⊢ dset = <the same set at the interpretation's indices>`, by
+        // congruence in the `ni` index positions and nothing else.
+        let (mid, congr) = if let Some((f, args)) = dset.as_app().filter(|(f, _)| *f != self.pre.ap.app)
+        {
+            // A recursive slot: `ind(p⃗, d⃗ᵢⱼ)`, one symbol with `np + ni` slots.
+            if args.len() != ps.len() + ni {
+                return Err("iota: a recursive slot's set is not the carrier at np + ni")
+            }
+            let mut cs: Vec<CondEq> = args[..ps.len()].iter().cloned().map(CondEq::refl).collect();
+            for e in &eqs {
+                cs.push(CondEq::plain(e.clone()).ok_or("iota: a child-index axiom is not an equation")?);
+            }
+            let ce = self
+                .ceq_congr(f, &cs)
+                .ok_or("iota: congruence at the indexed carrier's indices refused")?;
+            let (_, to) = ce.as_eq().ok_or("iota: the carrier congruence is not an equation")?;
+            (to, ce)
+        } else {
+            // An induction hypothesis: `app(m, d⃗ᵢⱼ, tⱼ)`, a curried spine.
+            let (mhead, margs) = self
+                .app_spine(dset, ni + 1)
+                .ok_or("iota: an induction hypothesis's set is not the motive's spine")?;
+            let mut acc = CondEq::refl(mhead);
+            let mut cs: Vec<CondEq> = Vec::with_capacity(2);
+            for (pos, a) in margs.iter().enumerate() {
+                let step = match eqs.get(pos) {
+                    Some(e) if pos < ni => CondEq::plain(e.clone())
+                        .ok_or("iota: a child-index axiom is not an equation")?,
+                    _ => CondEq::refl(a.clone()),
+                };
+                cs.clear();
+                cs.push(acc);
+                cs.push(step);
+                acc = self
+                    .ceq_congr(self.pre.ap.app, &cs)
+                    .ok_or("iota: congruence at the motive's indices refused")?;
+            }
+            let (_, to) =
+                acc.as_eq().ok_or("iota: the motive congruence is not an equation")?;
+            (to, acc)
+        };
+        // …then from there to the binder's own domain.
+        let tail = self
+            .ix_arg_bridge(ctx, dom_t, &mid, out_hyps)
+            .ok_or("iota: a recursive slot's binder domain has no bridge to the carrier")?;
+        let back = {
+            let hh = conj_of(&tail.hyps);
+            let s = self
+                .u_eq_symm(&tail.thm, hh.as_ref())
+                .ok_or("iota: reversing a recursive slot's binder bridge failed")?;
+            CondEq::new(s, tail.hyps).ok_or("iota: the reversed binder bridge is not an equation")?
+        };
+        let hyps = merge_hyps(&congr.hyps, &back.hyps);
+        let hh = conj_of(&hyps);
+        let a = reassume(&congr.thm, &congr.hyps, &hyps)
+            .ok_or("iota: restating the index congruence failed")?;
+        let b = reassume(&back.thm, &back.hyps, &hyps)
+            .ok_or("iota: restating the binder bridge failed")?;
+        let joined = self
+            .u_eq_trans(&a, &b, hh.as_ref())
+            .ok_or("iota: composing a slot's two equations failed")?;
+        CondEq::new(joined, hyps).ok_or("iota: the slot bridge is not an equation")
+    }
+
+    /// **The conclusion move** — `⊢ H → ⟦minor's codomain⟧ = app(m, e⃗ᵢ, ctorᵢ)`.
+    ///
+    /// `ni + 1` positions of one spine at once, which is where the indexed rule
+    /// stops being the non-indexed one at a longer arity:
+    /// [`Self::dep_minor_typed`] moves the constructor alone, under a single
+    /// `u_congr_arg` at slot 1.
+    ///
+    /// Every position is bridged against a **published** axiom, and the two
+    /// kinds point opposite ways. A result index is
+    /// `⊢ ∀p⃗∀y⃗. (eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧)` — `derived`'s symbol on the left — while a
+    /// constructor is `⊢ ∀f⃗. (cᵢ(f⃗) = ctorᵢ(y⃗,r⃗))`, mini's abbreviation on the
+    /// left. So the end `derived` states the conclusion at is the left one in
+    /// the first case and the right one in the second. Both orientations are
+    /// accepted and the *other* end is what the walk has to reach, through
+    /// [`Self::ix_arg_bridge`] — which is what lets a minor stated at
+    /// `m Tag.tb (ixba a)` meet one stated at `app(m, e⃗, ctorᵢ(t))`.
+    #[allow(clippy::too_many_arguments)]
+    fn ix_concl_bridge(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        d: &IxDepBottom,
+        i: usize,
+        c: &Term,
+        res_args: &[Term],
+        ctor_args: &[Term],
+        ctor_mems: &[Thm],
+        mdom: &Term,
+        target: &Term,
+        hyps: &[Formula],
+    ) -> Result<CondEq, &'static str> {
+        let ni = d.tr.ii.spec.num_indices();
+        let (mhead, margs) = self
+            .app_spine(mdom, ni + 1)
+            .ok_or("iota: the minor's codomain is not the motive's spine")?;
+        let (whead, wargs) = self
+            .app_spine(target, ni + 1)
+            .ok_or("iota: IDEP's conclusion is not the motive's spine")?;
+        if mhead != *c || whead != *c {
+            return Err("iota: the minor's codomain is not headed by this motive")
+        }
+        let mut cs: Vec<CondEq> = Vec::with_capacity(2);
+        let mut acc = CondEq::refl(mhead);
+        for (pos, (from, to)) in margs.iter().zip(wargs.iter()).enumerate() {
+            let pub_eq = if pos < ni {
+                let ax = d
+                    .tr
+                    .ax
+                    .ctors
+                    .get(i)
+                    .and_then(|cx| cx.result.get(pos))
+                    .ok_or("iota: mini published no result-index axiom for this constructor")?;
+                derived::inst_all(ax, res_args)
+                    .ok_or("iota: instantiating a result-index axiom at this site failed")?
+            } else {
+                let (_, ax) = d
+                    .tr
+                    .ctor_abbrev
+                    .get(i)
+                    .ok_or("iota: mini published no constructor abbreviation")?;
+                derived::inst_all(ax, ctor_args)
+                    .ok_or("iota: instantiating the constructor abbreviation failed")?
+            };
+            let (lhs, rhs) = pub_eq
+                .concl()
+                .as_eq()
+                .ok_or("iota: a published conclusion axiom is not an equation")?;
+            let (near, back) = if rhs == *to {
+                (lhs, u_a1i(&pub_eq, None))
+            } else if lhs == *to {
+                let s = u_eq_symm(&mut self.env_mut(), &pub_eq, None)
+                    .ok_or("iota: reversing a published conclusion axiom failed")?;
+                (rhs, s)
+            } else {
+                return Err("iota: a published conclusion axiom is about another symbol")
+            };
+            let head = match self.ix_arg_bridge(ctx, from, &near, hyps) {
+                Some(b) => b,
+                None if pos == ni => {
+                    // **The constructor's own spine.** `⟦cᵢ p⃗ f⃗⟧` is a lambda
+                    // nest over the parameters and the fields, and reaching
+                    // mini's `cᵢ(p⃗,f⃗)` from it is `np + k + m` beta steps —
+                    // mini's `beta_spine`, which on this side is
+                    // `adopted_lam_step` and needs each argument's membership
+                    // at its own binder. Those are exactly the rung typings the
+                    // walk has just produced, so nothing is searched for.
+                    self.ix_ctor_spine(from, ctor_args, ctor_mems, &near, hyps)?
+                }
+                None if pos < ni => {
+                    return Err("iota: an index position of the conclusion has no bridge")
+                }
+                None => {
+                    return Err("iota: the constructor position of the conclusion has no bridge")
+                }
+            };
+            let hh = conj_of(&head.hyps);
+            let joined = self
+                .u_eq_trans(&head.thm, &u_a1i(&back, hh.as_ref()), hh.as_ref())
+                .ok_or("iota: composing a conclusion position's two equations failed")?;
+            let step = CondEq::new(joined, head.hyps)
+                .ok_or("iota: a conclusion position's bridge is not an equation")?;
+            cs.clear();
+            cs.push(acc);
+            cs.push(step);
+            acc = self
+                .ceq_congr(self.pre.ap.app, &cs)
+                .ok_or("iota: congruence along the motive's spine refused")?;
+        }
+        if !acc.proves(mdom, target) {
+            return Err("iota: the conclusion bridge does not join the two spines")
+        }
+        Ok(acc)
+    }
+
+    /// `⊢ H → ⟦cᵢ p⃗ f⃗⟧ = cᵢ(p⃗,f⃗)` — mini's `beta_spine` down the constructor's
+    /// own lambda nest, one [`Self::adopted_lam_step`] per argument.
+    ///
+    /// Every step's domain premise is the caller's: `mems[l]` is the typing the
+    /// telescope walk already produced for argument `l` at that binder, so this
+    /// searches for nothing and acquires nothing.
+    fn ix_ctor_spine(
+        &mut self,
+        from: &Term,
+        args: &[Term],
+        mems: &[Thm],
+        want: &Term,
+        hyps: &[Formula],
+    ) -> Result<CondEq, &'static str> {
+        if args.len() != mems.len() {
+            return Err("iota: the constructor's spine and its premises have different arities")
+        }
+        let (head, spine) = self
+            .app_spine(from, args.len())
+            .ok_or("iota: the constructor's interpretation is not a spine of its own arity")?;
+        if spine != args {
+            return Err("iota: the constructor's interpretation is applied to other arguments")
+        }
+        let mut cur = head;
+        let mut acc = CondEq::refl(cur.clone());
+        for (l, (arg, mem)) in args.iter().zip(mems.iter()).enumerate() {
+            let dom = u_concl(mem, conj_of(hyps).as_ref())
+                .and_then(|f| f.as_mem())
+                .map(|(_, s)| s)
+                .ok_or("iota: a constructor argument's premise is not a membership")?;
+            let (step, next) = self.adopted_lam_step(&cur, arg, &dom, mem, hyps)?;
+            let applied = self
+                .ceq_congr(self.pre.ap.app, &[acc, CondEq::refl(arg.clone())])
+                .ok_or("iota: congruence along the constructor's spine refused")?;
+            // The accumulated equation starts unconditional and each beta step
+            // stands under the walk's antecedent, so the two lists join here
+            // rather than one being forced onto the other.
+            let hyps_j = merge_hyps(&applied.hyps, &step.hyps);
+            let hh = conj_of(&hyps_j);
+            let (Some(lhs), Some(rhs)) = (
+                reassume(&applied.thm, &applied.hyps, &hyps_j),
+                reassume(&step.thm, &step.hyps, &hyps_j),
+            ) else {
+                return Err("iota: restating a constructor beta step failed")
+            };
+            let joined = self
+                .u_eq_trans(&lhs, &rhs, hh.as_ref())
+                .ok_or("iota: composing a constructor beta step failed")?;
+            acc = CondEq::new(joined, hyps_j)
+                .ok_or("iota: a constructor beta step is not an equation")?;
+            cur = next;
+            let _ = l;
+        }
+        let (l, r) = acc.as_eq().ok_or("iota: the constructor spine is not an equation")?;
+        if l != *from || r != *want {
+            return Err("iota: the constructor's spine did not reach mini's own term")
+        }
+        Ok(acc)
     }
 
     /// Take `t` apart as `app(…app(head, a₀)…, a_{depth-1})`.
@@ -22594,6 +23191,11 @@ static IDEP_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 static IDEP_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static IDEP_NULLARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static IDEP_FIELDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// **The whole premise `PRE = ICOD ∧ IDEP`, discharged at a use site** — the
+/// thing the ι rule's `mp` consumes, counted per firing rather than per
+/// conjunct so that "every conjunct is in hand" and "the rule fired" stay two
+/// observations.
+static PRE_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "stepcount")]
 fn note_ix_census_row(rec: &str, what: &str) {
@@ -22822,6 +23424,10 @@ pub fn origin_report() -> String {
                 IDEP_DONE.load(Relaxed),
                 IDEP_NULLARY.load(Relaxed),
                 IDEP_FIELDED.load(Relaxed),
+            ));
+            s.push_str(&format!(
+                "  indexed premise PRE = ICOD ∧ IDEP discharged at a use site — {}\n",
+                PRE_DONE.load(Relaxed)
             ));
         }
         // A routed run names every declaration off the export file, so this is

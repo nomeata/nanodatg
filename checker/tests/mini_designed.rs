@@ -3105,22 +3105,16 @@ fn icod_counts(row: &str) -> (u64, u64) {
 /// firings and `Aux` is the six-constructor mutual encoding with three, so a
 /// consumer that happened to work at one arity is caught at the other.
 #[test]
-fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
+fn tg_discharges_the_indexed_iota_rules_premise() {
     for name in ["ctor_abbrev_major.ndjson", "mutual_aux_encoding.ndjson"] {
         let out = run_unified(name);
-        // **`IDEP`, not a particular label.** The decline moves inward as the
-        // clause is staged — it has already been `PRE = ICOD ∧ IDEP`, then
+        // **The counters, not a decline label.** The label moved inward on
+        // every increment of this clause — `PRE = ICOD ∧ IDEP`, then
         // `ICOD is discharged; IDEP … is not`, then a named sub-population of
-        // `IDEP` — and a test that pinned the spelling would go red on every
-        // increment while measuring nothing. What must hold is that the site
-        // reaches the rule and declines on the *remaining conjunct by name*.
-        assert!(
-            out.contains("iota: IDEP"),
-            "{name}: TG did not reach mini's indexed iota rule with `ICOD` in hand and decline \
-             on `IDEP`. The rule is published and `IndexedDepRecursor::iota` concludes it; not \
-             reaching it means the nest, not the premise discharge, is the wall — which is a \
-             different tranche.\n{out}"
-        );
+        // `IDEP`, then `PRE is discharged` — and its endpoint is no decline at
+        // all. A test pinned to any one spelling measures the spelling. What
+        // this pins is the thing that must hold at every stage *and* at the
+        // end: the site reaches mini's rule and discharges its premise.
         // The conjunct itself, from the readiness row: a decline that named
         // `IDEP` while `ICOD` silently stopped being derived would read exactly
         // the same, and that is the regression this catches.
@@ -3138,11 +3132,11 @@ fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
             done, asked,
             "{name}: ICOD is no longer discharged at every firing of the rule: {row}"
         );
-        // And the conjunct that is being staged: a fieldless constructor's
-        // `IDEP` is derived, so the row must show a non-zero fieldless column.
-        // Asserted as `> 0` rather than at a number, because the number is the
-        // constructor count times the firing count and both fixtures would
-        // have to be re-counted on any change to either.
+        // `IDEP`, every conjunct of it: the premise is a conjunction over all
+        // `n` constructors, so a clause that served some of them and not the
+        // rest would leave `PRE` undischarged while the fieldless column looked
+        // healthy. Asserted as `asked == complete` rather than at a number,
+        // because the number is the constructor count times the firing count.
         let idep = out
             .lines()
             .find(|l| l.contains("indexed premise IDEP, by CONSTRUCTOR"))
@@ -3153,10 +3147,28 @@ fn tg_reaches_the_indexed_iota_rule_and_declines_naming_its_premise() {
             .map(|s| s.parse().expect("digits"))
             .collect();
         assert_eq!(n.len(), 4, "{name}: the IDEP readiness row changed shape: {idep}");
-        assert!(
-            n[2] > 0,
-            "{name}: no fieldless IDEP conjunct is discharged any more: {idep}"
+        assert!(n[0] > 0, "{name}: IDEP was never asked for: {idep}");
+        assert_eq!(
+            n[1], n[0],
+            "{name}: not every IDEP conjunct is discharged any more: {idep}"
         );
+        assert!(
+            n[2] > 0 && n[3] > 0,
+            "{name}: one of IDEP's two constructor populations is unserved — both fixtures \
+             have fieldless *and* fielded constructors, and a clause serving only one of them \
+             is what this pair exists to catch: {idep}"
+        );
+        // And the whole premise, which is what the rule's `mp` consumes.
+        let pre = out
+            .lines()
+            .find(|l| l.contains("indexed premise PRE = ICOD ∧ IDEP discharged"))
+            .unwrap_or_else(|| panic!("{name}: no PRE readiness row\n{out}"));
+        let np: u64 = pre
+            .split_whitespace()
+            .last()
+            .and_then(|w| w.parse().ok())
+            .unwrap_or_else(|| panic!("{name}: the PRE readiness row changed shape: {pre}"));
+        assert!(np > 0, "{name}: PRE is not discharged at any use site: {pre}");
         assert!(
             !out.contains("iota: no interpretation — an indexed family"),
             "{name}: the declaration still declines under the label that prices three \
