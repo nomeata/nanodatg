@@ -1996,7 +1996,7 @@ fallback symbol** and not of `proj_of`'s spine; the sentence pre-dates
   `typed[i]` instead of `imp_refl`", it is **a bridge or a duplication**, and
   which one is a call for the owner rather than for this section.
 
-#### The answer is 222, and my recommendation is to retire this rather than build it
+#### The answer is 222, and the probe says retire — 24 escaping atoms, 0.5 %
 
 *Measured 2026-08-15 at `02c8cbe`, probing before building, and it revises the
 number this section was scoped against.*
@@ -2057,13 +2057,29 @@ against the work twice under measurement, which is a pattern rather than noise.
    structures, the whole `ty_proj` population changes shape and this would be
    re-derived against different numbers anyway.
 
-**What would revive it, and it is one more probe.** Register a provenance on
-`ty_proj`'s antecedent — `crate::escapes::Prov::ProjField` already exists and
-`has_type_proj` already uses it (`tg.rs:14079`) — and read the escape census
-under `stepcount`. If a material fraction of the 222 reach the boundary, the
-upgrade buys real escape reduction and is worth the chain. If they are discharged
-at their binders, it buys 222 better-evidenced typings and nothing measurable,
-and should stay retired.
+**The revival probe was run, and it confirms the retirement.** `ty_proj`'s
+antecedent now registers `crate::escapes::Prov::ProjField` — the same
+provenance `has_type_proj` uses (`tg.rs:14079`) — and the escape census under
+`stepcount` on `init-prelude`, over all **891** escaping groups, reports:
+
+| provenance | escaping atoms |
+| --- | ---: |
+| raw beta | 3 439 |
+| local | 1 035 |
+| unknown | 105 |
+| **projection field** | **24** |
+
+**24 atoms, 0.5 % of the 4 603 that escape** — and that 24 is an *upper* bound
+on what this work could remove, because it also counts `has_type_proj`'s own
+registrations, which predate the probe. So upgrading all 222 antecedents to
+derivations would remove **at most 24 escaping atoms of 4 603**, and plausibly
+fewer.
+
+**The 222 are discharged at their binders.** The retirement is therefore
+**measured, not judged**: the upgrade buys 222 better-evidenced typings, zero
+gaps, and a half-percent of the escape ledger at its most generous reading. That
+is not worth a derivation chain, and a future reader can check the claim rather
+than take it.
 
 #### The re-pricing pattern, for whoever re-opens this
 

@@ -22524,6 +22524,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         note_proj(ProjCause::Carried, interp_of, sd);
         let f = Formula::mem(te.clone(), tt.clone());
+        // **The revival probe for `MODEL-BASIS.md` §8.8.** The 222 upgradable
+        // antecedents are worth a derivation only if they actually reach the
+        // boundary; if their binders discharge them, upgrading buys better
+        // evidence and no measurable movement. Registering the provenance is
+        // what lets the escape census say which. `has_type_proj` registers the
+        // same `Prov::ProjField` for its own antecedent (`:14079`).
+        #[cfg(feature = "stepcount")]
+        crate::escapes::prov(&f, crate::escapes::Prov::ProjField);
         let thm = derived::imp_refl(f.clone());
         self.typing(crate::certify::TyGap::Proj, &te, &tt, thm, vec![f])
     }

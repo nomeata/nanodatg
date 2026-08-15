@@ -1176,15 +1176,16 @@ number.
 > **"Didn't reproduce in three runs" is evidence about your reproduction method,
 > not about the failure.**
 
-Four gate anomalies were seen in one session. Three are now explained and the
-explanation was available from the first sighting:
+Five gate anomalies were seen in one session. **All five are now explained**,
+and the explanation was available from the first sighting:
 
 | # | symptom | verdict |
 | --- | --- | --- |
 | 1 | `9 targets, 378 passed, 1 failed`, on a **doc-only** tree, never named | the `corpus.rs` temp-path race, below |
-| 2 | `mini_envshare_cross::a_checker_minted_pi_is_upgraded_not_reminted`, once, green in isolation | **still unexplained** — different suite, deliberately *not* closed by association |
+| 2 | `mini_envshare_cross::a_checker_minted_pi_is_upgraded_not_reminted`, once, green in isolation | **closed**: the same defect in that suite's own helper — see the confirmation below. It was left open and *not* swept in by association until it had its own mechanism |
 | 3 | `487 passed / 2 failed` | real: an instrument that minted (§7.3) |
 | 4 | `488 passed / 1 failed`, not reproducing | the same race as #1 |
+| 5 | `488 passed / 1 failed`, `one_pi_mint_for_both_engines` | the same defect again, in `mini_envshare_cross`'s helper — found by *applying this rule instead of discounting it* |
 
 **The race.** `corpus.rs::outcome` keyed its temp config on `process::id()` plus
 the export's *basename* — unique only while no two tests in one binary look at
@@ -1205,6 +1206,31 @@ And the fix already existed in the same repository — `tg_tutorial.rs::tmp_cfg`
 carries process id **plus an atomic counter**. **A fix that exists elsewhere in
 the same tree is the strongest possible sign the pattern was known and not
 propagated**, which is a review question, not a debugging one.
+
+**Swept, and the sweep was worth more than the fix.** Every test file that
+builds a temp path was checked, not just the one that bit:
+
+| file | had the counter |
+| --- | --- |
+| `tg_tutorial.rs::tmp_cfg` | **yes — from the start** |
+| `corpus.rs::outcome` | no → fixed |
+| `mini_envshare_cross.rs::run_checker` | no → fixed |
+| `mini_route.rs` (route-skel helper) | no → fixed, and its collision was **live**, not latent — two of its tests also use `034_boolType` |
+
+**Four sites, one defect, and the answer was in the tree the whole time.** So
+the sentence above understates it: this was never a question of *discovering* the
+fix, only of noticing that three siblings of a solved problem had gone unsolved.
+When a helper is copied, its guards are what get dropped — they are the part that
+looks incidental.
+
+*The sighting that closed last is the one that proves the diagnostic.*
+`mini_envshare_cross` had **two** victims across two runs —
+`a_checker_minted_pi_is_upgraded_not_reminted` and
+`one_pi_mint_for_both_engines` — and they are the two halves of a single
+collision: both drive the checker over `good/tutorial/034_boolType.ndjson`, so
+both computed the same path and each lost the race once. "A different victim each
+time" was the hypothesis; two named victims sharing one export is the
+confirmation.
 
 **Who discounted it, and why that matters here.** Sightings #1 and #4 were logged
 as "unattributed flake" and passed over — and that was a **coordination
