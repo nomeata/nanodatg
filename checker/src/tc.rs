@@ -824,8 +824,32 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     }
 
     #[allow(non_snake_case)]
-    fn infer_proj(&mut self, _ty_name: NamePtr<'t>, idx: usize, structure: ExprPtr<'t>, flag: InferFlag) -> ExprPtr<'t> {
-        let structure_ty = self.infer_ty(structure, flag, Dropped::Probe);
+    /// Returns the field type **and the subject's own typing**.
+    ///
+    /// The second is not decoration. `DeclProj::typed[j]` is
+    /// `∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(…))`, so letting
+    /// [`crate::tg::TgBackend::ty_proj`] derive rather than assume costs exactly
+    /// one premise — `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)` — and that is the certificate this
+    /// function computed and threw away from the day it was written
+    /// (`Dropped::Probe`, four lines above the consumer that needs it). It is
+    /// threaded now; whether it is *used* is a separate decision resting on the
+    /// cross-measurement `ty_proj` records. See `MODEL-BASIS.md` §8.8.
+    ///
+    /// **The ledger does not move.** The `Dropped::Probe` bump is kept
+    /// deliberately: this change threads a value that was already being
+    /// computed, and every counter reads identically before and after. A
+    /// threading change with no counter movement is easy to misread later as a
+    /// no-op, so it is said here.
+    fn infer_proj(
+        &mut self,
+        _ty_name: NamePtr<'t>,
+        idx: usize,
+        structure: ExprPtr<'t>,
+        flag: InferFlag,
+    ) -> (ExprPtr<'t>, crate::certify::Typing<'t, 'p>) {
+        let Typed { ty: structure_ty, cert: structure_cert } = self.infer(structure, flag);
+        crate::certify::bump_dropped(Dropped::Probe);
+        crate::certify::note_proj_subject(!crate::certify::typing_is_gap(&structure_cert));
         let structure_ty = self.whnf(structure_ty);
         let structure_ty_is_prop = self.is_proposition(structure_ty).0;
         let (_, struct_ty_name, struct_ty_levels, struct_ty_args) = self.ctx.unfold_const_apps(structure_ty).unwrap();
@@ -867,7 +891,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 if structure_ty_is_prop && !self.is_proposition(binder_type).0 {
                     panic!("infer_proj prop")
                 }
-                binder_type
+                (binder_type, structure_cert)
             }
             _ => panic!("Ran out of constructor telescope getting field"),
         }
@@ -909,8 +933,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 Typed { ty, cert }
             }
             Proj { ty_name, idx, structure, .. } => {
-                let ty = self.infer_proj(ty_name, idx, structure, flag);
-                let cert = self.certifier.ty_proj(self.ctx, e, ty, structure);
+                let (ty, subject) = self.infer_proj(ty_name, idx, structure, flag);
+                let cert = self.certifier.ty_proj(self.ctx, e, ty, structure, &subject);
                 Typed { ty, cert }
             }
             NatLit { .. } => {

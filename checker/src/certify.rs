@@ -570,8 +570,8 @@ pub enum Dropped {
     /// one site it does not describe — `check_declar_info`, which is a
     /// declaration's type and not a binder's domain.
     BinderSort,
-    /// `tc.rs`: a **shape probe** — inference run only to look at the result's
-    /// head, with no judgement drawn from it.
+    /// `tc.rs`: inference whose result is read for its **shape** and then
+    /// dropped — mostly a probe, and **not at every site**.
     ///
     /// `is_proposition`/`is_proof` used when only the `bool` is wanted,
     /// `infer_proj`'s structure and `Prop`-field checks, `infer_let`'s
@@ -580,6 +580,27 @@ pub enum Dropped {
     /// not side conditions and they are not inside definitional-equality rules.
     /// Keeping them apart is what lets the `DefEqSide` row above be read as the
     /// def-eq residue it claims to be.
+    ///
+    /// # This doc said "with no judgement drawn from it", and at one site that is false
+    ///
+    /// *Corrected 2026-08-15.* `infer_proj`'s structure check (`tc.rs:828`)
+    /// discards `⊢ ⟦s⟧ ∈ ⟦S p⃗⟧` — the subject's own typing — which is
+    /// **exactly the single premise**
+    /// `derived::inductive::decl_proj::DeclProj::typed[j]` needs
+    /// (`∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(…))`) to let
+    /// [`crate::tg::TgBackend::ty_proj`] **derive** its membership instead of
+    /// carrying it as an antecedent. A judgement *is* drawn from it — one
+    /// function below, by a consumer that never receives it.
+    ///
+    /// Measured on `init-prelude`: over all 797 `ty_proj` calls the subject's
+    /// typing is **279 derived, 518 already a gap**, so that 279 is the ceiling
+    /// on how many of those antecedents could become derivations.
+    /// `THREADING-CENSUS.md` §6.3–§6.4 and `MODEL-BASIS.md` §8.8 carry the
+    /// measurement and what it decides.
+    ///
+    /// **The label is still right and the sentence was not.** A reader
+    /// classifying a site as free-to-discard on the strength of this variant's
+    /// name would have got `tc.rs:828` wrong, which is what happened.
     Probe,
     /// `tc.rs`: the same, for the two predicates specifically, where a *witness*
     /// exists and this caller has no use for it.
@@ -631,6 +652,22 @@ pub fn bump_dropped(site: Dropped) {
     DROPPED_COUNTS[site as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     #[cfg(not(feature = "stepcount"))]
     let _ = site;
+}
+
+/// **The projection subject's own typing, derived or not** — a probe, and the
+/// go/no-go for `MODEL-BASIS.md` §8.8.
+///
+/// `DeclProj::typed[j]` is `∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(…))`, so making
+/// `TgBackend::ty_proj` derive rather than assume costs exactly one premise:
+/// `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the subject's typing. `TypeChecker::infer_proj` has
+/// always computed it and always thrown it away (`Dropped::Probe`), and how
+/// many of those are *derived* rather than themselves a gap decides whether the
+/// 669 carried projections can be upgraded at all. Counted before anything is
+/// threaded.
+pub static PROJ_SUBJECT: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+pub fn note_proj_subject(derived: bool) {
+    PROJ_SUBJECT[usize::from(derived)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(feature = "stepcount")]

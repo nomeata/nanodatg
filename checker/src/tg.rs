@@ -22491,14 +22491,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         e: ExprPtr<'t>,
         ty: ExprPtr<'t>,
         structure: ExprPtr<'t>,
+        subject: &TgTyping,
     ) -> TgTyping {
+        // Whether the subject's own typing is a derivation. `DeclProj::typed[j]`
+        // needs it as a premise, so this is the axis that bounds the population.
+        let sd = !crate::certify::typing_is_gap(subject);
         // `e` really is a projection, and out of the subject the caller named.
         let Expr::Proj { idx, structure: s, .. } = ctx.read_expr(e) else {
-            note_proj(ProjCause::NotProj, ProjInterp::Unknown);
+            note_proj(ProjCause::NotProj, ProjInterp::Unknown, sd);
             return self.ty_miss(crate::certify::TyGap::Proj)
         };
         if s != structure {
-            note_proj(ProjCause::SubjectMismatch, ProjInterp::Unknown);
+            note_proj(ProjCause::SubjectMismatch, ProjInterp::Unknown, sd);
             return self.ty_miss(crate::certify::TyGap::Proj)
         }
         // **The census axis**, resolved once and used at every exit below. It
@@ -22510,15 +22514,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // cannot reach the telescope is deliberate: nothing is assumed about a
         // projection whose field type this module cannot see for itself.
         let Some(field) = self.syn_type_proj(ctx, idx, structure) else {
-            note_proj(ProjCause::TelescopeUnreached, interp_of);
+            note_proj(ProjCause::TelescopeUnreached, interp_of, sd);
             return self.ty_miss(crate::certify::TyGap::Proj)
         };
         let tf = self.interp(ctx, field);
         if tf != tt {
-            note_proj(ProjCause::FieldTypeDiffers, interp_of);
+            note_proj(ProjCause::FieldTypeDiffers, interp_of, sd);
             return self.ty_miss(crate::certify::TyGap::Proj)
         }
-        note_proj(ProjCause::Carried, interp_of);
+        note_proj(ProjCause::Carried, interp_of, sd);
         let f = Formula::mem(te.clone(), tt.clone());
         let thm = derived::imp_refl(f.clone());
         self.typing(crate::certify::TyGap::Proj, &te, &tt, thm, vec![f])
@@ -25730,11 +25734,16 @@ enum ProjInterp {
 
 const N_PROJ_CAUSE: usize = 5;
 const N_PROJ_INTERP: usize = 4;
-static PROJ_CENSUS: [std::sync::atomic::AtomicU64; N_PROJ_CAUSE * N_PROJ_INTERP] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; N_PROJ_CAUSE * N_PROJ_INTERP];
-fn note_proj(c: ProjCause, i: ProjInterp) {
-    PROJ_CENSUS[(c as usize) * N_PROJ_INTERP + (i as usize)]
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+/// Three axes: cause × translation × **whether the subject's own typing was
+/// derived**. The third is what decides the population, not the first two:
+/// `DeclProj::typed[j]` carries `z ∈ ind(p⃗)` as a premise, so a projection whose
+/// subject is itself a gap cannot be upgraded however well translated its
+/// structure is. Crossing them is the measurement `MODEL-BASIS.md` §8.8 stops at.
+static PROJ_CENSUS: [std::sync::atomic::AtomicU64; N_PROJ_CAUSE * N_PROJ_INTERP * 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_PROJ_CAUSE * N_PROJ_INTERP * 2];
+fn note_proj(c: ProjCause, i: ProjInterp, subject_derived: bool) {
+    let k = ((c as usize) * N_PROJ_INTERP + (i as usize)) * 2 + usize::from(subject_derived);
+    PROJ_CENSUS[k].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// **Where [`TgBackend::has_type_lam`] declines** — the cause attribution for
@@ -26952,9 +26961,10 @@ fn ht_report() -> String {
     // them. See [`ProjCause`], and `MODEL-BASIS.md` §8.8 for the decision this
     // feeds — whether an interpreted-structure classification pays before
     // step 2 or only after it.
-    let pc = |c: ProjCause, i: ProjInterp| {
-        PROJ_CENSUS[(c as usize) * N_PROJ_INTERP + (i as usize)].load(Relaxed)
+    let pcs = |c: ProjCause, i: ProjInterp, d: bool| {
+        PROJ_CENSUS[((c as usize) * N_PROJ_INTERP + (i as usize)) * 2 + usize::from(d)].load(Relaxed)
     };
+    let pc = |c: ProjCause, i: ProjInterp| pcs(c, i, false) + pcs(c, i, true);
     let row = |c: ProjCause| {
         [ProjInterp::Translated, ProjInterp::Declined, ProjInterp::NotAttempted, ProjInterp::Unknown]
             .map(|i| pc(c, i))
@@ -26979,6 +26989,26 @@ fn ht_report() -> String {
             total(ProjCause::FieldTypeDiffers),
             total(ProjCause::Carried),
         ));
+        // The premise `DeclProj::typed` needs, counted where the checker throws
+        // it away — see `certify::PROJ_SUBJECT`.
+        let ps_d = crate::certify::PROJ_SUBJECT[1].load(Relaxed);
+        let ps_g = crate::certify::PROJ_SUBJECT[0].load(Relaxed);
+        if ps_d + ps_g > 0 {
+            s.push_str(&format!(
+                "      …and the subject's own typing, which `DeclProj::typed` needs as its premise: {ps_d} derived, {ps_g} already a gap\n",
+            ));
+        }
+        // **The cross, and the whole decision.** A carried projection over a
+        // translated structure whose subject's typing is itself derived is one
+        // `DeclProj::typed` could upgrade from an antecedent to a derivation.
+        // Anything else cannot be, whatever else is true of it.
+        let upgradable = pcs(ProjCause::Carried, ProjInterp::Translated, true);
+        let blocked = pcs(ProjCause::Carried, ProjInterp::Translated, false);
+        if upgradable + blocked > 0 {
+            s.push_str(&format!(
+                "      …of the carried-and-translated, the subject's typing is derived in {upgradable} and a gap in {blocked} — {upgradable} is the upgradable population\n",
+            ));
+        }
         for (name, c) in [
             ("telescope unreached", ProjCause::TelescopeUnreached),
             ("field type differs", ProjCause::FieldTypeDiffers),
