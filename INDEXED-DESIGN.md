@@ -1569,6 +1569,57 @@ abbreviation symbol `target_head_step` has no head to step. The bridge takes a �
 step from `abbrev_defs` first. The recursor's *declared* minor type never has
 that shape, which is why only the use-site walk needs it.
 
+### 8.7 `RBTree`'s −19 priced, and it is not `has_type_lam` — measured 2026-08-15
+
+**The prize is −19 and it is real.** `NANODA_ASSUME` on `077`'s single
+originating row `iota: IDEP undischargeable — a minor premise has no typing to
+rest on` takes it 28 → **9**. The `trans`/`congruence`/`symm over an admitted
+premise` rows are relays, not originators: assuming them changes nothing.
+
+**It is not a broad tranche.** Corpus-wide there are **39** lambda-typing
+declines in total, **24 of them in `077`**; eleven of the sixteen gapped exports
+have **zero**. The other four that have any (`076` 6, `116` 4, `118` 4, `075` 1)
+each originate their gaps somewhere else entirely — `076` at *"the major
+premise's domain is not this inductive at this parameter"* (worth **−35** on its
+own, the largest single remaining corpus tranche and not this one), `116` at the
+function-typed recursive argument, `118` at `Acc.rec`. So `has_type_lam` buys
+`077` and essentially nothing else here.
+
+**`HtMiss::Lam` is a genuine rule, not a cost guard** — the `Decline::Indices`
+question, asked again and answered the other way. `has_type_lam` is
+`lam_in_funspace_n` / `lam_in_dprod_n` and it fires; what it reports are two
+populations, and following them down settles the tranche:
+
+* **4 × `TargetDprodOtherDom`** — the target is a `Π` over a domain spelled
+  differently from the one the λ binds, *one conversion away*. Bridging it
+  works, and two things about that are worth keeping. The bridge runs
+  **`⊢ other = dom`, not the reverse** — the abbreviation is the *target's*
+  spelling at all four sites. And the bridge legitimately carries **the caller's
+  own assumptions**; requiring them to be empty rejected all four.
+* **20 × `BodyUntypeable`**, which is a recursion: the body is another λ (24
+  sites) and the bottom of it is **`RBTree.red` and `RBTree.black` applied to
+  their fields** (2 + 2).
+
+**So the wall is a constructor typing for an indexed family, and mini already
+publishes it.** `has_type_ctor_app` works where `has_type_app` does not because
+a constructor's base case is *supplied* — a `CtorRule` derived in `derived`. TG
+builds those for its own general inductives and builds none for an indexed
+family, because `gen_scope` declines it. But
+`IndexedCtor::mem_lean` — `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)))`,
+**with its antecedent already in Lean field order** — is exactly that supplied
+base case, it is on the shared store inside the published
+`IndexedTranslation`, and `checker/src/tg.rs` consumes it **zero times**.
+
+That is the *third* instance of one shape in this tranche: the fact is already
+published and the consumer declines for want of a rule it could have stood on
+(§8.4.1 item 2 is the first, `Full::rule`'s `want_full = false` the second).
+
+**What to build, in order**: consume `IndexedCtor::mem_lean` in the constructor
+typing path for a published indexed family; then the λ target bridge above,
+which is inert on its own and was **reverted rather than left in the tree** for
+exactly that reason — it moves the decline inward and rescues nothing until the
+constructor typing lands.
+
 ---
 
 #### 8.4.1 Three findings that are not about indexed families
