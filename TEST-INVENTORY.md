@@ -1242,3 +1242,132 @@ nothing beyond the above — but a mechanical scan cannot see a degenerate
 instantiation, and that group is the densest user of the very idiom the cluster
 above is about. **That is the next pass, and until it is run this section is a
 lower bound.**
+
+#### All seven fixed — task #174, each with its own watched falsification
+
+| # | fix | separating mutation, watched red |
+| --- | --- | --- |
+| 20a | `proj_stuck_subject`: name-table read `"str":"NAME"`, plus a **positive control** — `Tri`, the structure the fixture declares, must be *present*, so the same reader that reports `Nat` absent proves itself live | look for `Tri` instead of `PProd` → red at `:2283`, "`Tri` is in this export's name table" |
+| 20b | `proj_reduced_carrier`: same reader, `Nat` only, control on `PProd` | assert `PProd` absent → red at `:2370` |
+| 21 | strip the prefix, then look for the separator in the *payload* | empty the prefix so every key is "bare" → red naming all seven live keys |
+| 22 | the three dead lookups **deleted, not restated** | the surviving prefix guard made to match a present key → red at `:1639` |
+| 23 | kept, with its status written at the line: a *reporting* check, not a behavioural one | point the `POPULATION` row lookup at a neighbouring row → red at `:3020` |
+| 24 | summands rebuilt from `fibre_summands_at` at `q⃗`, one layer below `fibre_at` | `.rev()` the rebuilt summands → red at `:1584`, "`fibre_at`'s summands are not the telescopes' at q⃗" |
+| 26 | emptiness **asserted**, so the fixture cannot drift into a weak `check_declar` test | point at `ProjFromProp` → red, "the Empty fixture now has 8 declaration(s)" |
+
+Three of these are worth more than the repair.
+
+**22 was dead *and* redundant.** The same test already carries
+`!totals.keys().any(|k| k.starts_with("waiting:recursor(") && k.contains("class (S)"))`
+five hundred lines earlier — prefix-based, so it matches the producible key
+*with* its `: no constructors` suffix and the five other `rec_prop.rs` spellings
+that the exact-key form could not reach either. So the fix is deletion, and the
+first draft of it — a broader `contains` scan — was itself withdrawn as a
+duplicate. Replacing a dead assertion with a live one is right; replacing it
+with a second copy of a live one is not.
+
+**25 stopped enumerating payloads.** The list named six binder-congruence labels
+and three had no producer, because the payload set moved when the `Fs` clause
+went and the list did not. It reads the producer's stable prefix now, which
+covers every present and future rule and names the offender in the message.
+*Reported, not fixed:* `mini/ev.rs:53` still documents `Mismatch` as carrying
+"`Dep` against `Fs`", and `BinderClause` has had two variants — `Dep` and
+`Cond` — since at least `4e86d46`. That file is owned elsewhere.
+
+**A correction to this document's own reading, made in the same pass.** Dumping
+the live key set showed seven keys and no `waiting:` ones, and the first
+conclusion drawn was that `totals` is the wrong map and a dozen assertions in
+`tutorial_evidence_ledger` were dead by construction. **That was wrong.**
+`Ledger::row` (`mini/ledger.rs:1133`) appends `\twaiting:{k}={v}` to the *same*
+tab-separated `evidence` line the test parses, so `totals` is exactly the right
+map and an empty `waiting:` set means the tutorial corpus fully certifies —
+which `constEv == pairs == 218` asserts two hundred lines above, and which this
+file's own §1 header states outright. The error was reading an observable (the
+key dump) without checking what produces it, which is this section's subject
+committed by this section's author. It is recorded because the near-miss is the
+evidence that the discipline has to be applied to one's own findings too.
+
+That correction changes the *status* of every `waiting:` guard here, including
+20–22: their input is empty by construction, so **no mutation to the tree can
+falsify them today** — they are guards against reintroduction, exactly like
+`ci/check-test-inputs.sh` leg C. The mutations above therefore prove
+*reachability* — that the filter runs over a real, non-empty key set and the
+assertion fires — which is the strongest available statement and is a weaker one
+than "a regression would be caught". Said here so nobody reads the table as more
+than it is.
+
+### 6.10 The degenerate-premise cluster — bounded pass, task #175
+
+§6.9 named fourteen sites where a premise is built from `eq_refl`/`imp_refl` on
+a **single** atom, so the rule under test is exercised exactly where its two
+readings coincide. They were recorded as candidates, not findings. This pass
+verified them **mechanically** and fixed only those where the rule is
+load-bearing — the test being *"would a plausible implementation error survive
+this test?"*, not *"is this fixture degenerate?"* Deliberately bounded: the
+remainder is recorded below and left.
+
+#### Fixed — four, each with the swap watched red
+
+| site | degeneracy | mutation, watched |
+| --- | --- | --- |
+| `derived/tests/propositional.rs::conjunction_round_trip` | `and_intro(&p, &p)` at one `Thm`, so both projections returned the same formula | call `and_elim_right` where the test says left → red, "left projection did not return the left conjunct" |
+| `derived/tests/propositional.rs::biconditional_projections` | built at `p ↔ p` from two copies of `imp_refl(p)` | call `iff_mpr` for the forward half → red, "iff_mp is not the forward half" |
+| `derived/tests/hypothesis.rs::iff_projections_under_hypothesis` | `p ↔ p` **and** the two assertions were the identical predicate, written twice | call `hyp_iff_mp` for the backward half → red, "hyp_iff_mpr is not the backward half" |
+| `derived/tests/rules.rs::eq_symm_derives` | ran only at `f(a) = f(a)`; the comment said so outright — *"a = b with a syntactically equal to b"* | expect the unswapped equation, i.e. a no-op `symm` → red, "symm did not swap the sides" |
+
+`iff_mp` and `iff_mpr` are `and_elim_left` and `and_elim_right` under other
+names (`rules.rs:303,307`), so three of the four were one rule pair, and the
+whole biconditional interface rested on a fixture that could not tell its halves
+apart. Getting a biconditional backwards is the archetypal way to prove
+something in the wrong direction, which is why these were taken and a
+tautological count assertion in a tutorial was not.
+
+A genuine `⊢ p ↔ q` at **distinct** atoms needs no axiom, which is what made the
+fix cheap and is worth writing down: both atoms are provable, `a1i` weakens `⊢ q`
+to `⊢ p → q` and `⊢ p` to `⊢ q → p`, and `Formula::iff(p, q)` is exactly the
+conjunction of those two. For `eq_symm`, `Thm::assume` gives `{a = b} ⊢ a = b`
+with the sides syntactically different. Two atoms suffice throughout: the
+question is a **swap**, not an ordering or a nesting.
+
+#### Refuted — the fixture is degenerate and the rule is covered anyway
+
+Measured by mutating the *implementation* in `derived/src/rules.rs` and running
+the whole `derived` suite, then restoring (`git diff derived/src/` empty).
+
+* **`syl` — refuted.** Made to return its first premise unchanged (`a → b`
+  instead of `a → c`), which the `p → p ∘ p → p` fixture cannot see:
+  `derived/tests/acc.rs` fails **16 of 16** immediately. Composition is pinned,
+  heavily, elsewhere.
+* **`congr_arg` — refuted.** Made to ignore its equation and return reflexivity
+  at the unrewritten term: failures across many suites —
+  `addition_computes_at_numerals`, `addition_satisfies_the_peano_equations`,
+  `iota_computes_to_the_minor_and_not_to_a_constant`,
+  `applying_the_successor_graph_computes_succ` and more.
+* **`congr` — refuted by construction**, not by a separate run: it is a fold of
+  `congr_arg` over positions chained with `eq_trans` (`rules.rs:167-181`), so it
+  is subsumed by the coverage that caught `congr_arg`. Stated from the code, and
+  labelled as such rather than as a measurement.
+* **`kernel/tests/rules.rs::mp_rejects_mismatched_premises` and
+  `kernel/tests/hypotheses.rs`'s order-of-arrival cell — not degenerate at all.**
+  Read: the first uses three *distinct* atoms `pa`/`pb`/`pc`, and the second
+  asserts `t.hyps() == swapped.hyps()` over two *different* hypotheses, which is
+  a real canonicalisation property. The sweep was wrong to list them. (`kernel/`
+  tests are no longer stop-and-report; there was simply nothing to do.)
+
+That is **four real, four refuted** out of the eight examined — close to the rate
+§6.9 warned about, and the reason those fourteen were filed as candidates.
+
+#### Recorded and left, with owners
+
+`derived/tests/separation.rs::hyp_syl` (the `syl` shape under a hypothesis —
+almost certainly refuted for the same reason, unmeasured), `sets.rs:189` (case
+analysis at `p ∨ p`), `quantifier.rs` (`inst_all` on a body whose second binder
+does not occur), `deprec.rs:696`, `hypothesis.rs::hyp_mp_works_and_rejects`. All
+in unowned files. None is a rule the derivation layer leans on in the way
+`and_elim`/`iff_mp` are, and each carries a companion refusal assertion.
+
+**The 45 000-line `derived/tests` pass flagged in §6.9 is not being taken.** It
+stays recorded there as a stated lower bound. If it becomes the right work the
+note will still be there; the priority is end-to-end completeness — whether the
+checker handles what Lean handles, and whether anything is accepted by a
+shortcut rather than certified.
