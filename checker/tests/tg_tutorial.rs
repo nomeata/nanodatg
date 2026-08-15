@@ -1914,24 +1914,27 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // the claim — `RecBottom::Dep` is dispatched *after* `General`, so it can
     // only pick up what `t_policy` declined — and these are where it is a
     // number. Both were at their present values before this arm existed.
+    //
+    // **One assertion, both stories.** This floor used to be written twice —
+    // `assert!(fired >= 92, "… the dependent arm … is taking declarations the
+    // general path used to serve")` and, fourteen lines further down,
+    // `assert!(fired >= 92, "… the degenerate arm …")`. The same predicate on
+    // the same unchanged local: the second could not fail, whatever went wrong,
+    // and the "the degenerate arm stole a general site" story had no assertion
+    // of its own. There is one number here and it is the *conjunction* of the
+    // two claims — `fired` was 92 before either arm existed, so any site either
+    // arm takes from the general path shows up in it. TEST-INVENTORY.md §6.
     assert!(
         fired >= 92,
-        "the general ι rule computed at only {fired} sites — the dependent arm, which \
-         is dispatched after it, is taking declarations the general path used to serve"
+        "the general ι rule computed at only {fired} sites — one of the two arms dispatched \
+         around it is taking declarations the general path used to serve: the dependent arm \
+         (`RecBottom::Dep`, dispatched after it) or the degenerate arm (gated ahead of it). \
+         `fired` was 92 before either existed"
     );
     assert!(
         degen_fired >= 400,
         "the degenerate ι rule computed at only {degen_fired} sites — the dependent arm \
          is taking declarations the degenerate path used to serve"
-    );
-    // **The general path did not lose anything to it.** Disjointness is the
-    // claim; this is where it is a number. `fired` is asserted `>= 80` above
-    // and was 92 before the degenerate arm existed, so a degenerate arm that
-    // had stolen a general ι site would show here.
-    assert!(
-        fired >= 92,
-        "the general ι rule computed at only {fired} sites — the degenerate arm, which is \
-         gated ahead of it, is taking declarations the general path used to serve"
     );
     // **The canonicity invariant this whole store discipline exists for**: one
     // interpretation per `(name, ground levels)` for the run, so that a theorem
