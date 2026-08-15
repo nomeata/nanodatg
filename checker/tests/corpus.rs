@@ -107,8 +107,17 @@ fn arena_corpus() {
 
     let mut failures = Vec::new();
     let (mut checked, mut declined) = (0usize, 0usize);
+    // **A floor per leg, not one for the pair.** Task #137: "one counter lets a
+    // healthy leg hide a dead one." This loop has two legs with opposite
+    // expectations, and only the `bad` one carries the weight — a checker that
+    // accepts everything passes `good` trivially. A single `checked > 0` over
+    // the sum is satisfied by `good`'s 102 files alone, so an unpacked-short or
+    // half-linked corpus could delete every negative case in the suite and
+    // still report `ok`. Each leg is therefore counted and floored by name.
+    let mut per_leg: Vec<(&str, usize)> = Vec::new();
 
     for (sub, expect_accept) in [("good", true), ("bad", false)] {
+        let before = checked;
         for f in ndjson_files(&corpus.join(sub)) {
             // The perf files are large; they are a benchmark corpus, not a
             // correctness one, and would dominate test runtime.
@@ -127,9 +136,20 @@ fn arena_corpus() {
                 failures.push(format!("{}: expected {want}, got {had}", f.display()));
             }
         }
+        per_leg.push((sub, checked - before));
     }
 
-    eprintln!("arena: checked={checked} declined={declined} failures={}", failures.len());
+    let legs = per_leg.iter().map(|(s, n)| format!("{s}={n}")).collect::<Vec<_>>().join(" ");
+    eprintln!("arena: checked={checked} declined={declined} legs[{legs}] failures={}", failures.len());
+    for (sub, n) in &per_leg {
+        assert!(
+            *n > 0,
+            "the `{sub}` leg of the arena corpus checked 0 files, so this test proved \
+             nothing about it — the other leg's count is what kept `checked` nonzero. \
+             Legs: {legs}. See {}",
+            corpus.join(sub).display()
+        );
+    }
     assert!(checked > 0, "arena corpus directory exists but contained no files");
     assert!(failures.is_empty(), "{} of {checked} arena files mismatched ({declined} declined):\n  {}", failures.len(), failures.join("\n  "));
 }
